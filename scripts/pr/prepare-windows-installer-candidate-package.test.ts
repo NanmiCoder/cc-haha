@@ -1,0 +1,660 @@
+import { describe, expect, spyOn, test } from 'bun:test'
+import * as nativeFs from 'node:fs'
+import * as childProcess from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidateCleanupNodeScript, candidatePackage, candidatePackageFailureSummary, cleanupCandidateDirectory, finishCandidatePackage, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
+import { type SevenZipRunner } from './windows-installer-member-proof'
+import { createSandboxedTestEnvironment } from './test-environment'
+
+const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+const head = 'a'.repeat(40), nonce = 'fixture-only-nonce'
+function trigger() {
+  return { event: { action: 'synchronize', number: 1883, pull_request: { number: 1883,
+    base: { ref: 'main', repo: { full_name: 'NanmiCoder/cc-haha' } },
+    head: { sha: head, ref: 'fix/installer-fallback-foreign-helpers', repo: { full_name: 'toBerlinWay/cc-haha' } } } },
+    env: { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY: 'NanmiCoder/cc-haha',
+      GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: '12345', WINDOWS_INSTALLER_CHECKS_RESULT: 'success' } }
+}
+function ownedFixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-candidate-package-unit-')))
+  const temp = join(root, 'private build with spaces'), source = join(temp, 'source'), evidence = join(root, 'evidence'), capture = join(evidence, 'capture')
+  for (const dir of [source, capture]) mkdirSync(dir, { recursive: true })
+  const put = (file: string, bytes: Buffer | string) => {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, bytes)
+    return file
+  }
+  return { root, temp, source, evidence, capture, put, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+}
+
+function completionFixture() {
+  const f = ownedFixture()
+  const directory = realpathSync(mkdtempSync(join(f.root, 'cc-haha-candidate-package-')))
+  writeFileSync(join(directory, '.owner'), nonce)
+  writeFileSync(join(directory, 'owned.txt'), 'owned disposable payload')
+  const receipt: any = { version: 1, status: 'candidate_package_prepared', sourceHead: head, runId: '12345',
+    kind: 'full-electron-nsis-package', setupSha256: 'b'.repeat(64), setupBytes: 100 * 1024 * 1024,
+    accountsCreated: 0, profilesCreated: 0, installed: false, signed: false, published: false, fullF1: 'not_proven' }
+  return { ...f, directory, receipt, options: { receipt, evidence: f.evidence, temp: directory, parent: f.root, nonce } }
+}
+
+describe('bounded candidate cleanup diagnostics', () => {
+  test.each(['EBUSY', 'PRIVATE_UNRECOGNIZED_CODE'])('retains the complete receipt and exact error without publishing arbitrary cleanup data (%s)', code => {
+    const f = completionFixture(), secret = 'PRIVATE_CLEANUP_MESSAGE_STACK_AND_PATH'
+    const nativeError = Object.assign(new Error(secret), { code, path: secret, stack: secret })
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
+    let failure: any
+    try {
+      try { finishCandidatePackage(f.options) } catch (error) { failure = error }
+      expect(remove).toHaveBeenCalledTimes(1)
+      expect(failure.cause.cause).toBe(nativeError)
+      expect(failure.cleanupCause.cause).toBe(nativeError)
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      const receipt = JSON.parse(raw)
+      expect(receipt).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        errorCode: 'candidate_package_not_proven', kind: f.receipt.kind, setupSha256: 'b'.repeat(64),
+        setupBytes: 100 * 1024 * 1024, accountsCreated: 0, profilesCreated: 0, installed: false, fullF1: 'not_proven',
+        cleanupFailure: { site: 'remove', guard: null, nativeCode: code === 'EBUSY' ? 'EBUSY' : 'UNRECOGNIZED' } })
+      expect(raw).not.toContain(secret)
+      expect(raw).not.toContain('PRIVATE_UNRECOGNIZED_CODE')
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+      expect(candidatePackageFailureSummary(nativeError)).not.toContain(secret)
+      expect(existsSync(f.directory)).toBe(true)
+      expect(readFileSync(join(f.directory, '.owner'), 'utf8')).toBe(nonce)
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('records a denied owner guard without attempting deletion', () => {
+    const f = completionFixture(), remove = spyOn(childProcess, 'spawnSync')
+    let failure: any
+    try {
+      try { finishCandidatePackage({ ...f.options, nonce: 'different-private-owner' }) } catch (error) { failure = error }
+      expect(remove).not.toHaveBeenCalled()
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown',
+        cleanupFailure: { site: 'admission', guard: 'owner-value', nativeCode: null } })
+      expect(raw).not.toContain('different-private-owner')
+      expect(failure.cause.message).toBe('Unowned candidate temporary directory')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('retains a primary build error when cleanup also fails', () => {
+    const f = completionFixture(), buildError = new Error('PRIVATE_BUILD_MESSAGE')
+    const nativeError = Object.assign(new Error('PRIVATE_SECONDARY_MESSAGE'), { code: 'EPERM' })
+    f.receipt.status = 'not_proven'; f.receipt.failedStage = 'build-full-windows-x64'; f.receipt.errorCode = 'candidate_package_not_proven'
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
+    let failure: any
+    try {
+      try { finishCandidatePackage({ ...f.options, originalError: buildError }) } catch (error) { failure = error }
+      expect(failure.cause).toBe(buildError)
+      expect(failure.cleanupCause.cause).toBe(nativeError)
+      expect(JSON.parse(readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8'))).toMatchObject({
+        status: 'not_proven', cleanup: 'unknown', failedStage: 'build-full-windows-x64',
+        cleanupFailure: { site: 'remove', guard: null, nativeCode: 'EPERM' } })
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at build-full-windows-x64; bounded evidence preserved')
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('preserves successful cleanup without adding an unknown result', () => {
+    const f = completionFixture()
+    try {
+      const receipt = finishCandidatePackage(f.options)
+      expect(receipt.status).toBe('candidate_package_prepared')
+      expect(receipt.cleanup).toBe('owned_temporary_directory_removed')
+      expect(receipt.cleanupFailure).toBeUndefined()
+      expect(receipt.failedStage).toBeUndefined()
+      expect(existsSync(f.directory)).toBe(false)
+    } finally { f.cleanup() }
+  })
+  test('exits nonzero with only the bounded CLI summary when retained causes contain private data', () => {
+    const f = completionFixture()
+    const markers = ['PRIVATE_INJECTED_MESSAGE', 'PRIVATE_INJECTED_PATH', 'PRIVATE_INJECTED_STACK']
+    const program = `
+      import { finishCandidatePackage, candidatePackageFailureSummary } from ${JSON.stringify(join(import.meta.dir, 'prepare-windows-installer-candidate-package.ts'))}
+      const options = JSON.parse(process.argv[1])
+      const original = Object.assign(new Error(${JSON.stringify(markers[0])}), { path: ${JSON.stringify(markers[1])}, stack: ${JSON.stringify(markers[2])} })
+      try { finishCandidatePackage({ ...options, nonce: 'wrong-private-owner', originalError: original }) }
+      catch (error) {
+        if (error.cause !== original) throw new Error('Original cause was not retained')
+        console.error(candidatePackageFailureSummary(error))
+        process.exitCode = 1
+      }
+    `
+    try {
+      const child = spawnSync(process.execPath, ['--no-env-file', '--eval', program, JSON.stringify(f.options)], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024,
+        env: createSandboxedTestEnvironment(join(f.root, 'child-home')),
+      })
+      expect(child.error).toBeUndefined()
+      expect(child.status).toBe(1)
+      expect(child.signal).toBeNull()
+      expect(child.stdout).toBe('')
+      expect(child.stderr).toBe('Candidate package not proven at cleanup; bounded evidence preserved\n')
+      for (const marker of [...markers, f.directory]) {
+        expect(child.stdout).not.toContain(marker)
+        expect(child.stderr).not.toContain(marker)
+      }
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        errorCode: 'candidate_package_not_proven', setupSha256: f.receipt.setupSha256, setupBytes: f.receipt.setupBytes,
+        cleanupFailure: { site: 'admission', guard: 'owner-value', nativeCode: null } })
+      for (const marker of markers) expect(raw).not.toContain(marker)
+      expect(existsSync(f.directory)).toBe(true)
+      expect(readFileSync(join(f.directory, '.owner'), 'utf8')).toBe(nonce)
+    } finally { f.cleanup() }
+  })
+})
+
+describe('single Node22 candidate cleanup', () => {
+  const result = (reply: unknown, extra: Record<string, unknown> = {}) => ({ pid: 123,
+    status: 0, signal: null, stdout: Buffer.from(typeof reply === 'string' ? reply : JSON.stringify(reply)), stderr: Buffer.alloc(0), ...extra })
+  const removed = { version: 1, nodeVersion: '22.23.2', outcome: 'removed' }
+  test.each(['ordinary', 'readonly'])('removes an owned %s tree using the actual Node22 process and confirms absence', kind => {
+    const f = completionFixture(), run = childProcess.spawnSync
+    mkdirSync(join(f.directory, 'nested'))
+    writeFileSync(join(f.directory, 'nested', 'public-build-file'), 'owned public fixture', { mode: kind === 'readonly' ? 0o444 : 0o600 })
+    const child = spyOn(childProcess, 'spawnSync').mockImplementation(((...args: any[]) => (run as any)(...args)) as any)
+    const previous = process.env.NODE_OPTIONS
+    process.env.NODE_OPTIONS = '--require=PRIVATE_REMOVE_PRELOAD'
+    try {
+      const receipt = finishCandidatePackage(f.options)
+      expect(child).toHaveBeenCalledTimes(1)
+      const [executable, argv, options] = child.mock.calls[0]!
+      expect(executable).toBe('node')
+      expect(argv).toEqual(['--input-type=commonjs', '--eval', candidateCleanupNodeScript, '--', f.directory, f.root, nonce])
+      expect(options).toMatchObject({ shell: false, cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 180_000, maxBuffer: 64 * 1024 })
+      expect(options!.env!.NODE_OPTIONS).toBeUndefined()
+      expect(options!.env!.NODE_PATH).toBeUndefined()
+      expect(receipt).toMatchObject({ status: 'candidate_package_prepared', cleanup: 'owned_temporary_directory_removed',
+        cleanupRuntime: { runtime: 'node22', attempts: 1, confirmedAbsent: true } })
+      expect(receipt.cleanupRuntime.version).toMatch(/^22\.[0-9]+\.[0-9]+$/)
+      expect(existsSync(f.directory)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.NODE_OPTIONS
+      else process.env.NODE_OPTIONS = previous
+      child.mockRestore(); f.cleanup()
+    }
+  })
+  test.each(['owner', 'parent', 'root-link'])('rechecks the %s claim in the actual Node22 child before removal', kind => {
+    const f = completionFixture()
+    let directory = f.directory
+    if (kind === 'root-link') {
+      directory = join(f.root, 'cc-haha-candidate-package-link')
+      symlinkSync(f.directory, directory, 'junction')
+    }
+    try {
+      const child = spawnSync('node', ['--input-type=commonjs', '--eval', candidateCleanupNodeScript, '--', directory,
+        kind === 'parent' ? f.temp : f.root, kind === 'owner' ? 'PRIVATE_WRONG_OWNER' : nonce], {
+        cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, maxBuffer: 64 * 1024,
+        env: createSandboxedTestEnvironment(join(f.root, 'child-home')),
+      })
+      expect(child.error).toBeUndefined()
+      expect(child.status).toBe(1)
+      expect(child.stderr.length).toBe(0)
+      expect(JSON.parse(child.stdout.toString())).toMatchObject({ version: 1, outcome: 'admission-refused' })
+      expect(child.stdout.toString()).not.toContain('PRIVATE_WRONG_OWNER')
+      expect(readFileSync(join(f.directory, 'owned.txt'), 'utf8')).toBe('owned disposable payload')
+    } finally { f.cleanup() }
+  })
+  test.each(['timeout', 'spawn', 'overflow', 'signal', 'nonzero', 'invalid', 'stderr', 'runtime', 'refused', 'present', 'absence'])('retains unknown for a %s child result without retry', mode => {
+    const f = completionFixture()
+    const expected = { timeout: 'timeout', spawn: 'spawn-error', overflow: 'output-limit', signal: 'signal', nonzero: 'nonzero-exit',
+      invalid: 'invalid-reply', stderr: 'unexpected-output', runtime: 'runtime-refused', refused: 'child-admission-refused',
+      present: 'target-still-present', absence: 'absence-unknown' }[mode]!
+    const observed: any = result(mode === 'invalid' ? 'PRIVATE_INVALID_JSON' : mode === 'runtime'
+      ? { ...removed, nodeVersion: '26.7.0', outcome: 'runtime-refused' } : mode === 'refused' ? { ...removed, outcome: 'admission-refused' } : removed)
+    if (['timeout', 'spawn', 'overflow'].includes(mode)) observed.error = Object.assign(new Error('PRIVATE_CHILD_ERROR'), {
+      code: mode === 'timeout' ? 'ETIMEDOUT' : mode === 'overflow' ? 'ENOBUFS' : 'ENOENT' })
+    if (mode === 'signal') observed.signal = 'SIGTERM'
+    if (mode === 'nonzero') observed.status = 7
+    if (mode === 'stderr') observed.stderr = Buffer.from('PRIVATE_CHILD_STACK_AND_PATH')
+    const originalStat = nativeFs.lstatSync
+    let returned = false, failure: any
+    const child = spyOn(childProcess, 'spawnSync').mockImplementation(() => { returned = true; return observed })
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      if (mode === 'absence' && returned && String(args[0]) === f.directory) throw Object.assign(new Error('PRIVATE_METADATA'), { code: 'EACCES' })
+      return (originalStat as any)(...args)
+    }) as any)
+    try {
+      try { finishCandidatePackage(f.options) } catch (error) { failure = error }
+      expect(child).toHaveBeenCalledTimes(1)
+      expect(failure.cause.cause.cause).toBe(observed)
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        cleanupFailure: { site: 'remove', nodeOutcome: expected } })
+      expect(raw).not.toContain('PRIVATE_')
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { stat.mockRestore(); child.mockRestore(); f.cleanup() }
+  })
+  test('projects a native failure from the exact child script without publishing its message, stack or absolute target', () => {
+    const f = completionFixture(), target = join(f.directory, 'owned.txt')
+    const error = Object.assign(new Error('PRIVATE_NATIVE_MESSAGE'), { code: 'EPERM', syscall: 'unlink', errno: -1, path: target, stack: 'PRIVATE_NATIVE_STACK' })
+    let wire = '', removes = 0
+    const fakeProcess: any = { argv: ['node', f.directory, f.root, nonce], platform: process.platform, versions: { node: '22.23.2' },
+      cwd: () => f.root, stdout: { write: (value: string) => { wire += value } } }
+    const require = createRequire(import.meta.url)
+    runInNewContext(candidateCleanupNodeScript, { process: fakeProcess, require: (name: string) => name === 'node:fs'
+      ? { ...nativeFs, rmSync: () => { removes++; throw error } } : require(name) })
+    expect(removes).toBe(1)
+    expect(fakeProcess.exitCode).toBe(1)
+    expect(wire).not.toContain('PRIVATE_NATIVE_')
+    const child = spyOn(childProcess, 'spawnSync').mockReturnValue(result(wire, { status: 1 }) as any)
+    try {
+      expect(() => finishCandidatePackage(f.options)).toThrow('Candidate package not proven')
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', cleanupFailure: { nativeCode: 'EPERM',
+        syscall: 'unlink', errno: -1, relativePath: 'owned.txt', entryKind: 'file', nodeOutcome: 'child-failed' } })
+      expect(raw).not.toContain(f.directory)
+      expect(raw).not.toContain('PRIVATE_NATIVE_')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { child.mockRestore(); f.cleanup() }
+  })
+})
+
+describe('scoped remove diagnostics', () => {
+  function removalFailure(f: ReturnType<typeof completionFixture>, nativeError: Error) {
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
+    let error: any
+    try {
+      try { finishCandidatePackage(f.options) } catch (failure) { error = failure }
+      expect(remove).toHaveBeenCalledTimes(1)
+    } finally { remove.mockRestore() }
+    expect(error.cause.cause).toBe(nativeError)
+    expect(candidatePackageFailureSummary(error)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+    const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8'), receipt = JSON.parse(raw)
+    expect(receipt).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+      cleanupFailure: { site: 'remove', guard: null, nativeCode: 'EPERM' } })
+    expect(raw).not.toContain('PRIVATE_REMOVE_MESSAGE')
+    expect(raw).not.toContain('PRIVATE_REMOVE_STACK')
+    expect(existsSync(f.directory)).toBe(true)
+    return { receipt, raw }
+  }
+  function fault(fields: Record<string, unknown>) {
+    return Object.assign(new Error('PRIVATE_REMOVE_MESSAGE'), { code: 'EPERM', stack: 'PRIVATE_REMOVE_STACK', ...fields })
+  }
+  test.each(['file', 'directory', 'missing'])('publishes only the admitted task-relative target and metadata hint (%s)', kind => {
+    const f = completionFixture(), parent = join(f.directory, 'source'), target = join(parent, 'public-dependency')
+    mkdirSync(parent)
+    if (kind === 'file') writeFileSync(target, 'owned public build fixture')
+    if (kind === 'directory') mkdirSync(target)
+    const modeWriteBits = kind === 'missing' ? null : lstatSync(target).mode & 0o222
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toEqual({ site: 'remove', guard: null, nativeCode: 'EPERM',
+        syscall: 'unlink', errno: -4048, relativePath: 'source/public-dependency', entryKind: kind, modeWriteBits })
+      expect(raw).not.toContain(f.directory)
+      expect(receipt.cleanupFailure).not.toHaveProperty('win32LastError')
+      expect(receipt.cleanupFailure).not.toHaveProperty('nativeReadonly')
+    } finally { f.cleanup() }
+  })
+  test('retains the rm syscall in the actual failure receipt projection', () => {
+    const f = completionFixture(), target = join(f.directory, 'owned.txt')
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'rm', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toEqual({ site: 'remove', guard: null, nativeCode: 'EPERM', syscall: 'rm',
+        errno: -4048, relativePath: 'owned.txt', entryKind: 'file', modeWriteBits: lstatSync(target).mode & 0o222 })
+      expect(raw).not.toContain(f.directory)
+    } finally { f.cleanup() }
+  })
+  test.each(['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³'])('withholds reserved %s components before any component lstat', device => {
+    for (const suffix of ['', '.txt']) for (const position of ['leaf', 'ancestor']) {
+      const f = completionFixture(), source = join(f.directory, 'source')
+      mkdirSync(source)
+      const target = join(source, device + suffix, ...(position === 'ancestor' ? ['public-child'] : []))
+      const originalStat = nativeFs.lstatSync, seen: string[] = []
+      const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+        seen.push(String(args[0])); return (originalStat as any)(...args)
+      }) as any)
+      try {
+        const { receipt } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+        expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+        expect(seen.every(path => path === f.directory || path === join(f.directory, '.owner'))).toBe(true)
+      } finally { stat.mockRestore(); f.cleanup() }
+    }
+  })
+  test.each(['outside', 'relative', 'control', 'c1', 'format', 'escape', 'prefix', 'root', 'oversize', 'stream'])('withholds a %s path before reading its metadata', kind => {
+    const f = completionFixture()
+    const paths = {
+      outside: join(f.root, 'PRIVATE_OUTSIDE_FILE'), relative: 'PRIVATE_RELATIVE_FILE',
+      control: f.directory + '/PRIVATE_CONTROL\nFILE', escape: f.directory + '/source/../../PRIVATE_ESCAPE_FILE',
+      c1: f.directory + '/PRIVATE_CONTROL\u0085FILE', format: f.directory + '/PRIVATE_FORMAT\u202eFILE',
+      prefix: f.directory + '-neighbor/PRIVATE_PREFIX_FILE', root: f.directory,
+      oversize: f.directory + '/' + 'PRIVATE_LONG_FILE'.repeat(40), stream: f.directory + '/PRIVATE_FILE:stream',
+    }
+    const originalStat = nativeFs.lstatSync, seen: string[] = []
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      seen.push(String(args[0])); return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'rmdir', errno: -4048, path: paths[kind as keyof typeof paths] }))
+      expect(receipt.cleanupFailure).toMatchObject({ syscall: 'rmdir', errno: -4048,
+        relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(seen.every(path => path === f.directory || path === join(f.directory, '.owner'))).toBe(true)
+      expect(raw).not.toContain('PRIVATE_')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test.each(['leaf', 'ancestor'])('stops at a %s junction without following it', kind => {
+    const f = completionFixture(), outside = join(f.root, 'outside-owned'), link = join(f.directory, 'link')
+    mkdirSync(outside); writeFileSync(join(outside, 'PRIVATE_OUTSIDE_FILE'), 'outside sentinel unchanged')
+    symlinkSync(outside, link, 'junction')
+    const target = kind === 'leaf' ? link : join(link, 'PRIVATE_OUTSIDE_FILE')
+    const originalStat = nativeFs.lstatSync, seen: string[] = []
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      seen.push(String(args[0])); return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(seen).toContain(link)
+      expect(seen).not.toContain(join(link, 'PRIVATE_OUTSIDE_FILE'))
+      expect(seen.some(path => path.startsWith(outside))).toBe(false)
+      expect(raw).not.toContain(outside)
+      expect(readFileSync(join(outside, 'PRIVATE_OUTSIDE_FILE'), 'utf8')).toBe('outside sentinel unchanged')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test('withholds unavailable metadata without replacing the original remove error', () => {
+    const f = completionFixture(), target = join(f.directory, 'public-dependency')
+    const originalStat = nativeFs.lstatSync
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      if (String(args[0]) === target) throw Object.assign(new Error('PRIVATE_METADATA_ERROR'), { code: 'EACCES' })
+      return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(raw).not.toContain('PRIVATE_METADATA_ERROR')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test.each([-2147483648, 2147483647, 2147483648, -2147483649, 0.5, '-4048'])('accepts only an int32 errno (%s)', errno => {
+    const f = completionFixture()
+    try {
+      const { receipt } = removalFailure(f, fault({ syscall: 'PRIVATE_SYSCALL', errno }))
+      expect(receipt.cleanupFailure.syscall).toBeNull()
+      expect(receipt.cleanupFailure.errno).toBe(typeof errno === 'number' && Number.isInteger(errno)
+        && errno >= -2147483648 && errno <= 2147483647 ? errno : null)
+    } finally { f.cleanup() }
+  })
+  test('does not publish or substitute throwing error accessors', () => {
+    const f = completionFixture(), error = fault({})
+    for (const key of ['syscall', 'errno', 'path']) Object.defineProperty(error, key, { get() { throw new Error('PRIVATE_ACCESSOR') } })
+    try {
+      const { receipt, raw } = removalFailure(f, error)
+      expect(receipt.cleanupFailure).toMatchObject({ syscall: null, errno: null, relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(raw).not.toContain('PRIVATE_ACCESSOR')
+    } finally { f.cleanup() }
+  })
+})
+
+describe('candidate package execution boundary', () => {
+  test.each(['opened', 'synchronize', 'reopened', 'ready_for_review'])('accepts only an exact checked-out ordinary %s PR after successful Windows checks', action => {
+    const f = trigger()
+    f.event.action = action
+    expect(validateCandidatePackageTrigger(f.event, f.env, head)).toEqual({ sourceHead: head, runId: '12345', runAttempt: 1, eventAction: action })
+  })
+  test.each(['labeled', 'unlabeled', 'push', 'workflow_dispatch', 'closed', 'unknown'])('rejects %s without a build', action => {
+    const f = trigger()
+    f.event.action = action
+    expect(() => validateCandidatePackageTrigger(f.event, f.env, head)).toThrow('reviewed PR')
+  })
+  test.each(['repository', 'number', 'nested-number', 'base', 'base-repo', 'head-repo', 'head-ref', 'head', 'attempt', 'run-id', 'windows', 'ci', 'actions', 'event'])('rejects changed %s identity before a build', kind => {
+    const f = trigger()
+    if (kind === 'repository') f.env.GITHUB_REPOSITORY = 'other/repo'
+    if (kind === 'number') f.event.number++
+    if (kind === 'nested-number') f.event.pull_request.number++
+    if (kind === 'base') f.event.pull_request.base.ref = 'other'
+    if (kind === 'base-repo') f.event.pull_request.base.repo.full_name = 'other/repo'
+    if (kind === 'head-repo') f.event.pull_request.head.repo.full_name = 'other/repo'
+    if (kind === 'head-ref') f.event.pull_request.head.ref = 'fix/other'
+    if (kind === 'head') f.event.pull_request.head.sha = 'b'.repeat(40)
+    if (kind === 'attempt') f.env.GITHUB_RUN_ATTEMPT = '2'
+    if (kind === 'run-id') f.env.GITHUB_RUN_ID = 'unknown'
+    if (kind === 'windows') f.env.WINDOWS_INSTALLER_CHECKS_RESULT = 'skipped'
+    if (kind === 'ci') f.env.CI = 'false'
+    if (kind === 'actions') f.env.GITHUB_ACTIONS = 'false'
+    if (kind === 'event') f.env.GITHUB_EVENT_NAME = 'pull_request_target'
+    expect(() => validateCandidatePackageTrigger(f.event, f.env, head)).toThrow('reviewed PR')
+  })
+  test.skipIf(process.platform === 'win32')('cannot run a real build on this host', async () => {
+    await expect(runCandidatePackage()).rejects.toThrow('Windows CI only')
+  })
+  test('uses the full release builder after frozen workspace installs and real dependency preparation', () => {
+    const f = ownedFixture()
+    try {
+      const bun = join(f.temp, 'bun'), commands = candidateBuildCommands(f.source, join(f.temp, 'powershell'), bun)
+      expect(commands.slice(0, 4).map(value => value.cwd)).toEqual(['', 'desktop', 'adapters', 'mobile'].map(value => join(f.source, value)))
+      for (const item of commands.slice(0, 4)) expect(item.argv).toEqual([bun, 'install', '--frozen-lockfile'])
+      expect(commands.map(item => item.name)).toContain('prepare-ripgrep')
+      expect(commands.find(item => item.name === 'fetch-native')!.argv).toContain('--locked')
+      expect(commands.at(-1)!.argv.at(-1)).toBe(join(f.source, 'desktop/scripts/build-windows-x64.ps1'))
+      expect(commands.flatMap(item => item.argv).some(arg => /fake|stub|tiny|old-setup|profile|--publish always/.test(arg))).toBe(false)
+    } finally { f.cleanup() }
+  })
+  test.each(['owner', 'parent', 'prefix'])('refuses %s mismatch cleanup, retaining owned fixture evidence', kind => {
+    const f = ownedFixture(), directory = realpathSync(mkdtempSync(join(f.root, kind === 'prefix' ? 'foreign-' : 'cc-haha-candidate-package-')))
+    try {
+      writeFileSync(join(directory, '.owner'), nonce)
+      expect(() => cleanupCandidateDirectory(directory, kind === 'parent' ? f.temp : f.root, kind === 'owner' ? 'other' : nonce)).toThrow('Unowned')
+      expect(existsSync(directory)).toBe(true)
+      if (kind !== 'prefix') {
+        cleanupCandidateDirectory(directory, f.root, nonce)
+        expect(existsSync(directory)).toBe(false)
+      }
+    } finally { f.cleanup() }
+  })
+})
+
+describe('observation of the unchanged NSIS compiler path', () => {
+  test.each([
+    String.raw`C:\Users\RUNNER~1\AppData\Local\Temp\private build with spaces\capture.cjs`,
+    String.raw`C:\private "quoted" build\capture.cjs`,
+    String.raw`C:\private\\build with spaces\capture.cjs`,
+  ])('NODE_OPTIONS preserves the exact preload request through the real Node lexer: %s', preload => {
+    const f = ownedFixture()
+    try {
+      const observed = join(f.temp, 'observed-request.json')
+      const sink = f.put(join(f.temp, 'owned-empty.cjs'), 'module.exports = true\n')
+      const bootstrap = f.put(join(f.temp, 'lexer-probe.cjs'), `const fs=require('node:fs'),Module=require('node:module'),resolve=Module._resolveFilename;Module._resolveFilename=function(request,...args){if(request.startsWith('C:')){fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify(request),{flag:'wx'});return ${JSON.stringify(sink)}};if(Module.isBuiltin(request))return resolve.call(this,request,...args);throw Error('Unexpected probe module request')}`)
+      // This bootstrap has no quote component and uses Node's supported Windows
+      // forward-slash spelling. Every target request maps to our own empty
+      // CJS, so even a malformed target never opens a system/user path.
+      const result = spawnSync('node', ['-e', ''], { cwd: f.root, encoding: 'utf8', timeout: 10_000,
+        env: createSandboxedTestEnvironment(join(f.root, 'home'), {
+          NODE_OPTIONS: `--require="${bootstrap.replaceAll('\\', '/')}" ${candidateCaptureNodeOptions(preload)}`,
+        }) })
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(readFileSync(observed, 'utf8'))).toBe(preload)
+    } finally { f.cleanup() }
+  })
+
+  function fixture(outside = false) {
+    const f = ownedFixture()
+    const helperSource = f.put(join(f.source, 'desktop/build/guarded-removal.cs'), '// fixture; no compiler/PE execution')
+    const image = Buffer.from('MZ fixture compiled helper; never executed'), config = Buffer.from('<fixture/>')
+    const compilerOutput = outside ? join(f.root, 'outside') : join(f.temp, 'compiler-output')
+    mkdirSync(compilerOutput)
+    const guarded = f.put(join(f.source, 'desktop/scripts/nsis-guarded-removal.cjs'), `const f=require('node:fs'),p=require('node:path'),c=require('node:crypto');exports.compile=o=>{const executable=p.join(${JSON.stringify(compilerOutput)},'helper.exe'),config=executable+'.config';const image=Buffer.from(${JSON.stringify([...image])}),settings=Buffer.from(${JSON.stringify([...config])});f.writeFileSync(executable,image);f.writeFileSync(config,settings);return{executable,config,bytes:image.length,sha256:c.createHash('sha256').update(image).digest('hex'),configBytes:settings.length,configSha256:c.createHash('sha256').update(settings).digest('hex'),sourceSha256:c.createHash('sha256').update(f.readFileSync(o.source)).digest('hex')}}`)
+    const legacy = f.put(join(f.source, 'desktop/scripts/nsis-legacy-compat.cjs'), `exports.run=(mode,args)=>{if(mode==='prepare-guarded')require('./nsis-guarded-removal.cjs').compile({source:args[0]});return 42}`)
+    const uninstaller = f.put(join(f.source, 'desktop/build-artifacts/electron/owned.__uninstaller.exe'), 'MZ fixture current uninstaller; never executed')
+    const configFile = f.put(join(f.temp, 'capture-config.json'), JSON.stringify({ source: f.source, temp: f.temp, output: f.capture, sourceHead: head, nonce,
+      sourceSha256: sha(readFileSync(helperSource)), legacySha256: sha(readFileSync(legacy)), guardedSha256: sha(readFileSync(guarded)), uninstaller }))
+    const preload = f.put(join(f.temp, 'capture.cjs'), candidateCaptureScript(configFile))
+    const run = (mode: string, args: string[]) => spawnSync('node', ['-e', 'console.log(require(process.argv[1]).run(process.argv[2],JSON.parse(process.argv[3])))', legacy, mode, JSON.stringify(args)], { encoding: 'utf8', timeout: 10_000, env: createSandboxedTestEnvironment(join(f.root, 'home'), { NODE_OPTIONS: candidateCaptureNodeOptions(preload) }) })
+    return { ...f, helperSource, image, config, compilerOutput, uninstaller, run }
+  }
+  test('captures exact produced bytes before normal temp cleanup, preserving original return values', () => {
+    const f = fixture()
+    try {
+      const helper = f.run('prepare-guarded', [f.helperSource])
+      expect(helper.status, helper.stderr).toBe(0)
+      expect(helper.stdout.trim()).toBe('42')
+      const uninstall = f.run('prepare', [f.uninstaller, '/owned/bootstrap'])
+      expect(uninstall.status, uninstall.stderr).toBe(0)
+      expect(uninstall.stdout.trim()).toBe('42')
+      rmSync(f.compilerOutput, { recursive: true })
+      rmSync(f.uninstaller)
+      expect(readFileSync(join(f.capture, 'compiled-helper.exe'))).toEqual(f.image)
+      expect(readFileSync(join(f.capture, 'compiled-helper.exe.config'))).toEqual(f.config)
+      expect(JSON.parse(readFileSync(join(f.capture, 'helper-capture.json'), 'utf8'))).toMatchObject({ sourceHead: head, nonce, helper: { bytes: f.image.length, sha256: sha(f.image) } })
+      expect(existsSync(join(f.capture, 'uninstaller-capture.json'))).toBe(true)
+    } finally { f.cleanup() }
+  })
+  test.each(['outside', 'wrong-source', 'duplicate'])('fails capture for %s without combining unrelated output', kind => {
+    const f = fixture(kind === 'outside')
+    try {
+      if (kind === 'duplicate') expect(f.run('prepare-guarded', [f.helperSource]).status).toBe(0)
+      const source = kind === 'wrong-source' ? f.put(join(f.source, 'other.cs'), 'other') : f.helperSource
+      const result = f.run('prepare-guarded', [source])
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain(kind === 'outside' ? 'Candidate capture file boundary' : kind === 'wrong-source' ? 'Candidate helper source changed' : 'EEXIST')
+      if (kind !== 'duplicate') expect(existsSync(join(f.capture, 'helper-capture.json'))).toBe(false)
+    } finally { f.cleanup() }
+  })
+})
+
+describe('static candidate package lineage', () => {
+  async function fixture() {
+    const f = ownedFixture(), output = join(f.source, 'desktop/build-artifacts/windows-x64')
+    const setup = f.put(join(output, candidatePackage.setupName), 'MZ owned sparse setup fixture; never executed')
+    truncateSync(setup, 100 * 1024 * 1024)
+    const helper = Buffer.from('MZ owned helper bytes; never executed'), uninstall = Buffer.from('MZ owned uninstaller bytes; never executed')
+    const settings: Buffer = createRequire(import.meta.url)('../../desktop/scripts/nsis-guarded-removal.cjs').clrConfig
+    const pin = (name: string, data: Buffer) => {
+      const file = f.put(join(f.capture, name), data)
+      return { file, bytes: data.length, sha256: sha(data) }
+    }
+    const source = f.put(join(f.source, 'desktop/build/guarded-removal.cs'), '// fixture source')
+    f.put(join(f.capture, 'helper-capture.json'), JSON.stringify({ version: 1, sourceHead: head, nonce, sourceSha256: sha(readFileSync(source)), helper: pin('compiled-helper.exe', helper), config: pin('compiled-helper.exe.config', settings) }))
+    f.put(join(f.capture, 'uninstaller-capture.json'), JSON.stringify({ version: 1, sourceHead: head, nonce, output: pin('compiled-uninstaller.exe', uninstall) }))
+    const pe = Buffer.alloc(256)
+    pe.write('MZ')
+    pe.writeUInt32LE(64, 0x3c)
+    pe.write('PE\0\0', 64)
+    pe.writeUInt16LE(0x8664, 68)
+    const app = f.put(join(output, 'win-unpacked/Claude Code Haha.exe'), pe)
+    const sidecar = f.put(join(output, `win-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-${candidatePackage.target}.exe`), pe)
+    const main = 'module.exports = "owned bundle; never executed"'
+    f.put(join(f.source, 'desktop/electron-dist/main.cjs'), main)
+    f.put(join(output, 'win-unpacked/resources/app.asar'), JSON.stringify({ 'package.json': JSON.stringify({ version: '0.7.8' }), 'electron-dist/main.cjs': main }))
+    f.put(join(f.source, 'desktop/package.json'), '{"name":"test-owned-only"}')
+    f.put(join(f.source, 'desktop/node_modules/app-builder-lib/package.json'), '{"name":"app-builder-lib","version":"fixture"}')
+    f.put(join(f.source, 'desktop/node_modules/@electron/asar/index.js'), `exports.extractFile=(file,name)=>Buffer.from(JSON.parse(require('node:fs').readFileSync(file,'utf8'))[name])`)
+    const tool = f.put(join(f.temp, '7z.exe'), 'MZ owned fake tool; never executed')
+    const calls: string[][] = []
+    let mutation = ''
+    const run: SevenZipRunner = (_file, argv) => {
+      calls.push(argv)
+      const setupRead = argv.includes(setup)
+      const configRead = !setupRead && argv.at(-1) === candidatePackage.helperConfigLiteral
+      const literal = setupRead ? candidatePackage.uninstallerLiteral : configRead ? candidatePackage.helperConfigLiteral : candidatePackage.helperLiteral
+      const bytes = setupRead ? uninstall : configRead ? settings : helper
+      let stdout: Buffer
+      if (argv[0] === 'i') stdout = Buffer.from('7-Zip 26.06 (x64)\nFormats:\n F Nsis nsis\nCodecs:\n')
+      else if (argv[0] === 'l') {
+        const member = `Path = ${mutation === 'literal' || (mutation === 'helper-literal' && !setupRead) ? 'Other.exe' : literal}\nSize = ${bytes.length}\nPacked Size = 10`
+        const config = `Path = ${mutation === 'config-literal' ? 'cc-haha-guarded-removal.exe.config' : candidatePackage.helperConfigLiteral}\nSize = ${settings.length + (mutation === 'config-size' ? 1 : 0)}\nPacked Size = 10${mutation === 'config-folder' ? '\nFolder = +' : mutation === 'config-encrypted' ? '\nEncrypted = +' : ''}`
+        stdout = Buffer.from(`--\nPath = ${argv.at(-1)}\nType = Nsis\n\n----------\n${member}\n${mutation === 'duplicate' ? `\n${member}\n` : ''}${!setupRead && mutation !== 'config-missing' ? `\n${config}\n${mutation === 'config-duplicate' ? `\n${config}\n` : ''}` : ''}`)
+      } else {
+        stdout = mutation === 'bytes' || (mutation === 'helper-bytes' && !setupRead) ? Buffer.from('MZ changed bytes') : bytes
+        if (configRead && mutation === 'config-bytes') { stdout = Buffer.from(settings); stdout[20] = stdout[20]! ^ 1 }
+      }
+      return { status: 0, stdout, stderr: Buffer.alloc(0) }
+    }
+    const options = { source: f.source, temp: f.temp, evidence: f.evidence, trigger: validateCandidatePackageTrigger(trigger().event, trigger().env, head), nonce,
+      extractor: { version: '26.06', executable: tool, files: [{ file: tool, bytes: readFileSync(tool).length, sha256: sha(readFileSync(tool)) }] }, run }
+    return { ...f, output, setup, app, sidecar, settings, calls, options, mutate: (value: string) => { mutation = value } }
+  }
+  test('binds the complete setup, exact uninstaller and embedded compiled helper plus actual unpacked payload hashes', async () => {
+    const f = await fixture()
+    try {
+      const receipt = await verifyCandidateOutputs(f.options)
+      expect(receipt.kind).toBe('full-electron-nsis-package')
+      expect(receipt.displayVersion).toBe('0.7.8')
+      expect(receipt.payloads.map(value => value.kind)).toEqual(['app-exe', 'app-asar', 'sidecar'])
+      expect(receipt.uninstallerMember.proof.status).toBe('member_proven')
+      expect(receipt.helperMember.proof.status).toBe('member_proven')
+      expect(receipt.configMember.proof.status).toBe('member_proven')
+      for (const args of f.calls.filter(value => value[0] === 'e')) {
+        expect(args).toContain('-spd')
+        expect(args).toContain('-tNsis')
+      }
+      expect(f.calls.filter(value => value[0] === 'e').map(value => value.at(-1))).toEqual([candidatePackage.uninstallerLiteral, candidatePackage.helperLiteral, candidatePackage.helperConfigLiteral])
+      expect(receipt.runtimeInstall).toBe('not_run')
+      expect(receipt.fullF1).toBe('not_proven')
+    } finally { f.cleanup() }
+  })
+  test('embedded helper config binds non-PE compiler XML bytes to its full literal packaged member', async () => {
+    const f = await fixture()
+    try {
+      const receipt = await verifyCandidateOutputs(f.options)
+      const proof = receipt.configMember.proof
+      expect(proof.status).toBe('member_proven')
+      expect(proof.contentKind).toBe('helper-runtime-config')
+      expect(proof.literalMember).toBe('$PLUGINSDIR\\cc-haha-guarded-removal.exe.config')
+      expect(proof.member!.Path).toBe(proof.literalMember)
+      expect(proof.setup.sha256).toBe(receipt.uninstallerSha256)
+      expect(proof.captured).toEqual(receipt.compiledConfig)
+      expect(proof.output!.bytes).toBe(f.settings.length)
+      expect(proof.output!.sha256).toBe(sha(f.settings))
+      expect(readFileSync(proof.output!.file)).toEqual(f.settings)
+      expect(f.settings.toString('utf8')).toStartWith('<?xml')
+      expect(f.settings.toString('ascii', 0, 2)).not.toBe('MZ')
+      expect(proof.commands.map(value => value.argv[0])).toEqual(['l', 'e'])
+      for (const command of proof.commands) {
+        expect(command.argv).toContain('-tNsis')
+        expect(command.status).toBe(0)
+      }
+      expect(proof.commands[1]!.argv).toEqual(['e', '-tNsis', '-spd', '-so', '-bso0', '-bse2', '-bsp0', '--', proof.setup.file, proof.literalMember])
+      expect(readFileSync(proof.commands[1]!.stdout.file!)).toEqual(f.settings)
+      expect(JSON.parse(readFileSync(receipt.configMember.evidenceFile, 'utf8')).status).toBe('member_proven')
+      expect(receipt.fullF1).toBe('not_proven')
+    } finally { f.cleanup() }
+  })
+  test.each(['missing', 'duplicate', 'literal', 'bytes', 'size', 'folder', 'encrypted'])('embedded helper config rejects %s and leaves package unprepared', async kind => {
+    const f = await fixture()
+    try {
+      f.mutate(`config-${kind}`)
+      await expect(verifyCandidateOutputs(f.options)).rejects.toThrow('member is not proven')
+      expect(existsSync(join(f.evidence, 'candidate-package-receipt.json'))).toBe(false)
+      expect(existsSync(join(f.evidence, 'embedded-helper.exe.config'))).toBe(false)
+      if (kind !== 'duplicate') {
+        const proof = JSON.parse(readFileSync(join(f.evidence, 'uninstaller-config-member/member-proof.json'), 'utf8'))
+        expect(proof.status).toBe('not_proven')
+        expect(proof.literalMember).toBe(candidatePackage.helperConfigLiteral)
+      }
+    } finally { f.cleanup() }
+  })
+  test.each(['literal', 'duplicate', 'bytes', 'helper-literal', 'helper-bytes', 'capture', 'nonce', 'tiny', 'extra-setup', 'missing-sidecar', 'wrong-arch', 'asar-version', 'asar-main'])('rejects %s output without claiming a full package proof', async kind => {
+    const f = await fixture()
+    try {
+      if (['literal', 'duplicate', 'bytes', 'helper-literal', 'helper-bytes'].includes(kind)) f.mutate(kind)
+      if (kind === 'capture') writeFileSync(join(f.capture, 'compiled-helper.exe'), 'MZ changed compiled output')
+      if (kind === 'nonce') f.options.nonce = 'another invocation'
+      if (kind === 'tiny') truncateSync(f.setup, 4096)
+      if (kind === 'extra-setup') copyFileSync(f.setup, join(f.output, 'Other-Setup.exe'))
+      if (kind === 'missing-sidecar') rmSync(f.sidecar)
+      if (kind === 'wrong-arch') {
+        const value = readFileSync(f.sidecar)
+        value.writeUInt16LE(0x14c, 68)
+        writeFileSync(f.sidecar, value)
+      }
+      if (kind === 'asar-version') {
+        const file = join(f.output, 'win-unpacked/resources/app.asar'), value = JSON.parse(readFileSync(file, 'utf8'))
+        value['package.json'] = '{"version":"0.0.0"}'
+        writeFileSync(file, JSON.stringify(value))
+      }
+      if (kind === 'asar-main') writeFileSync(join(f.source, 'desktop/electron-dist/main.cjs'), 'different build main')
+      const message = ['literal', 'duplicate', 'bytes'].includes(kind) ? 'uninstaller member is not proven'
+        : kind.startsWith('helper-') ? 'compiled helper member is not proven' : kind.startsWith('asar-') ? 'version/main bundle'
+        : kind === 'capture' ? 'capture identity changed' : kind === 'nonce' ? 'another invocation'
+          : kind === 'tiny' ? 'Unbounded or aliased' : kind === 'extra-setup' ? 'one complete current'
+            : kind === 'missing-sidecar' ? 'ENOENT' : 'Windows x64'
+      await expect(verifyCandidateOutputs(f.options)).rejects.toThrow(message)
+      expect(existsSync(join(f.evidence, 'candidate-package-receipt.json'))).toBe(false)
+    } finally { f.cleanup() }
+  })
+})

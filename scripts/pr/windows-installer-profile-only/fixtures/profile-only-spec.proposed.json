@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "mode": "createprofile-only-controller",
+  "executionStage": "profile-only",
+  "realExecutionAdmitted": false,
+  "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+  "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+  "generation": 1,
+  "sourceRoot": null,
+  "gitRoot": "D:\\a\\cc-haha\\cc-haha",
+  "controllerRoot": null,
+  "output": null,
+  "setupPath": null,
+  "expectedBinarySha256": "9c03e5b01b25503cbae216854d70991a7f781020ef8262c356dc75eea0acb782",
+  "sourcePins": [
+    {
+      "file": "windows-installer-profile-fixture.cs",
+      "sha256": "b388d5d94c4fea11f9abedf81a6c9ece43c5b9c0020866f4e8e70d9fb0cec898"
+    },
+    {
+      "file": "windows-installer-profile-native.cs",
+      "sha256": "d02ef7cedeafa8ff1a9df53190ae2ec93520372acb8133591ba73b35a48e164f"
+    },
+    {
+      "file": "windows-installer-profile-fixture-tests.cs",
+      "sha256": "5d8e2d05da1ce90ddeaa6bd552dbecaa919698a98bbeda8cbf8358f7751c5b86"
+    }
+  ],
+  "frozenPlanManifestSha256": "60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672",
+  "argvEnvPlanSha256": "d2e740b8d48b87b3e34a53cec9f9400bd08797b17538ab8cb1f0cc548736451a"
+}

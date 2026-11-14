@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "packageSourceHead": "7bc62ecd68b96e900094b924193f06438be6ba2a",
+  "packageTree": "ad9557bd188ca322f16ae4b6f4863de649128329",
+  "packageRunId": 43581658402,
+  "packageArtifact": {
+    "id": 14109460170,
+    "name": "windows-installer-candidate-package-7bc62ecd68b96e900094b924193f06438be6ba2a-43581658402",
+    "size": 219177029,
+    "digest": "sha256:c00ee9dc89a3bf1f38babcbf4aaf38fc74f347b351d439c9379bb6b31837539b"
+  },
+  "packageReceipt": {
+    "file": "candidate-package-receipt.json",
+    "bytes": 40353,
+    "sha256": "4aa89e11fa991c8e98aa13bea70e1cb2983445cf2902881caf92873067e579ef"
+  },
+  "productSourcePins14": [
+    {
+      "path": "package.json",
+      "canonicalSha256": "d3f0d81747a3ebcbc2b78107e4a8842c677611798e3e7064293abfc4eafd2703",
+      "receiptBytes": 7826,
+      "receiptSha256": "6a346a999a0c0fa850fc7c9f5485ebc3abec0f83277acd691aea054da1aa7bad"
+    },
+    {
+      "path": "bun.lock",
+      "canonicalSha256": "06a7aae5517cb80c6979ee9d4d16be2a063ae33a30f9473481e2259e04362a62",
+      "receiptBytes": 163581,
+      "receiptSha256": "2f4ada42df5f249b2977e910918e23f8963d4aacfe2426359967ed8329ccd040"
+    },
+    {
+      "path": "desktop/package.json",
+      "canonicalSha256": "9f97c8b35a1ab2f024fec478ed1d5bf63c197f5367e7487318b465576c57ae1a",
+      "receiptBytes": 7900,
+      "receiptSha256": "e7e6cca5d9b66549428cf77619b4bee2bd855e2fda89ae907aa8f0305033a20f"
+    },
+    {
+      "path": "desktop/bun.lock",
+      "canonicalSha256": "b772c3d3bddd17f91cd18b8160e8c54053879fbf1e2c19e7adc00115f8b2a2da",
+      "receiptBytes": 294904,
+      "receiptSha256": "44a4df3701e7e20840b29e769593175a60a2a6c92818bcf51ee901a3165817df"
+    },
+    {
+      "path": "adapters/bun.lock",
+      "canonicalSha256": "d264228b605af745c46b2b9d99f2ff75ea46231b8734d6ae9cacbe33951ff6e7",
+      "receiptBytes": 49696,
+      "receiptSha256": "9bfb8bbe36450c8717f991291b3ecffcaacd1ef671a9475d6e0854b657f23a0f"
+    },
+    {
+      "path": "mobile/bun.lock",
+      "canonicalSha256": "f54cc1bf1c6d912e527036fea9882edfcf011ba37c6fb1241ef00d8a2ab3ffc9",
+      "receiptBytes": 289975,
+      "receiptSha256": "9b31fae4875d538dacaabda3a51416a9af42adb8b07158980ee2f29f3168ce02"
+    },
+    {
+      "path": "desktop/scripts/build-windows-x64.ps1",
+      "canonicalSha256": "ba34e94cbe9b27b33a5200bb6a546dfd217c0786a7ca22dafb34606c777be434",
+      "receiptBytes": 7553,
+      "receiptSha256": "5e7c8f7365efc1404ac9ea34c9a224a5558e35ff0d7a3575c8730cf673b03fd8"
+    },
+    {
+      "path": "desktop/scripts/build-sidecars.ts",
+      "canonicalSha256": "7e53c3d70c557f36b9d5c64cd0210d0e1f2e30825528f250722196921cc6840b",
+      "receiptBytes": 16145,
+      "receiptSha256": "f54039c4b82024dac9203b32f46beb4fb0791b42e33f36de60cc25351a3596c8"
+    },
+    {
+      "path": "desktop/build/installer.nsh",
+      "canonicalSha256": "b88e914a3bf87ad4453944348c336f8b8633eb463c9b89b1399f902397f98b03",
+      "receiptBytes": 31495,
+      "receiptSha256": "0080ac7918acf2c485b169f446ce6d1f5a471c14b8ce68129715e2070093b8aa"
+    },
+    {
+      "path": "desktop/build/guarded-removal.cs",
+      "canonicalSha256": "fcc4779804b2e66c3030c81553fa0e798f62078aa9a83b552c83a765114637c0",
+      "receiptBytes": 76795,
+      "receiptSha256": "27c3f167cd0e23205ba62c45c9cc738b8f09823c24107cd5e43d2358a41fa2f2"
+    },
+    {
+      "path": "desktop/build/guarded-removal-launch.nsh",
+      "canonicalSha256": "528457194b55ce04abc441664e06a73894d783d3fa67e163e332cfe65e830242",
+      "receiptBytes": 37312,
+      "receiptSha256": "3b32c568231b5094ef0ec8fa3b7b013ea7a0843baca6928a1b7d44c9c2d4d88b"
+    },
+    {
+      "path": "desktop/build/legacy-uninstaller-compat.nsh",
+      "canonicalSha256": "0abc9c2c4eb9ea458db79cef2485ca9f3febc5074d72f7b15121d46d4317130c",
+      "receiptBytes": 20982,
+      "receiptSha256": "19abeea5c16d8d591385d9340bd2bd8e0826c28c6f43b8ae5f761105ef0edfbc"
+    },
+    {
+      "path": "desktop/scripts/nsis-guarded-removal.cjs",
+      "canonicalSha256": "0c27fa0decf6af2941c2cc74b5f9652923065dab24ccdf23061fc8ef61390736",
+      "receiptBytes": 5524,
+      "receiptSha256": "6e25d1a1e1aaed7ab7d069ed32d515fc86d6b62bb1434641a60b85f8257e08f9"
+    },
+    {
+      "path": "desktop/scripts/nsis-legacy-compat.cjs",
+      "canonicalSha256": "1cc284f664099caaef8d0304f86091239b487d69fade3bb2dbd2196e55e3dbab",
+      "receiptBytes": 8612,
+      "receiptSha256": "6d2963cb4d04c6d54632f6ceaea5e6e3fbb6472090cb6e3bbd7e5b5a5ae4f91f"
+    }
+  ],
+  "setup": {
+    "file": "Claude-Code-Haha-0.7.8-Windows-x64-Setup.exe",
+    "bytes": 218418822,
+    "sha256": "058d55c3d28905eb013ae66879a836245a004022bc4e83edc9198561fed72030"
+  },
+  "uninstaller": {
+    "bytes": 214502,
+    "sha256": "8350a694b0d7f9eb243f6c51a64f145207988e4485febbec5e84a72fa59df418"
+  },
+  "guardedRemoval": {
+    "bytes": 52224,
+    "sha256": "fb74dacc504222016497c199489133d3bf48fbfa44b046195e19f81e1cc132fc"
+  },
+  "config": {
+    "bytes": 308,
+    "sha256": "1d788b468c1c6454511f16f2c909bbaf6bee157ad711b7ca7c96f8c8c8f53be3"
+  },
+  "payloads": [
+    {
+      "kind": "app-exe",
+      "relativePath": "Claude Code Haha.exe",
+      "bytes": 232749568,
+      "sha256": "8567fc808fdba235d50317d3c4b00ae61c233cc3b74492bf01b310982e0f5beb"
+    },
+    {
+      "kind": "app-asar",
+      "relativePath": "resources\\app.asar",
+      "bytes": 192271431,
+      "sha256": "ee771a420aa55ca58091676fbcd7c23f9f1514dca31379ce3ac953b8a9a06445"
+    },
+    {
+      "kind": "sidecar",
+      "relativePath": "resources\\app.asar.unpacked\\src-tauri\\binaries\\claude-sidecar-x86_64-pc-windows-msvc.exe",
+      "bytes": 132575744,
+      "sha256": "411c32fe1b3a8f6ef578703bd381d5f3957701f3bc07b4237d36499f13d81d44"
+    }
+  ],
+  "memberProof": {
+    "file": "setup-member/member-proof.json",
+    "bytes": 6800,
+    "sha256": "f40c46b1a20e895a4972d53d75ce086b3b8b4844f5fb39a85e8fd41721aad870"
+  },
+  "helperProof": {
+    "file": "uninstaller-member/member-proof.json",
+    "bytes": 6716,
+    "sha256": "b2356ed982f21e37054eeffb8e2b122a514b313664846df26c5a77dc29965cf0"
+  },
+  "configProof": {
+    "file": "uninstaller-config-member/member-proof.json",
+    "bytes": 6357,
+    "sha256": "ad8b9a0972941822f8012e43ba8ac103db20dc16ecd224470516a09b8030aad6"
+  }
+}

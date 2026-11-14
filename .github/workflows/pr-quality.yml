@@ -1,4 +1,5 @@
 name: PR Quality
+run-name: ${{ github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha) && format('profile1879-p:{0}', github.event.pull_request.head.sha) || github.event.pull_request.title || github.event.head_commit.message || 'PR Quality' }}
 
 # Also runs after every merge to main, scoped to what that push changed. A gate
 # that only ever looks at pull requests lets main drift red unnoticed, and then
@@ -14,8 +15,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: pr-quality-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # An admitted diagnostic is never in an ordinary PR cancellation group.
+  group: ${{ github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha) && format('profile1879-p-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || format('pr-quality-{0}', github.event.pull_request.number || github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha)) }}
 
 jobs:
   scope-plan:
@@ -381,6 +383,213 @@ jobs:
       - name: Run desktop native checks
         run: bun run check:native
 
+  windows-installer-checks:
+    name: windows-installer-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.desktop_native_checks == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      # This is dependency/fixture acquisition, not a test: both downloads are
+      # pinned and verified before the offline NSIS harness starts.
+      - name: Prepare pinned Windows installer dependencies
+        id: prepare
+        run: bun --no-env-file scripts/pr/prepare-windows-installer-tests.ts
+      - name: Run offline native installer regressions
+        run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts
+      - name: Compile and test the owned profile fixture (Stage A only)
+        if: always() && steps.prepare.outcome == 'success'
+        run: bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts
+      - name: Test the profile-only bootstrap producer without accounts or profiles
+        run: |
+          $env:CC1879_PREFLIGHT_PARENT_PSHOME = $PSHOME
+          bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-bootstrap-preflight
+      - name: Probe owned removal primitives without accounts or profiles
+        if: always() && steps.prepare.outcome == 'success'
+        run: bun --no-env-file test --parallel=1 --max-concurrency=1 --no-orphans ./scripts/pr/windows-installer-removal-primitives.test.ts
+      - name: Validate the owned ETW calibration contract
+        if: always() && steps.prepare.outcome == 'success'
+        run: bun --no-env-file test ./scripts/pr/windows-installer-etw-calibration.test.ts
+      # Advisory capability evidence only; unknown ETW support never weakens an existing check.
+      - name: Collect owned ETW calibration without accounts or profiles (advisory)
+        if: always() && steps.prepare.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: powershell
+        env:
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
+        run: |
+          & .\scripts\pr\windows-installer-etw-calibration.ps1 -RunCiCalibration -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'artifacts\windows-installer\etw-calibration')
+      - name: Upload Windows installer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-evidence
+          path: artifacts/windows-installer/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Preserve verified historical fixture for profile review
+        if: always() && steps.prepare.outputs.fixture_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-v078-fixture
+          path: ${{ steps.prepare.outputs.fixture_dir }}
+          if-no-files-found: error
+          retention-days: 2
+      - name: Clean Windows installer temporary directories
+        if: always()
+        run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts --cleanup-prepared
+
+  # Complete build evidence only. This job creates no account/profile and is
+  # outside the required gate; actual installation still needs separate F1 scope.
+  windows-candidate-package:
+    needs: windows-installer-checks
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'NanmiCoder/cc-haha' &&
+      github.event.pull_request.number == 1883 &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&
+      github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' &&
+      contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) &&
+      github.run_attempt == 1 &&
+      needs.windows-installer-checks.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up the normal release Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        env:
+          CARGO_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\cargo
+          RUSTUP_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\rustup
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Validate candidate package preparation boundaries
+        run: bun --no-env-file test ./scripts/pr/prepare-windows-installer-candidate-package.test.ts
+      - name: Build and statically bind the complete unsigned Windows x64 package
+        env:
+          WINDOWS_INSTALLER_CHECKS_RESULT: ${{ needs.windows-installer-checks.result }}
+          CARGO_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\cargo
+          RUSTUP_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\rustup
+        run: bun --no-env-file scripts/pr/prepare-windows-installer-candidate-package.ts
+      - name: Preserve bounded candidate package and original static evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-candidate-package-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: artifacts/windows-installer-candidate-package/
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+
+  # Diagnostic only. Applying the exact-head label is a separate coordinator
+  # admission after review and ordinary CI; no normal push/label runs this job.
+  windows-profile-only-review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'NanmiCoder/cc-haha' &&
+      github.event.sender.login == 'NanmiCoder' &&
+      github.event.action == 'labeled' &&
+      github.event.pull_request.number == 1883 &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&
+      github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' &&
+      github.actor == 'NanmiCoder' &&
+      github.run_attempt == 1 &&
+      github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Claim the first exact-head profile-only invocation with complete history
+        env:
+          PROFILE_REVIEW_TOKEN: ${{ github.token }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-claim
+      - name: Download only the verified Stage A fixture without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14070542178'
+          merge-multiple: true
+          run-id: '43492838022'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          path: D:\a\_temp\cc-haha-1879-profile-only-download
+      - name: Atomically prepare private bootstrap, protected claim and A inputs
+        id: profile-prepare
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-prepare
+      - name: Run the separately admitted disabled-SID CreateProfile diagnostic once
+        id: profile-only
+        shell: powershell
+        env:
+          PROFILE_PACKAGE: ${{ steps.profile-prepare.outputs.package_dir }}
+          PROFILE_A: ${{ steps.profile-prepare.outputs.stage_a_dir }}
+          PROFILE_CLAIM: ${{ steps.profile-prepare.outputs.claim_file }}
+          PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
+          PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
+          PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
+        run: |
+          & (Join-Path $env:PROFILE_PACKAGE 'launch-profile-only.proposed.ps1') -ExecuteReviewedProfileOnly -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM -StageAInputDirectory $env:PROFILE_A
+      # A separate serial process. Its own gates require launcher/Controller
+      # gone, and it never kills, unloads, deletes or reports cleanup success.
+      - name: Reconcile only the bound disabled account after an uncertain result
+        if: ${{ always() && steps.profile-prepare.outcome == 'success' && steps.profile-only.outcome != 'success' && steps.profile-only.outcome != 'skipped' }}
+        shell: powershell
+        env:
+          PROFILE_PACKAGE: ${{ steps.profile-prepare.outputs.package_dir }}
+          PROFILE_CLAIM: ${{ steps.profile-prepare.outputs.claim_file }}
+          PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
+          PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
+          PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
+        run: |
+          & (Join-Path $env:PROFILE_PACKAGE 'reconcile-profile-only.proposed.ps1') -DisableReviewedProfileOnlyOwnedAccount -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM
+      - name: Collect bounded original profile-only reports
+        if: ${{ always() && steps.profile-prepare.outcome == 'success' }}
+        env:
+          PROFILE_LAUNCHER_OUTCOME: ${{ steps.profile-only.outcome }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-collect
+      - name: Preserve profile-only evidence and uncertainty
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-only-review-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: artifacts/windows-installer-profile-only/
+          if-no-files-found: warn
+          retention-days: 7
+
   macos-swift-checks:
     name: macos-swift-checks
     needs: scope-plan
@@ -494,6 +703,7 @@ jobs:
       - agent-e2e-checks
       - adapter-checks
       - desktop-native-checks
+      - windows-installer-checks
       - macos-swift-checks
       - persistence-checks
       - docs-checks
@@ -540,6 +750,7 @@ jobs:
           require_selected "agent-e2e-checks" "${{ needs.scope-plan.outputs.agent_e2e_checks }}" "${{ needs.agent-e2e-checks.result }}"
           require_selected "adapter-checks" "${{ needs.scope-plan.outputs.adapter_checks }}" "${{ needs.adapter-checks.result }}"
           require_selected "desktop-native-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.desktop-native-checks.result }}"
+          require_selected "windows-installer-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.windows-installer-checks.result }}"
           require_selected "macos-swift-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.macos-swift-checks.result }}"
           require_selected "persistence-checks" "${{ needs.scope-plan.outputs.persistence_checks }}" "${{ needs.persistence-checks.result }}"
           require_selected "docs-checks" "${{ needs.scope-plan.outputs.docs_checks }}" "${{ needs.docs-checks.result }}"

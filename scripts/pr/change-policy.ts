@@ -76,6 +76,25 @@ const desktopNativeExactPaths = new Set([
   'desktop/scripts/build-macos-arm64.sh',
   'desktop/scripts/build-windows-x64.ps1',
   'desktop/scripts/build-linux.sh',
+  'desktop/build/installer.nsh',
+  'desktop/build/check-install-processes.ps1',
+  'desktop/build/check-install-processes.nsh',
+  'desktop/build/recover-legacy-install-data.ps1',
+  'scripts/pr/prepare-windows-installer-tests.ts',
+  'scripts/pr/run-windows-installer-checks.ts',
+  'scripts/pr/run-windows-installer-profile-checks.ts',
+  'scripts/pr/windows-installer-profile-fixture.cs',
+  'scripts/pr/windows-installer-profile-native.cs',
+  'scripts/pr/windows-installer-profile-fixture-tests.cs',
+  'scripts/pr/windows-installer-profile-only/argv-env-plan.json',
+  'scripts/pr/windows-installer-profile-review.ts',
+  'scripts/pr/windows-installer-profile-review.test.ts',
+  '.github/workflows/windows-installer-profile-review.yml',
+  'scripts/pr/windows-installer-process-check.test.ts',
+  'scripts/pr/windows-installer-recovery.test.ts',
+  'scripts/pr/windows-installer-native-fixtures.ts',
+  'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
+  'scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh',
 ])
 
 const desktopWebExactPaths = new Set([
@@ -411,6 +430,8 @@ export function evaluateChangePolicy(
     file.startsWith('desktop/electron/') ||
     file.startsWith('desktop/scripts/') ||
     file.startsWith('desktop/src-tauri/') ||
+    file.startsWith('scripts/pr/windows-installer-profile-only/') ||
+    file.startsWith('scripts/pr/windows-installer-profile-review/') ||
     desktopNativeExactPaths.has(file)
   ))
   const touchesProviderContract = selectionFiles.some((file) => startsWithAny(file, providerContractPrefixes))

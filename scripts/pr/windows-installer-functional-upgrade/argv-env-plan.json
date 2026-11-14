@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "kind": "isolated-functional-upgrade-argv-environment",
+  "executionStage": "functional-upgrade",
+  "controllerArgv": [
+    "--role",
+    "functional-controller",
+    "--spec",
+    "<protected-controller-spec>"
+  ],
+  "subjectArgv": [
+    "--role",
+    "functional-subject",
+    "--spec",
+    "<protected-subject-spec>"
+  ],
+  "setupArgv": [
+    "/S",
+    "/currentuser",
+    "/D=<exact-owned-default-install-root>"
+  ],
+  "oldUninstallerArgv": [
+    "/S",
+    "/KEEP_APP_DATA",
+    "/currentuser",
+    "--keep-shortcuts",
+    "--updated",
+    "_?=<exact-owned-default-install-root>"
+  ],
+  "powerShell": {
+    "source": "actualSystemRoot/SysWOW64/WindowsPowerShell/v1.0/powershell.exe",
+    "normalCimArgv": [
+      "-C",
+      "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
+    ],
+    "normalPolicyArgv": [
+      "-C",
+      "if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }"
+    ],
+    "unavailable": "same actual command with child-only COMPLUS_Version=v0.0.0-test-invalid-clr; require natural nonzero"
+  },
+  "helper": {
+    "image": "foreign/OpenConsole.exe",
+    "bytes": "exact copied reviewed fixture PE only",
+    "argv": [
+      "--functional-helper",
+      "--spec",
+      "<readonly-subject-spec>",
+      "--parent-pid",
+      "<actual-subject-pid>",
+      "--parent-creation",
+      "<actual-subject-filetime>"
+    ],
+    "usable": "owned-file nonce plus increasing sequence challenge/response; verify held Job/PID/ctime/SID/imageSHA/canonical outside install root before and after",
+    "network": false,
+    "startsAfter": "rebuild-old-install",
+    "maximumLifetimeMilliseconds": 900000
+  },
+  "subjectEnvironment": {
+    "source": "CorePolicy.BuildEnvironment exact allowlist from the fresh target token",
+    "HOME": "actual fresh profile",
+    "USERPROFILE": "actual fresh profile",
+    "APPDATA": "actual KnownFolder roaming",
+    "LOCALAPPDATA": "actual KnownFolder local",
+    "TEMP_TMP_TMPDIR": "exact owned tempRoot",
+    "PATH": "actualSystemRoot/System32;actualSystemRoot;actualSystemRoot/System32/Wbem;actualSystemRoot/System32/WindowsPowerShell/v1.0",
+    "XDG_CONFIG_CACHE_DATA_STATE": "fixtureRoot/isolated-<kind>",
+    "GH_CONFIG_DIR": "fixtureRoot/gh",
+    "CODEX_HOME": "fixtureRoot/codex",
+    "CC_HAHA_DISABLE_TERMINAL_SHELL_ENV": "1",
+    "faultOnly": {
+      "COMPLUS_Version": "v0.0.0-test-invalid-clr"
+    }
+  },
+  "forbidden": [
+    "saved-provider credentials",
+    "real-user-home or configuration",
+    "inherited arbitrary environment",
+    "URLs or network targets",
+    "manual guarded-removal.exe invocation",
+    "mock or forced exit substituted for natural0/22"
+  ],
+  "controllerBudgetMilliseconds": 900000,
+  "launcherWaitMilliseconds": 1200000,
+  "timeoutPolicy": "no kill or retry; retain unknown effects and fail",
+  "controllerEnvironment": {
+    "policy": "clear inherited environment; construct only these fixed owned/runtime values",
+    "names": [
+      "SystemRoot",
+      "WINDIR",
+      "SystemDrive",
+      "OS",
+      "ComSpec",
+      "PATH",
+      "HOME",
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "TEMP",
+      "TMP",
+      "TMPDIR",
+      "CI",
+      "GITHUB_RUN_ID",
+      "GITHUB_RUN_NUMBER",
+      "GITHUB_ACTOR",
+      "GITHUB_REF",
+      "GITHUB_SHA"
+    ],
+    "actionsContext": "only the five validated nonsecret GITHUB identity fields; never GITHUB_TOKEN/ACTIONS tokens or the packet environment"
+  }
+}

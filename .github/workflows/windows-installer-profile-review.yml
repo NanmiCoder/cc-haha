@@ -1,0 +1,98 @@
+name: Windows historical profile review
+run-name: ${{ github.event.label.name == format('p1879b-{0}', github.event.pull_request.head.sha) && format('profile1879-b:{0}', github.event.pull_request.head.sha) || 'inactive-profile-review' }}
+
+# Historical admission was consumed by run43380589124 on head9578. Keep its
+# original payloads for audit; no future head or new run may reuse this trigger.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  group: profile1879-b-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  historical-profile:
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.pull_request.head.sha == '9578b040d3f41060fc9b1e0a16fab2233939287c' &&
+      github.run_id == '43380589124' &&
+      github.event.pull_request.number == 1883 &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&
+      github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' &&
+      github.actor == 'NanmiCoder' &&
+      github.run_attempt == 1 &&
+      github.event.label.name == format('p1879b-{0}', github.event.pull_request.head.sha)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Claim the first exact-head invocation and original artifacts
+        env:
+          PROFILE_REVIEW_TOKEN: ${{ github.token }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --claim
+      - name: Download the original successful A artifact without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14008657574'
+          merge-multiple: true
+          run-id: '43361834858'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          path: D:\a\_temp\cc-haha-1879-reviewed-A
+      - name: Download the original pinned full historical setup
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14007544990'
+          merge-multiple: true
+          run-id: '43361834858'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          path: D:\a\_temp\cc-haha-1879-reviewed-v078
+      - name: Normalize and bind the approved scripts, raw sources and original PE
+        id: prepare
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --prepare
+      - name: Run the separately admitted historical Controller once
+        id: historical
+        shell: powershell
+        env:
+          REVIEW_PACKAGE: ${{ steps.prepare.outputs.package_dir }}
+          REVIEW_A: ${{ steps.prepare.outputs.stage_a_dir }}
+          REVIEW_SETUP: ${{ steps.prepare.outputs.setup_path }}
+        run: |
+          & (Join-Path $env:REVIEW_PACKAGE 'launch-stage-b.proposed.ps1') -ExecuteReviewedStageB -ApprovedSpecSha256 '337f999c0c3a0417c90ab4aae501849901ddf82c1d44d522083f311036de0a90' -StageAInputDirectory $env:REVIEW_A -VerifiedSetupPath $env:REVIEW_SETUP
+      # Separate serial step: the launcher PowerShell step/process has ended.
+      # The helper independently requires the original Controller to be gone.
+      # Its nonzero exit is intentional, even if only-disable succeeds.
+      - name: Reconcile only the bound owned account after failure or cancellation
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.historical.outcome != 'success' && steps.historical.outcome != 'skipped' }}
+        shell: powershell
+        env:
+          REVIEW_PACKAGE: ${{ steps.prepare.outputs.package_dir }}
+        run: |
+          & (Join-Path $env:REVIEW_PACKAGE 'reconcile-stage-b.proposed.ps1') -DisableReviewedOwnedAccount -ApprovedSpecSha256 '337f999c0c3a0417c90ab4aae501849901ddf82c1d44d522083f311036de0a90'
+      - name: Collect only bounded reports and historical JSON snapshots
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        env:
+          PROFILE_LAUNCHER_OUTCOME: ${{ steps.historical.outcome }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --collect
+      - name: Preserve original reports and unknown-state evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-profile-review-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: artifacts/windows-installer-profile-review/
+          if-no-files-found: warn
+          retention-days: 7

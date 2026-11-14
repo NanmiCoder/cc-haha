@@ -1,0 +1,39 @@
+{
+  "status": "PROPOSAL_ONLY_NOT_ADMITTED_NOT_EXECUTED",
+  "head": "e5aad0fefa759a3f1dcab963c4e12c4541863978",
+  "base": "e1156f5372f2ec202689d2001e279cc1a666b211",
+  "stageBase": "D:\\a\\_temp\\cc-haha-1879-b-e5aad0f-52f4ce19-g1",
+  "specSha256": "337f999c0c3a0417c90ab4aae501849901ddf82c1d44d522083f311036de0a90",
+  "binarySha256": "da7dfc9ffa9adbeb693736b79afaf78e9872a1df239b4e1e1eb6b377690c5cf8",
+  "binaryBytes": 195584,
+  "sourcePins": [
+    {
+      "file": "windows-installer-profile-fixture.cs",
+      "sha256": "be94a5b91a66f9d30eb8ecf459520fa07089d1db777771ef2e00738d8cfe99eb"
+    },
+    {
+      "file": "windows-installer-profile-native.cs",
+      "sha256": "6c32ed94be091b3ed60875edc538ca12aaca2585c30f44842539871271792a63"
+    },
+    {
+      "file": "windows-installer-profile-fixture-tests.cs",
+      "sha256": "f49653cbd4ee376bf697fbe24ed284bdc93718bb638c4cfd3bc6348869bd4fc1"
+    }
+  ],
+  "setupSha256": "dca6bb82f4d0fbee8d43c91912e4d50e7dcea69a7cb22c51cdd9cb265767c7e7",
+  "setupBytes": 230611497,
+  "setupAssetId": 730495182,
+  "memberSha256": "b0242b31b839cc8bf40ba4ac492004629bcf8ed28f8648d8c46b1797f7befb60",
+  "memberBytes": 174881,
+  "stageA": {
+    "run": 43361834858,
+    "job": 131677019360,
+    "artifact": 14008657574,
+    "zipSha256": "d824034fbfb1e28aa2bc68307ca6a85878891d599b32db2accd8d2b1e6a87e25"
+  },
+  "privilegesOnly": [
+    "SeBackupPrivilege",
+    "SeRestorePrivilege",
+    "SeImpersonatePrivilege"
+  ]
+}
