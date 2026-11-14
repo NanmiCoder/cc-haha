@@ -619,6 +619,7 @@ namespace CcHahaInstallerProfile
       RunF1NativeSliceTests(report);
       RunF1SafetyFixTests(report);
       RunF1CanaryDiagnosticContractTests(report);
+      RunF1CanaryRuntimeFixTests(report);
       Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
         FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
         Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
@@ -1423,14 +1424,15 @@ namespace CcHahaInstallerProfile
     {
       internal readonly Queue<F1DebugRecord> events = new Queue<F1DebugRecord>();
       internal readonly List<string> calls = new List<string>();
-      internal bool empty, terminated, pending, throwContinue, throwTerminate, throwDispose;
+      internal bool empty, terminated, pending, throwContinue, throwTerminate, throwDispose, emptyOnTerminate, throwAbortWait;
       public F1DebugRecord Wait(int milliseconds) { calls.Add("wait"); if (events.Count == 0) return null; pending = true; return events.Dequeue(); }
       public F1DebugNotice Capture(F1DebugRecord e) { calls.Add("capture:" + e.pid); return new F1DebugNotice { pid = e.pid, tid = e.tid, creationTime = "epoch-" + e.pid, image = new FileIdentity { sha256 = new String('a', 64) } }; }
       public void CloseImage(F1DebugRecord e) { if (e != null && e.file != IntPtr.Zero) { calls.Add("close-image"); e.file = IntPtr.Zero; } }
       public void Continue(F1DebugRecord e, uint disposition) { calls.Add("continue:" + e.code); if (throwContinue) throw new FixtureFailure("replay-continue-failed"); pending = false; if (events.Count == 0 && e.code == 5) empty = true; }
-      public void TerminateOwnedJob() { calls.Add("terminate-owned-job"); if (throwTerminate) throw new FixtureFailure("replay-termination-unknown"); terminated = true; }
+      public void TerminateOwnedJob() { calls.Add("terminate-owned-job"); if (throwTerminate) throw new FixtureFailure("replay-termination-unknown"); terminated = true; if (emptyOnTerminate) empty = true; }
       public bool JobEmpty { get { return empty; } }
       public void WaitNaturalExit(int milliseconds) { Assert(!pending && empty, "kernel wait must follow continued EXIT"); calls.Add("natural-wait"); }
+      public void WaitTerminatedExit(int milliseconds) { calls.Add("abort-wait"); Assert(!pending && empty && (!emptyOnTerminate || calls.Contains("continue:5")), "abort kernel wait must follow continued EXIT"); if (throwAbortWait) throw new FixtureFailure("replay-abort-kernel-exit-unknown"); }
       public void Dispose() { calls.Add("close-readonly-caps"); if (throwDispose) throw new FixtureFailure("replay-cap-close-unknown"); }
       internal void Process(int pid)
       { events.Enqueue(new F1DebugRecord { code = 3, pid = pid, tid = pid + 100, file = new IntPtr(1) }); events.Enqueue(new F1DebugRecord { code = 1, pid = pid, tid = pid + 100, exception = 0x80000003, firstChance = true }); events.Enqueue(new F1DebugRecord { code = 5, pid = pid, tid = pid + 100 }); }
@@ -1613,6 +1615,77 @@ namespace CcHahaInstallerProfile
       });
     }
 
+
+    private static void RunF1CanaryRuntimeFixTests(FixtureReport report)
+    {
+      Case(report, "f1-canary-abort-job-empty-still-drains-exit-before-cap-close", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi { emptyOnTerminate = true }; api.Process(10);
+        F1DebugPump pump = new F1DebugPump(api, n => new F1DebugReply { accept = false, sequence = n.sequence, barrier = n.barrier }, "zero-account-canary", new String('a', 32));
+        Reject(() => pump.Run(1000), "rejected create remains failure"); pump.Dispose();
+        Assert(api.calls.Contains("continue:5") && api.calls.IndexOf("continue:5") < api.calls.IndexOf("abort-wait")
+          && api.calls.IndexOf("abort-wait") < api.calls.IndexOf("close-readonly-caps"), "JobEmpty must not bypass the stopped EXIT event and kernel wait");
+      });
+      Case(report, "f1-canary-abort-kernel-wait-failure-retains-unknown-caps", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi { emptyOnTerminate = true, throwAbortWait = true }; api.Process(10);
+        F1DebugPump pump = new F1DebugPump(api, n => new F1DebugReply { accept = false, sequence = n.sequence, barrier = n.barrier }, "zero-account-canary", new String('a', 32));
+        Reject(() => pump.Run(1000), "first rejected create remains failure");
+        Reject(() => pump.Dispose(), "failed termination wait permanently latches unknown closure");
+        Assert(!api.calls.Contains("close-readonly-caps"), "unknown process exit cannot close epoch capabilities");
+      });
+      Case(report, "f1-canary-report-converts-filetime-without-changing-process-identity", delegate {
+        DateTime date = new DateTime(2026, 11, 14, 1, 2, 3, DateTimeKind.Utc).AddTicks(1234567);
+        string identity = date.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture), original = identity;
+        Assert(NativePlatform.CanaryCreationTimestamp(identity) == date.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+          && identity == original && identity.Length == 18, "report UTC projection must not mutate the retained FILETIME identity");
+        Assert(NativePlatform.CanaryCreationTimestamp(null) == null, "a never-created child retains nullable report time");
+      });
+      Case(report, "f1-canary-filetime-conversion-boundaries-and-malformed-inputs", delegate {
+        Assert(NativePlatform.CanaryCreationTimestamp("0") == "1601-01-01T00:00:00.0000000Z", "FILETIME epoch boundary");
+        string maximum = DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc).ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Assert(NativePlatform.CanaryCreationTimestamp(maximum) == "9999-12-31T23:59:59.9999999Z", "maximum UTC FILETIME boundary");
+        foreach (string invalid in new string[] { "", "-1", "+1", " 1", "1 ", "01", "1.0", "1e0", "18446744073709551616", "9223372036854775808", "2650467744000000000" })
+          Reject(() => NativePlatform.CanaryCreationTimestamp(invalid), "invalid or out-of-range FILETIME must fail closed");
+      });
+      Case(report, "f1-canary-create-binds-resolved-owned-image-before-user-code", delegate {
+        string hash = new String('a', 64), creation = "134391781230000000";
+        FileIdentity root = new FileIdentity { canonicalPath = @"C:\OwnedCanary", volumePath = "owned-volume", directory = true };
+        FileIdentity expected = new FileIdentity { canonicalPath = @"C:\OwnedCanary\profile-fixture.exe", volumePath = root.volumePath, fileId = "owned-image-id", sha256 = hash, bytes = 42 };
+        NativePlatform.RequireCanaryExpectedImage(expected, root, hash);
+        F1DebugNotice notice = new F1DebugNotice { pid = 10, creationTime = creation, image = new FileIdentity {
+          canonicalPath = expected.canonicalPath, volumePath = expected.volumePath, fileId = expected.fileId, sha256 = hash, bytes = expected.bytes } };
+        Assert(!CorePolicy.SamePath(notice.image.canonicalPath, @"D:\LogicalAlias\profile-fixture.exe"), "literal launch spelling is not a resolved object identity");
+        NativePlatform.RequireCanaryCreateNotice(notice, 10, creation, expected, hash);
+        foreach (string fault in new string[] { "pid", "ctime", "id", "volume", "bytes", "hash", "path", "reparse" })
+        {
+          F1DebugNotice changed = new F1DebugNotice { pid = notice.pid, creationTime = creation, image = new FileIdentity {
+            canonicalPath = expected.canonicalPath, volumePath = expected.volumePath, fileId = expected.fileId, sha256 = hash, bytes = expected.bytes } };
+          if (fault == "pid") changed.pid++;
+          if (fault == "ctime") changed.creationTime = "134391781230000001";
+          if (fault == "id") changed.image.fileId = "other-image-id";
+          if (fault == "volume") changed.image.volumePath = "other-volume";
+          if (fault == "bytes") changed.image.bytes++;
+          if (fault == "hash") changed.image.sha256 = new String('b', 64);
+          if (fault == "path") changed.image.canonicalPath = @"C:\Outside\profile-fixture.exe";
+          if (fault == "reparse") changed.image.reparse = true;
+          Reject(() => NativePlatform.RequireCanaryCreateNotice(changed, 10, creation, expected, hash), "every create identity constraint remains required");
+        }
+      });
+      Case(report, "f1-canary-expected-image-cannot-escape-its-owned-root-or-hash", delegate {
+        string hash = new String('a', 64);
+        FileIdentity root = new FileIdentity { canonicalPath = @"C:\OwnedCanary", volumePath = "owned-volume", directory = true };
+        foreach (string fault in new string[] { "path", "volume", "id", "hash", "directory", "reparse" })
+        {
+          FileIdentity changed = new FileIdentity { canonicalPath = @"C:\OwnedCanary\profile-fixture.exe", volumePath = root.volumePath, fileId = "owned-image-id", sha256 = hash, bytes = 42 };
+          if (fault == "path") changed.canonicalPath = @"C:\Outside\profile-fixture.exe";
+          if (fault == "volume") changed.volumePath = "other-volume";
+          if (fault == "id") changed.fileId = null;
+          if (fault == "hash") changed.sha256 = new String('b', 64);
+          if (fault == "directory") changed.directory = true;
+          if (fault == "reparse") changed.reparse = true;
+          Reject(() => NativePlatform.RequireCanaryExpectedImage(changed, root, hash), "the pre-launch held file is limited to the exact owned child leaf");
+        }
+      });
+    }
 
     private static void RunF1CanaryDiagnosticContractTests(FixtureReport report)
     {

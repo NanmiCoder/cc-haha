@@ -2632,6 +2632,7 @@ namespace CcHahaInstallerProfile
     void TerminateOwnedJob();
     bool JobEmpty { get; }
     void WaitNaturalExit(int milliseconds);
+    void WaitTerminatedExit(int milliseconds);
   }
   // Same synchronous machine is used by Win32 and deterministic replays.
   // It never waits for kernel shutdown while EXIT is still pending.
@@ -2712,17 +2713,27 @@ namespace CcHahaInstallerProfile
       // Signal only the separately verified owned Job, then release the stopped
       // event and drain on the creating thread. No kill-by-PID or image name.
       api.TerminateOwnedJob();
-      if (pending != null) { uint disposition = pending.code == 1 ? 0x80010001U : 0x00010002U; try { api.CloseImage(pending); } finally { Continue(disposition); } }
+      HashSet<int> draining = new HashSet<int>(live);
+      if (pending != null) DrainTerminatedEvent(draining);
       Stopwatch budget = Stopwatch.StartNew();
-      while (!api.JobEmpty && budget.ElapsedMilliseconds < 5000)
+      while ((draining.Count != 0 || !api.JobEmpty) && budget.ElapsedMilliseconds < 5000)
       {
         F1DebugRecord next = api.Wait(100); if (next == null) continue;
-        pending = next; api.CloseImage(next); Continue(next.code == 1 ? 0x80010001U : 0x00010002U);
+        pending = next; DrainTerminatedEvent(draining);
       }
-      CorePolicy.Require(api.JobEmpty, "f1-debug-abort-closure-unknown");
+      CorePolicy.Require(draining.Count == 0 && api.JobEmpty && budget.ElapsedMilliseconds < 5000, "f1-debug-abort-closure-unknown");
+      api.WaitTerminatedExit(5000 - checked((int)budget.ElapsedMilliseconds));
+      CorePolicy.Require(api.JobEmpty, "f1-debug-abort-final-job-not-empty");
       abortComplete = true;
       }
       catch { closureUnknown = true; throw; }
+    }
+    private void DrainTerminatedEvent(HashSet<int> draining)
+    {
+      F1DebugRecord item = pending;
+      if (item.code == 3) draining.Add(item.pid);
+      try { api.CloseImage(item); } finally { Continue(item.code == 1 ? 0x80010001U : 0x00010002U); }
+      if (item.code == 5) CorePolicy.Require(draining.Remove(item.pid), "f1-debug-abort-unobserved-exit");
     }
     internal bool Finished { get { return finished && !aborted; } }
     public void Dispose() { if (disposed) return; Owner(); CorePolicy.Require(!closureUnknown, "f1-debug-closure-unknown-retain-caps"); if (!finished) Abort(); CorePolicy.Require((finished || abortComplete) && api.JobEmpty, "f1-debug-drain-before-cap-close"); try { api.Dispose(); disposed = true; } catch { closureUnknown = true; throw; } }
