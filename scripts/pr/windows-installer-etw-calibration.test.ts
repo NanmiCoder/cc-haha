@@ -25,6 +25,33 @@ function pure(code: string) {
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
 
+// Replace only ETL I/O. Get-CalibrationFacts still parses, validates, decodes and
+// writes each real XML fixture; no EventLogReader or Windows API is invoked.
+const xmlReaderFixture = String.raw`
+function New-Object {
+  if ($args[0] -eq 'Diagnostics.Eventing.Reader.EventLogQuery') { return [pscustomobject]@{} }
+  if ($args[0] -eq 'Diagnostics.Eventing.Reader.EventLogReader') {
+    $reader=[pscustomobject]@{Index=0}
+    $reader|Add-Member ScriptMethod ReadEvent { if($this.Index -ge $script:fixtureRecords.Count){return $null}; $item=$script:fixtureRecords[$this.Index]; $this.Index++; return $item }
+    $reader|Add-Member ScriptMethod Dispose {}
+    return $reader
+  }
+  return Microsoft.PowerShell.Utility\New-Object @args
+}
+function FixtureRecord([string]$Body,[int]$Id=30,[int]$Version=1,[int]$Process=124,[string]$Provider='edd08927-9cc4-4e65-b970-c2560fb5c289') {
+  $xml="<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Guid='$Provider'/><EventID>$Id</EventID><Version>$Version</Version><TimeCreated SystemTime='2026-11-14T00:00:30Z'/><Execution ProcessID='$Process' ThreadID='42'/></System>$Body</Event>"
+  $item=[pscustomobject]@{ProviderId=[guid]$Provider; Id=$Id; Version=$Version; ProcessId=$Process; ThreadId=42; TimeCreated=[datetime]'2026-11-14T00:00:30Z'; Xml=$xml}
+  $item|Add-Member ScriptMethod ToXml {return $this.Xml}; $item|Add-Member ScriptMethod Dispose {}; return $item
+}
+function ScanFixture($Records) {
+  $script:fixtureRecords=@($Records); $path=Join-Path ([IO.Path]::GetTempPath()) (([guid]::NewGuid().ToString('N'))+'.sanitized.xml')
+  $native=@{ChildPid=123; ChildThreadId=42; CreationUtc='2026-11-14T00:00:00Z'; ExitUtc='2026-11-14T00:01:00Z'; ProcessIdentityVerified=$true; FileNtPath='owned'; KeyNtPath='owned'}
+  try { $facts=Get-CalibrationFacts 'owned-not-an-etl' $path $native; $text=[IO.File]::ReadAllText($path)
+    return @{facts=$facts; text=$text; eligible=(!$facts.ContainsKey('payloadScanComplete') -or $facts.payloadScanComplete)}
+  } finally { if([IO.File]::Exists($path)){[IO.File]::Delete($path)} }
+}
+`
+
 test('requires the deterministic contract while keeping OS observations advisory', () => {
   const jobs = (parse(readFileSync('.github/workflows/pr-quality.yml', 'utf8')) as any).jobs
   const job = jobs['windows-installer-checks']
@@ -47,6 +74,119 @@ test('requires the deterministic contract while keeping OS observations advisory
 }, 30_000)
 
 describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or registry calls', () => {
+  test('quarantines opaque and nested XML bodies through the actual reader for other PIDs', () => {
+    const result = pure(`${xmlReaderFixture}
+      $marker='4E455645522D5055424C495348'; $out=@()
+      foreach($body in @("<BinaryEventData>$marker</BinaryEventData>","<ProcessingErrorData><EventPayload>$marker</EventPayload></ProcessingErrorData>","<EventData><Binary>$marker</Binary></EventData>","<EventData><ComplexData><Data Name='CapturedData'>$marker</Data></ComplexData></EventData>")) {
+        $r=ScanFixture @((FixtureRecord $body)); $out+=@{published=$r.text.Contains($marker); eligible=$r.eligible; unknown=$r.facts.unknownRecords; mapping=$r.facts.mapping}
+      }; ConvertTo-Json -InputObject $out -Compress`)
+    expect(result).toEqual(Array.from({ length: 4 }, () => ({ published: false, eligible: false, unknown: 1, mapping: 'not_proven' })))
+  }, 30_000)
+
+  test('rejects adjacent extra nodes, namespace substitutions, attributes and nested flat fields', () => {
+    const result = pure(`${xmlReaderFixture}
+      $marker='4E455645522D5055424C495348'; $out=@()
+      $bodies=@("<EventData><Data Name='FileObject'>0x42</Data><Extra>$marker</Extra></EventData>","<EventData><Data Name='FileObject'><Data>$marker</Data></Data></EventData>","<EventData><Data Name='FileObject' Extra='$marker'>0x42</Data></EventData>","<EventData xmlns='urn:unknown'><Data Name='FileObject'>$marker</Data></EventData>","<EventData><Data xmlns='urn:unknown' Name='FileObject'>$marker</Data></EventData>","<EventData/><Extra>$marker</Extra>","<EventData/><!--$marker-->","<EventData><Data Name='FileObject'><![CDATA[$marker]]></Data></EventData>")
+      foreach($body in $bodies) { $r=ScanFixture @((FixtureRecord $body)); $out+=@{published=$r.text.Contains($marker); eligible=$r.eligible; unknown=$r.facts.unknownRecords} }
+      $record=FixtureRecord '<EventData/>'; $record.Xml=$record.Xml.Replace("<Event xmlns=", "<Event Extra='$marker' xmlns=")
+      $r=ScanFixture @($record); $out+=@{published=$r.text.Contains($marker); eligible=$r.eligible; unknown=$r.facts.unknownRecords}
+      $record=FixtureRecord '<EventData/>'; $record.Xml="<!DOCTYPE Event [<!ENTITY hidden '$marker'>]>"+$record.Xml
+      $r=ScanFixture @($record); $out+=@{published=$r.text.Contains($marker); eligible=$r.eligible; unknown=$r.facts.unknownRecords}
+      $record=FixtureRecord '<EventData/>'; $record.Xml=$record.Xml.Replace('<System>',"<System><Unexpected>$marker</Unexpected>")
+      $r=ScanFixture @($record); $out+=@{published=$r.text.Contains($marker); eligible=$r.eligible; unknown=$r.facts.unknownRecords}
+      ConvertTo-Json -InputObject $out -Compress`)
+    expect(result).toEqual(Array.from({ length: 11 }, () => ({ published: false, eligible: false, unknown: 1 })))
+  }, 30_000)
+
+  test('retains known flat metadata fields and an empty flat metadata-header fixture', () => {
+    const result = pure(`${xmlReaderFixture}
+      # Field shape is the actual c899 File30/v1 shape, with test-owned values.
+      $flat="<EventData><Data Name='Irp'>0x99</Data><Data Name='FileObject'>0x42</Data><Data Name='IssuingThreadId'>42</Data><Data Name='CreateOptions'>37752928</Data><Data Name='CreateAttributes'>0</Data><Data Name='ShareAccess'>7</Data><Data Name='FileName'>owned</Data></EventData>"
+      $r=ScanFixture @((FixtureRecord $flat),(FixtureRecord '<EventData/>' 0 2 124 '68fdd900-4a3e-11d1-84f4-0000f80464e3'))
+      @{eligible=$r.eligible; unknown=$r.facts.unknownRecords; events=$r.facts.events; flat=$r.text.Contains('FileName'); mapping=$r.facts.mapping}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ eligible: true, unknown: 0, events: 2, flat: true, mapping: 'not_proven' })
+  }, 30_000)
+
+  test('keeps a rejected metadata header private while scanning later valid canary facts', () => {
+    const result = pure(`${xmlReaderFixture}
+      $marker='4E455645522D5055424C495348'
+      $unknown=FixtureRecord "<ProcessingErrorData><ErrorCode>15003</ErrorCode><DataItemName/><EventPayload>$marker</EventPayload></ProcessingErrorData>" 0 2 124 '68fdd900-4a3e-11d1-84f4-0000f80464e3'
+      $create=FixtureRecord "<EventData><Data Name='FileName'>owned</Data><Data Name='FileObject'>0x42</Data><Data Name='Irp'>0x99</Data><Data Name='IssuingThreadId'>42</Data></EventData>" 30 1 123
+      $end=FixtureRecord "<EventData><Data Name='Irp'>0x99</Data><Data Name='Status'>0</Data></EventData>" 24 0 123
+      $write=FixtureRecord "<EventData><Data Name='FileObject'>0x42</Data><Data Name='IssuingThreadId'>42</Data></EventData>" 16 1 123
+      $r=ScanFixture @($unknown,$create,$end,$write)
+      @{eligible=$r.eligible; unknown=$r.facts.unknownRecords; events=$r.facts.events; writes=$r.facts.fileWrites; published=$r.text.Contains($marker); mapping=$r.facts.mapping; sanitized=$r.facts.xmlMeaning; labelled=$r.text.Contains('CompleteStream="false"')}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ eligible: false, unknown: 1, events: 4, writes: 1, published: false, mapping: 'not_proven', sanitized: 'validated-records-only;not-complete-stream', labelled: true })
+  }, 30_000)
+
+  test('maps the observed File30/v1 only inside the retained fresh-child epoch and explicit thread', () => {
+    const result = pure(`$n=@{ChildPid=123; ChildThreadId=42; CreationUtc='2026-11-14T00:00:00Z'; ExitUtc='2026-11-14T00:01:00Z'; ProcessIdentityVerified=$true; FileNtPath='\\Device\\owned\\canary.bin'; KeyNtPath='\\REGISTRY\\USER\\S-1-5-21-42\\Software\\CcHaha-CI-Fixture-owned'}
+      $f=New-FreshCalibrationFacts; $o=@{}; $k=@{}
+      $r=[pscustomobject]@{ProviderId=[guid]'edd08927-9cc4-4e65-b970-c2560fb5c289'; Id=30; Version=1; ProcessId=123; ThreadId=42; TimeCreated=[datetime]'2026-11-14T00:00:30Z'}
+      Add-FreshCalibrationEvent $f $r @{FileName=$n.FileNtPath; FileObject='0x42'; Irp='0x99'; IssuingThreadId=42} $n $o $k
+      $r.Id=24; $r.Version=0; Add-FreshCalibrationEvent $f $r @{Irp='0x99'; Status=0} $n $o $k
+      $r.Id=16; $r.Version=1; 1..3|ForEach-Object { Add-FreshCalibrationEvent $f $r @{FileObject='0x42'; IssuingThreadId=42} $n $o $k }
+      $r.ProcessId=124; Add-FreshCalibrationEvent $f $r @{FileObject='0x42'; IssuingThreadId=42} $n $o $k
+      @{writes=$f.fileWrites; other=$f.otherProcessEvents; mapping=$f.mapping}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ writes: 3, other: 1, mapping: 'not_proven' })
+  }, 30_000)
+
+  test('does not manufacture a registry namespace from a GUID leaf or the canary argument', () => {
+    const result = pure(`$n=@{ChildPid=123; ChildThreadId=42; CreationUtc='2026-11-14T00:00:00Z'; ExitUtc='2026-11-14T00:01:00Z'; ProcessIdentityVerified=$true; FileNtPath='owned'; KeyNtPath='\\REGISTRY\\USER\\S-1-5-21-42\\Software\\CcHaha-CI-Fixture-owned'}
+      $f=New-FreshCalibrationFacts; $o=@{}; $k=@{}
+      $r=[pscustomobject]@{ProviderId=[guid]'70eb4f03-c1de-4f73-a051-33d13d5413bd'; Id=1; Version=0; ProcessId=123; ThreadId=42; TimeCreated=[datetime]'2026-11-14T00:00:30Z'}
+      Add-FreshCalibrationEvent $f $r @{BaseObject='0x10'; KeyObject='0x20'; RelativeName='CcHaha-CI-Fixture-owned'; BaseName=''; Status=0} $n $o $k
+      $r.Id=5; foreach($t in @(0,3,0)){ Add-FreshCalibrationEvent $f $r @{KeyObject='0x20'; ValueName='type-canary'; Type=$t; Status=0; DataSize=0} $n $o $k }
+      @{sets=$f.registrySets; anchors=$f.absoluteAnchors; mapping=$f.mapping; view=$f.registryView}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ sets: 0, anchors: 0, mapping: 'not_proven', view: 'not_proven' })
+  }, 30_000)
+
+  test('uses only an observed absolute registry anchor and retires closed object generations', () => {
+    const result = pure(`$n=@{ChildPid=123; ChildThreadId=42; CreationUtc='2026-11-14T00:00:00Z'; ExitUtc='2026-11-14T00:01:00Z'; ProcessIdentityVerified=$true; FileNtPath='owned'; KeyNtPath='\\REGISTRY\\USER\\S-1-5-21-42\\Software\\CcHaha-CI-Fixture-owned'}
+      $f=New-FreshCalibrationFacts; $o=@{}; $k=@{}
+      $r=[pscustomobject]@{ProviderId=[guid]'70eb4f03-c1de-4f73-a051-33d13d5413bd'; Id=2; Version=0; ProcessId=123; ThreadId=42; TimeCreated=[datetime]'2026-11-14T00:00:30Z'}
+      Add-FreshCalibrationEvent $f $r @{KeyObject='0x10'; RelativeName='\\REGISTRY\\USER\\S-1-5-21-42\\Software'; Status=0} $n $o $k
+      $r.Id=1; Add-FreshCalibrationEvent $f $r @{BaseObject='0x10'; KeyObject='0x20'; RelativeName='CcHaha-CI-Fixture-owned'; Status=0} $n $o $k
+      $r.Id=5; foreach($t in @(0,3,0)){ Add-FreshCalibrationEvent $f $r @{KeyObject='0x20'; ValueName='type-canary'; Type=$t; Status=0; DataSize=0} $n $o $k }
+      $r.Id=13; Add-FreshCalibrationEvent $f $r @{KeyObject='0x20'; Status=0} $n $o $k
+      $r.Id=5; Add-FreshCalibrationEvent $f $r @{KeyObject='0x20'; ValueName='type-canary'; Type=3; Status=0; DataSize=0} $n $o $k
+      @{sets=$f.registrySets; types=($f.registryTypes -join ','); retired=$f.keyCloses; mapping=$f.mapping; view=$f.registryView}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ sets: 3, types: '0,3,0', retired: 1, mapping: 'not_proven', view: 'not_proven' })
+  }, 30_000)
+
+  test('rejects fresh-child thread, version, epoch and reused-or-closed object gaps', () => {
+    const result = pure(`$n=@{ChildPid=123; ChildThreadId=42; CreationUtc='2026-11-14T00:00:00Z'; ExitUtc='2026-11-14T00:01:00Z'; ProcessIdentityVerified=$true; FileNtPath='owned'; KeyNtPath='owned'}; $writes=0
+      foreach($kind in @('missing-thread','wrong-thread','wrong-version','before-epoch','unverified-process','closed','reused')) {
+        $n.ProcessIdentityVerified=$true; $f=New-FreshCalibrationFacts; $o=@{}; $k=@{}
+        $r=[pscustomobject]@{ProviderId=[guid]'edd08927-9cc4-4e65-b970-c2560fb5c289'; Id=30; Version=1; ProcessId=123; ThreadId=42; TimeCreated=[datetime]'2026-11-14T00:00:30Z'}
+        $create=@{FileName='owned'; FileObject='0x42'; Irp='0x99'; IssuingThreadId=42}; Add-FreshCalibrationEvent $f $r $create $n $o $k
+        $r.Id=24; $r.Version=0; Add-FreshCalibrationEvent $f $r @{Irp='0x99'; Status=0} $n $o $k; $r.Version=1
+        if($kind -eq 'closed') { foreach($i in @(13,14)){ $r.Id=$i; Add-FreshCalibrationEvent $f $r @{FileObject='0x42'; IssuingThreadId=42} $n $o $k } }
+        if($kind -eq 'reused') { $r.Id=30; Add-FreshCalibrationEvent $f $r $create $n $o $k }
+        $r.Id=16; $d=@{FileObject='0x42'; IssuingThreadId=42}
+        switch($kind) { 'missing-thread' {$d.Remove('IssuingThreadId')}; 'wrong-thread' {$d.IssuingThreadId=43}; 'wrong-version' {$r.Version=2}; 'before-epoch' {$r.TimeCreated=[datetime]'2026-11-13T23:59:00Z'}; 'unverified-process' {$n.ProcessIdentityVerified=$false} }
+        Add-FreshCalibrationEvent $f $r $d $n $o $k; $writes+=$f.fileWrites
+      }; @{writes=$writes}|ConvertTo-Json -Compress`)
+    expect(result).toEqual({ writes: 0 })
+  }, 30_000)
+
+  test('rejects unowned captured data and unknown body fields before any XML publication', () => {
+    const result = pure(`$n=@{ChildPid=123}; $f=New-FreshCalibrationFacts; $o=@{}; $k=@{}
+      $r=[pscustomobject]@{ProviderId=[guid]'70eb4f03-c1de-4f73-a051-33d13d5413bd'; Id=5; Version=0; ProcessId=124}
+      try { Add-FreshCalibrationEvent $f $r @{CapturedDataSize=1; CapturedData='never-retain-value'} $n $o $k } catch { $a=Safe-Error $_ 'decode' }
+      try { Add-FreshCalibrationEvent $f $r @{UnknownPayload='never-retain-value'} $n $o $k } catch { $b=Safe-Error $_ 'decode' }
+      @{payload=$a.valuePayload; fields=$b.unvalidatedFields; errors=(@($a,$b)|ConvertTo-Json -Compress)}|ConvertTo-Json -Compress`)
+    expect(result.payload).toBe(true)
+    expect(result.fields).toEqual(['UnknownPayload'])
+    expect(result.errors).not.toContain('never-retain-value')
+  }, 30_000)
+
+  test('never parses empty, fractional or overflowing event fields as a zero status or size', () => {
+    expect(pure(`$values=@('', ' ', '42.0', '-1', '+0', '18446744073709551616')
+      $unknown=@($values|ForEach-Object { $null -eq (Read-EventUnsigned $_) })
+      @{unknown=$unknown; zero=(Read-EventUnsigned '0'); hex=(Read-EventUnsigned '0x2a')}|ConvertTo-Json -Compress`)).toEqual({ unknown: [true, true, true, true, true, true], zero: 0, hex: 42 })
+  }, 30_000)
+
   test('parses and compiles the declared ABI without initializing ETW or touching HKCU', () => {
     const value = pure(`$errors=$null; $tokens=$null
       [Management.Automation.Language.Parser]::ParseFile(${ps(script)},[ref]$tokens,[ref]$errors)|Out-Null
@@ -54,6 +194,11 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       $flags=[Reflection.BindingFlags]'NonPublic'; $log=[CcHahaCiEtw].GetNestedType('LogFile',$flags)
       @{header=[Runtime.InteropServices.Marshal]::SizeOf([type][CcHahaCiEtw+Header]); log=[Runtime.InteropServices.Marshal]::SizeOf([type]$log)}|ConvertTo-Json -Compress`)
     expect(value).toEqual({ header: 280, log: 448 })
+  }, 30_000)
+
+  test('compiles both owned declarations and checks the SDK x64 child ABI without running either entry point', () => {
+    expect(pure(`Initialize-EtwNative; Add-Type -TypeDefinition (Get-OwnedCanarySource)
+      @{native=[CcHahaCiEtw]::FreshAbi(); child=[CcHahaFreshCanary]::ManagedAbi(); startup=[Runtime.InteropServices.Marshal]::SizeOf([type][CcHahaCiEtw+Startup]); process=[Runtime.InteropServices.Marshal]::SizeOf([type][CcHahaCiEtw+ProcessInfo])}|ConvertTo-Json -Compress`)).toEqual({ native: true, child: true, startup: 104, process: 24 })
   }, 30_000)
 
   test('denies execution before writing files when the explicit hosted CI scope is absent', () => {
