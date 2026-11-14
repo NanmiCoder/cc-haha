@@ -1,5 +1,6 @@
 import type { DiagnosticEvent, DiagnosticSeverity } from './diagnosticsService.js'
 import { redactSecrets, scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
+import { redactDiagnosticText } from './diagnosticRedaction.js'
 
 export type SharedDiagnosticEvent = {
   id: string
@@ -102,10 +103,15 @@ const SAFE_ERROR_NAMES = new Set([
   'TypeError',
   'URIError',
 ])
+const REMOTE_ACCESS_EVENT_TYPES = new Set(['remote_access_proxy_resolution', 'remote_access_gateway_verification'])
+const REMOTE_ACCESS_SCALAR_KEYS = new Set(['stage', 'outcome', 'reason', 'proxyMode', 'targetHost', 'contentType'])
+const REMOTE_ACCESS_NUMBER_KEYS = new Set(['durationMs', 'timeoutMs', 'status'])
 
 export function projectDiagnosticEventForSharing(event: DiagnosticEvent): SharedDiagnosticEvent {
   const omittedFields = ['summary']
-  const details = projectDetails(event.details, 'details', omittedFields)
+  const details = REMOTE_ACCESS_EVENT_TYPES.has(event.type)
+    ? projectRemoteAccessDetails(event.details, omittedFields)
+    : projectDetails(event.details, 'details', omittedFields)
   return {
     id: sanitizeSharedIdentifier(event.id, 'unknown-event', MAX_SHARED_IDENTIFIER_LENGTH),
     timestamp: sanitizeSharedIdentifier(event.timestamp, 'unknown-time', 64),
@@ -117,6 +123,39 @@ export function projectDiagnosticEventForSharing(event: DiagnosticEvent): Shared
     ...(details ? { details } : {}),
     omittedFields: [...new Set(omittedFields)].sort(),
   }
+}
+
+/** Only these producers log transport metadata, never request/response content. */
+function projectRemoteAccessDetails(value: unknown, omittedFields: string[]): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const details: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'attemptId' && typeof entry === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(entry)) details[key] = entry
+    else if (REMOTE_ACCESS_SCALAR_KEYS.has(key) && typeof entry === 'string') details[key] = projectSafeMetadataScalar(entry)
+    else if (REMOTE_ACCESS_NUMBER_KEYS.has(key) && typeof entry === 'number' && Number.isFinite(entry) && entry >= 0) details[key] = entry
+    else if (key === 'proxyUsed' && typeof entry === 'boolean') details[key] = entry
+    else if (key === 'error') {
+      const error = projectRemoteAccessError(entry, 'details.error', omittedFields)
+      if (error) details.error = error
+    } else omittedFields.push(`details.${key}`)
+  }
+  return Object.keys(details).length ? details : undefined
+}
+
+function projectRemoteAccessError(value: unknown, path: string, omittedFields: string[], depth = 0): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || depth >= 4) return undefined
+  const error: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (['name', 'code', 'syscall'].includes(key) && typeof entry === 'string') error[key] = projectSafeMetadataScalar(entry)
+    else if (key === 'description' && typeof entry === 'string') error.description = sanitizeSharedString(redactDiagnosticText(entry), 512)
+    else if (key === 'cause') {
+      const cause = projectRemoteAccessError(entry, `${path}.cause`, omittedFields, depth + 1)
+      if (cause) error.cause = cause
+    } else if (key === 'errors' && Array.isArray(entry)) {
+      error.errors = entry.slice(0, 4).map((child, index) => projectRemoteAccessError(child, `${path}.errors.${index}`, omittedFields, depth + 1)).filter(Boolean)
+    } else omittedFields.push(`${path}.${key}`)
+  }
+  return Object.keys(error).length ? error : undefined
 }
 
 export function projectProviderSummaryForSharing(
@@ -383,7 +422,10 @@ function formatErrorLine(event: SharedDiagnosticEvent): string {
   const details = event.details ?? {}
   const metadata = [
     typeof details.errorCode === 'string' ? `errorCode=${formatMetadata(details.errorCode)}` : '',
-    typeof details.status === 'string' ? `status=${formatMetadata(details.status)}` : '',
+    typeof details.status === 'string' || (REMOTE_ACCESS_EVENT_TYPES.has(event.type) && typeof details.status === 'number') ? `status=${formatMetadata(details.status)}` : '',
+    REMOTE_ACCESS_EVENT_TYPES.has(event.type) && typeof details.stage === 'string' ? `stage=${formatMetadata(details.stage)}` : '',
+    REMOTE_ACCESS_EVENT_TYPES.has(event.type) && typeof details.reason === 'string' ? `reason=${formatMetadata(details.reason)}` : '',
+    REMOTE_ACCESS_EVENT_TYPES.has(event.type) && typeof details.attemptId === 'string' ? `attemptId=${formatMetadata(details.attemptId)}` : '',
   ].filter(Boolean).join(', ')
   return `- ${formatMetadata(event.timestamp)} [${event.severity.toUpperCase()}] ${formatMetadata(event.type)} (${formatMetadata(event.id)})${metadata ? ` — ${metadata}` : ''}`
 }

@@ -1,9 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { PowerSaveBlocker } from 'electron'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessConfiguration, type DesktopPublicAccessStatus } from '../../src/lib/desktopHost/types'
 import { DEFAULT_PUBLIC_ACCESS_PORT, isPublicAccessConfiguration, normalizePublicAccessOrigin, readCloudflareTunnelToken } from '../../src/lib/desktopHost/publicAccessConfiguration'
 import { CloudflareTunnelError, publishedGatewayOrigin, startCloudflareTunnel, type CloudflareTunnel } from './cloudflareTunnel'
+import { recordPublicAccessDiagnostic, type PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 export { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
 
 export type PublicAccessStatus = DesktopPublicAccessStatus
@@ -18,12 +20,13 @@ type Settings = Record<string, unknown> & Omit<DesktopPublicAccessConfiguration,
   /** Hold off idle system sleep while remote access is wanted; on unless the user turned it off. */
   keepAwake: boolean
 }
-type Backend = { request<T>(route: string, method: string, body?: unknown): Promise<T> }
+type Backend = { request<T>(route: string, method: string, body?: unknown, context?: { attemptId: string }): Promise<T> }
 type Options = {
   directory: string
   backend: Backend
   desktopRoot?: string
   startTunnel?: typeof startCloudflareTunnel
+  onDiagnostic?: PublicAccessDiagnosticWriter
   /** Called whenever the connection state or the P2P preference changes. */
   onState?: (status: PublicAccessStatus) => void
   /**
@@ -304,7 +307,7 @@ export class PublicAccessManager {
    * Null when the attempt was superseded while it checked. Spaced checks give a
    * fresh hostname time to resolve before the tunnel is given up.
    */
-  private async verifyPublicUrl(live: () => boolean, signal: AbortSignal): Promise<boolean | null> {
+  private async verifyPublicUrl(live: () => boolean, signal: AbortSignal, attemptId: string, report: PublicAccessDiagnosticWriter): Promise<boolean | null> {
     const deadline = Date.now() + VERIFY_BUDGET_MS
     for (const [index, wait] of VERIFY_WAITS_MS.entries()) {
       if (index > 0) {
@@ -313,8 +316,11 @@ export class PublicAccessManager {
         if (!await pause(Math.min(wait, remaining), signal)) return null
       }
       if (!live()) return null
-      const result = await this.options.backend.request<{ ok: boolean }>('/verify', 'POST')
+      const startedAt = Date.now()
+      const result = await this.options.backend.request<{ ok: boolean }>('/verify', 'POST', undefined, { attemptId })
       if (!live()) return null
+      report({ stage: 'gateway_verification', outcome: result.ok ? 'succeeded' : 'failed', durationMs: Date.now() - startedAt,
+        reason: result.ok ? 'reachable' : 'unreachable', details: { attempts: index + 1 } })
       if (result.ok === true) return true
     }
     return false
@@ -341,17 +347,37 @@ export class PublicAccessManager {
   private async connect(generation: number, onRouteWait: () => void) {
     const controller = new AbortController()
     this.controller = controller
+    const attemptId = randomUUID()
+    const startedAt = Date.now()
+    const secrets = [this.settings.tunnelToken]
+    const report: PublicAccessDiagnosticWriter = event => recordPublicAccessDiagnostic(this.options.onDiagnostic, { ...event, attemptId }, secrets)
+    let stage = 'gateway_enable'
+    let stageStartedAt = startedAt
+    const enter = (next: string) => {
+      stage = next
+      stageStartedAt = Date.now()
+      report({ stage, outcome: 'started' })
+    }
+    const succeeded = (details?: Record<string, unknown>) => report({ stage, outcome: 'succeeded', durationMs: Date.now() - stageStartedAt, details })
+    report({ stage: 'connection', outcome: 'started', details: { mode: this.settings.mode, localPort: this.settings.localPort, retry: this.retryCount } })
     this.update({ state: this.retryCount ? 'reconnecting' : 'connecting', error: null, phase: 'preparing', publicUrl: null })
     try {
+      enter('gateway_enable')
       const { port } = await this.options.backend.request<{ port: number }>('/enable', 'POST', { port: this.settings.localPort })
       if (!this.current(generation)) return this.getStatus()
       if (port !== this.settings.localPort) throw new CloudflareTunnelError('configuration', 'Invalid fixed listener port configuration')
-      const { proxyUrl } = await this.options.backend.request<{ proxyUrl: string | null }>('/network', 'GET')
+      succeeded()
+      enter('proxy_resolution')
+      const { proxyUrl } = await this.options.backend.request<{ proxyUrl: string | null }>('/network', 'GET', undefined, { attemptId })
       if (!this.current(generation)) return this.getStatus()
+      if (proxyUrl) secrets.push(proxyUrl)
+      succeeded({ proxyUsed: !!proxyUrl })
+      enter('tunnel_start')
       const tunnel = await (this.options.startTunnel ?? startCloudflareTunnel)({
         mode: this.settings.mode, localPort: port,
         token: this.settings.mode === 'named' ? this.settings.tunnelToken : undefined,
         proxyUrl: proxyUrl || undefined, signal: controller.signal,
+        onDiagnostic: report,
         onPhase: () => { if (this.current(generation)) this.update({ phase: 'connecting' }) },
       }, { desktopRoot: this.options.desktopRoot })
       if (!this.current(generation)) {
@@ -360,20 +386,30 @@ export class PublicAccessManager {
         catch { this.stopUnconfirmed = true; this.update({ state: 'failed', error: 'stop', publicUrl: null, phase: null }) }
         return this.getStatus()
       }
+      succeeded()
       this.tunnel = tunnel
       this.unsubscribe = tunnel.onExit(() => { if (this.current(generation) && this.wanted) void this.recoverAfterExit() })
+      enter('route_discovery')
       const publicUrl = tunnel.url ?? await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait)
       if (!publicUrl || !this.current(generation)) return this.getStatus()
+      succeeded()
+      enter('gateway_origin')
       await this.options.backend.request('/origin', 'PUT', { publicUrl })
       if (!this.current(generation)) return this.getStatus()
+      succeeded()
+      enter('public_verification')
       this.update({ phase: 'checking' })
-      const verified = await this.verifyPublicUrl(() => this.current(generation), controller.signal)
+      const verified = await this.verifyPublicUrl(() => this.current(generation), controller.signal, attemptId, report)
       if (verified === null) return this.getStatus()
       if (!verified) throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
+      succeeded()
       this.established = { publicUrl, key: this.tunnelKey() }
       this.update({ publicUrl, state: 'online', phase: null })
       this.retryCount = 0
+      report({ stage: 'connection', outcome: 'succeeded', durationMs: Date.now() - startedAt })
     } catch (error) {
+      report({ stage, outcome: controller.signal.aborted || !this.current(generation) ? 'cancelled' : 'failed',
+        reason: classifyPublicAccessError(error), durationMs: Date.now() - stageStartedAt, error })
       if (error instanceof CloudflareTunnelError && error.retryStop) {
         this.pendingStops.add(error.retryStop)
         this.stopUnconfirmed = true
@@ -395,6 +431,8 @@ export class PublicAccessManager {
       // A network or proxy failure is retried with the same gateway, so phones
       // keep their resumable streams; anything final ends them.
       const retrying = closed && (category === 'network' || category === 'proxy') && this.canRetry()
+      report({ stage: 'connection', outcome: retrying ? 'retrying' : 'failed', durationMs: Date.now() - startedAt, reason: category,
+        details: { retryDelayMs: retrying ? Math.min(30_000, 1000 * 2 ** this.retryCount) : null } })
       try {
         if (retrying) await this.options.backend.request('/disable', 'POST', { reason: 'restart' })
         else await this.options.backend.request('/disable', 'POST')
@@ -531,21 +569,36 @@ export class PublicAccessManager {
     const port = this.settings.localPort
     this.attaching?.abort()
     const controller = new AbortController()
+    const attemptId = randomUUID()
+    const startedAt = Date.now()
+    const report: PublicAccessDiagnosticWriter = event => recordPublicAccessDiagnostic(this.options.onDiagnostic, { ...event, attemptId }, [this.settings.tunnelToken])
+    let stage = 'gateway_enable'
+    report({ stage: 'gateway_reattach', outcome: 'started', details: { localPort: port } })
     this.attaching = controller
     const live = () => this.current(generation) && attachment === this.attachment && this.tunnel === tunnel
     this.update({ state: 'reconnecting', phase: 'checking', error: null, publicUrl: null })
     try {
       const enabled = await this.options.backend.request<{ port: number }>('/enable', 'POST', { port })
       if (!live()) return 'superseded'
-      if (enabled.port !== port) return 'failed'
+      if (enabled.port !== port) {
+        report({ stage, outcome: 'failed', reason: 'listener_port_mismatch', durationMs: Date.now() - startedAt })
+        return 'failed'
+      }
+      stage = 'gateway_origin'
       await this.options.backend.request('/origin', 'PUT', { publicUrl })
       if (!live()) return 'superseded'
-      const verified = await this.verifyPublicUrl(live, controller.signal)
+      stage = 'public_verification'
+      const verified = await this.verifyPublicUrl(live, controller.signal, attemptId, report)
       if (verified === null) return 'superseded'
-      if (!verified) return 'failed'
+      if (!verified) {
+        report({ stage, outcome: 'failed', reason: 'unreachable', durationMs: Date.now() - startedAt })
+        return 'failed'
+      }
       this.update({ state: 'online', phase: null, error: null, publicUrl })
+      report({ stage: 'gateway_reattach', outcome: 'succeeded', durationMs: Date.now() - startedAt })
       return 'online'
-    } catch {
+    } catch (error) {
+      report({ stage, outcome: live() ? 'failed' : 'cancelled', reason: classifyPublicAccessError(error), durationMs: Date.now() - startedAt, error })
       return live() ? 'failed' : 'superseded'
     } finally {
       if (this.attaching === controller) this.attaching = null

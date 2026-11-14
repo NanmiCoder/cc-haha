@@ -21,6 +21,52 @@ afterEach(async () => {
 })
 
 describe('SystemProxyBridge', () => {
+  it('records the underlying CONNECT route failure before the bridge returns its generic 502', async () => {
+    const unavailablePort = await reserveClosedPort()
+    const events: unknown[] = []
+    const bridge = new SystemProxyBridge(async () => `PROXY 127.0.0.1:${unavailablePort}`, event => events.push(event))
+    bridges.push(bridge)
+    const address = await bridge.start()
+    await expect(connectAndEcho(address, 'region1.v2.argotunnel.com:7844', 'unused')).rejects.toThrow('502 Bad Gateway')
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'system_proxy_route', outcome: 'failed', reason: 'route_failed', durationMs: expect.any(Number),
+      details: expect.objectContaining({ ruleType: 'http', targetHost: 'region1.v2.argotunnel.com', targetPort: 7844, proxyHost: '127.0.0.1', proxyPort: unavailablePort }),
+      error: expect.objectContaining({ code: 'ECONNREFUSED', syscall: 'connect' }),
+    }))
+  })
+
+  it('records a CONNECT resolver failure with its cause without changing the failure response', async () => {
+    const events: unknown[] = []
+    const cause = Object.assign(new Error('PAC network unavailable'), { code: 'EHOSTUNREACH' })
+    const bridge = new SystemProxyBridge(async () => { throw Object.assign(new Error('PAC resolution failed'), { code: 'EPACRESOLVE', cause }) }, event => events.push(event))
+    bridges.push(bridge)
+    const address = await bridge.start()
+    await expect(connectAndEcho(address, 'api.trycloudflare.com:443', 'unused')).rejects.toThrow('502 Bad Gateway')
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'system_proxy_resolution', outcome: 'failed', reason: 'resolution_failed', durationMs: expect.any(Number),
+      details: expect.objectContaining({ targetHost: 'api.trycloudflare.com', targetPort: 443 }),
+      error: expect.objectContaining({ code: 'EPACRESOLVE', cause: expect.objectContaining({ code: 'EHOSTUNREACH' }) }),
+    }))
+  })
+
+  it('records a SOCKS negotiation failure before it is folded into CONNECT 502', async () => {
+    const events: unknown[] = []
+    const proxy = net.createServer(socket => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      socket.once('data', () => socket.end(Buffer.from([0x05, 0xff])))
+    })
+    servers.push(proxy)
+    const port = await listen(proxy)
+    const bridge = new SystemProxyBridge(async () => `SOCKS5 127.0.0.1:${port}`, event => events.push(event))
+    bridges.push(bridge)
+    const address = await bridge.start()
+    await expect(connectAndEcho(address, 'region1.v2.argotunnel.com:7844', 'unused')).rejects.toThrow('502 Bad Gateway')
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'system_proxy_route', outcome: 'failed', reason: 'route_failed',
+      details: expect.objectContaining({ ruleType: 'socks5', targetPort: 7844 }),
+      error: expect.objectContaining({ message: 'SOCKS5 proxy rejected no-authentication mode' }) }))
+  })
+
   it('preserves Chromium proxy fallback order and supported rule types', () => {
     expect(parseSystemProxyRules(
       'HTTPS secure.example:8443; PROXY plain.example:8080; SOCKS4 old.example:1080; SOCKS5 socks.example:1081; DIRECT',
@@ -160,7 +206,8 @@ describe('SystemProxyBridge', () => {
     expect(receivedHeaders['x-remove-me']).toBeUndefined()
   })
 
-  it('preserves fallback order for CONNECT tunnels', async () => {
+  it.each(['capture', 'throw'] as const)('preserves fallback order for CONNECT tunnels when diagnostics %s', async diagnosticMode => {
+    const events: unknown[] = []
     const echoServer = net.createServer(socket => {
       sockets.add(socket)
       socket.once('close', () => sockets.delete(socket))
@@ -184,11 +231,19 @@ describe('SystemProxyBridge', () => {
     const resolver = vi.fn(async () => (
       `PROXY 127.0.0.1:${unavailablePort}; PROXY 127.0.0.1:${proxyPort}; DIRECT`
     ))
-    const bridge = await startBridge(resolver)
+    const bridge = await startBridge(resolver, event => {
+      if (diagnosticMode === 'throw') throw new Error('diagnostic fixture failure')
+      events.push(event)
+    })
 
     await expect(connectAndEcho(bridge, 'foreign.example:443', 'tunnel-ok'))
       .resolves.toBe('tunnel-ok')
     expect(resolver).toHaveBeenCalledWith('https://foreign.example/')
+    if (diagnosticMode === 'capture') {
+      expect(events).toContainEqual(expect.objectContaining({ stage: 'system_proxy_route', outcome: 'failed', reason: 'route_failed' }))
+      expect(events).toContainEqual(expect.objectContaining({ stage: 'system_proxy_route', outcome: 'succeeded', reason: 'fallback_recovered',
+        details: expect.objectContaining({ attempts: 2 }) }))
+    }
   })
 
   it('surfaces proxy authentication requirements without falling through to DIRECT', async () => {
@@ -441,8 +496,9 @@ function createPendingProxyServer(port: number) {
 
 async function startBridge(
   resolver: (url: string) => Promise<string>,
+  onDiagnostic?: ConstructorParameters<typeof SystemProxyBridge>[1],
 ): Promise<string> {
-  const bridge = new SystemProxyBridge(resolver)
+  const bridge = new SystemProxyBridge(resolver, onDiagnostic)
   bridges.push(bridge)
   return await bridge.start()
 }
