@@ -197,7 +197,6 @@ export async function connectRemoteWorkspace(serverUrl: string, sshHost: string,
     enabled: true,
     connectedAt: new Date().toISOString(),
   })
-
   return normalizedUrl
 }
 
@@ -225,9 +224,11 @@ async function initializeRemoteWorkspaceUrl(): Promise<string | null> {
   const profile = getEnabledRemoteWorkspace()
   if (!profile) return null
 
+  console.warn('[remote-workspace] startup: applying saved profile for', profile.url, 'token:', profile.token ? 'present' : 'absent')
   try {
     await waitForHealth(profile.url, STARTUP_HEALTH_ATTEMPTS)
-  } catch {
+  } catch (error) {
+    console.warn('[remote-workspace] startup: healthcheck failed, falling back to local:', error instanceof Error ? error.message : error)
     disableUnreachableRemoteWorkspace()
     return null
   }

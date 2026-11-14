@@ -393,6 +393,7 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
     const stored = storage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)
     if (stored === null) return
     if (parseRemoteWorkspaceProfile(stored) === null) {
+      console.warn('[remote-workspace] migration: dropping unparsable profile:', stored?.slice(0, 120))
       storage.removeItem(REMOTE_WORKSPACE_STORAGE_KEY)
       report.migratedKeys.push(REMOTE_WORKSPACE_STORAGE_KEY)
     }
