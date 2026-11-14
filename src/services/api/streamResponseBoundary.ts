@@ -3,6 +3,7 @@ import type { AssistantMessage } from '../../types/message.js'
 import { createAssistantAPIErrorMessage } from '../../utils/messages.js'
 import { API_ERROR_MESSAGE_PREFIX } from './errors.js'
 import type { StreamAssistantCommitBuffer } from './streamAssistantCommitBuffer.js'
+import { markOutputLimitRetryBudget } from './outputBudget.js'
 
 export type OutputLimitStopReason = Extract<
   BetaStopReason,
@@ -30,12 +31,16 @@ export function commitOutputLimitResponse(
 
 export function createOutputLimitErrorMessage({
   stopReason,
+  maxOutputTokens,
   truncatedToolUse,
+  retryBudget,
 }: {
   stopReason: OutputLimitStopReason
   maxOutputTokens: number
   truncatedToolUse: boolean
+  retryBudget?: number
 }): AssistantMessage {
+  const canRetry = stopReason === 'max_tokens' && retryBudget !== undefined && retryBudget > maxOutputTokens
   const content = stopReason === 'max_tokens'
     ? truncatedToolUse
       ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated at an upstream length limit, so it was not executed. Retry with a larger supported output budget or split the operation into smaller tool calls.`
@@ -44,9 +49,10 @@ export function createOutputLimitErrorMessage({
       ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated at the context window limit, so it was not executed.`
       : `${API_ERROR_MESSAGE_PREFIX}: The model has reached its context window limit.`
 
-  return createAssistantAPIErrorMessage({
+  const message = createAssistantAPIErrorMessage({
     content,
-    ...(truncatedToolUse ? undefined : { apiError: 'max_output_tokens' }),
+    ...(!truncatedToolUse || canRetry ? { apiError: 'max_output_tokens' } : undefined),
     error: 'max_output_tokens',
   })
+  return canRetry ? markOutputLimitRetryBudget(message, retryBudget) : message
 }

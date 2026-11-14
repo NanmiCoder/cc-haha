@@ -166,6 +166,7 @@ export function GeneralSettings() {
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
+  const [outputEscalationSaving, setOutputEscalationSaving] = useState(false)
   const [subagentLimitInput, setSubagentLimitInput] = useState(String(maxConcurrentSubagents ?? ''))
   const [subagentLimitSaving, setSubagentLimitSaving] = useState(false)
   const [subagentLimitError, setSubagentLimitError] = useState<string | null>(null)
@@ -687,6 +688,18 @@ export function GeneralSettings() {
     }
   }
 
+  const handleOutputEscalationChange = async (mode: typeof maxOutputTokensEscalationMode) => {
+    if (outputEscalationSaving || mode === maxOutputTokensEscalationMode) return
+    setOutputEscalationSaving(true)
+    try {
+      await setMaxOutputTokensEscalationMode(mode)
+    } catch {
+      addToast({ type: 'error', message: t('settings.general.maxOutputTokensEscalationSaveFailed') })
+    } finally {
+      setOutputEscalationSaving(false)
+    }
+  }
+
   const handleOutputStyleChange = async (value: string) => {
     try {
       await setOutputStyle(value, outputStyleWorkDir)
@@ -1174,12 +1187,12 @@ export function GeneralSettings() {
             <SegmentedControl
               label={t('settings.general.maxOutputTokensEscalationTitle')}
               items={[
-                { value: 'auto', label: t('settings.general.maxOutputTokensEscalationAuto') },
-                { value: 'enabled', label: t('settings.general.maxOutputTokensEscalationEnabled') },
-                { value: 'disabled', label: t('settings.general.maxOutputTokensEscalationDisabled') },
+                { value: 'auto', label: t('settings.general.maxOutputTokensEscalationAuto'), disabled: outputEscalationSaving },
+                { value: 'enabled', label: t('settings.general.maxOutputTokensEscalationEnabled'), disabled: outputEscalationSaving },
+                { value: 'disabled', label: t('settings.general.maxOutputTokensEscalationDisabled'), disabled: outputEscalationSaving },
               ]}
               value={maxOutputTokensEscalationMode}
-              onChange={(mode) => void setMaxOutputTokensEscalationMode(mode)}
+              onChange={(mode) => void handleOutputEscalationChange(mode)}
               size="sm"
             />
           </SettingsRow>

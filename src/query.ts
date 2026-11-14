@@ -100,8 +100,7 @@ import {
   finalContextTokensFromLastResponse,
   tokenCountWithEstimation,
 } from './utils/tokens.js'
-import { ESCALATED_MAX_TOKENS } from './utils/context.js'
-import { isMaxTokensCapEnabled } from './services/api/claude.js'
+import { getOutputLimitRetryBudget } from './services/api/outputBudget.js'
 import { SLEEP_TOOL_NAME } from './tools/SleepTool/prompt.js'
 import { executePostSamplingHooks } from './utils/hooks/postSamplingHooks.js'
 import { executeStopFailureHooks } from './utils/hooks.js'
@@ -778,6 +777,7 @@ async function* queryLoop(
             // We could.. but then we'd have to merge assistant messages
             // with different ids and double up on full the tool_results
             if (streamingFallbackOccured) {
+              streamingFallbackOccured = false
               // Yield tombstones for orphaned messages so they're removed from UI and transcript.
               // These partial messages (especially thinking blocks) have invalid signatures
               // that would cause "thinking blocks cannot be modified" API errors.
@@ -1352,19 +1352,13 @@ async function* queryLoop(
       // was withheld from the stream above; only surface it if recovery
       // exhausts.
       if (isWithheldMaxOutputTokens(lastMessage)) {
-        // Escalating retry: if we used the capped 8k default and hit the
-        // limit, retry the SAME request at 64k — no meta message, no
-        // multi-turn dance. This fires once per turn (guarded by the
-        // override check), then falls through to multi-turn recovery if
-        // 64k also hits the cap.
-        const capEnabled = isMaxTokensCapEnabled()
-        if (
-          capEnabled &&
-          maxOutputTokensOverride === undefined &&
-          !process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
-        ) {
+        // Only the actual capped request can authorize a clean replay. The
+        // API layer records a larger, model-bounded budget for native routes;
+        // transformed/omitted or explicit budgets use ordinary continuation.
+        const retryBudget = getOutputLimitRetryBudget(lastMessage)
+        if (retryBudget !== undefined && maxOutputTokensOverride === undefined) {
           logEvent('tengu_max_tokens_escalate', {
-            escalatedTo: ESCALATED_MAX_TOKENS,
+            escalatedTo: retryBudget,
           })
           const next: State = {
             messages: messagesForQuery,
@@ -1372,7 +1366,7 @@ async function* queryLoop(
             autoCompactTracking: tracking,
             maxOutputTokensRecoveryCount,
             hasAttemptedReactiveCompact,
-            maxOutputTokensOverride: ESCALATED_MAX_TOKENS,
+            maxOutputTokensOverride: retryBudget,
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,
@@ -1400,7 +1394,7 @@ async function* queryLoop(
             autoCompactTracking: tracking,
             maxOutputTokensRecoveryCount: maxOutputTokensRecoveryCount + 1,
             hasAttemptedReactiveCompact,
-            maxOutputTokensOverride: undefined,
+            maxOutputTokensOverride,
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,

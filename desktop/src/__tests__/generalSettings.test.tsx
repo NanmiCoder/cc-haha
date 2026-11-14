@@ -1461,13 +1461,57 @@ describe('Settings > General tab', () => {
       const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
       expect(autoBtn).toHaveAttribute('aria-checked', 'true')
 
-      // Switch to Enabled
-      fireEvent.click(enabledBtn)
+      // Each saved choice becomes available for the next change.
+      await act(async () => { fireEvent.click(enabledBtn) })
       expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
       expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'enabled' })
 
-      // Switch to Disabled
+      await act(async () => { fireEvent.click(disabledBtn) })
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
+
+      await act(async () => { fireEvent.click(autoBtn) })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'auto' })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('blocks overlapping output escalation saves and restores the choice after a save failure', async () => {
+    let rejectSave!: (error: Error) => void
+    const updateUser = vi.spyOn(settingsApi, 'updateUser')
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+      .mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+
+      await act(async () => { fireEvent.click(enabledBtn) })
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeDisabled()
+      }
       fireEvent.click(disabledBtn)
+      expect(updateUser).toHaveBeenCalledTimes(1)
+
+      await act(async () => { rejectSave(new Error('disk full')) })
+
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(useSettingsStore.getState().maxOutputTokensEscalationMode).toBe('auto')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeEnabled()
+      }
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: 'Could not save the output token escalation setting. Please try again.',
+      })
+
+      await act(async () => { fireEvent.click(disabledBtn) })
       expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
       expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
     } finally {

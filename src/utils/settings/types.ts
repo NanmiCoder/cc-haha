@@ -496,9 +496,10 @@ export const SettingsSchema = lazySchema(() =>
         .enum(['auto', 'enabled', 'disabled'])
         .optional()
         .describe(
-          'Controls max output tokens 8k slot-cap + 64k escalation retry. ' +
+          'Controls the native output budget cap (up to 8k) and model-bounded retry (up to 64k). ' +
             'auto = follow GrowthBook remote flag (tengu_otk_slot_v1). ' +
-            'enabled = force 8k cap + 64k escalation. disabled = force model defaults.',
+            'enabled = opt in on supported routes, preserving explicit budgets. ' +
+            'disabled = use model defaults. Continuation recovery remains available in all modes.',
         ),
       workflowSizeGuideline: z
         .enum(['unrestricted', 'small', 'medium', 'large'])
