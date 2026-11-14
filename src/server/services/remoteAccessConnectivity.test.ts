@@ -1,9 +1,67 @@
 import { describe, expect, test } from 'bun:test'
 import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './remoteAccessConnectivity.js'
 import type { NetworkSettings } from './networkSettings.js'
+import type { DiagnosticEventInput } from './diagnosticsService.js'
 
 const direct = async (): Promise<NetworkSettings> => ({ aiRequestTimeoutMs: 30000, proxy: { mode: 'direct', url: '' } })
 describe('remote access connectivity', () => {
+  test('records the failing probe stage and nested transport code without credentials or response bodies', async () => {
+    const events: DiagnosticEventInput[] = []
+    const settings = async (): Promise<NetworkSettings> => ({ aiRequestTimeoutMs: 30000, proxy: { mode: 'manual', url: 'http://fixture-user:fixture-password@127.0.0.1:12345' } })
+    const cause = Object.assign(new Error('connect ECONNREFUSED http://fixture-user:fixture-password@127.0.0.1:12345'), { code: 'ECONNREFUSED', syscall: 'connect' })
+    const fetchError = new TypeError('fetch failed', { cause })
+    expect(await verifyRemoteAccessGateway('https://phone.example.test', 'fixture', {
+      settings,
+      fetch: (async () => { throw fetchError }) as typeof fetch,
+      attemptId: '81d5559c-a61e-4871-a185-4e7aaf02c693',
+      recordDiagnostic: input => { events.push(input) },
+    })).toBe(false)
+    expect(events.at(-1)?.details).toMatchObject({
+      attemptId: '81d5559c-a61e-4871-a185-4e7aaf02c693', stage: 'gateway_request', outcome: 'failed', reason: 'request_failed', proxyMode: 'manual', proxyUsed: true,
+      error: { name: 'TypeError', cause: { code: 'ECONNREFUSED', syscall: 'connect' } },
+    })
+    expect(JSON.stringify(events)).not.toContain('fixture-user')
+    expect(JSON.stringify(events)).not.toContain('fixture-password')
+    expect(events.at(-1)?.details).toHaveProperty('durationMs')
+  })
+
+  test('distinguishes HTTP rejection, response format, identity mismatch and invalid JSON', async () => {
+    const cases = [
+      [new Response('PRIVATE_RESPONSE_BODY', { status: 502 }), 'gateway_response', 'http_status', 502],
+      [new Response('PRIVATE_RESPONSE_BODY', { headers: { 'Content-Type': 'text/html' } }), 'gateway_response', 'unexpected_content_type', 200],
+      [Response.json({ status: 'ok', gatewayId: 'wrong-gateway', secret: 'PRIVATE_RESPONSE_BODY' }), 'gateway_identity', 'gateway_identity_mismatch', 200],
+      [new Response('PRIVATE_RESPONSE_BODY', { headers: { 'Content-Type': 'application/json' } }), 'gateway_body_parse', 'invalid_json', 200],
+    ] as const
+    for (const [response, stage, reason, status] of cases) {
+      const events: DiagnosticEventInput[] = []
+      expect(await verifyRemoteAccessGateway('https://phone.example.test', 'fixture', { settings: direct, fetch: (async () => response) as typeof fetch, recordDiagnostic: input => { events.push(input) } })).toBe(false)
+      expect(events.at(-1)?.details).toMatchObject({ stage, outcome: 'failed', reason, status })
+      expect(JSON.stringify(events)).not.toContain('PRIVATE_RESPONSE_BODY')
+      expect(JSON.stringify(events)).not.toContain('wrong-gateway')
+    }
+  })
+
+  test('records proxy resolution failure and never lets a failed diagnostic write change connectivity', async () => {
+    const events: DiagnosticEventInput[] = []
+    const error = new Error('system proxy bridge unavailable')
+    await expect(resolveRemoteAccessProxy({ settings: async () => { throw error }, recordDiagnostic: input => { events.push(input) } })).rejects.toBe(error)
+    expect(events.at(-1)?.details).toMatchObject({ stage: 'proxy_settings', outcome: 'failed', reason: 'settings_load_failed', error: { description: 'system proxy bridge unavailable' } })
+    expect(await resolveRemoteAccessProxy({ settings: direct, recordDiagnostic: () => { throw new Error('read-only disk') } })).toEqual({ proxyUrl: null })
+  })
+
+  test('logs invalid target construction without changing the existing rejected-request behavior', async () => {
+    const events: DiagnosticEventInput[] = []
+    await expect(verifyRemoteAccessGateway('not-a-url', 'fixture', { settings: direct, recordDiagnostic: input => { events.push(input) } })).rejects.toBeInstanceOf(TypeError)
+    expect(events.at(-1)?.details).toMatchObject({ stage: 'gateway_target_validation', reason: 'invalid_origin', outcome: 'failed' })
+  })
+
+  test('retains the network codes inside AggregateError causes', async () => {
+    const events: DiagnosticEventInput[] = []
+    const error = new TypeError('fetch failed', { cause: new AggregateError([Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }), Object.assign(new Error('no network route'), { code: 'ENETUNREACH' })]) })
+    expect(await verifyRemoteAccessGateway('https://phone.example.test', 'fixture', { settings: direct, fetch: (async () => { throw error }) as typeof fetch, recordDiagnostic: input => { events.push(input) } })).toBe(false)
+    expect(events.at(-1)?.details).toMatchObject({ error: { name: 'TypeError', cause: { name: 'AggregateError', errors: [{ code: 'ECONNREFUSED' }, { code: 'ENETUNREACH' }] } } })
+  })
+
   test('uses the existing saved proxy policy for both tunnel setup and the public probe', async () => {
     const settings = async (): Promise<NetworkSettings> => ({ aiRequestTimeoutMs: 30000, proxy: { mode: 'manual', url: 'http://fixture:fake@127.0.0.1:12345' } })
     expect(await resolveRemoteAccessProxy({ settings })).toEqual({ proxyUrl: 'http://fixture:fake@127.0.0.1:12345' })
