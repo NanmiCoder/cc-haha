@@ -175,8 +175,29 @@ namespace CcHahaInstallerProfile
     public bool assigned;
     public bool resumed;
     public bool exited;
+    internal ChildWaitFacts waitFacts;
     internal F1DebugPump debugPump;
     internal Func<F1DebugNotice, F1DebugReply> debugExchange;
+  }
+
+  // Runtime-only observation from the already-held process, before any stop.
+  // A non-signaled handle (including STILL_ACTIVE) is never a natural exit.
+  internal sealed class ChildWaitFacts
+  {
+    internal bool identityVerified;
+    internal uint waitResult;
+    internal uint? signalResult;
+    internal uint? exitCode;
+    internal bool NaturalExitKnown { get { return identityVerified && signalResult == 0 && exitCode.HasValue && exitCode.Value != 259; } }
+    internal string Format(OwnedProcess child)
+    {
+      CorePolicy.Require(identityVerified && child != null && child.pid > 0 && FunctionalPolicy.DecimalTime(child.creationTime), "held-wait-diagnostic-identity");
+      return "pid=" + child.pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "; birth=" + child.creationTime
+        + "; wait=" + (waitResult == 258 ? "timeout" : waitResult == 0 ? "signaled" : "unknown")
+        + "; signal=" + (signalResult == 0 ? "signaled" : signalResult == 258 ? "live" : "unknown")
+        + "; exitKnown=" + (NaturalExitKnown ? "1; exitHex=" + exitCode.Value.ToString("x8", System.Globalization.CultureInfo.InvariantCulture) : "0")
+        + "; beforeStop=1";
+    }
   }
 
   internal sealed class FixtureState
@@ -1930,7 +1951,7 @@ namespace CcHahaInstallerProfile
       // Latch the primary safe failure before considering late diagnostics. A
       // malformed later record cannot erase it, authorize ACK or promote facts.
       state.report.Check("subject-postack-" + first.name, false, NativePlatform.SafeFailure(new FixtureFailure(first.detail)));
-      string[] late = { "subject-failure-exit", "subject-failure-command", "subject-failure-image", "subject-failure-exit-unavailable", "subject-legacy-tasklist", "subject-legacy-matches", "subject-failure-type", "subject-failure-native", "subject-failure-stack", "subject-secondary-failure", "subject-failure-diagnostic-unavailable",
+      string[] late = { "subject-failure-exit", "subject-failure-command", "subject-failure-image", "subject-failure-exit-unavailable", "subject-failure-phase", "subject-failure-wait", "subject-legacy-tasklist", "subject-legacy-matches", "subject-failure-type", "subject-failure-native", "subject-failure-stack", "subject-secondary-failure", "subject-failure-diagnostic-unavailable",
         "subject-phase-cleanup", "subject-owned-child-stop", "subject-owned-child-close", "subject-terminal-report", "subject-terminal-message", "subject-channel-close", "f1-debug-cleanup-unknown" };
       foreach (CheckResult check in child.checks.Skip(1))
       {
@@ -2764,6 +2785,7 @@ namespace CcHahaInstallerProfile
         {
           RememberFailure(report, diagnosticStage ?? "subject-products", error);
           if (initial && exitKnown) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
+          if (IsPowerShellCalibration(command.phase)) RecordPowerShellWaitFailure(report, child, command, evidence, environment);
         }
         throw;
       }
@@ -2990,12 +3012,50 @@ namespace CcHahaInstallerProfile
       return rows;
     }
 
+    internal static bool IsPowerShellCalibration(string phase)
+    {
+      return phase == "powershell-normal-capability-1" || phase == "powershell-normal-capability-2";
+    }
+
+    internal static string PowerShellCapabilityCommand(string powershell, bool executionPolicy)
+    {
+      CorePolicy.ValidateAbsolutePath(powershell);
+      return "\"" + powershell + (executionPolicy
+        ? "\" -C \"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }\""
+        : "\" -C \"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }\"");
+    }
+
+    internal static string PowerShellStartupCommand(string powershell)
+    {
+      CorePolicy.ValidateAbsolutePath(powershell);
+      return "\"" + powershell + "\" -C \"exit 0\"";
+    }
+
+    internal static void RecordPowerShellWaitFailure(FixtureReport report, OwnedProcess child, CommandPlan command, PhaseEvidence evidence, Dictionary<string, string> environment)
+    {
+      try
+      {
+        CorePolicy.Require(command != null && IsPowerShellCalibration(command.phase) && environment != null && environment.ContainsKey("SystemRoot"), "fixed-powershell-failure-phase");
+        string expected = Path.Combine(environment["SystemRoot"], @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
+        string role = CorePolicy.SamePath(command.application, expected) ? "powershell-x86" : "other";
+        report.Check("subject-failure-phase", false, "phase=" + command.phase + "; app=" + role + "; expected=" + command.expectedExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture)
+          + "; timeoutms=" + command.timeoutMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        CorePolicy.Require(child != null && child.waitFacts != null, "held-wait-diagnostic-unavailable");
+        report.Check("subject-failure-wait", false, child.waitFacts.Format(child));
+        CorePolicy.Require(evidence != null && F1Policy.Hash(evidence.argvSha256) && F1Policy.Hash(evidence.environmentSha256), "powershell-command-diagnostic-binding");
+        report.Check("subject-failure-command", false, "argvsha=" + evidence.argvSha256 + "; envsha=" + evidence.environmentSha256);
+        CorePolicy.Require(child.image != null && F1Policy.Hash(child.image.sha256), "powershell-image-diagnostic-binding");
+        report.Check("subject-failure-image", false, "imagesha=" + child.image.sha256);
+      }
+      catch { report.Check("subject-failure-diagnostic-unavailable", false, "Held PowerShell wait diagnostic unavailable"); }
+    }
+
     private void CalibratePowerShell()
     {
       string powershell = Path.Combine(normal["SystemRoot"], "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe");
       CorePolicy.ValidateAbsolutePath(powershell);
-      string first = "\"" + powershell + "\" -C \"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }\"";
-      string second = "\"" + powershell + "\" -C \"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }\"";
+      string first = PowerShellCapabilityCommand(powershell, false);
+      string second = PowerShellCapabilityCommand(powershell, true);
       Phase(Command("powershell-normal-capability-1", powershell, first, 0, 30000), normal, null);
       Phase(Command("powershell-normal-capability-2", powershell, second, 0, 30000), normal, null);
       // A nonzero unavailable result must be observed, not assumed from env.

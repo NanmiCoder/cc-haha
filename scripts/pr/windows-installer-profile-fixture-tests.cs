@@ -1185,9 +1185,144 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    internal static void RunPowerShellWaitProbeTests(FixtureReport report)
+    {
+      Case(report, "powershell-shared-builder-preserves-both-original-argv-and-separate-control", delegate {
+        string ps = @"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe";
+        Assert(Subject.PowerShellCapabilityCommand(ps, false) == "\"" + ps + "\" -C \"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }\"", "first original command byte equality");
+        Assert(Subject.PowerShellCapabilityCommand(ps, true) == "\"" + ps + "\" -C \"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }\"", "second original command byte equality");
+        Assert(Subject.PowerShellStartupCommand(ps) == "\"" + ps + "\" -C \"exit 0\"", "control is separately fixed, never a capability replacement");
+      });
+      Case(report, "powershell-normal-unavailable-environments-are-independent-without-global-poison", delegate {
+        FixtureSpec spec = Spec(); spec.knownPaths = Paths(); spec.profilePath = spec.knownPaths.profile;
+        spec.fixtureRoot = @"C:\Owned\fixture"; spec.tempRoot = spec.fixtureRoot + @"\tmp";
+        Dictionary<string,string> source = new FakePlatform().Environment();
+        source["COMPLUS_Version"] = "foreign-poison"; source["PSModulePath"] = @"C:\foreign";
+        string globalClr = Environment.GetEnvironmentVariable("COMPLUS_Version"), globalModules = Environment.GetEnvironmentVariable("PSModulePath");
+        Dictionary<string,string> normal = CorePolicy.BuildEnvironment(source, spec, false), unavailable = CorePolicy.BuildEnvironment(source, spec, true);
+        Assert(!Object.ReferenceEquals(normal, unavailable) && !Object.ReferenceEquals(normal, source) && !Object.ReferenceEquals(unavailable, source), "three independent dictionaries");
+        Assert(!normal.ContainsKey("COMPLUS_Version") && !normal.ContainsKey("PSModulePath") && unavailable["COMPLUS_Version"] == CorePolicy.BadClr, "CLR poison child-only");
+        normal["APPDATA"] = "normal-mutation"; unavailable["COMPLUS_Version"] = "unavailable-mutation";
+        Assert(unavailable["APPDATA"] == spec.knownPaths.roaming && !normal.ContainsKey("COMPLUS_Version") && source["COMPLUS_Version"] == "foreign-poison", "neither mutation aliases the other environment or target");
+        Assert(Environment.GetEnvironmentVariable("COMPLUS_Version") == globalClr && Environment.GetEnvironmentVariable("PSModulePath") == globalModules, "builder does not write process-global environment");
+      });
+      Case(report, "powershell-abi-normal-environment-uses-subject-builder-and-private-runtime", delegate {
+        Dictionary<string,string> source = new FakePlatform().Environment(); source["GITHUB_TOKEN"] = "fake-secret"; source["PSModulePath"] = @"C:\foreign"; source["COMPLUS_Version"] = "foreign";
+        Dictionary<string,string> runtime = new Dictionary<string,string> { {"SystemRoot",@"C:\Windows"},{"USERPROFILE",@"C:\Private\home"},{"APPDATA",@"C:\Private\home\.config"},{"LOCALAPPDATA",@"C:\Private\home\.local"},{"TEMP",@"C:\Private\home\tmp"},{"TMP",@"C:\Private\home\tmp"} };
+        Dictionary<string,string> actual = NativePlatform.AbiPowerShellEnvironment(source, runtime, @"C:\Private\protocol");
+        Dictionary<string,string> mapped = new Dictionary<string,string>(source); foreach (KeyValuePair<string,string> row in runtime) mapped[row.Key] = row.Value;
+        FixtureSpec local = new FixtureSpec { fixtureRoot=@"C:\Private\protocol", tempRoot=runtime["TEMP"],profilePath=runtime["USERPROFILE"],knownPaths=new KnownPaths {profile=runtime["USERPROFILE"],roaming=runtime["APPDATA"],local=runtime["LOCALAPPDATA"]} };
+        Assert(CorePolicy.EnvironmentHash(actual) == CorePolicy.EnvironmentHash(CorePolicy.BuildEnvironment(mapped,local,false)), "same normal Subject environment constructor");
+        Assert(!actual.ContainsKey("GITHUB_TOKEN") && !actual.ContainsKey("PSModulePath") && !actual.ContainsKey("COMPLUS_Version") && source["COMPLUS_Version"] == "foreign", "private local mapping copies source and excludes foreign values");
+      });
+      Case(report, "powershell-four-profile-candidates-and-metadata-errors-never-read-content", delegate {
+        string ps = @"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe", documents = @"C:\Users\own\Documents";
+        string[] paths = NativePlatform.PowerShellProfileCandidates(ps,documents);
+        Assert(paths.Length == 4 && paths[0] == Path.Combine(Path.GetDirectoryName(ps),"profile.ps1")
+          && paths[1] == Path.Combine(Path.GetDirectoryName(ps),"Microsoft.PowerShell_profile.ps1")
+          && paths[2] == Path.Combine(documents,"WindowsPowerShell","profile.ps1") && paths[3] == Path.Combine(documents,"WindowsPowerShell","Microsoft.PowerShell_profile.ps1"), "PS5 console host four exact candidates");
+        Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw new FileNotFoundException(); }) == "absent"
+          && NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw new DirectoryNotFoundException(); }) == "absent", "only explicit not-found is absent");
+        foreach (Exception error in new Exception[] {new UnauthorizedAccessException("private-value"),new IOException("private-value"),new System.Security.SecurityException("private-value")})
+          Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw error; }) == "unknown", "access and I/O uncertainty is not false absence");
+        Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { return FileAttributes.Directory|FileAttributes.ReparsePoint; }) == "present", "any existing entry rejects execution");
+      });
+      Case(report, "powershell-profile-present-or-unknown-blocks-every-launch-before-execution", delegate {
+        string[] paths = {"allusers0","allusers1","user0","user1"};
+        for (int slot=0;slot<4;slot++) foreach(bool denied in new bool[]{false,true})
+        {
+          FixtureReport result=new FixtureReport();int calls=0;int blocked=slot;
+          NativePlatform.RunPowerShellProbeChecks(result,paths,delegate(string path) {
+            if(path==paths[blocked]) { if(denied)throw new UnauthorizedAccessException("secret-metadata");return FileAttributes.Normal; }
+            throw new FileNotFoundException();
+          },delegate(bool control){calls++;return true;});
+          Assert(calls==0 && result.checks.Count==4 && result.checks.Any(check=>check.status=="failed") && !CoreJson.Serialize(result).Contains("secret-metadata"), "profile gate denies before either child and publishes no paths/content/errors");
+        }
+      });
+      Case(report, "powershell-control-success-never-upgrades-original-failure-and-is-regated", delegate {
+        string[] paths={"a","b","c","d"};List<bool> calls=new List<bool>();int metadata=0;FixtureReport result=new FixtureReport();
+        NativePlatform.RunPowerShellProbeChecks(result,paths,delegate { metadata++;throw new FileNotFoundException(); },delegate(bool control){calls.Add(control);return control;});
+        Assert(calls.SequenceEqual(new[]{false,true}) && metadata==8 && result.checks.Single(check=>check.name=="owned-powershell-capability").status=="failed"
+          && result.checks.Single(check=>check.name=="owned-powershell-startup-control").status=="passed", "diagnostic control is no fallback or green retry");
+        calls.Clear();result=new FixtureReport();NativePlatform.RunPowerShellProbeChecks(result,paths,delegate {throw new FileNotFoundException();},delegate(bool control){calls.Add(control);return true;});
+        Assert(calls.SequenceEqual(new[]{false}) && result.checks.All(check=>check.status=="passed"), "successful exact command runs only once without control");
+        calls.Clear();metadata=0;result=new FixtureReport();NativePlatform.RunPowerShellProbeChecks(result,paths,delegate {metadata++;if(metadata>4)return FileAttributes.Normal;throw new FileNotFoundException();},delegate(bool control){calls.Add(control);return false;});
+        Assert(calls.SequenceEqual(new[]{false}) && result.checks.Any(check=>check.name.StartsWith("owned-powershell-control-profile-",StringComparison.Ordinal)&&check.status=="failed"), "newly present profile blocks the diagnostic too");
+        calls.Clear();bool thrown=false;try {NativePlatform.RunPowerShellProbeChecks(new FixtureReport(),paths,delegate {throw new FileNotFoundException();},delegate(bool control){calls.Add(control);throw new FixtureFailure("owned-cleanup-unknown");});}catch(FixtureFailure){thrown=true;}
+        Assert(thrown&&calls.SequenceEqual(new[]{false}), "late cleanup failure cannot start the control");
+      });
+      Case(report, "powershell-fixed-abi-command-rejects-external-argv-and-expectation-budget-changes", delegate {
+        string windows=@"C:\Windows",ps=Path.Combine(windows,@"SysWOW64\WindowsPowerShell\v1.0\powershell.exe"),hash=new String('a',64);
+        foreach(bool control in new[]{false,true})
+        {
+          Func<CommandPlan> plan=()=>new CommandPlan {phase=control?"abi-powershell-startup-control":"abi-powershell-capability",application=ps,expectedSha256=hash,expectedExitCode=0,timeoutMilliseconds=control?10000:30000,
+            commandLine=control?Subject.PowerShellStartupCommand(ps):Subject.PowerShellCapabilityCommand(ps,false)};
+          NativePlatform.RequireAbiPowerShellCommand(plan(),windows,hash);
+          foreach(string fault in new[]{"argv","NoProfile","app","phase","hash","exit","budget","policy"})
+          {
+            CommandPlan bad=plan();if(fault=="argv")bad.commandLine+="; arbitrary";if(fault=="NoProfile")bad.commandLine=bad.commandLine.Replace(" -C "," -NoProfile -C ");
+            if(fault=="app")bad.application=@"C:\foreign\powershell.exe";if(fault=="phase")bad.phase="abi-owned-child";if(fault=="hash")bad.expectedSha256=new String('b',64);
+            if(fault=="exit")bad.expectedExitCode=1;if(fault=="budget")bad.timeoutMilliseconds++;if(fault=="policy")bad.commandLine=Subject.PowerShellCapabilityCommand(ps,true);
+            Reject(()=>NativePlatform.RequireAbiPowerShellCommand(bad,windows,hash),"fixed internal PS command refuses "+fault);
+          }
+        }
+      });
+      Case(report, "powershell-abi-budget-keeps-exact30s-and-reserves-existing-cleanup-window", delegate {
+        Assert(NativePlatform.AbiPowerShellBudget(false,0)==30000 && NativePlatform.AbiPowerShellBudget(false,18000)==30000, "primary budget never shortened or enlarged");
+        Reject(()=>NativePlatform.AbiPowerShellBudget(false,18001),"insufficient remaining primary budget must not launch");
+        Assert(NativePlatform.AbiPowerShellBudget(true,38000)==10000 && NativePlatform.AbiPowerShellBudget(true,47999)==1,"diagnostic uses only remaining internal window, at most10s");
+        Reject(()=>NativePlatform.AbiPowerShellBudget(true,48000),"control cannot occupy cleanup reservation");
+        Reject(()=>NativePlatform.AbiPowerShellBudget(false,-1),"invalid clock input is not extra budget");
+        int launches=0;bool rejected=false;
+        try {NativePlatform.RunPowerShellProbeChecks(new FixtureReport(),new[]{"a","b","c","d"},delegate {throw new FileNotFoundException();},delegate(bool control){NativePlatform.AbiPowerShellBudget(control,18001);launches++;return true;});}catch(FixtureFailure){rejected=true;}
+        Assert(rejected&&launches==0,"real scheduler does not run either child when primary30s no longer fits");
+      });
+      Case(report, "held-wait-live-or-unknown-never-reads-exit-or-invents-natural-259", delegate {
+        OwnedProcess cap=PowerShellWaitCap();int exits=0;
+        foreach(uint signal in new uint[]{258,0xffffffff})
+        {
+          ChildWaitFacts facts=NativePlatform.ObserveChildWait(cap,258,delegate{return 50;},delegate{return cap.creationTime;},delegate{return signal;},delegate{exits++;return 0;});
+          Assert(!facts.NaturalExitKnown && facts.Format(cap).Contains("exitKnown=0"),"non-signaled or unknown wait has no natural code");
+        }
+        Assert(exits==0,"GetExitCodeProcess is not called for a live or unknown signal");
+        ChildWaitFacts active=NativePlatform.ObserveChildWait(cap,258,delegate{return 50;},delegate{return cap.creationTime;},delegate{return 0;},delegate{return 259;});
+        Assert(!active.NaturalExitKnown&&!active.Format(cap).Contains("exitHex="),"STILL_ACTIVE never becomes a natural exit");
+        ChildWaitFacts race=NativePlatform.ObserveChildWait(cap,258,delegate{return 50;},delegate{return cap.creationTime;},delegate{return 0;},delegate{return 0;});
+        Assert(race.NaturalExitKnown&&race.Format(cap).Contains("wait=timeout; signal=signaled; exitKnown=1; exitHex=00000000"),"later signaled race does not erase original timeout");
+      });
+      Case(report, "held-wait-rejects-id-drift-and-keeps-original-failure-if-diagnostic-fails", delegate {
+        OwnedProcess cap=PowerShellWaitCap();int signals=0;
+        Reject(()=>NativePlatform.ObserveChildWait(cap,258,delegate{return 51;},delegate{return cap.creationTime;},delegate{signals++;return 0;},delegate{return 0;}),"wrong PID cap");
+        Reject(()=>NativePlatform.ObserveChildWait(cap,258,delegate{return 50;},delegate{return "134391494714882964";},delegate{signals++;return 0;},delegate{return 0;}),"wrong birth cap");
+        Assert(signals==0,"identity failure precedes state reads");
+        FixtureReport child=new FixtureReport();Subject.RememberFailure(child,"subject-products",new FixtureFailure("Owned child timed out"));
+        Subject.RecordPowerShellWaitFailure(child,cap,new CommandPlan {phase="powershell-normal-capability-1",application=@"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",expectedExitCode=0,timeoutMilliseconds=30000},null,new Dictionary<string,string>{{"SystemRoot",@"C:\Windows"}});
+        Assert(child.checks[0].detail=="Owned child timed out"&&child.checks.Any(check=>check.name=="subject-failure-diagnostic-unavailable"),"diagnostic failures never replace primary or yield success");
+      });
+      Case(report, "powershell-timeout-diagnostics-survive-real-finish-and-failed-frame-consumer", delegate {
+        OwnedProcess cap=PowerShellWaitCap();cap.waitFacts=NativePlatform.ObserveChildWait(cap,258,delegate{return 50;},delegate{return cap.creationTime;},delegate{return 258;},delegate{throw new Exception("must not read live exit");});
+        FixtureReport child=new FixtureReport {mode=FunctionalPolicy.SubjectMode,binarySha256=new String('a',64),specSha256=new String('b',64)};
+        Subject.RememberFailure(child,"subject-products",new FixtureFailure("Owned child timed out"));
+        Subject.RecordPowerShellWaitFailure(child,cap,new CommandPlan {phase="powershell-normal-capability-1",application=@"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",expectedExitCode=0,timeoutMilliseconds=30000},
+          new PhaseEvidence {argvSha256=new String('d',64),environmentSha256=new String('e',64)},new Dictionary<string,string>{{"SystemRoot",@"C:\Windows"}});
+        ProtocolTestChannel wire=new ProtocolTestChannel();Subject.Finish(new FakePlatform(),new List<OwnedProcess>(),wire,child,"nonce",null);
+        FixtureState state=new FixtureState {acknowledged=true,spec=new FixtureSpec {mode=FunctionalPolicy.ControllerMode,nonce="nonce",expectedBinarySha256=child.binarySha256,subjectSpecSha256=child.specSha256},subject=new OwnedProcess {pid=50},report=new FixtureReport()};
+        Controller.PreservePostAckFailure(state,CoreJson.Deserialize<ProtocolMessage>(wire.Messages.Single()),50);
+        Assert(state.report.checks[0].detail=="Owned child timed out"&&state.report.checks.Any(check=>check.name=="subject-postack-subject-failure-phase"&&check.detail.Contains("app=powershell-x86"))
+          && state.report.checks.Any(check=>check.name=="subject-postack-subject-failure-wait"&&check.detail.Contains("signal=live; exitKnown=0"))&&state.report.checks.All(check=>check.status=="failed"),"existing production DataContract wire preserves bounded fixed failure-only facts");
+        Assert(state.report.checks.All(check=>check.detail.Length<=192)&&!CoreJson.Serialize(state.report).Contains(@"C:\Windows"),"no arbitrary path or raw output is published");
+      });
+    }
+
+    private static OwnedProcess PowerShellWaitCap()
+    {
+      return new OwnedProcess {process=new IntPtr(201),pid=50,creationTime="134391494714882963",assigned=true,resumed=true,image=new FileIdentity {sha256=new String('c',64)},identity=Standard()};
+    }
+
     public static void Run(FixtureReport report)
     {
       RunLegacyExitProbeTests(report);
+      RunPowerShellWaitProbeTests(report);
       RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);

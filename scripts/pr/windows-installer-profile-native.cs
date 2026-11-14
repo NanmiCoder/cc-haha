@@ -2383,6 +2383,10 @@ namespace CcHahaInstallerProfile
       uint wait;
       if (child.debugPump != null) { child.debugPump.Run(timeoutMilliseconds); wait = WaitForSingleObject(child.process, (uint)Math.Max(0, timeoutMilliseconds - Math.Min(timeoutMilliseconds, deadline.ElapsedMilliseconds))); }
       else wait = WaitForSingleObject(child.process, (uint)timeoutMilliseconds);
+      // Capture before the existing timeout throw or any owned Job stop. An
+      // unavailable diagnostic never changes the original wait result.
+      try { child.waitFacts = ReadChildWaitFacts(child, wait); }
+      catch { child.waitFacts = null; }
       CorePolicy.Require(wait == 0, wait == 258 ? "Owned child timed out" : "Owned child wait failed");
       int remaining = timeoutMilliseconds - checked((int)Math.Min(deadline.ElapsedMilliseconds, Int32.MaxValue));
       CorePolicy.Require(remaining > 0, "Owned process descendants exceeded the phase deadline");
@@ -2391,6 +2395,24 @@ namespace CcHahaInstallerProfile
       Win(GetExitCodeProcess(child.process, out exit), "GetExitCodeProcess");
       child.exited = true;
       return unchecked((int)exit);
+    }
+
+    internal static ChildWaitFacts ObserveChildWait(OwnedProcess child, uint wait,
+      Func<IntPtr, uint> pid, Func<IntPtr, string> birth, Func<IntPtr, uint> signal, Func<IntPtr, uint?> exit)
+    {
+      CorePolicy.Require(child != null && child.process != IntPtr.Zero && child.pid > 0 && child.assigned && child.resumed
+        && child.identity != null && child.image != null && FunctionalPolicy.DecimalTime(child.creationTime), "held-child-wait-cap-required");
+      CorePolicy.Require(pid(child.process) == (uint)child.pid && birth(child.process) == child.creationTime, "held-child-wait-identity-changed");
+      ChildWaitFacts facts = new ChildWaitFacts { identityVerified = true, waitResult = wait, signalResult = signal(child.process) };
+      if (facts.signalResult == 0) facts.exitCode = exit(child.process);
+      return facts;
+    }
+
+    private static ChildWaitFacts ReadChildWaitFacts(OwnedProcess child, uint wait)
+    {
+      return ObserveChildWait(child, wait, GetProcessId, ProcessCreation,
+        delegate(IntPtr handle) { return WaitForSingleObject(handle, 0); },
+        delegate(IntPtr handle) { uint code; return GetExitCodeProcess(handle, out code) ? (uint?)code : null; });
     }
 
     public override void StopChild(OwnedProcess child)
@@ -3361,6 +3383,158 @@ namespace CcHahaInstallerProfile
       finally { FreeEnvironmentBytes(block, environment); }
     }
 
+    internal static string[] PowerShellProfileCandidates(string powershell, string documents)
+    {
+      CorePolicy.ValidateAbsolutePath(powershell); CorePolicy.ValidateAbsolutePath(documents);
+      string home = Path.GetDirectoryName(powershell), user = Path.Combine(documents, "WindowsPowerShell");
+      return new string[] { Path.Combine(home, "profile.ps1"), Path.Combine(home, "Microsoft.PowerShell_profile.ps1"),
+        Path.Combine(user, "profile.ps1"), Path.Combine(user, "Microsoft.PowerShell_profile.ps1") };
+    }
+
+    // Only metadata is queried. Exists() would collapse denied/unknown into
+    // false. An existing directory or reparse entry is also not an absent file.
+    internal static string PowerShellProfileMetadata(string path, Func<string, FileAttributes> attributes)
+    {
+      try { attributes(path); return "present"; }
+      catch (FileNotFoundException) { return "absent"; }
+      catch (DirectoryNotFoundException) { return "absent"; }
+      catch { return "unknown"; }
+    }
+
+    internal static bool PowerShellProfilesAbsent(FixtureReport report, string[] paths, Func<string, FileAttributes> attributes, bool control)
+    {
+      CorePolicy.Require(paths != null && paths.Length == 4 && attributes != null, "four-fixed-powershell-profile-candidates-required");
+      string[] slots = { "allusers-allhosts", "allusers-currenthost", "currentuser-allhosts", "currentuser-currenthost" };
+      bool absent = true;
+      for (int i = 0; i < paths.Length; i++)
+      {
+        string status = PowerShellProfileMetadata(paths[i], attributes); absent &= status == "absent";
+        report.Check("owned-powershell-" + (control ? "control-profile-" : "profile-") + slots[i], status == "absent", "metadata=" + status + "; content-not-read; not-a-cross-user-claim");
+      }
+      return absent;
+    }
+
+    internal static void RunPowerShellProbeChecks(FixtureReport report, string[] profiles, Func<string, FileAttributes> attributes, Func<bool, bool> execute)
+    {
+      if (!PowerShellProfilesAbsent(report, profiles, attributes, false)) return;
+      bool exact = execute(false);
+      report.Check("owned-powershell-capability", exact, "Exact Subject normal command; expected natural0 within30000ms; same caller/private desktop/own Job only");
+      // This is a separate diagnostic, never a retry or fallback result. Any
+      // exact-command failure remains recorded, even when the control exits0.
+      if (!exact && PowerShellProfilesAbsent(report, profiles, attributes, true))
+        report.Check("owned-powershell-startup-control", execute(true), "Diagnostic-only fixed exit0 within10000ms; cannot qualify a failed capability command");
+    }
+
+    internal static void RequireAbiPowerShellCommand(CommandPlan command, string windows, string powershellHash)
+    {
+      string expected = Path.Combine(windows, @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
+      bool control = command != null && command.phase == "abi-powershell-startup-control";
+      CorePolicy.Require(command != null && (control || command.phase == "abi-powershell-capability")
+        && command.expectedExitCode == 0 && (control ? command.timeoutMilliseconds > 0 && command.timeoutMilliseconds <= 10000 : command.timeoutMilliseconds == 30000)
+        && F1Policy.Hash(powershellHash) && command.expectedSha256 == powershellHash && CorePolicy.SamePath(command.application, expected)
+        && command.commandLine == (control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(expected) : CcHahaInstallerProfile.Subject.PowerShellCapabilityCommand(expected, false)),
+        "ABI PowerShell probe accepts only its fixed normal or startup-control command");
+    }
+
+    internal static Dictionary<string, string> AbiPowerShellEnvironment(Dictionary<string, string> tokenEnvironment, Dictionary<string, string> runtime, string root)
+    {
+      CorePolicy.Require(tokenEnvironment != null && runtime != null, "ABI PowerShell environment inputs required");
+      Dictionary<string, string> target = new Dictionary<string, string>(tokenEnvironment, StringComparer.OrdinalIgnoreCase);
+      foreach (string name in new string[] { "SystemRoot", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP" })
+      { CorePolicy.Require(runtime.ContainsKey(name), "ABI PowerShell private runtime path required"); target[name] = runtime[name]; }
+      FixtureSpec local = new FixtureSpec { fixtureRoot = root, tempRoot = runtime["TEMP"], profilePath = runtime["USERPROFILE"],
+        knownPaths = new KnownPaths { profile = runtime["USERPROFILE"], roaming = runtime["APPDATA"], local = runtime["LOCALAPPDATA"] } };
+      // Same normal builder as Subject. The calling token is unchanged; these
+      // sandbox env paths are explicitly not new-account/KnownFolder evidence.
+      return CorePolicy.BuildEnvironment(target, local, false);
+    }
+
+    private void StartAbiPowerShellChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
+    {
+      AbiOperatingSystem();
+      CorePolicy.Require(controllerContext == null && subjectContext == null && !subjectProductsAllowed && state.controllerRootOwned
+        && state.spec.mode == "abi-harness" && CorePolicy.SamePath(root, state.spec.controllerRoot) && state.account == null && !state.accountCreated && !state.profileCreated && !state.profileLoaded
+        && state.subject != null && state.subject.process == IntPtr.Zero && state.subject.job == IntPtr.Zero
+        && state.station != IntPtr.Zero && state.desktop != IntPtr.Zero && !String.IsNullOrEmpty(state.desktopName)
+        && state.desktopName.IndexOf('\\') > 0 && !state.desktopName.StartsWith("winsta0\\", StringComparison.OrdinalIgnoreCase), "ABI PowerShell requires the existing own private context");
+      string windows = ActualWindowsDirectory();
+      CorePolicy.Require(environment != null && environment.ContainsKey("SystemRoot") && CorePolicy.SamePath(environment["SystemRoot"], windows)
+        && !environment.ContainsKey("COMPLUS_Version") && !environment.ContainsKey("PSModulePath") && !environment.ContainsKey("PSExecutionPolicyPreference"),
+        "ABI PowerShell requires the normal isolated environment");
+      TokenIdentity own = InspectCurrentToken(); RequireAbiSameUserToken(own, state.targetIdentity);
+      FileIdentity image = IdentifyPath(Path.Combine(windows, @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe"), false);
+      CorePolicy.Require(!image.reparse && !image.directory, "ABI PowerShell image must be regular");
+      RequireAbiPowerShellCommand(command, windows, image.sha256);
+      state.subject.job = NewJob(); IntPtr block = EnvironmentBytes(environment);
+      try
+      {
+        StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
+        ProcessInformation created;
+        Win(CreateProcessW(command.application, new StringBuilder(command.commandLine), IntPtr.Zero, IntPtr.Zero, false,
+          0x08000404, block, root, ref startup, out created), "CreateProcessW own fixed ABI PowerShell");
+        state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
+        state.subject.creationTime = ProcessCreation(state.subject.process);
+        Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign fixed ABI PowerShell Job");
+        state.subject.assigned = true; CaptureProcess(state.subject); RequireAbiSameUserToken(own, state.subject.identity);
+      }
+      finally { FreeEnvironmentBytes(block, environment); }
+    }
+
+    internal static int AbiPowerShellBudget(bool control, long elapsedMilliseconds)
+    {
+      // The outer lane remains 60s: leave 10s for the existing process/Job
+      // cleanup plus 2s for startup/report overhead. Never shorten exact30s.
+      long remaining = 48000 - elapsedMilliseconds;
+      CorePolicy.Require(elapsedMilliseconds >= 0 && remaining > 0 && (control || remaining >= 30000), "Owned ABI PowerShell budget insufficient");
+      return control ? (int)Math.Min(10000, remaining) : 30000;
+    }
+
+    private static bool RunAbiPowerShellChild(NativePlatform platform, FixtureState state, Dictionary<string, string> environment, string root, string powershell, FileIdentity image, bool control, FixtureReport report, Stopwatch lane)
+    {
+      platform.CloseChild(state.subject); state.subject = new OwnedProcess();
+      CommandPlan command = new CommandPlan { phase = control ? "abi-powershell-startup-control" : "abi-powershell-capability",
+        application = powershell, expectedSha256 = image.sha256, expectedExitCode = 0, timeoutMilliseconds = AbiPowerShellBudget(control, lane.ElapsedMilliseconds),
+        commandLine = control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(powershell) : CcHahaInstallerProfile.Subject.PowerShellCapabilityCommand(powershell, false) };
+      string label = control ? "startup-control" : "capability";
+      try
+      {
+        platform.StartAbiPowerShellChild(state, command, environment, root);
+        platform.VerifyChild(state.subject, state.runnerSid, command.application, image.sha256);
+        platform.ResumeChild(state.subject);
+        int exit = platform.WaitChild(state.subject, command.timeoutMilliseconds);
+        report.trace.Add("ABI PowerShell " + label + "; actualHex=" + unchecked((uint)exit).ToString("x8", CultureInfo.InvariantCulture) + "; expected=0");
+        report.Check("owned-powershell-" + label + "-exit", exit == 0, "Natural actualHex=" + unchecked((uint)exit).ToString("x8", CultureInfo.InvariantCulture) + "; expected=0; before-owned-cleanup");
+        return exit == 0;
+      }
+      catch (Exception error) { report.Check("owned-powershell-" + label + "-execution", false, SafeFailure(error)); return false; }
+      finally
+      {
+        try
+        {
+          report.trace.Add("ABI PowerShell " + label + "; imagesha=" + image.sha256 + "; argvsha=" + CorePolicy.HashText(command.commandLine) + "; envsha=" + CorePolicy.EnvironmentHash(environment));
+          report.trace.Add("ABI PowerShell " + label + "; " + state.subject.waitFacts.Format(state.subject));
+        }
+        catch { report.Check("owned-powershell-" + label + "-diagnostic", false, "Bounded held-wait diagnostic unavailable"); }
+        // If cleanup throws, do not reach a diagnostic control with unknown
+        // running resources. The surrounding ABI cleanup retains that failure.
+        platform.StopChild(state.subject); platform.CloseChild(state.subject);
+      }
+    }
+
+    private static void RunAbiPowerShellProbe(NativePlatform platform, FixtureState state, Dictionary<string, string> environment, string root, FileIdentity expectedRoot, FixtureReport report, Stopwatch lane)
+    {
+      FileIdentity actual = platform.IdentifyPath(root, true);
+      CorePolicy.Require(expectedRoot != null && !actual.reparse && actual.fileId == expectedRoot.fileId && actual.volumePath == expectedRoot.volumePath, "ABI PowerShell root identity changed");
+      string powershell = Path.Combine(ActualWindowsDirectory(), @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
+      FileIdentity image = platform.IdentifyPath(powershell, false);
+      CorePolicy.Require(!image.reparse && !image.directory && CorePolicy.SamePath(image.canonicalPath, powershell), "ABI fixed PowerShell image identity");
+      // Documents is the token's actual PS5 profile location, not a HOME env
+      // override. KnownFolder uses DONT_VERIFY and creates no directory.
+      string[] profiles = PowerShellProfileCandidates(powershell, KnownFolder("FDD39AD0-238F-46AF-ADB4-6C85480369C7", IntPtr.Zero));
+      RunPowerShellProbeChecks(report, profiles, File.GetAttributes,
+        delegate(bool control) { return RunAbiPowerShellChild(platform, state, environment, root, powershell, image, control, report, lane); });
+    }
+
     private static void RunAbiLegacyProbe(NativePlatform platform, FixtureState state, Dictionary<string, string> environment, string root, FileIdentity expectedRoot, FixtureReport report)
     {
       FileIdentity actualRoot = platform.IdentifyPath(root, true);
@@ -3688,6 +3862,7 @@ namespace CcHahaInstallerProfile
       bool cleaned = false;
       IntPtr originalStation = GetProcessWindowStation();
       IntPtr originalDesktop = GetThreadDesktop(GetCurrentThreadId());
+      Stopwatch lane = Stopwatch.StartNew();
       try
       {
         AbiOperatingSystem();
@@ -3729,9 +3904,14 @@ namespace CcHahaInstallerProfile
         // Only this internal harness owns the lease, after AbiOperatingSystem,
         // atomic private-root creation and OpenProcessToken(current process).
         // Do not route Stage A through the historical Controller admission.
-        Dictionary<string, string> environment;
+        Dictionary<string, string> environment, powershellEnvironment;
         platform.abiEnvironmentContext = state;
-        try { environment = platform.AbiEnvironment(platform.ReadAbiTokenEnvironment(state), root); }
+        try
+        {
+          Dictionary<string, string> tokenEnvironment = platform.ReadAbiTokenEnvironment(state);
+          environment = platform.AbiEnvironment(tokenEnvironment, root);
+          powershellEnvironment = AbiPowerShellEnvironment(tokenEnvironment, environment, root);
+        }
         finally { platform.abiEnvironmentContext = null; }
         report.Check("private-runtime-context-bound", true,
           "Parent and child share the verified compiler sandbox home/config/local/tmp paths; environment is not SID/profile evidence");
@@ -3805,6 +3985,8 @@ namespace CcHahaInstallerProfile
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI read-only legacy calibration failed");
         RunAbiStartupProbe(platform, state, spec, environment, report);
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI assertion failed");
+        RunAbiPowerShellProbe(platform, state, powershellEnvironment, root, rootIdentity, report, lane);
+        CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI fixed PowerShell calibration failed");
         report.Check("stage-a-no-real-profile-or-product", platform.controllerContext == null && platform.subjectContext == null &&
           !platform.subjectProductsAllowed && !state.accountCreated && !state.profileCreated && !state.profileLoaded,
           "No stage B context was bound; account/profile/HKCU-write/released-PE methods were unreachable");
