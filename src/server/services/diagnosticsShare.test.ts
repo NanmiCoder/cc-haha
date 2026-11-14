@@ -6,6 +6,21 @@ import {
 } from './diagnosticsShare.js'
 
 describe('projectDiagnosticEventForSharing', () => {
+  test('exports connection stages and bounded transport causes only for the explicit remote connection producers', () => {
+    const details = {
+      attemptId: '81d5559c-a61e-4871-a185-4e7aaf02c693', stage: 'gateway_request', outcome: 'failed', reason: 'request_failed', durationMs: 6001, timeoutMs: 6000, proxyMode: 'manual', proxyUsed: true,
+      error: { name: 'TypeError', description: 'fetch failed', cause: { name: 'Error', code: 'ECONNREFUSED', syscall: 'connect', description: 'connect failed https://private-user:private-pass@example.com/path?token=query-secret', body: 'PRIVATE_RESPONSE_BODY', stack: 'PRIVATE_STACK' } },
+      body: 'PRIVATE_RESPONSE_BODY', proxyUrl: 'http://private-user:private-pass@proxy.example.test',
+    }
+    const event: DiagnosticEvent = { id: 'remote-diagnostic', timestamp: '2026-11-14T06:00:00.000Z', type: 'remote_access_gateway_verification', severity: 'warn', summary: 'PRIVATE_SUMMARY', details }
+    const projected = projectDiagnosticEventForSharing(event)
+    expect(projected.details).toMatchObject({ attemptId: details.attemptId, stage: 'gateway_request', reason: 'request_failed', durationMs: 6001, proxyMode: 'manual', error: { name: 'TypeError', description: 'fetch failed', cause: { code: 'ECONNREFUSED', syscall: 'connect' } } })
+    const text = JSON.stringify(projected)
+    for (const secret of ['private-user', 'private-pass', 'query-secret', 'PRIVATE_RESPONSE_BODY', 'PRIVATE_STACK', 'PRIVATE_SUMMARY']) expect(text).not.toContain(secret)
+    const ordinary = projectDiagnosticEventForSharing({ ...event, type: 'other_event', details: { stage: 'PRIVATE_STAGE', reason: 'PRIVATE_REASON' } })
+    expect(ordinary.details).toBeUndefined()
+  })
+
   test('reduces native and serialized errors to metadata without messages, stacks, paths, prompts, or cloud keys', () => {
     const nativeError = new Error('PRIVATE_PROMPT at /Users/alice/private/project AKIAIOSFODNN7EXAMPLE')
     nativeError.name = 'PRIVATE_PROMPT_CONTENT'
