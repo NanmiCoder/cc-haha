@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
@@ -9,6 +9,10 @@ import { createSandboxedTestEnvironment } from './test-environment'
 const backend = resolve('desktop/build/guarded-removal.cs')
 const harness = resolve('scripts/pr/windows-installer-guarded-removal.cs')
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
+
+function createCanonicalOwnedSandbox(parent = tmpdir()) {
+  return realpathSync(mkdtempSync(join(parent, 'cc-haha-guarded-removal-')))
+}
 
 function withNativeIoStubs(source: string) {
   const replacements: Record<string, string> = {
@@ -54,9 +58,29 @@ function removePlainOwnedTree(root: string) {
   }
 }
 
+test('guarded fixture capabilities use canonical owned temp paths before opening handles', () => {
+  const arena = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-guarded-temp-alias-')))
+  const actual = join(arena, 'actual'), alias = join(arena, 'alias')
+  mkdirSync(actual)
+  symlinkSync(actual, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  try {
+    const legacy = mkdtempSync(join(alias, 'legacy-'))
+    expect(resolve(legacy)).not.toBe(realpathSync(legacy))
+    const canonical = createCanonicalOwnedSandbox(alias)
+    const fixture = join(canonical, 'fixture')
+    mkdirSync(fixture)
+    expect(canonical).toBe(realpathSync(canonical))
+    expect(fixture).toBe(realpathSync(fixture))
+    expect(canonical.startsWith(`${actual}\\`) || canonical.startsWith(`${actual}/`)).toBe(true)
+  } finally {
+    unlinkSync(alias)
+    removePlainOwnedTree(arena)
+  }
+})
+
 test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises shared guarded engine only on fresh owned data', async () => {
   if (process.env.CI !== 'true') throw new Error('Guarded native harness requires a disposable Windows CI runner')
-  const sandbox = mkdtempSync(join(tmpdir(), 'cc-haha-guarded-removal-'))
+  const sandbox = createCanonicalOwnedSandbox()
   const code = join(sandbox, 'code')
   mkdirSync(code)
   const privateEnvironment = createSandboxedTestEnvironment(join(sandbox, 'home'))

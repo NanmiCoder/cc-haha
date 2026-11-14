@@ -1,12 +1,16 @@
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { release, tmpdir, version } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
 
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
+
+function createCanonicalOwnedSandbox(prefix: string, parent = tmpdir()) {
+  return realpathSync(mkdtempSync(join(parent, prefix)))
+}
 
 // Only replace native declarations and allocation accounting in a disposable
 // compiled copy. Relative/RenameNt/RunCase and their cleanup remain unchanged.
@@ -139,6 +143,26 @@ function removeOwnedPlainTree(root: string) {
   }
 }
 
+test('native fixture paths start from the canonical owned temp directory', () => {
+  const arena = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-probe-temp-alias-')))
+  const actual = join(arena, 'actual'), alias = join(arena, 'alias')
+  mkdirSync(actual)
+  symlinkSync(actual, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  try {
+    const legacy = mkdtempSync(join(alias, 'legacy-'))
+    expect(resolve(legacy)).not.toBe(realpathSync(legacy))
+    const canonical = createCanonicalOwnedSandbox('native-', alias)
+    const fixture = join(canonical, 'fixture')
+    mkdirSync(fixture)
+    expect(canonical).toBe(realpathSync(canonical))
+    expect(fixture).toBe(realpathSync(fixture))
+    expect(canonical.startsWith(`${actual}\\`) || canonical.startsWith(`${actual}/`)).toBe(true)
+  } finally {
+    unlinkSync(alias)
+    removeOwnedPlainTree(arena)
+  }
+})
+
 test('retains an owned native arena for missing, pending, reparse or incomplete-close evidence', () => {
   const known = { version: 4, safeForControllerCleanup: true, cleanupState: { rootInitiallyVerified: true,
     allHandlesClosed: true, pendingNativeIo: false, reparseUncertain: false, unsafeEffectObserved: false } }
@@ -218,7 +242,7 @@ function inspectToolchain(env: Record<string, string>) {
 for (const architecture of ['x86', 'x64'] as const) {
   test.skipIf(process.platform !== 'win32')(`probes ${architecture} readonly MOVE guards and parent-relative named PRUNE using owned temp only`, () => {
     if (process.env.CI !== 'true') throw new Error('Run this owned primitive probe only on a disposable Windows CI runner')
-    const sandbox = mkdtempSync(join(tmpdir(), `cc-haha-removal-primitives-${architecture}-`))
+    const sandbox = createCanonicalOwnedSandbox(`cc-haha-removal-primitives-${architecture}-`)
     const env = createSandboxedTestEnvironment(join(sandbox, 'home'))
     const fixture = join(sandbox, 'fixture')
     mkdirSync(fixture)

@@ -11,6 +11,7 @@ using System.Text;
 internal static class GuardedRemovalChecks
 {
   private static int Count;
+  private static string ParentObservation = "null";
   private static void Assert(bool value, string name) { if (!value) throw new Exception(name); Count++; }
   private static void Reject(Action action, string code)
   {
@@ -125,6 +126,38 @@ internal static class GuardedRemovalChecks
 
   private static string Dword(uint value) { return value.ToString(CultureInfo.InvariantCulture); }
   private static string Number(IntPtr value) { return Dword(unchecked((uint)value.ToInt32())); }
+  private static string ObserveParent(IntPtr parent, uint expectedPid)
+  {
+    uint flags;
+    bool flagsRead = GuardedRemoval.Native.GetHandleInformation(parent, out flags);
+    int flagsError = Marshal.GetLastWin32Error();
+    uint actualPid = GuardedRemoval.Native.GetProcessId(parent), ownPid = GuardedRemoval.Native.GetCurrentProcessId();
+    uint wait = GuardedRemoval.Native.WaitForSingleObject(parent, 0);
+    var queries = new List<string>();
+    // Diagnostic comparisons only. Neither result replaces or bypasses the
+    // production ReceiveParent check; failed queries never grant admission.
+    foreach (uint length in new uint[] { 64, 56 })
+    {
+      IntPtr buffer = Marshal.AllocHGlobal((int)length);
+      try
+      {
+        for (int i = 0; i < length; i++) Marshal.WriteByte(buffer, i, 0);
+        uint returned;
+        int status = GuardedRemoval.Native.NtQueryObject(parent, 0, buffer, length, out returned);
+        string granted = status >= 0 && returned >= 8 && returned <= length ?
+          Quote(unchecked((uint)Marshal.ReadInt32(buffer, 4)).ToString("x8", CultureInfo.InvariantCulture)) : "null";
+        queries.Add("{\"queryBytes\":" + Dword(length) + ",\"ntStatus\":" + Quote(unchecked((uint)status).ToString("x8", CultureInfo.InvariantCulture)) +
+          ",\"returnedBytes\":" + Dword(returned) + ",\"grantedMask\":" + granted + "}");
+      }
+      finally { Marshal.FreeHGlobal(buffer); }
+    }
+    return "{\"requestedMask\":\"00101000\",\"source\":\"OpenProcess\",\"expectedPid\":" + Dword(expectedPid) +
+      ",\"actualPid\":" + Dword(actualPid) + ",\"ownPid\":" + Dword(ownPid) +
+      ",\"matchesRequestedNonSelf\":" + (actualPid == expectedPid && actualPid != ownPid && actualPid != 0 ? "true" : "false") +
+      ",\"flagsRead\":" + (flagsRead ? "true" : "false") + ",\"flags\":" + Dword(flags) +
+      ",\"flagsError\":" + (flagsRead ? "null" : flagsError.ToString(CultureInfo.InvariantCulture)) + ",\"wait0\":" + Dword(wait) +
+      ",\"queries\":[" + String.Join(",", queries.ToArray()) + "]}";
+  }
   private static void Receive(GuardedRemoval.Context context, string root, uint parentPid, bool wrongId, List<IntPtr> created)
   {
     var tuples = new List<string>();
@@ -145,6 +178,7 @@ internal static class GuardedRemovalChecks
     GuardedRemoval.Need(parent != IntPtr.Zero, "fixture-open-parent"); created.Add(parent);
     GuardedRemoval.Time creation, exit, kernel, user;
     GuardedRemoval.Need(GuardedRemoval.Native.GetProcessTimes(parent, out creation, out exit, out kernel, out user), "fixture-parent-times");
+    ParentObservation = ObserveParent(parent, parentPid);
     string tuple = Number(parent) + ":" + Dword(parentPid) + ":" + Dword(creation.Low) + ":" + Dword(creation.High);
     var invocation = GuardedRemoval.Parse(Arguments(root, String.Join(",", tuples.ToArray()), tuple));
       context.Receive(invocation);
@@ -319,6 +353,7 @@ internal static class GuardedRemovalChecks
         ",\"originalBytesPreserved\":" + (bytesPreserved ? "true" : "false") + ",\"nativeError\":" + nativeError.ToString(CultureInfo.InvariantCulture) +
         ",\"namedPrunePins\":" + namedPrunePins.ToString(CultureInfo.InvariantCulture) +
         ",\"phase\":" + Quote(context == null ? "receive" : context.Phase) +
+        ",\"parentCapabilityObservation\":" + ParentObservation +
         ",\"treeMutationStarted\":" + (tree != null && tree.MutationStarted ? "true" : "false") +
         ",\"protectedNamespaceMetadataCase\":" + (mode.StartsWith("data-", StringComparison.Ordinal) ? "true" : "false") +
         ",\"capabilityBoundary\":\"same-process fixture handles; NSIS cross-process handoff tested separately\",\"realAccountsCreated\":0,\"realProfilesCreated\":0,\"productPeExecuted\":false}", new UTF8Encoding(false));
