@@ -180,18 +180,24 @@ public static class OwnedHandoff {
   [DllImport("kernel32.dll",SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr h,uint ms);
   public static IntPtr Handle(string s) { return new IntPtr(unchecked((int)UInt32.Parse(s))); }
   public static void Require(bool b) { if(!b) throw new Exception("owned handoff rejection"); }
+  public static void Stage(string root,string text) { try { File.AppendAllText(root+".clr.log",text+Environment.NewLine); } catch(Exception) {} }
   public static int Main(string[] args) {
-    string root = "";
+    string root = "",phase="arguments";
     try {
       Require(IntPtr.Size==4 && args.Length==4 && args[0]=="--cc-guarded-removal=1");
       Require(args[1].StartsWith("--root=") && args[2].StartsWith("--capabilities=") && args[3].StartsWith("--parent="));
       root=args[1].Substring(7);
+      Stage(root,"main-enter;pointerBytes="+IntPtr.Size);
       var p=args[3].Substring(9).Split(':'); Require(p.Length==4);
       IntPtr parent=Handle(p[0]); uint flags; Time creation,exit,kernel,user;
-      Require(GetHandleInformation(parent,out flags) && (flags&1)==1 && SetHandleInformation(parent,1,0));
-      Require(GetProcessId(parent)==UInt32.Parse(p[1]));
-      Require(GetProcessTimes(parent,out creation,out exit,out kernel,out user));
+      phase="parent-inheritance"; bool parentInfo=GetHandleInformation(parent,out flags); int nativeError=Marshal.GetLastWin32Error();
+      Stage(root,"parent-info;handle="+parent.ToInt64()+";success="+parentInfo+";flags="+flags+";error="+nativeError);
+      Require(parentInfo && (flags&1)==1 && SetHandleInformation(parent,1,0));
+      phase="parent-pid"; uint parentPid=GetProcessId(parent); Stage(root,"parent-pid;actual="+parentPid+";expected="+p[1]); Require(parentPid==UInt32.Parse(p[1]));
+      phase="parent-times"; bool parentTimes=GetProcessTimes(parent,out creation,out exit,out kernel,out user); nativeError=Marshal.GetLastWin32Error();
+      Stage(root,"parent-times;success="+parentTimes+";low="+creation.L+";high="+creation.H+";error="+nativeError); Require(parentTimes);
       Require(creation.L==UInt32.Parse(p[2]) && creation.H==UInt32.Parse(p[3]) && WaitForSingleObject(parent,0)==258);
+      phase="weak-capabilities";
       var handles=new List<IntPtr>(); var ids=new HashSet<IntPtr>();
       foreach(string tuple in args[2].Substring(15).Split(',')) {
         var x=tuple.Split(':'); Require(x.Length==4); IntPtr h=Handle(x[0]); Info i;
@@ -200,15 +206,18 @@ public static class OwnedHandoff {
         handles.Add(h);
       }
       Require(handles.Count>=2);
+      Stage(root,"weak-verified;count="+handles.Count);
       foreach(IntPtr h in handles) Require(CloseHandle(h));
+      phase="empty-root-delete-recreate"; Stage(root,"weak-closed");
       Require(WaitForSingleObject(parent,0)==258 && Directory.GetFileSystemEntries(root).Length==0);
       Directory.Delete(root,false);
       Require(!Directory.Exists(root));
       Directory.CreateDirectory(root); // Fails if a parent retained a delete-pending weak root.
       Require(WaitForSingleObject(parent,0)==258 && CloseHandle(parent));
       File.WriteAllText(root+".handoff.log","all-inherited-ids-and-parent-verified;all-weak-closed;empty-root-deleted-and-recreated");
+      Stage(root,"main-exit;code=0");
       return 0;
-    } catch(Exception e) { if(root!="") File.WriteAllText(root+".rejected.log",e.ToString()); return 22; }
+    } catch(Exception e) { if(root!="") { Stage(root,"main-rejected;phase="+phase+";type="+e.GetType().FullName); File.WriteAllText(root+".rejected.log",e.ToString()); } return 22; }
   }
 }
 `)
@@ -222,9 +231,77 @@ public static class OwnedHandoff {
         sha256: sha256(guardedRemovalCompilerFixturePe()), configBytes: guardedBuild.clrConfig.length,
         configSha256: sha256(guardedBuild.clrConfig), sourceSha256: sha256(readFileSync(source)), compiler: 'injected non-runnable fixture' }
     }
-    const production = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8')
+    const production = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8').replace(/\r\n/g, '\n')
+    // This ledger is inserted only into the owned compiled fixture copies.
+    // Preserve registers, NSIS Errors and thread LastError around diagnostics.
+    const stageMacro = (file: string, role: string) => String.raw`
+!macro FixtureStage _TEXT
+  System::Call 'kernel32::GetLastError() i.s'
+  Push $0
+  Push $1
+  StrCpy $1 0
+  IfErrors 0 +2
+    StrCpy $1 1
+  ClearErrors
+  FileOpen $0 "${file}" a
+  ${'${IfNot}'} ${'${Errors}'}
+    FileWrite $0 "${role};${'${_TEXT}'}$\r$\n"
+    FileClose $0
+  ${'${EndIf}'}
+  ${'${If}'} $1 == 1
+    SetErrors
+  ${'${Else}'}
+    ClearErrors
+  ${'${EndIf}'}
+  Pop $1
+  Pop $0
+  System::Call 'kernel32::SetLastError(i s)'
+!macroend
+`
+    const instrument = (text: string) => text.split('\n').map(line => {
+      let detail = ''
+      if (line.includes("System::Call 'kernel32::CreateFileW(w \"$ccHahaGuardPath\"")) detail = 'directory-open;handle=$R1;path=$ccHahaGuardPath'
+      if (line.includes("System::Call 'kernel32::GetFileType(p R1) i.R5")) detail = 'identity-type;result=$R5;path=$ccHahaGuardPath'
+      if (line.includes("System::Call 'kernel32::GetFileType(p R1) i.R2")) detail = 'receive-type;result=$R2;handle=$R1'
+      if (line.includes("System::Call 'kernel32::GetFileInformationByHandle(p R1,")) detail = 'identity-info;result=$R5;handle=$R1;path=$ccHahaGuardPath'
+      if (line.includes("System::Call '*$ccHahaGuardInformation(i.R5,")) detail = 'identity-info-fields;attrs=$R5;volume=$R2;low=$R3;high=$R4'
+      if (line.includes("System::Call 'kernel32::GetFileInformationByHandleEx(p R1,")) detail = 'identity-standard;result=$R5;handle=$R1;path=$ccHahaGuardPath'
+      if (line.includes("System::Call '*$ccHahaGuardStandard(l, l, i,")) detail = 'identity-standard-fields;pending=$R5;directory=$R6'
+      if (line.includes("System::Call 'kernel32::GetFinalPathNameByHandleW(p R1,")) detail = 'identity-final;length=$R6;expected=$ccHahaGuardPath;observed=$R5'
+      if (line.trim() === 'cc_haha_guard_capture_done:') detail = 'capture;ok=$ccHahaGuardOk;count=$ccHahaGuardCount;root=$ccHahaGuardRoot'
+      if (line.trim() === 'cc_haha_guard_revalidate_done:') detail = 'revalidate;ok=$ccHahaGuardOk;count=$ccHahaGuardCount;root=$ccHahaGuardRoot'
+      if (line.trim() === 'cc_haha_guard_root_done:') detail = 'root-syntax;ok=$ccHahaGuardOk;root=$ccHahaGuardRoot'
+      if (line.trim() === 'cc_haha_guard_code_root_done:') detail = 'code-pin;ok=$ccHahaGuardOk;application=$ccHahaGuardApplication'
+      if (line.includes("System::Call 'kernel32::GetFinalPathNameByHandleW(p $ccHahaGuardCode,")) detail = 'code-final;length=$R2;expected=$ccHahaGuardApplication;observed=$R1'
+      if (line.includes("System::Call 'kernel32::OpenProcess(")) detail = 'self-cap-open;handle=$R2'
+      if (line.includes("System::Call 'kernel32::GetHandleInformation(p $ccHahaGuardParent,")) detail = 'receive-parent-info;result=$R1;flags=$R0;parent=$ccHahaGuardParent'
+      if (line.includes("System::Call 'kernel32::GetProcessId(p $ccHahaGuardParent)")) detail = 'receive-parent-pid;actual=$R0;expected=$ccHahaGuardParentPid'
+      if (line.includes("System::Call 'kernel32::GetProcessTimes(p $ccHahaGuardParent,")) detail = 'receive-parent-times;result=$R4'
+      if (line.includes("System::Call 'kernel32::UpdateProcThreadAttribute(")) detail = 'inherit-list;result=$R1;count=$ccHahaGuardCount'
+      if (line.includes("System::Call 'kernel32::CreateProcessW(")) detail = 'create;result=$R0;count=$ccHahaGuardCount;application=$ccHahaGuardApplication'
+      if (line.trim() === 'Call ${CC_HAHA_GUARD_PREFIX}CcHahaGuardCloseWeak') detail = 'weak-close-before-resume;ok=$ccHahaGuardOk;count=$ccHahaGuardCount'
+      if (line.includes("System::Call 'kernel32::CloseHandle(p $ccHahaGuardOwnProcess)")) detail = 'self-cap-close;result=$R0'
+      if (line.includes("System::Call 'kernel32::ResumeThread(")) detail = 'resume;previous=$R0'
+      if (line.includes("System::Call 'kernel32::GetExitCodeProcess(")) detail = 'child-exit;query=$R1;exit=$R0'
+      if (line.trim() === 'cc_haha_guard_launch_done:') detail = 'launch-finish;exit=$ccHahaGuardExit;resumed=$ccHahaGuardResumed;process=$ccHahaGuardProcess'
+      if (line.trim() === 'cc_haha_guard_receive_arguments:') detail = 'receive-arguments;root=$ccHahaGuardRoot'
+      if (line.trim() === '${GetParameters} $R0') detail = 'receive-parameters;value=$R0'
+      if (line.trim() === 'cc_haha_guard_receive_validate:') detail = 'receive-parsed;count=$ccHahaGuardCount;root=$ccHahaGuardRoot'
+      if (line.trim() === 'Call un.CcHahaGuardReceiveParent') detail = 'receive-parent;ok=$ccHahaGuardOk;parent=$ccHahaGuardParent'
+      if (line.trim() === 'cc_haha_guard_receive_done:') detail = 'receive-finish;mode=$ccHahaGuardMode;count=$ccHahaGuardCount;root=$ccHahaGuardRoot'
+      if (line.trim() === 'cc_haha_guard_remove_done:') detail = 'remove-finish;exit=$ccHahaGuardExit'
+      if (line.trim().startsWith('IntCmp $R0 ${NSIS_MAX_STRLEN} cc_haha_guard_launch_done')) {
+        return `  !insertmacro FixtureStage "command-bound;size=$R0;root=$ccHahaGuardRoot"\n${line}`
+      }
+      if (!detail) return line
+      if (line.trim().startsWith("System::Call 'kernel32::") && !line.endsWith(" ?e'")) {
+        return `${line.slice(0, -1)} ?e'\n  Pop $fixtureNativeError\n  !insertmacro FixtureStage "${detail};nativeError=$fixtureNativeError"`
+      }
+      return `${line}\n  !insertmacro FixtureStage "${detail}"`
+    }).join('\n')
     const include = path.join(root, 'guarded.nsh')
-    writeFileSync(include, production)
+    const currentStages = path.join(root, 'current.stages.log')
+    writeFileSync(include, instrument(production))
     const common = String.raw`Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -232,6 +309,7 @@ SilentInstall silent
 !include "FileFunc.nsh"
 !addplugindir /x86-unicode "${path.join(resources, 'plugins/x86-unicode')}"
 !include "${path.join(legacyVendorRoot, 'templates/nsis/include/StdUtils.nsh')}"
+Var fixtureNativeError
 `
     const compile = (name: string, text: string) => {
       const file = path.join(root, `${name}.nsi`)
@@ -245,9 +323,26 @@ SilentInstall silent
     }
     const current = path.join(root, 'current.exe')
     let safeToClean = true
+    const preserveHandoffEvidence = (name: string, run: { status: number | null; error?: Error }, expected: number, files: Record<string, string>) => {
+      // Copy bounded owned metadata before assertions/finally can remove the
+      // disposable fixture. No executable or file payload enters evidence.
+      const evidence = path.resolve('artifacts/windows-installer/guarded-two-hop')
+      mkdirSync(evidence, { recursive: true })
+      const metadata = { name, status: run.status, expected, error: run.error?.message,
+        root, temp: env.TEMP, tmp: env.TMP, productionLfSha256: sha256(production), files: {} as Record<string, { bytes: number; truncated: boolean }> }
+      for (const [kind, file] of Object.entries(files)) {
+        if (!existsSync(file)) continue
+        const bytes = readFileSync(file)
+        metadata.files[kind] = { bytes: bytes.length, truncated: bytes.length > 65536 }
+        writeFileSync(path.join(evidence, `${name}.${kind}.log`), bytes.subarray(0, 65536))
+      }
+      writeFileSync(path.join(evidence, `${name}.json`), `${JSON.stringify(metadata, null, 2)}\n`)
+      if (run.error || run.status !== expected) safeToClean = false
+      return metadata
+    }
     try {
       const wrapper = path.join(root, 'wrapper.exe')
-      compile('current-wrapper', common + String.raw`Name "Owned capability receiver"
+      compile('current-wrapper', common + stageMacro(currentStages, 'current') + String.raw`Name "Owned capability receiver"
 OutFile "${wrapper}"
 !define BUILD_UNINSTALLER
 !define CC_HAHA_GUARDED_HELPER_FILE "${helper.executable}"
@@ -291,10 +386,11 @@ SectionEnd
           .replace('StrCpy $ccHahaGuardThread $R2', "StrCpy $ccHahaGuardThread $R2\n  System::Call 'kernel32::GetProcessId(p $ccHahaGuardProcess) i.R1'\n  StrCpy $fixtureChildPid $R1")
         if (item.name === 'weak-close-failure') adapted = adapted.replace("System::Call 'kernel32::CloseHandle(p R2) i.R3'", "System::Call 'kernel32::CloseHandle(p R2) i.R3'\n      ${If} $fixtureCloseInjected == 0\n        StrCpy $fixtureCloseInjected 1\n        StrCpy $R3 0\n      ${EndIf}")
         const fixtureInclude = path.join(root, `${item.name}.nsh`)
-        writeFileSync(fixtureInclude, adapted)
+        writeFileSync(fixtureInclude, instrument(adapted))
         const executable = path.join(root, `${item.name}.exe`)
         const journal = `${owned}.parent.log`
-        compile(item.name, common + String.raw`Name "Owned capability launcher"
+        const outerStages = `${owned}.stages.log`
+        compile(item.name, common + stageMacro(outerStages, 'outer') + String.raw`Name "Owned capability launcher"
 OutFile "${executable}"
 Var fixtureResumes
 Var fixtureTerminates
@@ -328,9 +424,12 @@ SectionEnd
 `)
         if (process.platform !== 'win32') continue
         const run = spawnSync(executable, ['/S'], { env, windowsHide: true, timeout: 30_000 })
-        expect(run.error, item.name).toBeUndefined()
-        expect(run.status, item.name).toBe(item.expected)
-        const trace = readFileSync(journal, 'utf8')
+        const metadata = preserveHandoffEvidence(item.name, run, item.expected, { outer: outerStages, current: currentStages,
+          parent: journal, clr: `${owned}.clr.log`, rejected: `${owned}.rejected.log` })
+        const trace = existsSync(journal) ? readFileSync(journal, 'utf8') : 'missing parent journal'
+        const context = JSON.stringify({ ...metadata, parent: trace })
+        expect(run.error, context).toBeUndefined()
+        expect(run.status, context).toBe(item.expected)
         expect(trace, item.name).toContain(`exit=${item.expected};resumes=${item.resumes};terminates=${item.terminates};`)
         const pid = Number(trace.match(/child=(\d+);/)![1])
         const deadline = Date.now() + 15_000
@@ -350,17 +449,19 @@ SectionEnd
         mkdirSync(owned)
         const run = spawnSync(current, ['/S', '/KEEP_APP_DATA', '/currentuser', '--keep-shortcuts', '--updated', '--cc-guarded-removal=1',
           `--root=${owned}`, '--capabilities=0:0:0:0', '--parent=0:0:0:0', `_?=${owned}`], { env, windowsHide: true, timeout: 15_000 })
-        expect(run.error).toBeUndefined()
-        expect(run.status).toBe(22)
+        const metadata = preserveHandoffEvidence('invalid-capabilities', run, 22, { current: currentStages,
+          clr: `${owned}.clr.log`, rejected: `${owned}.rejected.log` })
+        expect(run.error, JSON.stringify(metadata)).toBeUndefined()
+        expect(run.status, JSON.stringify(metadata)).toBe(22)
         expect(existsSync(`${owned}.handoff.log`)).toBe(false)
       }
     } finally { if (safeToClean) rmSync(root, { recursive: true, force: true }) }
   }, 120_000)
 
   test('keeps suspended exact-handle inheritance and guarded removal separate from default recursive removal', () => {
-    const launch = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8')
-    const installer = readFileSync('desktop/build/installer.nsh', 'utf8')
-    const legacy = readFileSync('desktop/build/legacy-uninstaller-compat.nsh', 'utf8')
+    const launch = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const installer = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const legacy = readFileSync('desktop/build/legacy-uninstaller-compat.nsh', 'utf8').replace(/\r\n/g, '\n')
     expect(launch).toContain('InitializeProcThreadAttributeList(p 0, i 1, i 0, *i.R0)')
     expect(launch).toContain('UpdateProcThreadAttribute(p $ccHahaGuardAttributes, i 0, p 0x20002, p $ccHahaGuardList, i R0, p 0, p 0)')
     expect(launch).toContain('System::Alloc 72')
@@ -395,7 +496,7 @@ describe('Windows installer process matching', () => {
   test.skipIf(process.platform !== 'win32' && process.env.CC_HAHA_TEST_NSIS_COMPILE_ONLY !== '1')('requires literal old, capability-source and current target paths at the actual NSIS admission comparison (Mac compiles only)', () => {
     const compiler = process.env.CC_HAHA_TEST_MAKENSIS
     if (!compiler) throw new Error('Run the prepared pinned Windows installer lane')
-    const source = readFileSync('desktop/build/legacy-uninstaller-compat.nsh', 'utf8')
+    const source = readFileSync('desktop/build/legacy-uninstaller-compat.nsh', 'utf8').replace(/\r\n/g, '\n')
     const gate = source.match(/^  StrCmpS? \$R2 \$ccHahaCompatRoot 0 \$\{_FAIL\}\n  StrCmpS? \$R2 \$INSTDIR 0 \$\{_FAIL\}$/m)?.[0]
     if (!gate) throw new Error('Missing production old/current installation identity comparison')
     const before = gate.replace(/StrCmpS/g, 'StrCmp')
