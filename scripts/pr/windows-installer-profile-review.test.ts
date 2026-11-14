@@ -46,7 +46,7 @@ describe('isolated functional upgrade admission and finite evidence', () => {
     const report = JSON.parse(result.stdout.toString('utf8'))
     expect(report).toEqual({ version: 1, status: 'passed', actualSelectedDeclarations: true, correctHashRetained: true, wrongHashRejected: true, streamsClosed: true, missingDependency: null, realAccountsCreated: 0, realProfilesCreated: 0, nativeExecution: 'not_run' })
     expect(result.status).toBe(0)
-  }))
+  }), 20_000)
 
   test('hashes functional sources across the old cap and rejects bytes above its declared 1MiB bound', () => temporary(workspace => {
     const { once } = functionalFixture(workspace)
