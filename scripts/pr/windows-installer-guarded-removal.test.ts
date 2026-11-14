@@ -271,6 +271,15 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
         expect(result.restored).toBe(true)
         expect(result.originalFileIdsAndBytesPreserved).toBe(true)
       }
+      if (mode !== 'success') {
+        expect(result.fixtureReader.access).toBe(1)
+        expect(result.fixtureReader.share).toBe(7)
+        expect(result.fixtureReader.expectedTextVerified).toBe(true)
+      }
+      if (mode === 'rollback') {
+        expect(result.fixtureReader.legacyReadAttempted).toBe(true)
+        expect(result.fixtureReader.legacyReadHResult).toBe(0x80070020 | 0)
+      }
     }
     report.cases = cases
     report.status = 'passed'

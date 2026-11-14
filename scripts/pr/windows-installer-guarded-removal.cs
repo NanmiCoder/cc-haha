@@ -12,6 +12,43 @@ internal static class GuardedRemovalChecks
 {
   private static int Count;
   private static string ParentObservation = "null";
+  private static bool LegacyFixtureReadAttempted;
+  private static int LegacyFixtureReadHResult;
+  private const FileShare FixtureReaderShare = FileShare.ReadWrite | FileShare.Delete;
+  private static string ReadFixturePayload(string path)
+  {
+    // This auxiliary reader requests no write/delete access. Its sharing must
+    // coexist with the retained source DELETE pins and the owned busy writer.
+    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FixtureReaderShare))
+    using (var reader = new StreamReader(stream, Encoding.UTF8, true)) return reader.ReadToEnd();
+  }
+  private static void AssertLegacyReaderSharingDenied(string path)
+  {
+    LegacyFixtureReadAttempted = true;
+    bool returned = false;
+    try { File.ReadAllText(path); returned = true; }
+    catch (IOException failure) { LegacyFixtureReadHResult = failure.HResult; }
+    Assert(!returned && LegacyFixtureReadHResult == unchecked((int)0x80070020), "legacy-fixture-reader-sharing-violation");
+  }
+  private static void ManagedFixtureReader()
+  {
+    string root = Path.Combine(Path.GetTempPath(), "cc-haha-fixture-reader-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "owned.txt");
+    const string expected = "owned UTF8 payload \u03bb\nsecond line";
+    try
+    {
+      File.WriteAllText(path, expected);
+      using (var writer = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+      {
+        // Unix does not implement the Windows access/share compatibility rule.
+        if (Environment.OSVersion.Platform == PlatformID.Win32NT) AssertLegacyReaderSharingDenied(path);
+        Assert(ReadFixturePayload(path) == expected, "fixture-reader-full-text-with-owned-writer");
+        Assert(writer.CanRead && writer.CanWrite, "fixture-reader-does-not-close-the-retained-writer");
+      }
+    }
+    finally { File.Delete(path); Directory.Delete(root); }
+  }
   private static readonly List<GuardedRemoval.MetadataObservation> MetadataObservations = new List<GuardedRemoval.MetadataObservation>();
   private static bool MetadataObservationsTruncated;
   private static void ObserveMetadata(GuardedRemoval.MetadataObservation value)
@@ -116,6 +153,7 @@ internal static class GuardedRemovalChecks
   public static string Managed()
   {
     Count = 0;
+    ManagedFixtureReader();
     Assert(Marshal.SizeOf(typeof(GuardedRemoval.PublicObjectBasicInformation)) == 56, "public-basic-information-exact-fourteen-dwords");
     Assert(Marshal.OffsetOf(typeof(GuardedRemoval.PublicObjectBasicInformation), "GrantedAccess").ToInt32() == 4, "public-basic-information-access-offset");
     const string root = "C:\\Apps\\Claude Code Haha", caps = "4:7:1:0,8:7:2:0,12:7:3:0", parent = "16:123:4:5";
@@ -420,8 +458,9 @@ internal static class GuardedRemovalChecks
       }
       if (mode != "success")
       {
-        Assert((rejected || mode == "data-plain" || mode == "data-missing") && File.ReadAllText(Path.Combine(root, "a.bin")) == "owned first payload" &&
-          File.ReadAllText(Path.Combine(root, "nested", "b.bin")) == "owned nested payload", "owned-rejection-preserves-original-bytes");
+        if (mode == "rollback") AssertLegacyReaderSharingDenied(Path.Combine(root, "a.bin"));
+        Assert((rejected || mode == "data-plain" || mode == "data-missing") && ReadFixturePayload(Path.Combine(root, "a.bin")) == "owned first payload" &&
+          ReadFixturePayload(Path.Combine(root, "nested", "b.bin")) == "owned nested payload", "owned-rejection-preserves-original-bytes");
         bytesPreserved = true;
         if (tree != null) foreach (GuardedRemoval.FileNode file in tree.Files)
           Assert(context.Read(file.Pin).Id == file.Original.Id && context.Hash(file.Pin) == file.Hash, "original-file-id-and-hash-retained");
@@ -457,6 +496,9 @@ internal static class GuardedRemovalChecks
         ",\"metadataObservations\":" + MetadataJson() + ",\"metadataObservationsTruncated\":" + (MetadataObservationsTruncated ? "true" : "false") +
         ",\"firstTreeFailure\":" + (firstFailure == null ? "null" : firstFailure.Json()) +
         ",\"originalFileVerification\":" + Quote(bytesPreserved && fileIdsPreserved ? "passed" : "not_run") +
+        ",\"fixtureReader\":{\"access\":1,\"share\":" + ((int)FixtureReaderShare).ToString(CultureInfo.InvariantCulture) +
+        ",\"legacyReadAttempted\":" + (LegacyFixtureReadAttempted ? "true" : "false") + ",\"legacyReadHResult\":" + LegacyFixtureReadHResult.ToString(CultureInfo.InvariantCulture) +
+        ",\"expectedTextVerified\":" + (bytesPreserved ? "true" : "false") + "}" +
         ",\"treeMutationStarted\":" + (tree != null && tree.MutationStarted ? "true" : "false") +
         ",\"protectedNamespaceMetadataCase\":" + (mode.StartsWith("data-", StringComparison.Ordinal) ? "true" : "false") +
         ",\"capabilityBoundary\":\"same-process fixture handles; NSIS cross-process handoff tested separately\",\"realAccountsCreated\":0,\"realProfilesCreated\":0,\"productPeExecuted\":false}", new UTF8Encoding(false));
