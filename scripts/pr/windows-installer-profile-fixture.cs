@@ -2583,13 +2583,13 @@ namespace CcHahaInstallerProfile
         {
           try
           {
-            report.status = "failed"; report.Check("fixture-entry", false, NativePlatform.SafeFailure(error));
+            report.status = "failed"; report.Check("fixture-entry", false, arguments.Length > 0 && arguments[0] == "--f1-audit-canary" ? NativePlatform.SafeCanaryFailure(error) : NativePlatform.SafeFailure(error));
             report.binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath);
             report.finishedAtUtc = DateTime.UtcNow.ToString("o"); CoreJson.Write(output, report);
           }
           catch { }
         }
-        Console.Error.WriteLine("Installer profile fixture stopped: " + NativePlatform.SafeFailure(error));
+        Console.Error.WriteLine("Installer profile fixture stopped: " + (arguments.Length > 0 && arguments[0] == "--f1-audit-canary" ? NativePlatform.SafeCanaryFailure(error) : NativePlatform.SafeFailure(error)));
         return 1;
       }
     }

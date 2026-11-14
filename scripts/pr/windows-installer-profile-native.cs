@@ -308,6 +308,28 @@ namespace CcHahaInstallerProfile
       return "Native operation failed (" + error.GetType().Name + ")";
     }
 
+
+    // Canary diagnostics cross a strict metadata-only publication boundary.
+    // Historical SafeFailure remains unchanged; never publish exception text.
+    internal static string SafeCanaryFailure(Exception error)
+    {
+      string kind = error == null ? "unknown" : error is Win32Exception ? "win32" : error is TokenInformationFailure ? "token" : error is FixtureFailure ? "fixture" : error is InvalidOperationException ? "operation" : "exception";
+      Win32Exception win32 = error as Win32Exception;
+      string code = win32 == null ? "none" : unchecked((uint)win32.NativeErrorCode).ToString("x8", CultureInfo.InvariantCulture);
+      string label = error is FixtureFailure || error is TokenInformationFailure || error is InvalidOperationException ? error.Message : null;
+      int count = label == null ? 0 : label.Length;
+      string hash = label == null ? "none" : count <= 192 ? CorePolicy.HashText(label) : "oversize";
+      if (win32 == null && label != null && count <= 160)
+      {
+        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(label,
+          @"\A[A-Za-z][A-Za-z0-9 _-]{0,95} failed \((?:Win32|NET_API_STATUS) ([0-9]{1,10})\)\z",
+          System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        uint native;
+        if (match.Success && UInt32.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out native)) code = native.ToString("x8", CultureInfo.InvariantCulture);
+      }
+      return "f1-canary-failure-" + kind + "-code-" + code + "-labelchars-" + count.ToString(CultureInfo.InvariantCulture) + "-labelsha-" + hash;
+    }
+
     private static void StageBIdentity(FixtureSpec spec, string mode)
     {
       CorePolicy.Require(spec != null && spec.realExecutionAdmitted && spec.executionStage == "B" && spec.mode == mode &&
@@ -3550,7 +3572,7 @@ namespace CcHahaInstallerProfile
           "Runtime observations only; provider scope support, complete lifecycle/namespace and F1 remain not_proven.");
         report.status = report.checks.All(c => c.status == "passed") ? "passed" : "failed";
       }
-      catch (Exception e) { report.Check("f1-zero-account-native", false, SafeFailure(e)); }
+      catch (Exception e) { report.Check("f1-zero-account-native", false, SafeCanaryFailure(e)); }
       finally
       {
         Exception cleanupFailure = null; bool jobStopped = false, traceClosed = session == null;
@@ -3583,7 +3605,7 @@ namespace CcHahaInstallerProfile
           }
           report.cleanup = "passed";
         }
-        catch (Exception e) { report.cleanup = "unknown"; report.status = "failed"; report.Check("f1-canary-cleanup", false, SafeFailure(cleanupFailure ?? e)); }
+        catch (Exception e) { report.cleanup = "unknown"; report.status = "failed"; report.Check("f1-canary-cleanup", false, SafeCanaryFailure(cleanupFailure ?? e)); }
         if (session != null) { report.f1NativeCanary = session.Observation(); report.f1NativeCanary.childPid = child.pid; report.f1NativeCanary.childCreationTime = child.creationTime; report.f1NativeCanary.childResumeAttempted = resumeAttempted; report.f1NativeCanary.childResumed = child.resumed; report.f1NativeCanary.childExited = child.exited; }
         report.finishedAtUtc = DateTime.UtcNow.ToString("o");
       }

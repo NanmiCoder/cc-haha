@@ -618,6 +618,7 @@ namespace CcHahaInstallerProfile
       RunF1PureTests(report);
       RunF1NativeSliceTests(report);
       RunF1SafetyFixTests(report);
+      RunF1CanaryDiagnosticContractTests(report);
       Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
         FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
         Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
@@ -1609,6 +1610,31 @@ namespace CcHahaInstallerProfile
         Assert(F1Policy.CanaryRegistryCleanupKnown(false, false), "never-resumed child cannot create its user-mode volatile leaf");
         Assert(F1Policy.CanaryRegistryCleanupKnown(true, true), "natural exit0 occurs only after child close/delete finally succeeds");
         Assert(!F1Policy.CanaryRegistryCleanupKnown(true, false), "timeout/forced exit/nonzero including registry cleanup failure remains unknown even with empty files");
+      });
+    }
+
+
+    private static void RunF1CanaryDiagnosticContractTests(FixtureReport report)
+    {
+      Case(report, "f1-canary-diagnostic-contract-encodes-shared-constant-without-changing-history", delegate {
+        const string label = "Owned child did not terminate"; Exception error = new FixtureFailure(label);
+        Assert(NativePlatform.SafeFailure(error) == label, "historical failure text remains unchanged");
+        string value = NativePlatform.SafeCanaryFailure(error);
+        Assert(value == "f1-canary-failure-fixture-code-none-labelchars-29-labelsha-" + CorePolicy.HashText(label) && value.IndexOf(label, StringComparison.Ordinal) < 0, "bounded constant/hash contract replaces raw detail only for canary");
+      });
+      Case(report, "f1-canary-diagnostic-contract-keeps-numeric-error-and-rejects-value-text", delegate {
+        const string marker = "CapturedData=PRIVATE_CANARY_DIAGNOSTIC";
+        string value = NativePlatform.SafeCanaryFailure(new System.ComponentModel.Win32Exception(5, marker));
+        Assert(value == "f1-canary-failure-win32-code-00000005-labelchars-0-labelsha-none" && value.IndexOf(marker, StringComparison.Ordinal) < 0, "typed numeric code without arbitrary Win32 text");
+        string wrapped = NativePlatform.SafeCanaryFailure(new InvalidOperationException("Owned API failed (Win32 32)"));
+        Assert(wrapped.Contains("-code-00000020-") && !wrapped.Contains("Owned API"), "existing bounded numeric wrapper is preserved as a code/hash");
+      });
+      Case(report, "f1-canary-diagnostic-contract-is-bounded-for-long-or-unknown-errors", delegate {
+        foreach (Exception error in new Exception[] { null, new Exception("CapturedData=PRIVATE"), new FixtureFailure(new String('x', 10000)) })
+        {
+          string value = NativePlatform.SafeCanaryFailure(error);
+          Assert(value.Length < 192 && System.Text.RegularExpressions.Regex.IsMatch(value, "\\Af1-[a-z0-9-]+\\z") && !value.Contains("CapturedData"), "finite category/code/length/hash, never exception payload");
+        }
       });
     }
 
