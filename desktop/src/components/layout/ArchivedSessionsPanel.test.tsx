@@ -9,14 +9,22 @@ import { ArchivedSessionsPanel } from './ArchivedSessionsPanel'
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   history: vi.fn(),
+  getFullHistory: vi.fn(),
   setSessionArchived: vi.fn(),
   openHistoricalSession: vi.fn(),
   connectToSession: vi.fn(),
+  addToast: vi.fn(),
   projectArchivedTotals: {} as Record<string, number>,
+}))
+const markdownMocks = vi.hoisted(() => ({
+  buildSessionMarkdown: vi.fn(() => '# Session markdown\n'),
+  downloadTextFile: vi.fn(),
+  isCompleteSessionHistory: vi.fn((history: { page?: { historyComplete?: boolean } }) => history.page?.historyComplete !== false),
+  sanitizeSessionFilename: vi.fn((title: string) => `${title}.md`),
 }))
 
 vi.mock('@/api/sessions', () => ({
-  sessionsApi: { list: mocks.list, listProjectHistory: mocks.history },
+  sessionsApi: { list: mocks.list, listProjectHistory: mocks.history, getFullHistory: mocks.getFullHistory },
 }))
 vi.mock('@/stores/sessionStore', () => ({
   useSessionStore: Object.assign(
@@ -25,6 +33,11 @@ vi.mock('@/stores/sessionStore', () => ({
   ),
 }))
 vi.mock('@/stores/chatStore', () => ({ useChatStore: { getState: () => mocks } }))
+vi.mock('@/stores/uiStore', () => ({
+  useUIStore: (selector: (state: typeof mocks) => unknown) => selector(mocks),
+}))
+vi.mock('@/lib/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
+vi.mock('@/lib/sessionMarkdown', () => markdownMocks)
 vi.mock('@/i18n', async () => {
   const { en } = await import('@/i18n/locales/en')
   const translate = (key: keyof typeof en, params?: Record<string, string | number>) => {
@@ -52,15 +65,56 @@ function deferred<T>() {
 const row = (title: string) => screen.getByText(title).closest('button') as HTMLButtonElement
 
 beforeEach(() => {
-  for (const mock of [mocks.list, mocks.history, mocks.setSessionArchived, mocks.openHistoricalSession, mocks.connectToSession]) mock.mockReset()
+  for (const mock of [mocks.list, mocks.history, mocks.getFullHistory, mocks.setSessionArchived, mocks.openHistoricalSession, mocks.connectToSession, mocks.addToast, markdownMocks.buildSessionMarkdown, markdownMocks.downloadTextFile, markdownMocks.isCompleteSessionHistory, markdownMocks.sanitizeSessionFilename]) mock.mockReset()
   mocks.projectArchivedTotals = {}
   mocks.setSessionArchived.mockResolvedValue(undefined)
+  mocks.getFullHistory.mockResolvedValue({ messages: [], page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 } })
+  markdownMocks.buildSessionMarkdown.mockReturnValue('# Session markdown\n')
+  markdownMocks.isCompleteSessionHistory.mockImplementation((history: { page?: { historyComplete?: boolean } }) => history.page?.historyComplete !== false)
+  markdownMocks.sanitizeSessionFilename.mockImplementation((title: string) => `${title}.md`)
   useTabStore.setState({ activeTabId: null })
 })
 afterEach(cleanup)
 
 
 describe('ArchivedSessionsPanel', () => {
+  it('copies and exports complete Markdown from an archived session menu', async () => {
+    const { copyTextToClipboard } = await import('@/lib/clipboard')
+    vi.mocked(copyTextToClipboard).mockResolvedValue(true)
+    const archived = session('markdown')
+    mocks.history.mockResolvedValue({ sessions: [archived], nextCursor: null })
+    mocks.getFullHistory.mockResolvedValue({
+      messages: [{ id: 'm1', type: 'user', content: 'Keep this', timestamp: '2026-01-01T00:00:00.000Z' }],
+      page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 },
+    })
+    render(<ArchivedSessionsPanel projectRoot="/work/project" onBack={vi.fn()} />)
+    fireEvent.contextMenu(await screen.findByText('Session markdown'))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Copy Markdown' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: 'Export Markdown' })).toBeInTheDocument()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Copy Markdown' }))
+    await waitFor(() => expect(copyTextToClipboard).toHaveBeenCalledWith(expect.stringContaining('Keep this')))
+    expect(mocks.addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown copied.' })
+
+    fireEvent.contextMenu(screen.getByText('Session markdown'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export Markdown' }))
+    await waitFor(() => expect(markdownMocks.downloadTextFile).toHaveBeenCalledWith('# Session markdown\n', 'Session markdown.md'))
+    expect(mocks.addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown exported.' })
+  })
+
+  it('reports incomplete archived history without copying', async () => {
+    const { copyTextToClipboard } = await import('@/lib/clipboard')
+    vi.mocked(copyTextToClipboard).mockResolvedValue(true)
+    const archived = session('incomplete')
+    mocks.history.mockResolvedValue({ sessions: [archived], nextCursor: null })
+    mocks.getFullHistory.mockResolvedValue({ messages: [], page: { historyComplete: false, contentTruncated: false, omittedOversizedEntries: 0 } })
+    render(<ArchivedSessionsPanel projectRoot="/work/project" onBack={vi.fn()} />)
+    fireEvent.contextMenu(await screen.findByText('Session incomplete'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+    await waitFor(() => expect(mocks.addToast).toHaveBeenCalledWith({ type: 'error', message: 'The session history is incomplete, so Markdown was not created.' }))
+    expect(copyTextToClipboard).not.toHaveBeenCalled()
+  })
+
   it('opens an archived transcript without restoring it and keeps the list in place', async () => {
     const archived = session('a')
     mocks.history.mockResolvedValue({ sessions: [archived, session('b')], nextCursor: null })
