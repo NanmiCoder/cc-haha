@@ -224,7 +224,7 @@ async function initializeRemoteWorkspaceUrl(): Promise<string | null> {
   if (!profile) return null
 
   try {
-    await waitForHealth(profile.url)
+    await waitForHealth(profile.url, STARTUP_HEALTH_ATTEMPTS)
   } catch {
     disableUnreachableRemoteWorkspace()
     return null
@@ -264,7 +264,7 @@ export async function initializeDesktopServerUrl() {
     ])
     setBaseUrl(serverUrl)
     setAuthToken(localAccessToken)
-    await waitForHealth(serverUrl)
+    await waitForHealth(serverUrl, STARTUP_HEALTH_ATTEMPTS)
     markDesktopServerReady()
     return serverUrl
   } catch (error) {
@@ -383,15 +383,26 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
 }
 
 /**
+ * How long startup will wait for a server to answer `/health`.
+ *
+ * Both servers this can wait on cold-start: the local sidecar rebuilds its
+ * search index before binding, and a remote workspace's tunnel may still be
+ * waking the network. The interactive "test connection" keeps the short
+ * window; only startup pays the longer one.
+ */
+const STARTUP_HEALTH_ATTEMPTS = 120
+
+/**
  * Wait for `GET <serverUrl>/health` to answer `{status:'ok'}`.
  *
- * Shared by startup and by the Remote Workspace pane's "test connection", so
- * both agree on what a reachable server looks like.
+ * Shared by startup (which passes the longer attempt budget for cold starts)
+ * and by the Remote Workspace pane's "test connection" (short, interactive),
+ * so both agree on what a reachable server looks like.
  */
-export async function waitForHealth(serverUrl: string) {
+export async function waitForHealth(serverUrl: string, attempts = 30) {
   let lastError: unknown
 
-  for (let attempt = 0; attempt < 30; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const response = await fetch(`${serverUrl}/health`, {
         cache: 'no-store',

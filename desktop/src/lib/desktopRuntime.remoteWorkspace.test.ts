@@ -133,6 +133,29 @@ describe('remote workspace runtime', () => {
       expect(window.desktopHost.runtime.getServerUrl).toHaveBeenCalledTimes(1)
     })
 
+    it('waits out a slow cold-booting sidecar instead of failing startup', async () => {
+      // A cold sidecar rebuilds its search index before binding, which can
+      // outlast the interactive health window. Startup keeps polling well
+      // past it — this probe answers only after more attempts than the
+      // short window has, so the test discriminates the two budgets.
+      const localUrl = 'http://127.0.0.1:59231'
+      window.desktopHost = desktopHostAt(localUrl)
+      let calls = 0
+      globalThis.fetch = vi.fn(() => {
+        calls++
+        return calls <= 40
+          ? Promise.reject(new Error('ECONNREFUSED'))
+          : Promise.resolve(healthOkResponse())
+      }) as typeof fetch
+
+      vi.useFakeTimers()
+      const startup = expect(initializeDesktopServerUrl()).resolves.toBe(localUrl)
+      await vi.runAllTimersAsync()
+      await startup
+
+      expect(calls).toBeGreaterThan(30)
+    })
+
     it('falls back to the local sidecar and disables the profile when the tunnel is down', async () => {
       writeRemoteWorkspace({ url: REMOTE_URL, sshHost: 'my-gpu-server', enabled: true, connectedAt: null })
       const localUrl = 'http://127.0.0.1:59231'
