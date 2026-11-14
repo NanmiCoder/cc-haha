@@ -3315,6 +3315,7 @@ namespace CcHahaInstallerProfile
     internal long EventsLost, BuffersLost, OwnedRecords, OtherHeaders, UnknownRecords;
     internal long FileWrites { get { lock (gate) return graph.FileWrites; } }
     internal long RegistrySets { get { lock (gate) return graph.RegistrySets; } }
+    internal string FileDiagnostic() { lock (gate) return graph.FileDiagnostic(); }
     internal void CanaryNamespace(string file, string registry) { lock (gate) { graph.CanaryFile = file; graph.CanaryRegistry = registry; } }
     internal bool Ready { get { return created && consumer != null && consumer.IsAlive && !stopping; } }
     internal bool Closed { get { return closed; } }
@@ -3569,6 +3570,28 @@ namespace CcHahaInstallerProfile
     }
     internal static void RequireCanaryDetachedConsole(IntPtr window)
     { CorePolicy.Require(window == IntPtr.Zero, "f1-canary-detached-console-required"); }
+    internal static void RequireCanaryEmptyEnvironment(FixtureReport report, string slot, Func<FileIdentity> identify, Func<int> entries, Action remove)
+    {
+      string fixedSlot = new string[] { "home", "userprofile", "appdata", "localappdata", "temp", "tmp" }.Contains(slot) ? slot : "unknown";
+      string stage = "identity"; FileIdentity identity = null; int? count = null;
+      try
+      {
+        CorePolicy.Require(fixedSlot != "unknown", "f1-canary-empty-private-environment");
+        identity = identify(); CorePolicy.Require(identity != null && identity.directory && !identity.reparse, "f1-canary-empty-private-environment");
+        stage = "enumeration"; count = entries(); stage = "empty";
+        CorePolicy.Require(count == 0, "f1-canary-empty-private-environment"); stage = "delete"; remove();
+      }
+      catch
+      {
+        // Only fixed enums and bounded counts are public. Preserve the original
+        // failure and retain every unknown entry; no name/path/exception text.
+        if (report != null) report.Check("f1-canary-cleanup", false, "f1-env-slot-" + fixedSlot + "-stage-" + stage
+          + "-kind-" + (identity == null ? "unknown" : identity.directory ? "directory" : "file")
+          + "-reparse-" + (identity == null ? "unknown" : identity.reparse ? "1" : "0")
+          + "-count-" + (count.HasValue ? Math.Max(0, Math.Min(100000, count.Value)).ToString(CultureInfo.InvariantCulture) : "unknown"));
+        throw;
+      }
+    }
     [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
     [DllImport("advapi32.dll", EntryPoint = "RegCreateKeyExW", CharSet = CharSet.Unicode)] private static extern int F1RegCreate(IntPtr root, string path, uint reserved, string cls, uint options, uint access, IntPtr security, out IntPtr key, out uint disposition);
     [DllImport("advapi32.dll", EntryPoint = "RegSetValueExW", CharSet = CharSet.Unicode)] private static extern int F1RegSet(IntPtr key, string name, uint reserved, uint type, IntPtr data, uint bytes);
@@ -3669,6 +3692,7 @@ namespace CcHahaInstallerProfile
         report.trace.Add("native-metadata-owned=" + session.OwnedRecords + ";other-headers=" + session.OtherHeaders + ";unknown=" + session.UnknownRecords + ";file-writes=" + session.FileWrites + ";registry-sets=" + session.RegistrySets);
         report.Check("f1-real-debug-pump-and-owned-metadata", session.OwnedRecords > 0 && session.FileWrites >= 3 && session.RegistrySets >= 3 && session.EventsLost == 0 && session.BuffersLost == 0 && !session.Gap,
           "Runtime observations only; provider scope support, complete lifecycle/namespace and F1 remain not_proven.");
+        if (report.checks.Last().status == "failed") report.Check("f1-real-debug-pump-and-owned-metadata", false, session.FileDiagnostic());
         report.status = report.checks.All(c => c.status == "passed") ? "passed" : "failed";
       }
       catch (Exception e) { report.Check("f1-zero-account-native", false, SafeCanaryFailure(e)); }
@@ -3701,7 +3725,7 @@ namespace CcHahaInstallerProfile
             }
             string microsoft = Path.Combine(root, "localappdata", "Microsoft"); if (Directory.Exists(microsoft)) { CorePolicy.Require(!api.IdentifyPath(microsoft, true).reparse && Directory.GetFileSystemEntries(microsoft).Length == 0, "f1-known-runtime-parent-only"); Directory.Delete(microsoft); }
             foreach (string field in new string[] { "home", "userprofile", "appdata", "localappdata", "temp", "tmp" })
-            { string path = Path.Combine(root, field); CorePolicy.Require(!api.IdentifyPath(path, true).reparse && Directory.GetFileSystemEntries(path).Length == 0, "f1-canary-empty-private-environment"); Directory.Delete(path); }
+            { string path = Path.Combine(root, field); RequireCanaryEmptyEnvironment(report, field, () => api.IdentifyPath(path, true), () => Directory.GetFileSystemEntries(path).Length, () => Directory.Delete(path)); }
             CorePolicy.Require(Directory.GetFileSystemEntries(root).Length == 0, "f1-canary-unknown-residue-retained"); Directory.Delete(root);
           }
           report.cleanup = "passed";

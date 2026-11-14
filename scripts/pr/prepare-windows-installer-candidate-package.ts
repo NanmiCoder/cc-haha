@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, readdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { assertOutsideSourceGit, downloadPinnedInstaller, isInsideDirectory, pinnedNsisCompiler, pinnedNsisResources, sha256File, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { bootstrapFullSevenZip, parseSevenZipListing, pinnedFullSevenZip, proveNsisMember, selectLiteralMember, type NsisMemberProof, type SevenZipExtractor, type SevenZipRunner } from './windows-installer-member-proof'
-import { createSandboxedTestEnvironment } from './test-environment'
+import { createOfflineTestEnvironment, createSandboxedTestEnvironment } from './test-environment'
 
 export const candidatePackage = {
   repository: 'NanmiCoder/cc-haha', number: 1883, headRepository: 'toBerlinWay/cc-haha',
@@ -300,12 +300,93 @@ type CleanupRemovalDetails = {
   syscall: string | null, errno: number | null, relativePath: string | null,
   entryKind: 'file' | 'directory' | 'missing' | 'other' | null, modeWriteBits: number | null,
 }
+type NodeCleanupOutcome = 'timeout' | 'output-limit' | 'spawn-error' | 'signal' | 'unexpected-output' | 'invalid-reply'
+  | 'runtime-refused' | 'child-admission-refused' | 'child-failed' | 'nonzero-exit' | 'target-still-present' | 'absence-unknown'
 type CleanupDiagnostic = {
   site: 'admission' | 'remove' | 'unknown'; guard: CleanupGuard; nativeCode: string | null
+  nodeOutcome?: NodeCleanupOutcome
 } & Partial<CleanupRemovalDetails>
 const cleanupNativeCodes = new Set(['EACCES', 'EBUSY', 'EEXIST', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE',
   'ENAMETOOLONG', 'ENFILE', 'ENOENT', 'ENOSPC', 'ENOTDIR', 'ENOTEMPTY', 'EPERM', 'EROFS', 'ETXTBSY'])
 const cleanupSyscalls = new Set(['unlink', 'rmdir', 'scandir', 'lstat', 'stat', 'rm'])
+export const candidateCleanupNodeScript = String.raw`
+const fs = require('node:fs'), p = require('node:path')
+const codes = new Set(${JSON.stringify([...cleanupNativeCodes])}), syscalls = new Set(${JSON.stringify([...cleanupSyscalls])})
+const same = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+const emit = (outcome, error) => {
+  process.stdout.write(JSON.stringify({version:1,nodeVersion:process.versions.node,outcome,...(error ? {error} : {})}))
+  process.exitCode = outcome === 'removed' ? 0 : 1
+}
+;(() => {
+  if (!/^22\.[0-9]+\.[0-9]+$/.test(process.versions.node)) return emit('runtime-refused')
+  if (process.argv.length !== 4) return emit('admission-refused')
+  const [temp, parent, nonce] = process.argv.slice(1), owner = p.join(temp, '.owner')
+  try {
+    if (!p.isAbsolute(temp) || !p.isAbsolute(parent) || !same(fs.realpathSync(parent), parent)
+      || !fs.lstatSync(parent).isDirectory() || fs.lstatSync(parent).isSymbolicLink()
+      || !same(fs.realpathSync(process.cwd()), parent) || !same(fs.realpathSync(temp), temp)
+      || !fs.lstatSync(temp).isDirectory() || fs.lstatSync(temp).isSymbolicLink()
+      || p.dirname(temp) !== parent || !p.basename(temp).startsWith('cc-haha-candidate-package-')
+      || !fs.lstatSync(owner).isFile() || fs.lstatSync(owner).isSymbolicLink()
+      || fs.lstatSync(owner).size > 64 || fs.readFileSync(owner, 'utf8') !== nonce) return emit('admission-refused')
+  } catch { return emit('admission-refused') }
+  try {
+    fs.rmSync(temp, { recursive: true })
+    emit('removed')
+  } catch (error) {
+    emit('failed', {code: codes.has(error.code) ? error.code : null,
+      syscall: syscalls.has(error.syscall) ? error.syscall : null,
+      errno: Number.isInteger(error.errno) && error.errno >= -2147483648 && error.errno <= 2147483647 ? error.errno : null,
+      path: typeof error.path === 'string' && error.path.length <= 8192 && !/[\p{Cc}\p{Cf}]/u.test(error.path) ? error.path : null})
+  }
+})()
+`
+class CandidateNodeCleanupFailure extends Error {
+  constructor(readonly outcome: NodeCleanupOutcome, fields: Record<string, unknown>, cause: unknown) {
+    super('Candidate Node cleanup failed', { cause })
+    Object.assign(this, fields)
+  }
+}
+function nodeCleanup(temp: string, parent: string, nonce: string) {
+  const home = join(temp, 'home')
+  const result = spawnSync('node', ['--input-type=commonjs', '--eval', candidateCleanupNodeScript, '--', temp, parent, nonce], {
+    shell: false, cwd: parent, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 180_000, maxBuffer: 64 * 1024,
+    env: createOfflineTestEnvironment({ HOME: home, CFFIXED_USER_HOME: home, USERPROFILE: home,
+      APPDATA: join(home, '.config'), LOCALAPPDATA: join(home, '.local'), TEMP: parent, TMP: parent, TMPDIR: parent }),
+  })
+  const fail = (outcome: NodeCleanupOutcome, fields: Record<string, unknown> = {}): never => {
+    throw new CandidateNodeCleanupFailure(outcome, fields, result)
+  }
+  if (result.error) fail(cleanupErrorField(result.error, 'code') === 'ETIMEDOUT' ? 'timeout'
+    : cleanupErrorField(result.error, 'code') === 'ENOBUFS' ? 'output-limit' : 'spawn-error')
+  if (result.signal) fail('signal')
+  if (result.stderr?.length || !result.stdout || result.stdout.length > 64 * 1024) fail('unexpected-output')
+  let reply: any
+  try { reply = JSON.parse(result.stdout.toString('utf8')) } catch { fail('invalid-reply') }
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply) || reply.version !== 1
+    || Object.keys(reply).some(key => !['version', 'nodeVersion', 'outcome', 'error'].includes(key))) fail('invalid-reply')
+  if (reply.outcome === 'runtime-refused') fail('runtime-refused')
+  if (typeof reply.nodeVersion !== 'string' || !/^22\.[0-9]{1,3}\.[0-9]{1,3}$/.test(reply.nodeVersion)) fail('invalid-reply')
+  if (reply.outcome === 'admission-refused') fail('child-admission-refused')
+  if (reply.outcome === 'failed' && result.status === 1) {
+    const error = reply.error
+    if (!error || typeof error !== 'object' || Array.isArray(error)
+      || Object.keys(error).length !== 4 || Object.keys(error).some(key => !['code', 'syscall', 'errno', 'path'].includes(key))
+      || !(error.code === null || cleanupNativeCodes.has(error.code))
+      || !(error.syscall === null || cleanupSyscalls.has(error.syscall))
+      || !(error.errno === null || Number.isInteger(error.errno) && error.errno >= -2147483648 && error.errno <= 2147483647)
+      || !(error.path === null || typeof error.path === 'string' && error.path.length <= 8192 && !/[\p{Cc}\p{Cf}]/u.test(error.path))) fail('invalid-reply')
+    fail('child-failed', error)
+  }
+  if (result.status !== 0) fail('nonzero-exit')
+  if (reply.outcome !== 'removed' || 'error' in reply) fail('invalid-reply')
+  try { lstatSync(temp); fail('target-still-present') }
+  catch (error) {
+    if (error instanceof CandidateNodeCleanupFailure) throw error
+    if (cleanupErrorField(error, 'code') !== 'ENOENT') fail('absence-unknown')
+  }
+  return { runtime: 'node22', version: reply.nodeVersion, attempts: 1, confirmedAbsent: true }
+}
 function cleanupErrorField(error: unknown, key: 'code' | 'syscall' | 'errno' | 'path') {
   try { return error && typeof error === 'object' ? Reflect.get(error, key) : undefined } catch { return undefined }
 }
@@ -384,10 +465,11 @@ export function cleanupCandidateDirectory(temp: string, parent: string, nonce: s
     guard = 'owner-value'
     if (readFileSync(owner, 'utf8') !== nonce) refuse()
     site = 'remove'; guard = null
-    rmSync(temp, { recursive: true })
+    return nodeCleanup(temp, parent, nonce)
   } catch (error) {
     throw new CandidateCleanupFailure({ site, guard, nativeCode: denied ? null : cleanupNativeCode(error),
-      ...(site === 'remove' ? cleanupRemovalDetails(error, temp) : {}) }, error, denied)
+      ...(site === 'remove' ? cleanupRemovalDetails(error, temp) : {}),
+      ...(error instanceof CandidateNodeCleanupFailure ? { nodeOutcome: error.outcome } : {}) }, error, denied)
   }
 }
 
@@ -399,7 +481,7 @@ export function finishCandidatePackage(options: {
   let failed = originalError !== undefined || receipt.failedStage !== undefined
   let failure = originalError, cleanupCause: unknown
   try {
-    cleanupCandidateDirectory(temp, parent, nonce)
+    receipt.cleanupRuntime = cleanupCandidateDirectory(temp, parent, nonce)
     receipt.cleanup = 'owned_temporary_directory_removed'
   } catch (error) {
     cleanupCause = error

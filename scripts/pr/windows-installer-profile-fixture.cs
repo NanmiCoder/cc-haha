@@ -2761,7 +2761,7 @@ namespace CcHahaInstallerProfile
     internal static readonly HashSet<string> MetadataNames = new HashSet<string>(StringComparer.Ordinal) {
       "BaseObject", "KeyObject", "Status", "Disposition", "BaseName", "RelativeName", "KeyName", "Irp", "FileObject", "IssuingThreadId",
       "CreateOptions", "CreateAttributes", "ShareAccess", "FileName", "ExtraInformation", "FileKey", "InfoClass", "ByteOffset", "IOSize",
-      "IOFlags", "ExtraFlags", "Length", "FileIndex", "Type", "DataSize", "ValueName", "CapturedDataSize", "PreviousDataType", "PreviousDataSize", "PreviousDataCapturedSize" };
+      "IOFlags", "ExtraFlags", "Length", "FileIndex", "Index", "FilePath", "Type", "DataSize", "ValueName", "CapturedDataSize", "PreviousDataType", "PreviousDataSize", "PreviousDataCapturedSize" };
 
     internal static F1MetadataField Project(string name, ushort type, int flags, int count, int length, int ordinal)
     {
@@ -2858,6 +2858,19 @@ namespace CcHahaInstallerProfile
     private readonly Dictionary<ulong, long> generations = new Dictionary<ulong, long>();
     internal readonly List<F1AuditOperation> operations = new List<F1AuditOperation>();
     internal long FileWrites, RegistrySets, KeyCloses, FileCloses;
+    internal long FileWriteSeen, FileWriteNoIrp, FileWriteNoName, FileWriteConflict, FileWriteReuse, FileWriteBegun,
+      FileWriteEnds, FileWriteBadOrder, FileWriteNoStatus, FileWriteFailed, FileWriteOtherPath, FileOrphanEnds;
+    private static string DiagnosticCount(long value) { return Math.Max(0, Math.Min(100000, value)).ToString(System.Globalization.CultureInfo.InvariantCulture); }
+    internal string FileDiagnostic()
+    {
+      return "f1-fw-seen-" + DiagnosticCount(FileWriteSeen) + "-noirp-" + DiagnosticCount(FileWriteNoIrp)
+        + "-noname-" + DiagnosticCount(FileWriteNoName) + "-conflict-" + DiagnosticCount(FileWriteConflict)
+        + "-reuse-" + DiagnosticCount(FileWriteReuse) + "-begun-" + DiagnosticCount(FileWriteBegun)
+        + "-ends-" + DiagnosticCount(FileWriteEnds) + "-order-" + DiagnosticCount(FileWriteBadOrder)
+        + "-nostatus-" + DiagnosticCount(FileWriteNoStatus) + "-failed-" + DiagnosticCount(FileWriteFailed)
+        + "-otherpath-" + DiagnosticCount(FileWriteOtherPath) + "-pending-" + DiagnosticCount(irps.Count(pair => pair.Value.kind == "write"))
+        + "-orphanends-" + DiagnosticCount(FileOrphanEnds);
+    }
     internal bool Gap;
     internal string CanaryFile, CanaryRegistry;
     internal int PendingCount { get { return irps.Count; } }
@@ -2896,12 +2909,20 @@ namespace CcHahaInstallerProfile
     internal void File(int id, int version, Dictionary<string, object> d, long qpc)
     {
       ulong obj = Number(d, "FileObject"), key = Number(d, "FileKey"), irp = Number(d, "Irp");
+      if (id == 16) FileWriteSeen++;
       if (id == 10 || id == 11)
       { string name = Text(d, "FileName"); if (key == 0 || !AbsoluteFile(name)) { Gap = true; return; } if (id == 10) fileKeys[key] = name; else fileKeys.Remove(key); return; }
       if (id == 24 && version == 0)
       {
-        Pending pending; if (irp == 0 || !irps.TryGetValue(irp, out pending)) return;
-        irps.Remove(irp); if (qpc <= pending.qpc) { Gap = true; return; }
+        Pending pending; if (irp == 0 || !irps.TryGetValue(irp, out pending)) { FileOrphanEnds++; return; }
+        if (pending.kind == "write") FileWriteEnds++;
+        irps.Remove(irp); if (qpc <= pending.qpc) { if (pending.kind == "write") FileWriteBadOrder++; Gap = true; return; }
+        if (pending.kind == "write")
+        {
+          if (!d.ContainsKey("Status")) FileWriteNoStatus++;
+          else if (Number(d, "Status") != 0) FileWriteFailed++;
+          else if (!Same(pending.path, CanaryFile)) FileWriteOtherPath++;
+        }
         if (Number(d, "Status") == 0 && d.ContainsKey("Status"))
         { if (pending.kind == "write" && Same(pending.path, CanaryFile)) FileWrites++; if (pending.kind == "close") { files.Remove(pending.obj); createIrps.Remove(pending.obj); FileCloses++; } }
         return;
@@ -2911,10 +2932,12 @@ namespace CcHahaInstallerProfile
       { string path = Text(d, "FileName"); if (obj == 0 || !AbsoluteFile(path)) { Gap = true; return; } if (files.ContainsKey(obj)) { if (id != 30 || !Same(files[obj], path) || !createIrps.ContainsKey(obj) || createIrps[obj] != irp) { Gap = true; return; } } else { files.Add(obj, path); createIrps[obj] = irp; } }
       string current = null;
       if (obj != 0) files.TryGetValue(obj, out current);
-      if (key != 0 && fileKeys.ContainsKey(key)) { if (current != null && !Same(current, fileKeys[key])) { Gap = true; return; } current = fileKeys[key]; }
+      if (key != 0 && fileKeys.ContainsKey(key)) { if (current != null && !Same(current, fileKeys[key])) { if (id == 16) FileWriteConflict++; Gap = true; return; } current = fileKeys[key]; }
       if (id == 16 || id == 18 || id == 19 || id == 14)
       {
+        if (id == 16) { if (irp == 0) FileWriteNoIrp++; if (current == null) FileWriteNoName++; if (irps.ContainsKey(irp)) FileWriteReuse++; }
         if (irp == 0 || current == null || irps.ContainsKey(irp)) { Gap = true; return; }
+        if (id == 16) FileWriteBegun++;
         irps.Add(irp, new Pending { kind = id == 16 ? "write" : id == 18 ? "delete" : id == 19 ? "rename" : "close", path = current, obj = obj, qpc = qpc });
       }
       if (id == 26 || id == 27 || id == 28 || id == 29) Gap = true; // target/link bridge is not inferred from adjacent arrival.
@@ -2924,7 +2947,9 @@ namespace CcHahaInstallerProfile
   internal static class F1KnownMetadataSchemas
   {
     // Verified 4a source XML SHA233b7ff46f425efeb68e062f3e79c08288da41ce069f8bcbc53a54f023c0a6a1.
-    // Names only: native types/lengths are read from TDH, never inferred from XML text.
+    // 31d raw SHA645f59960d390d9051a15a4f8fb5b787ce0947ba3f7a9eef253c68a51d799b67
+    // additionally verifies Reg8/v0/op39 and File26/27/v1/op0 field names.
+    // Native types/lengths are read from TDH, never inferred from XML text.
     internal static bool Matches(bool registry, int id, int version, int opcode, IEnumerable<string> fields)
     {
       string names = null;
@@ -2933,6 +2958,7 @@ namespace CcHahaInstallerProfile
         if (id == 1 || id == 2) names = "BaseObject,KeyObject,Status,Disposition,BaseName,RelativeName";
         if (id == 3 || id == 13) names = "KeyObject,Status,KeyName";
         if (id == 5) names = "KeyObject,Status,Type,DataSize,KeyName,ValueName,CapturedDataSize,CapturedData,PreviousDataType,PreviousDataSize,PreviousDataCapturedSize,PreviousData";
+        if (id == 8) names = "KeyObject,Status,Index,InfoClass,DataSize,KeyName,CapturedDataSize,CapturedData";
       }
       if (!registry && opcode == 0)
       {
@@ -2943,6 +2969,7 @@ namespace CcHahaInstallerProfile
         if (new int[] {17,18,19,22,23,32,34}.Contains(id) && version == 1) names = "Irp,FileObject,FileKey,ExtraInformation,IssuingThreadId,InfoClass";
         if (id == 20 && version == 1) names = "Irp,FileObject,FileKey,IssuingThreadId,Length,InfoClass,FileIndex,FileName";
         if (id == 24 && version == 0) names = "Irp,ExtraInformation,Status";
+        if ((id == 26 || id == 27) && version == 1) names = "Irp,FileObject,FileKey,ExtraInformation,IssuingThreadId,InfoClass,FilePath";
       }
       if (names == null) return false;
       string[] expected = names.Split(','); string[] actual = fields.ToArray();

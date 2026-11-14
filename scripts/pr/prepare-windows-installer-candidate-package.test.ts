@@ -1,12 +1,14 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import * as nativeFs from 'node:fs'
+import * as childProcess from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidatePackage, candidatePackageFailureSummary, cleanupCandidateDirectory, finishCandidatePackage, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
+import { runInNewContext } from 'node:vm'
+import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidateCleanupNodeScript, candidatePackage, candidatePackageFailureSummary, cleanupCandidateDirectory, finishCandidatePackage, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
 import { type SevenZipRunner } from './windows-installer-member-proof'
 import { createSandboxedTestEnvironment } from './test-environment'
 
@@ -46,7 +48,7 @@ describe('bounded candidate cleanup diagnostics', () => {
   test.each(['EBUSY', 'PRIVATE_UNRECOGNIZED_CODE'])('retains the complete receipt and exact error without publishing arbitrary cleanup data (%s)', code => {
     const f = completionFixture(), secret = 'PRIVATE_CLEANUP_MESSAGE_STACK_AND_PATH'
     const nativeError = Object.assign(new Error(secret), { code, path: secret, stack: secret })
-    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
     let failure: any
     try {
       try { finishCandidatePackage(f.options) } catch (error) { failure = error }
@@ -68,7 +70,7 @@ describe('bounded candidate cleanup diagnostics', () => {
     } finally { remove.mockRestore(); f.cleanup() }
   })
   test('records a denied owner guard without attempting deletion', () => {
-    const f = completionFixture(), remove = spyOn(nativeFs, 'rmSync')
+    const f = completionFixture(), remove = spyOn(childProcess, 'spawnSync')
     let failure: any
     try {
       try { finishCandidatePackage({ ...f.options, nonce: 'different-private-owner' }) } catch (error) { failure = error }
@@ -85,7 +87,7 @@ describe('bounded candidate cleanup diagnostics', () => {
     const f = completionFixture(), buildError = new Error('PRIVATE_BUILD_MESSAGE')
     const nativeError = Object.assign(new Error('PRIVATE_SECONDARY_MESSAGE'), { code: 'EPERM' })
     f.receipt.status = 'not_proven'; f.receipt.failedStage = 'build-full-windows-x64'; f.receipt.errorCode = 'candidate_package_not_proven'
-    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
     let failure: any
     try {
       try { finishCandidatePackage({ ...f.options, originalError: buildError }) } catch (error) { failure = error }
@@ -147,9 +149,116 @@ describe('bounded candidate cleanup diagnostics', () => {
   })
 })
 
+describe('single Node22 candidate cleanup', () => {
+  const result = (reply: unknown, extra: Record<string, unknown> = {}) => ({ pid: 123,
+    status: 0, signal: null, stdout: Buffer.from(typeof reply === 'string' ? reply : JSON.stringify(reply)), stderr: Buffer.alloc(0), ...extra })
+  const removed = { version: 1, nodeVersion: '22.23.2', outcome: 'removed' }
+  test.each(['ordinary', 'readonly'])('removes an owned %s tree using the actual Node22 process and confirms absence', kind => {
+    const f = completionFixture(), run = childProcess.spawnSync
+    mkdirSync(join(f.directory, 'nested'))
+    writeFileSync(join(f.directory, 'nested', 'public-build-file'), 'owned public fixture', { mode: kind === 'readonly' ? 0o444 : 0o600 })
+    const child = spyOn(childProcess, 'spawnSync').mockImplementation(((...args: any[]) => (run as any)(...args)) as any)
+    const previous = process.env.NODE_OPTIONS
+    process.env.NODE_OPTIONS = '--require=PRIVATE_REMOVE_PRELOAD'
+    try {
+      const receipt = finishCandidatePackage(f.options)
+      expect(child).toHaveBeenCalledTimes(1)
+      const [executable, argv, options] = child.mock.calls[0]!
+      expect(executable).toBe('node')
+      expect(argv).toEqual(['--input-type=commonjs', '--eval', candidateCleanupNodeScript, '--', f.directory, f.root, nonce])
+      expect(options).toMatchObject({ shell: false, cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 180_000, maxBuffer: 64 * 1024 })
+      expect(options!.env!.NODE_OPTIONS).toBeUndefined()
+      expect(options!.env!.NODE_PATH).toBeUndefined()
+      expect(receipt).toMatchObject({ status: 'candidate_package_prepared', cleanup: 'owned_temporary_directory_removed',
+        cleanupRuntime: { runtime: 'node22', attempts: 1, confirmedAbsent: true } })
+      expect(receipt.cleanupRuntime.version).toMatch(/^22\.[0-9]+\.[0-9]+$/)
+      expect(existsSync(f.directory)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.NODE_OPTIONS
+      else process.env.NODE_OPTIONS = previous
+      child.mockRestore(); f.cleanup()
+    }
+  })
+  test.each(['owner', 'parent', 'root-link'])('rechecks the %s claim in the actual Node22 child before removal', kind => {
+    const f = completionFixture()
+    let directory = f.directory
+    if (kind === 'root-link') {
+      directory = join(f.root, 'cc-haha-candidate-package-link')
+      symlinkSync(f.directory, directory, 'junction')
+    }
+    try {
+      const child = spawnSync('node', ['--input-type=commonjs', '--eval', candidateCleanupNodeScript, '--', directory,
+        kind === 'parent' ? f.temp : f.root, kind === 'owner' ? 'PRIVATE_WRONG_OWNER' : nonce], {
+        cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, maxBuffer: 64 * 1024,
+        env: createSandboxedTestEnvironment(join(f.root, 'child-home')),
+      })
+      expect(child.error).toBeUndefined()
+      expect(child.status).toBe(1)
+      expect(child.stderr.length).toBe(0)
+      expect(JSON.parse(child.stdout.toString())).toMatchObject({ version: 1, outcome: 'admission-refused' })
+      expect(child.stdout.toString()).not.toContain('PRIVATE_WRONG_OWNER')
+      expect(readFileSync(join(f.directory, 'owned.txt'), 'utf8')).toBe('owned disposable payload')
+    } finally { f.cleanup() }
+  })
+  test.each(['timeout', 'spawn', 'overflow', 'signal', 'nonzero', 'invalid', 'stderr', 'runtime', 'refused', 'present', 'absence'])('retains unknown for a %s child result without retry', mode => {
+    const f = completionFixture()
+    const expected = { timeout: 'timeout', spawn: 'spawn-error', overflow: 'output-limit', signal: 'signal', nonzero: 'nonzero-exit',
+      invalid: 'invalid-reply', stderr: 'unexpected-output', runtime: 'runtime-refused', refused: 'child-admission-refused',
+      present: 'target-still-present', absence: 'absence-unknown' }[mode]!
+    const observed: any = result(mode === 'invalid' ? 'PRIVATE_INVALID_JSON' : mode === 'runtime'
+      ? { ...removed, nodeVersion: '26.7.0', outcome: 'runtime-refused' } : mode === 'refused' ? { ...removed, outcome: 'admission-refused' } : removed)
+    if (['timeout', 'spawn', 'overflow'].includes(mode)) observed.error = Object.assign(new Error('PRIVATE_CHILD_ERROR'), {
+      code: mode === 'timeout' ? 'ETIMEDOUT' : mode === 'overflow' ? 'ENOBUFS' : 'ENOENT' })
+    if (mode === 'signal') observed.signal = 'SIGTERM'
+    if (mode === 'nonzero') observed.status = 7
+    if (mode === 'stderr') observed.stderr = Buffer.from('PRIVATE_CHILD_STACK_AND_PATH')
+    const originalStat = nativeFs.lstatSync
+    let returned = false, failure: any
+    const child = spyOn(childProcess, 'spawnSync').mockImplementation(() => { returned = true; return observed })
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      if (mode === 'absence' && returned && String(args[0]) === f.directory) throw Object.assign(new Error('PRIVATE_METADATA'), { code: 'EACCES' })
+      return (originalStat as any)(...args)
+    }) as any)
+    try {
+      try { finishCandidatePackage(f.options) } catch (error) { failure = error }
+      expect(child).toHaveBeenCalledTimes(1)
+      expect(failure.cause.cause.cause).toBe(observed)
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        cleanupFailure: { site: 'remove', nodeOutcome: expected } })
+      expect(raw).not.toContain('PRIVATE_')
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { stat.mockRestore(); child.mockRestore(); f.cleanup() }
+  })
+  test('projects a native failure from the exact child script without publishing its message, stack or absolute target', () => {
+    const f = completionFixture(), target = join(f.directory, 'owned.txt')
+    const error = Object.assign(new Error('PRIVATE_NATIVE_MESSAGE'), { code: 'EPERM', syscall: 'unlink', errno: -1, path: target, stack: 'PRIVATE_NATIVE_STACK' })
+    let wire = '', removes = 0
+    const fakeProcess: any = { argv: ['node', f.directory, f.root, nonce], platform: process.platform, versions: { node: '22.23.2' },
+      cwd: () => f.root, stdout: { write: (value: string) => { wire += value } } }
+    const require = createRequire(import.meta.url)
+    runInNewContext(candidateCleanupNodeScript, { process: fakeProcess, require: (name: string) => name === 'node:fs'
+      ? { ...nativeFs, rmSync: () => { removes++; throw error } } : require(name) })
+    expect(removes).toBe(1)
+    expect(fakeProcess.exitCode).toBe(1)
+    expect(wire).not.toContain('PRIVATE_NATIVE_')
+    const child = spyOn(childProcess, 'spawnSync').mockReturnValue(result(wire, { status: 1 }) as any)
+    try {
+      expect(() => finishCandidatePackage(f.options)).toThrow('Candidate package not proven')
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', cleanupFailure: { nativeCode: 'EPERM',
+        syscall: 'unlink', errno: -1, relativePath: 'owned.txt', entryKind: 'file', nodeOutcome: 'child-failed' } })
+      expect(raw).not.toContain(f.directory)
+      expect(raw).not.toContain('PRIVATE_NATIVE_')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { child.mockRestore(); f.cleanup() }
+  })
+})
+
 describe('scoped remove diagnostics', () => {
   function removalFailure(f: ReturnType<typeof completionFixture>, nativeError: Error) {
-    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    const remove = spyOn(childProcess, 'spawnSync').mockImplementation(() => { throw nativeError })
     let error: any
     try {
       try { finishCandidatePackage(f.options) } catch (failure) { error = failure }

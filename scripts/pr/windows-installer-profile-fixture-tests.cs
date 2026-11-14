@@ -617,6 +617,8 @@ namespace CcHahaInstallerProfile
       RunF1ClosureTests(report);
       RunF1PureTests(report);
       RunF1NativeSliceTests(report);
+      RunF1Actual31dMetadataTests(report);
+      RunF1CanaryMetadataDiagnosticTests(report);
       RunF1SafetyFixTests(report);
       RunF1CanaryDiagnosticContractTests(report);
       RunF1CanaryRuntimeFixTests(report);
@@ -1572,6 +1574,111 @@ namespace CcHahaInstallerProfile
       });
     }
 
+
+
+    private static void RunF1Actual31dMetadataTests(FixtureReport report)
+    {
+      Case(report, "f1-31d-actual-schema-headers-and-fields-remain-exact", delegate {
+        string[] registry = { "KeyObject", "Status", "Index", "InfoClass", "DataSize", "KeyName", "CapturedDataSize", "CapturedData" };
+        string[] file = { "Irp", "FileObject", "FileKey", "ExtraInformation", "IssuingThreadId", "InfoClass", "FilePath" };
+        Assert(F1KnownMetadataSchemas.Matches(true, 8, 0, 39, registry), "actual 31d Reg8/v0/op39 metadata");
+        foreach (int id in new int[] { 26, 27 })
+        {
+          Assert(F1KnownMetadataSchemas.Matches(false, id, 1, 0, file), "actual 31d path metadata tuple");
+          Assert(!F1KnownMetadataSchemas.Matches(false, id, 0, 0, file) && !F1KnownMetadataSchemas.Matches(false, id, 1, 1, file)
+            && !F1KnownMetadataSchemas.Matches(false, id, 1, 0, file.Concat(new string[] { "opaque" })), "adjacent version/opcode/extra body is unknown");
+        }
+        Assert(!F1KnownMetadataSchemas.Matches(true, 8, 0, 38, registry) && !F1KnownMetadataSchemas.Matches(true, 8, 1, 39, registry)
+          && !F1KnownMetadataSchemas.Matches(true, 8, 0, 39, registry.Concat(new string[] { "PreviousData" })), "no registry shape generalization");
+      });
+      Case(report, "f1-31d-reg8-actual-plan-skips-nonzero-captured-data", delegate {
+        string[] names = { "KeyObject", "Status", "Index", "InfoClass", "DataSize", "KeyName", "CapturedDataSize", "CapturedData" };
+        ushort[] types = { 16, 8, 8, 8, 8, 1, 6, 14 }; int[] lengths = { 8, 4, 4, 4, 4, 0, 2, 6 };
+        F1MetadataPlan plan = new F1MetadataPlan();
+        for (int i = 0; i < names.Length; i++) plan.fields.Add(F1MetadataPlan.Project(names[i], types[i], i == 7 ? 2 : 0, 1, lengths[i], i));
+        byte[] bytes = new byte[32]; bytes[0] = 1; bytes[16] = 1; bytes[20] = 4; bytes[26] = 4;
+        F1PoisonBytes poison = new F1PoisonBytes { bytes = bytes, poisonStart = 28, poisonLength = 4 };
+        Dictionary<string, object> metadata = plan.Read(poison, bytes.Length, 8);
+        Assert(poison.reads == 28 && (ulong)metadata["Index"] == 0 && (ulong)metadata["CapturedDataSize"] == 4 && !metadata.ContainsKey("CapturedData"), "actual scalar widths and prior size skip all captured bytes");
+        plan.fields[7].lengthProperty = -1; plan.fields[7].lengthKind = F1LengthKind.Unspecified; plan.fields[7].fixedLength = 0;
+        poison.reads = 0; Reject(() => plan.Read(poison, bytes.Length, 8), "no explicit value span is still rejected before any body read"); Assert(poison.reads == 0, "whole-plan validation precedes body");
+      });
+      Case(report, "f1-31d-path-records-decode-metadata-without-promoting-lifecycle", delegate {
+        string[] names = { "Irp", "FileObject", "FileKey", "ExtraInformation", "IssuingThreadId", "InfoClass", "FilePath" };
+        F1MetadataPlan plan = new F1MetadataPlan();
+        for (int i = 0; i < names.Length; i++) plan.fields.Add(F1MetadataPlan.Project(names[i], (ushort)(i < 4 ? 16 : i < 6 ? 8 : 1), 0, 1, i < 4 ? 8 : i < 6 ? 4 : 0, i));
+        byte[] path = System.Text.Encoding.Unicode.GetBytes(@"\Device\Owned\stage" + "\0"), bytes = new byte[40 + path.Length]; bytes[0] = 1; bytes[8] = 2; bytes[32] = 3; Array.Copy(path, 0, bytes, 40, path.Length);
+        Dictionary<string, object> metadata = plan.Read(new F1ArrayMetadataBytes(bytes), bytes.Length, 8);
+        Assert((string)metadata["FilePath"] == @"\Device\Owned\stage" && (ulong)metadata["IssuingThreadId"] == 3, "known path is metadata only");
+        foreach (int id in new int[] { 26, 27 })
+        {
+          F1ObservedNamespaces graph = new F1ObservedNamespaces(); graph.File(id, 1, metadata, 1);
+          Assert(graph.Gap && graph.FileWrites == 0 && graph.operations.Count == 0, "delete/rename target bridge remains unknown");
+        }
+      });
+    }
+
+    private static void RunF1CanaryMetadataDiagnosticTests(FixtureReport report)
+    {
+      Case(report, "f1-file-diagnostics-separate-missing-name-irp-and-completion-rejections", delegate {
+        F1ObservedNamespaces graph = new F1ObservedNamespaces { CanaryFile = @"\Device\Owned\canary.bin" };
+        graph.File(16, 1, new Dictionary<string, object>(), 1);
+        graph.File(12, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 10UL }, { "FileName", graph.CanaryFile } }, 2);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 11UL } }, 3);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 11UL } }, 4);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 11UL }, { "Status", 0UL } }, 3);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 12UL } }, 5);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 12UL } }, 6);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 13UL } }, 7);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 13UL }, { "Status", 1UL } }, 8);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 14UL } }, 9);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 14UL }, { "Status", 0UL } }, 10);
+        graph.File(12, 1, new Dictionary<string, object> { { "FileObject", 2UL }, { "Irp", 20UL }, { "FileName", @"\Device\Owned\other" } }, 11);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 2UL }, { "Irp", 15UL } }, 12);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 15UL }, { "Status", 0UL } }, 13);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 16UL } }, 14);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 999UL }, { "Status", 0UL } }, 15);
+        graph.File(10, 0, new Dictionary<string, object> { { "FileKey", 101UL }, { "FileName", @"\Device\Owned\conflict" } }, 16);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "FileKey", 101UL }, { "Irp", 17UL } }, 17);
+        string detail = graph.FileDiagnostic();
+        Assert(detail == "f1-fw-seen-9-noirp-1-noname-1-conflict-1-reuse-1-begun-6-ends-5-order-1-nostatus-1-failed-1-otherpath-1-pending-1-orphanends-1", "fixed diagnostic distinguishes actual rejection branches without names or pointers");
+        Assert(graph.FileWrites == 1 && graph.Gap && graph.PendingCount == 1 && graph.operations.Count == 0, "diagnostics never turn failed order or pending IRP into completed write");
+      });
+      Case(report, "f1-cleanup-slot-diagnostic-keeps-unknown-residue-and-reparse", delegate {
+        foreach (string slot in new string[] { "home", "userprofile", "appdata", "localappdata", "temp", "tmp" })
+        {
+          FixtureReport r = new FixtureReport(); bool removed = false;
+          Reject(() => NativePlatform.RequireCanaryEmptyEnvironment(r, slot, () => new FileIdentity { directory = true }, () => 2, () => { removed = true; }), "nonempty remains failure");
+          Assert(!removed && r.checks.Count == 1 && r.checks[0].status == "failed" && r.checks[0].detail == "f1-env-slot-" + slot + "-stage-empty-kind-directory-reparse-0-count-2", "only fixed slot, kind, tag and bounded count are public");
+        }
+        FixtureReport tagged = new FixtureReport(); bool enumerated = false, deleted = false;
+        Reject(() => NativePlatform.RequireCanaryEmptyEnvironment(tagged, "temp", () => new FileIdentity { directory = true, reparse = true }, () => { enumerated = true; return 0; }, () => { deleted = true; }), "tagged directory remains failure");
+        Assert(!enumerated && !deleted && tagged.checks[0].detail == "f1-env-slot-temp-stage-identity-kind-directory-reparse-1-count-unknown", "no enumeration through rejected tag");
+      });
+      Case(report, "f1-cleanup-diagnostic-is-bounded-and-preserves-failures", delegate {
+        FixtureReport r = new FixtureReport(); bool deleted = false;
+        Reject(() => NativePlatform.RequireCanaryEmptyEnvironment(r, "temp", () => new FileIdentity { directory = true }, () => Int32.MaxValue, () => { deleted = true; }), "nonempty still fails before bounding the diagnostic");
+        Assert(!deleted && r.checks[0].detail == "f1-env-slot-temp-stage-empty-kind-directory-reparse-0-count-100000", "entry count is bounded without granting empty");
+        FixtureReport unknown = new FixtureReport(); bool inspected = false;
+        Reject(() => NativePlatform.RequireCanaryEmptyEnvironment(unknown, "unknown/private-name", () => { inspected = true; return new FileIdentity { directory = true }; }, () => 0, () => { deleted = true; }), "unknown slot cannot reach an operation");
+        Assert(!inspected && !deleted && unknown.checks[0].detail == "f1-env-slot-unknown-stage-identity-kind-unknown-reparse-unknown-count-unknown", "no raw slot or entry name");
+        foreach (string stage in new string[] { "identity", "enumeration" })
+        {
+          FixtureReport denied = new FixtureReport(); bool caught = false;
+          try { NativePlatform.RequireCanaryEmptyEnvironment(denied, "home", () => { if (stage == "identity") throw new IOException("private-message"); return new FileIdentity { directory = true }; }, () => { throw new IOException("private-message"); }, () => { deleted = true; }); }
+          catch (IOException) { caught = true; }
+          Assert(caught && !deleted && denied.checks.Single().detail == "f1-env-slot-home-stage-" + stage + "-kind-" + (stage == "identity" ? "unknown-reparse-unknown" : "directory-reparse-0") + "-count-unknown", "failed query is unknown and cannot publish exception text");
+        }
+        FixtureReport failed = new FixtureReport(); bool threw = false;
+        try { NativePlatform.RequireCanaryEmptyEnvironment(failed, "tmp", () => new FileIdentity { directory = true }, () => 0, () => { throw new IOException("private-message"); }); }
+        catch (IOException) { threw = true; }
+        Assert(threw && failed.checks.Single().detail == "f1-env-slot-tmp-stage-delete-kind-directory-reparse-0-count-0", "delete exception is rethrown without public exception text");
+        FixtureReport empty = new FixtureReport(); NativePlatform.RequireCanaryEmptyEnvironment(empty, "tmp", () => new FileIdentity { directory = true }, () => 0, () => { deleted = true; });
+        Assert(deleted && empty.checks.Count == 0, "same zero-entry guard permits only the existing empty-directory deletion");
+        F1ObservedNamespaces graph = new F1ObservedNamespaces(); graph.FileWriteSeen = graph.FileWriteNoIrp = graph.FileWriteNoName = graph.FileWriteConflict = graph.FileWriteReuse = graph.FileWriteBegun = graph.FileWriteEnds = graph.FileWriteBadOrder = graph.FileWriteNoStatus = graph.FileWriteFailed = graph.FileWriteOtherPath = graph.FileOrphanEnds = Int64.MaxValue;
+        Assert(graph.FileDiagnostic().Length <= 256 && !graph.FileDiagnostic().Contains(Int64.MaxValue.ToString()), "each public count is bounded even for a hostile internal number");
+      });
+    }
 
     private static void RunF1SafetyFixTests(FixtureReport report)
     {
