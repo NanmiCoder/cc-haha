@@ -621,6 +621,7 @@ namespace CcHahaInstallerProfile
       RunF1CanaryDiagnosticContractTests(report);
       RunF1CanaryRuntimeFixTests(report);
       RunF1CanaryPidDiagnosticTests(report);
+      RunF1CanaryHintTests(report);
       Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
         FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
         Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
@@ -1641,7 +1642,7 @@ namespace CcHahaInstallerProfile
         Assert(api.terminated && api.empty && api.calls.Count(c => c == "continue:5") == 2
           && api.calls.IndexOf("abort-wait") < api.calls.IndexOf("close-readonly-caps"), "failed CREATE stays pending until owned termination and both EXIT continuations drain");
         Assert(observation.checks.Count == 1 && observation.checks[0].status == "failed"
-          && observation.checks[0].detail == "f1-canary-create-debug-event-root-10-pid-20-tid-120-p-0-c-0-i-1-id-1-v-1-b-1-h-1-path-1-sha-" + hash,
+          && observation.checks[0].detail == "f1-canary-create-debug-event-root-10-pid-20-tid-120-p-0-c-0-i-1-id-1-v-1-b-1-h-1-path-1-sha-" + hash + "-hint-profile-fixture",
           "a failed CREATE has only fixed site, numeric IDs, guard bits and the captured image hash");
       });
       Case(report, "f1-canary-create-diagnostics-are-bounded-and-never-copy-path-or-exception-text", delegate {
@@ -1651,15 +1652,45 @@ namespace CcHahaInstallerProfile
           image = new FileIdentity { canonicalPath = marker, volumePath = marker, fileId = marker, sha256 = marker, bytes = 1 } };
         string diagnostic = NativePlatform.CanaryCreateDiagnostic(marker, notice, Int32.MaxValue, marker, expected, expected.sha256);
         Assert(diagnostic.Length <= 256 && System.Text.RegularExpressions.Regex.IsMatch(diagnostic, @"\Af1-[a-z0-9-]+\z")
-          && diagnostic.StartsWith("f1-canary-create-unknown-", StringComparison.Ordinal) && diagnostic.EndsWith("-sha-none", StringComparison.Ordinal)
+          && diagnostic.StartsWith("f1-canary-create-unknown-", StringComparison.Ordinal) && diagnostic.EndsWith("-sha-none-hint-other", StringComparison.Ordinal)
           && !diagnostic.Contains(marker), "only typed values and predicate bits cross the metadata boundary");
         notice.image.sha256 = new String('a', 64);
-        Assert(NativePlatform.CanaryCreateDiagnostic("debug-event", notice, Int32.MaxValue, marker, expected, expected.sha256).Length <= 256,
-          "maximum numeric IDs with a full captured hash still meet the existing detail bound");
+        notice.image.canonicalPath = @"C:\Owned\profile-fixture.exe";
+        string maximum = NativePlatform.CanaryCreateDiagnostic("debug-event", notice, Int32.MaxValue, marker, expected, expected.sha256);
+        Assert(maximum.Length == 200 && maximum.Length <= 256 && maximum.EndsWith("-hint-profile-fixture", StringComparison.Ordinal),
+          "maximum numeric IDs, full captured hash and longest fixed hint meet the existing detail bound");
         FixtureReport observation = new FixtureReport(); string first = null;
         try { NativePlatform.CheckCanaryCreate(observation, "post-start", null, 1, marker, expected, expected.sha256); }
         catch (FixtureFailure failure) { first = failure.Message; }
         Assert(first == "f1-canary-create-pid" && observation.checks.Count == 1 && observation.checks[0].detail.StartsWith("f1-canary-create-post-start-", StringComparison.Ordinal), "diagnostics preserve the original denial and distinguish the calling site");
+      });
+    }
+
+    private static void RunF1CanaryHintTests(FixtureReport report)
+    {
+      Case(report, "f1-canary-hint-is-exact-basename-only-and-case-independent", delegate {
+        string[] names = { "profile-fixture.exe", "conhost.exe", "WerFault.exe", "csc.exe" };
+        string[] hints = { "profile-fixture", "conhost", "werfault", "csc" };
+        for (int i = 0; i < names.Length; i++) foreach (string name in new string[] { names[i], names[i].ToUpperInvariant() })
+          Assert(NativePlatform.CanaryImageBasenameHint(new FileIdentity { canonicalPath = @"C:\Owned\" + name }) == hints[i], "complete basename maps to a constant hint");
+        Assert(NativePlatform.CanaryImageBasenameHint(new FileIdentity { canonicalPath = @"C:\WerFault.exe\profile-fixture.exe" }) == "profile-fixture", "parent directory names are not hints");
+      });
+      Case(report, "f1-canary-hint-keeps-unknown-empty-and-malformed-metadata-other", delegate {
+        foreach (string path in new string[] { null, "", "csc.exe", @"relative\csc.exe", @"C:\Owned\unknown.exe", @"C:\Owned\prefix-csc.exe",
+          @"C:\Owned\csc.exe.evil", @"C:\Owned\conhost.exe ", @"C:\Owned\WerFault.exe\", "C:\\bad\n\\csc.exe", "C:\\bad\0\\csc.exe", @"C:\bad:stream\csc.exe" })
+          Assert(NativePlatform.CanaryImageBasenameHint(new FileIdentity { canonicalPath = path }) == "other", "unrecognized or malformed metadata cannot export a name");
+        Assert(NativePlatform.CanaryImageBasenameHint(null) == "other"
+          && NativePlatform.CanaryImageBasenameHint(new FileIdentity { canonicalPath = @"C:\Owned\csc.exe", directory = true }) == "other"
+          && NativePlatform.CanaryImageBasenameHint(new FileIdentity { canonicalPath = @"C:\Owned\csc.exe", reparse = true }) == "other", "missing or nonordinary images have no hint");
+      });
+      Case(report, "f1-canary-known-hint-cannot-admit-a-different-pid", delegate {
+        string hash = new String('a', 64); FixtureReport observation = new FixtureReport();
+        FileIdentity image = new FileIdentity { canonicalPath = @"C:\Owned\csc.exe", fileId = "id", volumePath = "vol", bytes = 1, sha256 = hash };
+        F1DebugNotice notice = new F1DebugNotice { pid = 20, tid = 120, creationTime = "same", image = image };
+        string first = null;
+        try { NativePlatform.CheckCanaryCreate(observation, "debug-event", notice, 10, "same", image, hash); } catch (FixtureFailure failure) { first = failure.Message; }
+        Assert(first == "f1-canary-create-pid" && observation.checks.Count == 1 && observation.checks[0].status == "failed"
+          && observation.checks[0].detail.EndsWith("-hint-csc", StringComparison.Ordinal), "the hint changes diagnostic text only; strict PID and all admission predicates remain required");
       });
     }
 

@@ -3514,6 +3514,22 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(notice.image.sha256 == sha256 && expected.sha256 == sha256, "f1-canary-create-image-hash");
       CorePolicy.Require(CorePolicy.SamePath(notice.image.canonicalPath, expected.canonicalPath), "f1-canary-create-image-path");
     }
+    // A lexical hint only. It is never used by process or image admission.
+    internal static string CanaryImageBasenameHint(FileIdentity image)
+    {
+      if (image == null || image.directory || image.reparse) return "other";
+      string path = image.canonicalPath;
+      if (String.IsNullOrEmpty(path) || path.Length < 4 || path.Length > 32767 || path[1] != ':'
+        || !(path[0] >= 'A' && path[0] <= 'Z' || path[0] >= 'a' && path[0] <= 'z') || !(path[2] == '\\' || path[2] == '/')
+        || path.IndexOf(':', 2) >= 0 || path.Any(c => c < 32) || path.IndexOfAny(new char[] { '"', '<', '>', '|', '?', '*' }) >= 0) return "other";
+      int separator = Math.Max(path.LastIndexOf('\\'), path.LastIndexOf('/'));
+      string leaf = path.Substring(separator + 1);
+      if (String.Equals(leaf, "profile-fixture.exe", StringComparison.OrdinalIgnoreCase)) return "profile-fixture";
+      if (String.Equals(leaf, "conhost.exe", StringComparison.OrdinalIgnoreCase)) return "conhost";
+      if (String.Equals(leaf, "WerFault.exe", StringComparison.OrdinalIgnoreCase)) return "werfault";
+      if (String.Equals(leaf, "csc.exe", StringComparison.OrdinalIgnoreCase)) return "csc";
+      return "other";
+    }
     internal static string CanaryCreateDiagnostic(string site, F1DebugNotice notice, int pid, string creation, FileIdentity expected, string sha256)
     {
       string station = site == "post-start" || site == "debug-event" ? site : "unknown";
@@ -3533,7 +3549,7 @@ namespace CcHahaInstallerProfile
         + "-b-" + (present && image.bytes == expected.bytes ? "1" : "0")
         + "-h-" + (present && image.sha256 == sha256 && expected.sha256 == sha256 ? "1" : "0")
         + "-path-" + (present && CorePolicy.SamePath(image.canonicalPath, expected.canonicalPath) ? "1" : "0")
-        + "-sha-" + imageHash;
+        + "-sha-" + imageHash + "-hint-" + CanaryImageBasenameHint(image);
     }
     internal static void CheckCanaryCreate(FixtureReport report, string site, F1DebugNotice notice, int pid, string creation, FileIdentity expected, string sha256)
     {
