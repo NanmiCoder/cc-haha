@@ -620,6 +620,7 @@ namespace CcHahaInstallerProfile
       RunF1SafetyFixTests(report);
       RunF1CanaryDiagnosticContractTests(report);
       RunF1CanaryRuntimeFixTests(report);
+      RunF1CanaryPidDiagnosticTests(report);
       Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
         FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
         Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
@@ -1425,8 +1426,9 @@ namespace CcHahaInstallerProfile
       internal readonly Queue<F1DebugRecord> events = new Queue<F1DebugRecord>();
       internal readonly List<string> calls = new List<string>();
       internal bool empty, terminated, pending, throwContinue, throwTerminate, throwDispose, emptyOnTerminate, throwAbortWait;
+      internal FileIdentity captureImage;
       public F1DebugRecord Wait(int milliseconds) { calls.Add("wait"); if (events.Count == 0) return null; pending = true; return events.Dequeue(); }
-      public F1DebugNotice Capture(F1DebugRecord e) { calls.Add("capture:" + e.pid); return new F1DebugNotice { pid = e.pid, tid = e.tid, creationTime = "epoch-" + e.pid, image = new FileIdentity { sha256 = new String('a', 64) } }; }
+      public F1DebugNotice Capture(F1DebugRecord e) { calls.Add("capture:" + e.pid); return new F1DebugNotice { pid = e.pid, tid = e.tid, creationTime = "epoch-" + e.pid, image = captureImage ?? new FileIdentity { sha256 = new String('a', 64) } }; }
       public void CloseImage(F1DebugRecord e) { if (e != null && e.file != IntPtr.Zero) { calls.Add("close-image"); e.file = IntPtr.Zero; } }
       public void Continue(F1DebugRecord e, uint disposition) { calls.Add("continue:" + e.code); if (throwContinue) throw new FixtureFailure("replay-continue-failed"); pending = false; if (events.Count == 0 && e.code == 5) empty = true; }
       public void TerminateOwnedJob() { calls.Add("terminate-owned-job"); if (throwTerminate) throw new FixtureFailure("replay-termination-unknown"); terminated = true; if (emptyOnTerminate) empty = true; }
@@ -1615,6 +1617,51 @@ namespace CcHahaInstallerProfile
       });
     }
 
+
+    private static void RunF1CanaryPidDiagnosticTests(FixtureReport report)
+    {
+      Case(report, "f1-canary-root-create-passes-but-other-pid-create-is-rejected-before-continue", delegate {
+        string hash = new String('a', 64);
+        FileIdentity expected = new FileIdentity { canonicalPath = @"C:\Owned\profile-fixture.exe", volumePath = "owned-volume", fileId = "owned-id", bytes = 42, sha256 = hash };
+        NativePlatform.RequireCanaryCreateNotice(new F1DebugNotice { pid = 10, creationTime = "epoch-10", image = expected }, 10, "epoch-10", expected, hash);
+        F1ReplayDebugApi api = new F1ReplayDebugApi { captureImage = expected };
+        api.events.Enqueue(new F1DebugRecord { code = 3, pid = 10, tid = 110 });
+        api.events.Enqueue(new F1DebugRecord { code = 1, pid = 10, tid = 110, exception = 0x80000003, firstChance = true });
+        api.events.Enqueue(new F1DebugRecord { code = 3, pid = 20, tid = 120 });
+        api.events.Enqueue(new F1DebugRecord { code = 5, pid = 20, tid = 120 });
+        api.events.Enqueue(new F1DebugRecord { code = 5, pid = 10, tid = 110 });
+        List<int> continued = new List<int>(); string rejected = null; FixtureReport observation = new FixtureReport();
+        using (F1DebugPump pump = new F1DebugPump(api, n => {
+          if (n.kind == "create") NativePlatform.CheckCanaryCreate(observation, "debug-event", n, 10, "epoch-10", expected, hash);
+          if (n.kind == "continued") continued.Add(n.pid);
+          return new F1DebugReply { accept = true, sequence = n.sequence, barrier = n.barrier };
+        }, "zero-account-canary", new String('a', 32)))
+        { try { pump.Run(1000); } catch (FixtureFailure failure) { rejected = failure.Message; } }
+        Assert(rejected == "f1-canary-create-pid" && continued.SequenceEqual(new int[] { 10 }), "only the root got a continued ACK; another PID remains denied even with the same image");
+        Assert(api.terminated && api.empty && api.calls.Count(c => c == "continue:5") == 2
+          && api.calls.IndexOf("abort-wait") < api.calls.IndexOf("close-readonly-caps"), "failed CREATE stays pending until owned termination and both EXIT continuations drain");
+        Assert(observation.checks.Count == 1 && observation.checks[0].status == "failed"
+          && observation.checks[0].detail == "f1-canary-create-debug-event-root-10-pid-20-tid-120-p-0-c-0-i-1-id-1-v-1-b-1-h-1-path-1-sha-" + hash,
+          "a failed CREATE has only fixed site, numeric IDs, guard bits and the captured image hash");
+      });
+      Case(report, "f1-canary-create-diagnostics-are-bounded-and-never-copy-path-or-exception-text", delegate {
+        string marker = "PRIVATE_IMAGE_PATH_BODY_1879";
+        FileIdentity expected = new FileIdentity { canonicalPath = marker, volumePath = marker, fileId = marker, sha256 = new String('a', 64), bytes = 1 };
+        F1DebugNotice notice = new F1DebugNotice { pid = Int32.MaxValue, tid = Int32.MaxValue, creationTime = marker,
+          image = new FileIdentity { canonicalPath = marker, volumePath = marker, fileId = marker, sha256 = marker, bytes = 1 } };
+        string diagnostic = NativePlatform.CanaryCreateDiagnostic(marker, notice, Int32.MaxValue, marker, expected, expected.sha256);
+        Assert(diagnostic.Length <= 256 && System.Text.RegularExpressions.Regex.IsMatch(diagnostic, @"\Af1-[a-z0-9-]+\z")
+          && diagnostic.StartsWith("f1-canary-create-unknown-", StringComparison.Ordinal) && diagnostic.EndsWith("-sha-none", StringComparison.Ordinal)
+          && !diagnostic.Contains(marker), "only typed values and predicate bits cross the metadata boundary");
+        notice.image.sha256 = new String('a', 64);
+        Assert(NativePlatform.CanaryCreateDiagnostic("debug-event", notice, Int32.MaxValue, marker, expected, expected.sha256).Length <= 256,
+          "maximum numeric IDs with a full captured hash still meet the existing detail bound");
+        FixtureReport observation = new FixtureReport(); string first = null;
+        try { NativePlatform.CheckCanaryCreate(observation, "post-start", null, 1, marker, expected, expected.sha256); }
+        catch (FixtureFailure failure) { first = failure.Message; }
+        Assert(first == "f1-canary-create-pid" && observation.checks.Count == 1 && observation.checks[0].detail.StartsWith("f1-canary-create-post-start-", StringComparison.Ordinal), "diagnostics preserve the original denial and distinguish the calling site");
+      });
+    }
 
     private static void RunF1CanaryRuntimeFixTests(FixtureReport report)
     {

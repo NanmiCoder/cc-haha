@@ -3514,6 +3514,36 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(notice.image.sha256 == sha256 && expected.sha256 == sha256, "f1-canary-create-image-hash");
       CorePolicy.Require(CorePolicy.SamePath(notice.image.canonicalPath, expected.canonicalPath), "f1-canary-create-image-path");
     }
+    internal static string CanaryCreateDiagnostic(string site, F1DebugNotice notice, int pid, string creation, FileIdentity expected, string sha256)
+    {
+      string station = site == "post-start" || site == "debug-event" ? site : "unknown";
+      FileIdentity image = notice == null ? null : notice.image;
+      bool present = image != null && expected != null;
+      string imageHash = image == null ? null : image.sha256;
+      if (imageHash == null || imageHash.Length != 64 || !imageHash.All(c => c >= '0' && c <= '9' || c >= 'a' && c <= 'f')) imageHash = "none";
+      return "f1-canary-create-" + station
+        + "-root-" + Math.Max(0, pid).ToString(CultureInfo.InvariantCulture)
+        + "-pid-" + Math.Max(0, notice == null ? 0 : notice.pid).ToString(CultureInfo.InvariantCulture)
+        + "-tid-" + Math.Max(0, notice == null ? 0 : notice.tid).ToString(CultureInfo.InvariantCulture)
+        + "-p-" + (notice != null && notice.pid == pid && pid > 0 ? "1" : "0")
+        + "-c-" + (!String.IsNullOrEmpty(creation) && notice != null && notice.creationTime == creation ? "1" : "0")
+        + "-i-" + (present && !image.directory && !image.reparse ? "1" : "0")
+        + "-id-" + (present && image.fileId == expected.fileId ? "1" : "0")
+        + "-v-" + (present && image.volumePath == expected.volumePath ? "1" : "0")
+        + "-b-" + (present && image.bytes == expected.bytes ? "1" : "0")
+        + "-h-" + (present && image.sha256 == sha256 && expected.sha256 == sha256 ? "1" : "0")
+        + "-path-" + (present && CorePolicy.SamePath(image.canonicalPath, expected.canonicalPath) ? "1" : "0")
+        + "-sha-" + imageHash;
+    }
+    internal static void CheckCanaryCreate(FixtureReport report, string site, F1DebugNotice notice, int pid, string creation, FileIdentity expected, string sha256)
+    {
+      try { RequireCanaryCreateNotice(notice, pid, creation, expected, sha256); }
+      catch (FixtureFailure)
+      {
+        if (report != null) report.Check("f1-zero-account-native", false, CanaryCreateDiagnostic(site, notice, pid, creation, expected, sha256));
+        throw;
+      }
+    }
     [DllImport("advapi32.dll", EntryPoint = "RegCreateKeyExW", CharSet = CharSet.Unicode)] private static extern int F1RegCreate(IntPtr root, string path, uint reserved, string cls, uint options, uint access, IntPtr security, out IntPtr key, out uint disposition);
     [DllImport("advapi32.dll", EntryPoint = "RegSetValueExW", CharSet = CharSet.Unicode)] private static extern int F1RegSet(IntPtr key, string name, uint reserved, uint type, IntPtr data, uint bytes);
     [DllImport("advapi32.dll", EntryPoint = "RegDeleteKeyW", CharSet = CharSet.Unicode)] private static extern int F1RegDelete(IntPtr root, string path);
@@ -3598,13 +3628,13 @@ namespace CcHahaInstallerProfile
         finally { FreeEnvironmentBytes(block, environment); }
         F1EtwSession current = session;
         child.debugPump = new F1DebugPump(new F1WinDebug(api, child, sid), delegate(F1DebugNotice notice) {
-          if (notice.kind == "create") { RequireCanaryCreateNotice(notice, child.pid, child.creationTime, expectedImage, report.binarySha256); current.AddEpoch(notice.pid, notice.tid, notice.creationTime); }
+          if (notice.kind == "create") { CheckCanaryCreate(report, "debug-event", notice, child.pid, child.creationTime, expectedImage, report.binarySha256); current.AddEpoch(notice.pid, notice.tid, notice.creationTime); }
           else if (notice.kind == "thread") current.AddThread(notice.pid, notice.tid);
           else if (notice.kind == "continued") current.ConfirmContinued(notice.pid, notice.barrier);
           else if (notice.kind == "exit") current.ExitEpoch(notice.pid);
           return new F1DebugReply { accept = true, sequence = notice.sequence, barrier = notice.barrier };
         }, "zero-account-canary", nonce);
-        RequireCanaryCreateNotice(new F1DebugNotice { pid = child.pid, creationTime = child.creationTime, image = child.image },
+        CheckCanaryCreate(report, "post-start", new F1DebugNotice { pid = child.pid, creationTime = child.creationTime, image = child.image },
           child.pid, child.creationTime, expectedImage, report.binarySha256);
         resumeAttempted = true; CorePolicy.Require(ResumeThread(child.thread) == 1, "f1-canary-resume-one"); child.resumed = true;
         child.debugPump.Run(30000); uint exit; Win(GetExitCodeProcess(child.process, out exit), "F1 canary exit"); CorePolicy.Require(exit == 0, "f1-canary-natural-exit-zero"); naturalExitZero = child.debugPump.Finished; child.exited = true;
