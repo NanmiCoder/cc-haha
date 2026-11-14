@@ -52,9 +52,9 @@ export async function compileInstallerPathCases(options: {
   const require = createRequire(join(vendorRoot, 'package.json'))
   // Load the ordinary package entry first, as electron-builder does, to avoid
   // loading NsisTarget in the middle of its PlatformPackager circular import.
-  require('./out/index.js')
-  const { NsisTarget } = require('./out/targets/nsis/NsisTarget.js')
-  const { UninstallerReader } = require('./out/targets/nsis/nsisUtil.js')
+  require(join(vendorRoot, 'out/index.js'))
+  const { NsisTarget } = require(join(vendorRoot, 'out/targets/nsis/NsisTarget.js'))
+  const { UninstallerReader } = require(join(vendorRoot, 'out/targets/nsis/nsisUtil.js'))
   const installer = readFileSync(join(sourceRoot, 'desktop/build/installer.nsh'), 'utf8').replace(/\r\n/g, '\n')
   const legacyLauncher = readFileSync(join(sourceRoot, 'scripts/pr/fixtures/nsis-build-launcher-before-path-encoding.nsh'), 'utf8').replace(/\r\n/g, '\n')
   const launcher = installer.match(/!macro CcHahaRunBuildHelper[^\n]*\n[\s\S]*?\n!macroend/)?.[0]
@@ -104,7 +104,7 @@ export async function compileInstallerPathCases(options: {
       writeFileSync(join(scripts, 'nsis-legacy-compat.cjs'), `
 const fs = require('node:fs')
 const path = require('node:path')
-const helper = require('./nsis-guarded-removal.cjs')
+const helper = require(path.join(__dirname, 'nsis-guarded-removal.cjs'))
 helper.compile = ({ source, directory }) => {
   const executable = path.join(directory, 'guarded-removal.exe')
   const bytes = Buffer.from('${guardedRemovalCompilerFixturePe().toString('base64')}', 'base64')
@@ -114,7 +114,7 @@ helper.compile = ({ source, directory }) => {
   return { executable, bytes: bytes.length, sha256: helper.digest(bytes), config,
     configBytes: helper.clrConfig.length, configSha256: helper.digest(helper.clrConfig), sourceSha256: helper.digest(fs.readFileSync(source)) }
 }
-exports.run = require('./nsis-legacy-compat.production.cjs').run
+exports.run = require(path.join(__dirname, 'nsis-legacy-compat.production.cjs')).run
 if (require.main === module) exports.run(process.argv[2], process.argv.slice(3))
 `)
       writeFileSync(join(app, 'fixture.txt'), 'Owned compile-only payload; no PE execution')

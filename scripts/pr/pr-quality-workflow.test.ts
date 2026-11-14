@@ -558,6 +558,34 @@ describe('full quality workflow', () => {
 })
 
 describe('Windows installer lane preparation and isolation', () => {
+  test('builds a complete candidate only after successful ordinary reviewed-PR Windows checks, outside the gate', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    const job = jobs['windows-candidate-package']!
+    expect(job.needs).toBe('windows-installer-checks')
+    for (const condition of ["github.event_name == 'pull_request'", "github.repository == 'NanmiCoder/cc-haha'",
+      'github.event.pull_request.number == 1883', "github.event.pull_request.base.ref == 'main'",
+      "github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha'",
+      "github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers'",
+      "needs.windows-installer-checks.result == 'success'", 'github.run_attempt == 1',
+      "fromJSON('[\"opened\",\"synchronize\",\"reopened\",\"ready_for_review\"]')",
+    ]) expect(job.if).toContain(condition)
+    expect(job.if).not.toContain('label')
+    expect(job['runs-on']).toBe('windows-latest')
+    expect((job as any).permissions).toEqual({ contents: 'read' })
+    expect(jobs['pr-quality-gate']!.needs).not.toContain('windows-candidate-package')
+    const checkout = job.steps!.find(step => step.uses === 'actions/checkout@v4')!
+    expect(checkout.with).toMatchObject({ ref: '${{ github.event.pull_request.head.sha }}', 'persist-credentials': false })
+    const steps = job.steps!.map(step => step.run ?? '').join('\n')
+    expect(steps).toContain('bun --no-env-file test ./scripts/pr/prepare-windows-installer-candidate-package.test.ts')
+    expect(steps).toContain('bun --no-env-file scripts/pr/prepare-windows-installer-candidate-package.ts')
+    expect(JSON.stringify(job)).not.toContain('secrets.')
+    expect(steps).not.toContain('profile-review.ts')
+    const upload = job.steps!.find(step => step.uses === 'actions/upload-artifact@v4')!
+    expect(upload.if).toBe('always()')
+    expect(upload.with).toMatchObject({ path: 'artifacts/windows-installer-candidate-package/', 'compression-level': 0 })
+  })
+
   function fixture() {
     const root = mkdtempSync(join(tmpdir(), 'cc-haha-installer-lane-unit-'))
     const sourceRoot = join(root, 'source')

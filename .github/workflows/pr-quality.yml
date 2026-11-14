@@ -450,6 +450,60 @@ jobs:
         if: always()
         run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts --cleanup-prepared
 
+  # Complete build evidence only. This job creates no account/profile and is
+  # outside the required gate; actual installation still needs separate F1 scope.
+  windows-candidate-package:
+    needs: windows-installer-checks
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'NanmiCoder/cc-haha' &&
+      github.event.pull_request.number == 1883 &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&
+      github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' &&
+      contains(fromJSON('["opened","synchronize","reopened","ready_for_review"]'), github.event.action) &&
+      github.run_attempt == 1 &&
+      needs.windows-installer-checks.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up the normal release Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        env:
+          CARGO_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\cargo
+          RUSTUP_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\rustup
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Validate candidate package preparation boundaries
+        run: bun --no-env-file test ./scripts/pr/prepare-windows-installer-candidate-package.test.ts
+      - name: Build and statically bind the complete unsigned Windows x64 package
+        env:
+          WINDOWS_INSTALLER_CHECKS_RESULT: ${{ needs.windows-installer-checks.result }}
+          CARGO_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\cargo
+          RUSTUP_HOME: ${{ runner.temp }}\cc-haha-candidate-toolchain-${{ github.run_id }}\rustup
+        run: bun --no-env-file scripts/pr/prepare-windows-installer-candidate-package.ts
+      - name: Preserve bounded candidate package and original static evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-candidate-package-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: artifacts/windows-installer-candidate-package/
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+
   # Diagnostic only. Applying the exact-head label is a separate coordinator
   # admission after review and ordinary CI; no normal push/label runs this job.
   windows-profile-only-review:
