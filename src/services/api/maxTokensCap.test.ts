@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { beforeAll, beforeEach, afterEach, describe, expect, spyOn, test } from 'bun:test'
 
 describe('isMaxTokensCapEnabled resolution chain', () => {
   let isMaxTokensCapEnabled: typeof import('./claude.js').isMaxTokensCapEnabled
