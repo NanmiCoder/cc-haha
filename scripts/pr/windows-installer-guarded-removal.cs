@@ -29,6 +29,8 @@ internal static class GuardedRemovalChecks
   public static string Managed()
   {
     Count = 0;
+    Assert(Marshal.SizeOf(typeof(GuardedRemoval.PublicObjectBasicInformation)) == 56, "public-basic-information-exact-fourteen-dwords");
+    Assert(Marshal.OffsetOf(typeof(GuardedRemoval.PublicObjectBasicInformation), "GrantedAccess").ToInt32() == 4, "public-basic-information-access-offset");
     const string root = "C:\\Apps\\Claude Code Haha", caps = "4:7:1:0,8:7:2:0,12:7:3:0", parent = "16:123:4:5";
     GuardedRemoval.Invocation input = GuardedRemoval.Parse(Arguments(root, caps, parent));
     Assert(input.Paths.Length == 3 && input.Paths[0] == "C:\\" && input.Paths[2] == root && input.Parent[1] == 123, "complete-chain-and-parent");
@@ -367,11 +369,23 @@ internal static class GuardedRemovalChecks
 internal static class GuardedRemovalIoStubs
 {
   private static int Mode, Frees, Closes;
+  private static int ParentMode;
+  private static uint LastParentQueryBytes;
   private static IntPtr Io;
   private static readonly List<IntPtr> Allocations = new List<IntPtr>();
   public static IntPtr Allocate(int bytes) { IntPtr value = Marshal.AllocHGlobal(bytes); Allocations.Add(value); return value; }
   public static void Free(IntPtr value) { if (!Allocations.Remove(value)) throw new Exception("untracked-free"); Frees++; Marshal.FreeHGlobal(value); }
   public static bool Close(IntPtr value) { Closes++; return true; }
+  public static int QueryParent(IntPtr handle, int kind, IntPtr buffer, uint bytes, out uint returned)
+  {
+    if (handle != new IntPtr(4) || kind != 0) throw new Exception("parent-query-stub-boundary");
+    LastParentQueryBytes = bytes;
+    returned = 0;
+    if (bytes != 56) return unchecked((int)0xc0000004);
+    returned = ParentMode == 3 ? 55u : ParentMode == 4 ? 64u : ParentMode == 5 ? 0u : 56u;
+    Marshal.WriteInt32(buffer, 4, ParentMode == 1 ? 0x101010 : 0x101000);
+    return ParentMode == 2 ? unchecked((int)0xc0000004) : ParentMode == 6 ? 1 : 0;
+  }
   private static int Call(IntPtr io)
   {
     Io = io;
@@ -432,5 +446,36 @@ internal static class GuardedRemovalIoStubs
     }
     return "pending-control-pass:" + cases.ToString(CultureInfo.InvariantCulture);
   }
-  private static int Main() { Console.WriteLine(Run()); return 0; }
+  public static string RunParent()
+  {
+    IntPtr legacy = Allocate(64);
+    try
+    {
+      uint returned;
+      Assert(QueryParent(new IntPtr(4), 0, legacy, 64, out returned) == unchecked((int)0xc0000004) && returned == 0, "actual-legacy-size-control");
+    }
+    finally { Free(legacy); }
+    int cases = 0;
+    for (ParentMode = 0; ParentMode < 7; ParentMode++)
+    {
+      Frees = Closes = 0;
+      var context = new GuardedRemoval.Context();
+      GuardedRemoval.Failure rejected = null;
+      try { context.RequireReadonlyParentCapability(new IntPtr(4)); }
+      catch (GuardedRemoval.Failure error) { rejected = error; }
+      Assert((rejected == null) == (ParentMode == 0), "exact-parent-status-size-and-mask");
+      if (rejected != null) Assert(rejected.Code == "parent-not-readonly-process-capability", "parent-rejection-reason");
+      Assert(LastParentQueryBytes == 56 && Frees == 1 && Allocations.Count == 0 && Closes == 0, "parent-query-no-fallback-and-lifetime");
+      Assert(!context.Unknown && !context.PendingIo, "terminal-parent-query-not-queued");
+      cases++;
+    }
+    return "parent-query-control-pass:" + cases.ToString(CultureInfo.InvariantCulture);
+  }
+  private static int Main(string[] args)
+  {
+    if (args.Length == 0) Console.WriteLine(Run());
+    else if (args.Length == 1 && args[0] == "parent-capability") Console.WriteLine(RunParent());
+    else return 2;
+    return 0;
+  }
 }

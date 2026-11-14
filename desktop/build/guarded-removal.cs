@@ -135,6 +135,11 @@ internal static class GuardedRemoval
   [StructLayout(LayoutKind.Explicit)] internal struct IoUnion
   { [FieldOffset(0)] internal int Status; [FieldOffset(0)] internal IntPtr Pointer; }
   [StructLayout(LayoutKind.Sequential)] internal struct IoStatus { internal IoUnion Result; internal UIntPtr Information; }
+  [StructLayout(LayoutKind.Sequential)] internal struct PublicObjectBasicInformation
+  {
+    internal uint Attributes, GrantedAccess, HandleCount, PointerCount;
+    internal uint Reserved0, Reserved1, Reserved2, Reserved3, Reserved4, Reserved5, Reserved6, Reserved7, Reserved8, Reserved9;
+  }
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] internal struct RenameInfo
   { internal uint Replace; internal IntPtr Root; internal uint NameLength; internal char Name; }
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct ProcessEntry
@@ -437,15 +442,7 @@ internal static class GuardedRemoval
       Time creation, exit, kernel, user;
       bool timed = Native.GetProcessTimes(raw, out creation, out exit, out kernel, out user); error = Marshal.GetLastWin32Error();
       Win(timed && creation.Low == tuple[2] && creation.High == tuple[3], "parent-creation-mismatch", error);
-      IntPtr access = Marshal.AllocHGlobal(64);
-      try
-      {
-        uint returned;
-        int status = Native.NtQueryObject(raw, 0, access, 64, out returned);
-        Need(status >= 0 && returned >= 8 && returned <= 64 && unchecked((uint)Marshal.ReadInt32(access, 4)) == 0x101000,
-          "parent-not-readonly-process-capability");
-      }
-      finally { Marshal.FreeHGlobal(access); }
+      RequireReadonlyParentCapability(raw);
       Need(Native.ProcessSid(this, raw, false) == currentSid, "parent-user-mismatch");
       var path = new StringBuilder(32768); uint length = (uint)path.Capacity;
       bool image = Native.QueryFullProcessImageNameW(raw, 0, path, ref length); error = Marshal.GetLastWin32Error();
@@ -456,6 +453,21 @@ internal static class GuardedRemoval
       ParentImage = code.Path;
       Parent = Own(raw, "inherited-parent-process");
       CheckParent(false);
+    }
+    internal void RequireReadonlyParentCapability(IntPtr raw)
+    {
+      int bytes = Marshal.SizeOf(typeof(PublicObjectBasicInformation));
+      Need(bytes == 56, "parent-basic-information-layout");
+      IntPtr access = Marshal.AllocHGlobal(bytes);
+      try
+      {
+        uint returned;
+        int status = Native.NtQueryObject(raw, 0, access, (uint)bytes, out returned);
+        Need(status == 0 && returned == bytes && unchecked((uint)Marshal.ReadInt32(access,
+          Marshal.OffsetOf(typeof(PublicObjectBasicInformation), "GrantedAccess").ToInt32())) == 0x101000,
+          "parent-not-readonly-process-capability");
+      }
+      finally { Marshal.FreeHGlobal(access); }
     }
     internal void CheckParent(bool restoring)
     {

@@ -10,7 +10,11 @@ const backend = resolve('desktop/build/guarded-removal.cs')
 const harness = resolve('scripts/pr/windows-installer-guarded-removal.cs')
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
-function createCanonicalOwnedSandbox(parent = tmpdir()) {
+function ownedSandboxParent(env: NodeJS.ProcessEnv = process.env, fallback = tmpdir()) {
+  return env.CI === 'true' && env.RUNNER_TEMP ? env.RUNNER_TEMP : fallback
+}
+
+function createCanonicalOwnedSandbox(parent = ownedSandboxParent()) {
   return realpathSync(mkdtempSync(join(parent, 'cc-haha-guarded-removal-')))
 }
 
@@ -20,6 +24,7 @@ function withNativeIoStubs(source: string) {
     NtSetInformationFile: 'internal static int NtSetInformationFile(IntPtr handle, IntPtr io, IntPtr information, uint bytes, int kind) { return GuardedRemovalIoStubs.Rename(handle, io, information, bytes, kind); }',
     WaitForSingleObject: 'internal static uint WaitForSingleObject(IntPtr handle, uint milliseconds) { return GuardedRemovalIoStubs.Wait(handle, milliseconds); }',
     CloseHandle: 'internal static bool CloseHandle(IntPtr handle) { return GuardedRemovalIoStubs.Close(handle); }',
+    NtQueryObject: 'internal static int NtQueryObject(IntPtr handle, int kind, IntPtr information, uint bytes, out uint returned) { return GuardedRemovalIoStubs.QueryParent(handle, kind, information, bytes, out returned); }',
   }
   for (const [name, replacement] of Object.entries(replacements)) {
     const declaration = new RegExp(`\\[DllImport\\([^\\n]+\\)\\] internal static extern [^;\\n]+\\b${name}\\([^;]+;`, 'g')
@@ -58,7 +63,7 @@ function removePlainOwnedTree(root: string) {
   }
 }
 
-test('guarded fixture capabilities use canonical owned temp paths before opening handles', () => {
+test('guarded fixture prefers CI runner temp and keeps the isolated local fallback', () => {
   const arena = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-guarded-temp-alias-')))
   const actual = join(arena, 'actual'), alias = join(arena, 'alias')
   mkdirSync(actual)
@@ -72,6 +77,13 @@ test('guarded fixture capabilities use canonical owned temp paths before opening
     expect(canonical).toBe(realpathSync(canonical))
     expect(fixture).toBe(realpathSync(fixture))
     expect(canonical.startsWith(`${actual}\\`) || canonical.startsWith(`${actual}/`)).toBe(true)
+    const runnerTemp = join(arena, 'runner-temp')
+    mkdirSync(runnerTemp)
+    const selected = ownedSandboxParent({ CI: 'true', RUNNER_TEMP: runnerTemp }, alias)
+    expect(selected).toBe(runnerTemp)
+    expect(dirname(createCanonicalOwnedSandbox(selected))).toBe(realpathSync(runnerTemp))
+    expect(ownedSandboxParent({ CI: 'false', RUNNER_TEMP: runnerTemp }, alias)).toBe(alias)
+    expect(ownedSandboxParent({ CI: 'true' }, actual)).toBe(actual)
   } finally {
     unlinkSync(alias)
     removePlainOwnedTree(arena)
@@ -96,6 +108,7 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
   const report: Record<string, unknown> = { status: 'starting', sourceSha256: sha256(readFileSync(backend)),
     harnessSha256: sha256(readFileSync(harness)), mode: 'same-source-engine-owned-harness',
     productionAdmissionExecuted: false, crossProcessNsisHandoff: 'tested-separately', realAccountsCreated: 0,
+    fixtureInput: { systemTemp: tmpdir(), runnerTemp: process.env.RUNNER_TEMP ?? null, selectedParent: ownedSandboxParent(), sandbox },
     realProfilesCreated: 0, productPeExecuted: false, ordinaryNativePrimitives: 'separate-probe-evidence', sandbox }
   let nativeUnknown = false
   let priorFailure = false
@@ -132,6 +145,11 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
     expect(pending.error).toBeUndefined()
     expect(pending.status, pending.stderr).toBe(0)
     expect(pending.stdout.trim()).toBe('pending-control-pass:14')
+    const parentQuery = spawnSync(stubExecutable, ['parent-capability'], { env, encoding: 'utf8', windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 })
+    report.parentCapabilityControlFlow = { status: parentQuery.status, stdout: parentQuery.stdout, stderr: parentQuery.stderr, nativeApiCalled: false }
+    expect(parentQuery.error).toBeUndefined()
+    expect(parentQuery.status, parentQuery.stderr).toBe(0)
+    expect(parentQuery.stdout.trim()).toBe('parent-query-control-pass:7')
     const cases: unknown[] = []
     for (const mode of ['success', 'rollback', 'busy', 'wrong-cap', 'namespace-change', 'parent-dead',
       'data-plain', 'data-missing', 'data-config-leaf', 'data-product-leaf', 'data-config-ancestor', 'data-product-ancestor',

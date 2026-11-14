@@ -3,12 +3,16 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { release, tmpdir, version } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
 
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
-function createCanonicalOwnedSandbox(prefix: string, parent = tmpdir()) {
+function ownedSandboxParent(env: NodeJS.ProcessEnv = process.env, fallback = tmpdir()) {
+  return env.CI === 'true' && env.RUNNER_TEMP ? env.RUNNER_TEMP : fallback
+}
+
+function createCanonicalOwnedSandbox(prefix: string, parent = ownedSandboxParent()) {
   return realpathSync(mkdtempSync(join(parent, prefix)))
 }
 
@@ -143,7 +147,7 @@ function removeOwnedPlainTree(root: string) {
   }
 }
 
-test('native fixture paths start from the canonical owned temp directory', () => {
+test('native fixture prefers CI runner temp and keeps the isolated local fallback', () => {
   const arena = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-probe-temp-alias-')))
   const actual = join(arena, 'actual'), alias = join(arena, 'alias')
   mkdirSync(actual)
@@ -157,6 +161,13 @@ test('native fixture paths start from the canonical owned temp directory', () =>
     expect(canonical).toBe(realpathSync(canonical))
     expect(fixture).toBe(realpathSync(fixture))
     expect(canonical.startsWith(`${actual}\\`) || canonical.startsWith(`${actual}/`)).toBe(true)
+    const runnerTemp = join(arena, 'runner-temp')
+    mkdirSync(runnerTemp)
+    const selected = ownedSandboxParent({ CI: 'true', RUNNER_TEMP: runnerTemp }, alias)
+    expect(selected).toBe(runnerTemp)
+    expect(dirname(createCanonicalOwnedSandbox('ci-', selected))).toBe(realpathSync(runnerTemp))
+    expect(ownedSandboxParent({ CI: 'false', RUNNER_TEMP: runnerTemp }, alias)).toBe(alias)
+    expect(ownedSandboxParent({ CI: 'true' }, actual)).toBe(actual)
   } finally {
     unlinkSync(alias)
     removeOwnedPlainTree(arena)
@@ -261,6 +272,7 @@ for (const architecture of ['x86', 'x64'] as const) {
     let native: Record<string, any> | undefined
     let originalFailure = false
     const report: Record<string, unknown> = { version: 4, status: 'starting', platform: process.platform,
+      fixtureInput: { systemTemp: tmpdir(), runnerTemp: process.env.RUNNER_TEMP ?? null, selectedParent: ownedSandboxParent(), sandbox, fixture, executable },
       operatingSystem: { release: release(), version: version() },
       architecture, source: fileEvidence(source), compiler: fileEvidence(compiler),
       compileCommand, sandbox, ownedFixtureRoot: fixture, officialOldPeExecuted: false, productPeExecuted: false,
