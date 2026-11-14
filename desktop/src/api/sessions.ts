@@ -231,6 +231,8 @@ export type SessionUsageSnapshot = {
 }
 
 export type SessionContextSnapshot = {
+  /** Fast meter response; categories are collected only for an opened panel. */
+  summaryOnly?: boolean
   categories: Array<{
     name: string
     tokens: number
@@ -622,6 +624,7 @@ export const sessionsApi = {
     includeContext?: boolean
     timeout?: number
     contextOnly?: boolean
+    summaryOnly?: boolean
     statusOnly?: boolean
     signal?: AbortSignal
   }) {
@@ -631,6 +634,9 @@ export const sessionsApi = {
     }
     if (options?.contextOnly) {
       query.set('contextOnly', '1')
+    }
+    if (options?.summaryOnly) {
+      query.set('summaryOnly', '1')
     }
     if (options?.statusOnly) {
       query.set('statusOnly', '1')

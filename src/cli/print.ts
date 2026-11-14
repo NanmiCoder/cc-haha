@@ -292,7 +292,7 @@ import {
 } from 'src/utils/messages/mappers.js'
 import { createModelSwitchBreadcrumbs, createUserMessage } from 'src/utils/messages.js'
 import { PrintPartialOutputTracker } from './partialOutput.js'
-import { collectContextData } from 'src/commands/context/context-noninteractive.js'
+import { collectContextData, collectContextSummary } from 'src/commands/context/context-noninteractive.js'
 import { getSessionUsageSnapshot } from 'src/cost-tracker.js'
 import { LOCAL_COMMAND_STDOUT_TAG } from 'src/constants/xml.js'
 import {
@@ -3355,17 +3355,32 @@ function runHeadlessStreaming(
           sendControlResponseSuccess(message, getSessionUsageSnapshot())
         } else if (message.request.subtype === 'get_context_usage') {
           try {
+            const mainLoopModel = getMainLoopModel()
+            const savedPrefix = getLastCacheSafeParams()
+            const cacheSafeParams = savedPrefix?.toolUseContext.getAppState === getAppState ? savedPrefix : null
+            const summary = message.request.summaryOnly
+              ? collectContextSummary({
+                  messages: mutableMessages,
+                  mainLoopModel,
+                  cacheSafeParams,
+                })
+              : null
+            if (summary) {
+              sendControlResponseSuccess(message, { ...summary })
+              continue
+            }
             const appState = getAppState()
             const data = await collectContextData({
               messages: mutableMessages,
               getAppState,
               options: {
-                mainLoopModel: getMainLoopModel(),
+                mainLoopModel,
                 tools: buildAllTools(appState),
                 agentDefinitions: appState.agentDefinitions,
                 customSystemPrompt: options.systemPrompt,
                 appendSystemPrompt: options.appendSystemPrompt,
                 estimateOnly: Boolean(message.request.estimateOnly),
+                cacheSafeParams,
               },
             })
             sendControlResponseSuccess(message, { ...data })
