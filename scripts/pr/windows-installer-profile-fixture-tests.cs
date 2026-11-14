@@ -878,8 +878,82 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private sealed class FakeAbiPrimaryTokenApi : NativePlatform.AbiPrimaryTokenApi
+    {
+      internal readonly List<string> calls = new List<string>();
+      internal TokenIdentity clone = Standard();
+      internal IntPtr result = new IntPtr(202);
+      internal bool rejectDuplicate, rejectInspect, rejectClose;
+      internal override IntPtr Duplicate(IntPtr source)
+      {
+        calls.Add("duplicate:" + source.ToInt64());
+        if (rejectDuplicate) throw new FixtureFailure("fake-duplicate-denied");
+        return result;
+      }
+      internal override TokenIdentity Inspect(IntPtr token)
+      {
+        calls.Add("inspect:" + token.ToInt64());
+        if (rejectInspect) throw new FixtureFailure("fake-clone-query-failed");
+        return clone;
+      }
+      internal override void Close(IntPtr token)
+      {
+        calls.Add("close:" + token.ToInt64());
+        if (rejectClose) throw new FixtureFailure("fake-clone-close-failed");
+      }
+    }
+    internal static void RunAbiPrimaryTokenTests(FixtureReport report)
+    {
+      Case(report, "abi-primary-clone-held-through-launch-and-closed-exactly-once", delegate {
+        FakeAbiPrimaryTokenApi api = new FakeAbiPrimaryTokenApi();
+        NativePlatform.AbiPrimaryTokenLease lease = NativePlatform.AbiPrimaryTokenLease.Acquire(api, new IntPtr(101), Standard());
+        Assert(!api.calls.Any(call => call.StartsWith("close:")), "clone stays held before WithToken launch");
+        IntPtr supplied = IntPtr.Zero;
+        lease.Launch(delegate(IntPtr token) {
+          supplied = token; Assert(token == new IntPtr(202) && token != new IntPtr(101), "launcher receives only the dedicated clone");
+          Assert(!api.calls.Any(call => call.StartsWith("close:")), "clone stays held until launcher returns");
+        });
+        Assert(supplied == new IntPtr(202) && api.calls.Last() == "close:202", "owned clone closes after launch");
+        lease.Dispose(); Assert(api.calls.Count(call => call == "close:202") == 1 && !api.calls.Contains("close:101"), "source never closed and clone is not retried");
+        Reject(delegate { IntPtr invalid = lease.Handle; }, "disposed clone cannot be reused");
+      });
+      Case(report, "abi-primary-clone-rejects-duplication-query-and-core-mismatch-without-launch", delegate {
+        foreach (string fault in new string[] { "duplicate", "zero", "source-alias", "query", "sid", "auth", "session", "type", "core" })
+        {
+          FakeAbiPrimaryTokenApi api = new FakeAbiPrimaryTokenApi(); bool launched = false;
+          if (fault == "duplicate") api.rejectDuplicate = true; if (fault == "zero") api.result = IntPtr.Zero;
+          if (fault == "source-alias") api.result = new IntPtr(101); if (fault == "query") api.rejectInspect = true;
+          if (fault == "sid") api.clone.sid = RunnerSid; if (fault == "auth") api.clone.authenticationId = "other";
+          if (fault == "session") api.clone.sessionId++; if (fault == "type") api.clone.tokenType = 2;
+          if (fault == "core") api.clone.integrityRid = 0x3000;
+          Reject(delegate {
+            NativePlatform.AbiPrimaryTokenLease lease = NativePlatform.AbiPrimaryTokenLease.Acquire(api, new IntPtr(101), Standard());
+            lease.Launch(delegate { launched = true; });
+          }, "reject " + fault);
+          Assert(!launched && !api.calls.Contains("close:101"), "never launch or close original on " + fault);
+          int expectedClose = new string[] { "duplicate", "zero", "source-alias" }.Contains(fault) ? 0 : 1;
+          Assert(api.calls.Count(call => call == "close:202") == expectedClose, "rejected owned clone released once " + fault);
+        }
+      });
+      Case(report, "abi-primary-clone-close-failure-latches-and-preserves-first-launch-error", delegate {
+        foreach (bool launchFails in new bool[] { false, true })
+        {
+          FakeAbiPrimaryTokenApi api = new FakeAbiPrimaryTokenApi { rejectClose = true };
+          NativePlatform.AbiPrimaryTokenLease lease = NativePlatform.AbiPrimaryTokenLease.Acquire(api, new IntPtr(101), Standard());
+          string cause = null;
+          try { lease.Launch(delegate { if (launchFails) throw new FixtureFailure("fake-launch-failed"); }); }
+          catch (FixtureFailure error) { cause = error.Message; }
+          Assert(cause == (launchFails ? "fake-launch-failed" : "fake-clone-close-failed"), "first launch failure remains visible; close error is latched");
+          Reject(delegate { lease.Dispose(); }, "unknown closure cannot become clean on another Dispose");
+          Reject(delegate { IntPtr invalid = lease.Handle; }, "uncertain clone cannot be reused");
+          Assert(api.calls.Count(call => call == "close:202") == 1 && !api.calls.Contains("close:101"), "failed close is never retried and source is retained");
+        }
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunAbiPrimaryTokenTests(report);
       RunSubjectStartupTests(report);
       RunAbiStartupExitTests(report);
       RunFunctionalTests(report);

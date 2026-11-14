@@ -234,6 +234,7 @@ namespace CcHahaInstallerProfile
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string application, StringBuilder commandLine, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool DuplicateTokenEx(IntPtr source, uint access, IntPtr attributes, int impersonationLevel, int tokenType, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenThreadToken(IntPtr thread, uint access, bool openAsSelf, out IntPtr token);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenSCManagerW(string machine, string database, uint access);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenServiceW(IntPtr manager, string service, uint access);
@@ -3080,6 +3081,93 @@ namespace CcHahaInstallerProfile
       finally { if (channel != null) channel.Dispose(); }
     }
 
+    // ABI-only ownership boundary. The production LogonUser token path is not
+    // changed. A new noninheritable primary object models that token lifetime.
+    internal abstract class AbiPrimaryTokenApi
+    {
+      internal abstract IntPtr Duplicate(IntPtr source);
+      internal abstract TokenIdentity Inspect(IntPtr token);
+      internal abstract void Close(IntPtr token);
+    }
+    internal sealed class AbiPrimaryTokenLease : IDisposable
+    {
+      private readonly AbiPrimaryTokenApi api;
+      private IntPtr token;
+      private bool closeAttempted, closeUnknown;
+      private AbiPrimaryTokenLease(AbiPrimaryTokenApi operations) { api = operations; }
+      internal IntPtr Handle
+      {
+        get { CorePolicy.Require(token != IntPtr.Zero && !closeAttempted, "ABI primary clone is no longer held"); return token; }
+      }
+      internal static AbiPrimaryTokenLease Acquire(AbiPrimaryTokenApi api, IntPtr source, TokenIdentity expected)
+      {
+        CorePolicy.Require(api != null && source != IntPtr.Zero && expected != null && expected.tokenType == 1,
+          "ABI primary clone requires the current primary source");
+        AbiPrimaryTokenLease owned = new AbiPrimaryTokenLease(api);
+        IntPtr candidate = api.Duplicate(source);
+        // A poisoned duplicate result must never transfer the caller's source.
+        CorePolicy.Require(candidate != IntPtr.Zero && candidate != source, "ABI duplicate must return a separate primary handle");
+        owned.token = candidate;
+        try
+        {
+          TokenIdentity actual = api.Inspect(owned.Handle);
+          CorePolicy.Require(actual != null && actual.tokenType == 1 && actual.sid == expected.sid
+            && actual.authenticationId == expected.authenticationId && actual.sessionId == expected.sessionId
+            && TokenCoreHash(actual) == TokenCoreHash(expected), "ABI primary clone changed token identity or core");
+          return owned;
+        }
+        catch
+        {
+          // Preserve the first reject/query failure. Native Close separately
+          // latches closure uncertainty in the owned ABI state and report.
+          try { owned.Dispose(); } catch { }
+          throw;
+        }
+      }
+      internal void Launch(Action<IntPtr> launch)
+      {
+        CorePolicy.Require(launch != null, "ABI primary clone requires a launch operation");
+        bool failed = false;
+        try { launch(Handle); }
+        catch { failed = true; throw; }
+        finally
+        {
+          if (failed) { try { Dispose(); } catch { } }
+          else Dispose();
+        }
+      }
+      public void Dispose()
+      {
+        if (closeAttempted) { CorePolicy.Require(!closeUnknown, "ABI primary clone close remains unknown"); return; }
+        if (token == IntPtr.Zero) return;
+        closeAttempted = true;
+        try { api.Close(token); token = IntPtr.Zero; }
+        catch { closeUnknown = true; throw; }
+      }
+    }
+    private sealed class NativeAbiPrimaryTokenApi : AbiPrimaryTokenApi
+    {
+      private readonly NativePlatform platform;
+      private readonly FixtureState state;
+      internal NativeAbiPrimaryTokenApi(NativePlatform native, FixtureState owner) { platform = native; state = owner; }
+      internal override IntPtr Duplicate(IntPtr source)
+      {
+        IntPtr token;
+        // TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY; NULL security
+        // attributes prohibit inheritance. No MAXIMUM_ALLOWED or privilege edit.
+        Win(DuplicateTokenEx(source, 0x0000000b, IntPtr.Zero, 2, 1, out token), "DuplicateTokenEx owned ABI primary");
+        return token;
+      }
+      internal override TokenIdentity Inspect(IntPtr token) { return platform.InspectToken(token); }
+      internal override void Close(IntPtr token)
+      {
+        if (CloseHandle(token)) return;
+        int code = Marshal.GetLastWin32Error(); state.abiPrimaryTokenClosureUnknown = true;
+        state.report.Check("abi-primary-clone-close", false, "Close ABI primary clone failed (Win32 " + code.ToString(CultureInfo.InvariantCulture) + ")");
+        throw new InvalidOperationException("Close ABI primary clone failed (Win32 " + code.ToString(CultureInfo.InvariantCulture) + ")");
+      }
+    }
+
     private void StartAbiWithTokenChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
     {
       AbiOperatingSystem();
@@ -3098,14 +3186,19 @@ namespace CcHahaInstallerProfile
       IntPtr block = EnvironmentBytes(environment);
       try
       {
-        StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
-        ProcessInformation created;
-        Win(CreateProcessWithTokenW(state.token, 0, command.application, new StringBuilder(command.commandLine), 0x00000404 | 0x08000000,
-          block, root, ref startup, out created), "CreateProcessWithTokenW owned ABI child");
-        state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
-        state.subject.creationTime = ProcessCreation(state.subject.process);
-        Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign WithToken ABI child Job");
-        state.subject.assigned = true; CaptureProcess(state.subject);
+        AbiPrimaryTokenLease primary = AbiPrimaryTokenLease.Acquire(new NativeAbiPrimaryTokenApi(this, state), state.token, target);
+        primary.Launch(delegate(IntPtr launchToken)
+        {
+          state.report.trace.Add("ABI WithToken source=current-primary; source-requested-access=0000000f; launch=dedicated-primary-clone; clone-requested-access=0000000b; inherited=false; token-core=" + TokenCoreHash(target));
+          StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
+          ProcessInformation created;
+          Win(CreateProcessWithTokenW(launchToken, 0, command.application, new StringBuilder(command.commandLine), 0x00000404 | 0x08000000,
+            block, root, ref startup, out created), "CreateProcessWithTokenW owned ABI child");
+          state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
+          state.subject.creationTime = ProcessCreation(state.subject.process);
+          Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign WithToken ABI child Job");
+          state.subject.assigned = true; CaptureProcess(state.subject);
+        });
       }
       finally { FreeEnvironmentBytes(block, environment); }
     }
@@ -3511,6 +3604,7 @@ namespace CcHahaInstallerProfile
             RecordAbiRootInventory(report, "before-root-cleanup", root, rootIdentity, platform);
             RemoveAbiRoot(root, rootIdentity, platform);
           }
+          CorePolicy.Require(!state.abiPrimaryTokenClosureUnknown, "ABI primary clone closure is unknown");
           cleaned = true;
           report.cleanup = "passed";
           report.Check("owned-native-cleanup", true, "Owned processes/Job/thread/UI/IPC/environment/token handles closed and private ABI files removed");
