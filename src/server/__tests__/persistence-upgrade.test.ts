@@ -251,6 +251,35 @@ describe('persistent storage upgrade migrations', () => {
     expect(await new SettingsService().getAutoUpdateEnabled()).toBe(true)
   })
 
+  test('reads auto escalation mode for missing field and preserves unknown fields on save', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    expect(await service.getMaxOutputTokensEscalationMode()).toBe('auto')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'enabled' })
+
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('enabled')
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, maxOutputTokensEscalationMode: 'enabled' })
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'disabled' })
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('disabled')
+  })
+
+  test('rejects an invalid escalation mode without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ maxOutputTokensEscalationMode: 'auto', unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(new SettingsService().updateUserSettings({ maxOutputTokensEscalationMode: 'bogus' })).rejects.toThrow('maxOutputTokensEscalationMode')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
   test('rejects a non-boolean automatic update choice without changing the settings file', async () => {
     const userPath = path.join(tempDir, 'settings.json')
     const original = JSON.stringify({ autoUpdateEnabled: false, unknownFuturePreference: 'keep' })
