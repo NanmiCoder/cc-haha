@@ -36,7 +36,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 <p><sub><b>特惠活动：</b>单笔充值 US$20 即可解锁 0.015 倍价格倍率的 GPT 特惠分组，单笔充值 US$50 即可解锁 0.03 倍价格倍率的 Claude 特惠分组。通过 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">专属链接注册</a>即可参与。</sub></p>
 
 <p align="center">
-  <a href="#功能预览">功能预览</a> · <a href="#安装">安装</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#用户交流群">用户交流群</a>
+  <a href="#功能预览">功能预览</a> · <a href="#安装">安装</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a>
 </p>
 
 ---
@@ -147,16 +147,6 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 4. 手机端（可选）：Android 在 Releases 下载 `cc-haha-mobile-*.apk` 安装；iPhone 先装 TestFlight，再打开[公开链接](https://testflight.apple.com/join/Nd49JrWZ)加入测试。手机 App 需要桌面端 v0.7.6 或更新版本。在桌面端「手机连接」里扫码配对，同一 Wi-Fi 直连，外出用 Cloudflare 连接，详见 [手机 App 与远程连接](docs/desktop/remote.md)。
 
 发布可信度与隐私：[Code signing policy](docs/start/code-signing.md) · [隐私与联网说明](docs/start/privacy.md)
-
----
-
-## 用户交流群
-
-使用过程中有问题、想反馈 Bug，或者想看看别人怎么用，欢迎扫码加入 cc-haha 企业微信用户群。也可以直接来 [Issues](https://github.com/NanmiCoder/cc-haha/issues) 提问。企业定制 / 私有化部署 / Agent 定制需求，请联系作者 [NanmiCoder](https://github.com/NanmiCoder)。
-
-<p align="center">
-  <img src="docs/images/community/wechat-group-qr.png" width="300" alt="cc-haha 企业微信用户群二维码">
-</p>
 
 ---
 
