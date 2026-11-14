@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, Folder, RotateCcw } from 'lucide-react'
+import { ChevronLeft, Copy, Download, Folder, RotateCcw } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { sessionsApi } from '@/api/sessions'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -9,10 +9,13 @@ import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { buildSessionMarkdown, downloadTextFile, isCompleteSessionHistory, sanitizeSessionFilename } from '@/lib/sessionMarkdown'
 import { useChatStore } from '@/stores/chatStore'
 import { resolveProjectDisplayName } from '@/stores/projectDisplayNameStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTabStore } from '@/stores/tabStore'
+import { useUIStore } from '@/stores/uiStore'
 import type { SessionListItem } from '@/types/session'
 import { SidebarMenuItem } from './SidebarMenuItem'
 import { getSessionProjectKey, projectTitle } from './sidebarTaskGroups'
@@ -45,6 +48,7 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
   const t = useTranslation()
   const errorId = useId()
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const addToast = useUIStore((s) => s.addToast)
   const projectArchivedTotals = useSessionStore((s) => s.projectArchivedTotals)
   const [page, setPage] = useState<ArchivePage>({ sessions: [], nextCursor: null, offset: 0, hasMore: false, total: null })
   const [loading, setLoading] = useState(true)
@@ -156,6 +160,27 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
   const openSession = (session: SessionListItem) => {
     useSessionStore.getState().openHistoricalSession(session)
     useChatStore.getState().connectToSession(session.id)
+  }
+
+  const handleMarkdown = async (session: SessionListItem, mode: 'copy' | 'export') => {
+    setMenu(null)
+    try {
+      const history = await sessionsApi.getFullHistory(session.id)
+      if (!isCompleteSessionHistory(history)) {
+        addToast({ type: 'error', message: t('sidebar.markdownHistoryIncomplete') })
+        return
+      }
+      const markdown = buildSessionMarkdown(session.title || t('tabs.untitled'), history)
+      if (mode === 'copy') {
+        if (!await copyTextToClipboard(markdown)) throw new Error('clipboard')
+        addToast({ type: 'success', message: t('sidebar.markdownCopied') })
+      } else {
+        downloadTextFile(markdown, sanitizeSessionFilename(session.title || t('tabs.untitled')))
+        addToast({ type: 'success', message: t('sidebar.markdownExported') })
+      }
+    } catch {
+      addToast({ type: 'error', message: t(mode === 'copy' ? 'sidebar.markdownCopyFailed' : 'sidebar.markdownExportFailed') })
+    }
   }
 
   // Across all projects, rows group under their project in server order.
@@ -308,6 +333,18 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
             onClick={() => void restoreSession(menu.session.id)}
           >
             {t('sidebar.restoreSession')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => void handleMarkdown(menu.session, 'copy')}
+          >
+            {t('sidebar.copyMarkdown')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => void handleMarkdown(menu.session, 'export')}
+          >
+            {t('sidebar.exportMarkdown')}
           </SidebarMenuItem>
         </div>,
         document.body,

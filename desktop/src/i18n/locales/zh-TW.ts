@@ -63,6 +63,13 @@ export const zh: Record<TranslationKey, string> = {
   "sidebar.batchArchiveSucceeded": "已封存 {count} 個對話",
   "sidebar.batchArchiveFailed": "有 {count} 個對話無法封存，可能正在執行或等待輸入。",
   "sidebar.projectAllArchived": "對話已全部封存",
+  "sidebar.copyMarkdown": "複製 Markdown",
+  "sidebar.exportMarkdown": "匯出 Markdown",
+  "sidebar.markdownCopied": "Markdown 已複製。",
+  "sidebar.markdownExported": "Markdown 已匯出。",
+  "sidebar.markdownCopyFailed": "無法複製 Markdown。",
+  "sidebar.markdownExportFailed": "無法匯出 Markdown。",
+  "sidebar.markdownHistoryIncomplete": "對話記錄不完整，未建立 Markdown。",
 
   "scheduledChat.workspaceRequired": "請選擇新聊天使用的工作目錄。",
   "scheduledChat.prompt": "任務指令",

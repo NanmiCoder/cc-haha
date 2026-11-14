@@ -61,6 +61,13 @@ export const en = {
   "sidebar.batchArchiveSucceeded": "Archived {count} sessions",
   "sidebar.batchArchiveFailed": "{count} sessions could not be archived. They may be running or waiting for input.",
   "sidebar.projectAllArchived": "All sessions archived",
+  "sidebar.copyMarkdown": "Copy Markdown",
+  "sidebar.exportMarkdown": "Export Markdown",
+  "sidebar.markdownCopied": "Markdown copied.",
+  "sidebar.markdownExported": "Markdown exported.",
+  "sidebar.markdownCopyFailed": "Could not copy Markdown.",
+  "sidebar.markdownExportFailed": "Could not export Markdown.",
+  "sidebar.markdownHistoryIncomplete": "The session history is incomplete, so Markdown was not created.",
 
   "scheduledChat.workspaceRequired": "Choose a workspace folder for new chats.",
   "scheduledChat.prompt": "Task instructions",
