@@ -358,7 +358,12 @@ OutFile "${wrapper}"
 !insertmacro CcHahaGuardFunctions
 !insertmacro CcHahaGuardUninstallerFunctions
 Section
+  ClearErrors
   WriteUninstaller "${current}"
+  ${'${If}'} ${'${Errors}'}
+    SetErrorLevel 22
+    Quit
+  ${'${EndIf}'}
 SectionEnd
 Section "un.Uninstall"
   SetOutPath $INSTDIR
@@ -372,9 +377,27 @@ Section "un.Uninstall"
   Quit
 SectionEnd
 `)
-      const require = createRequire(path.join(legacyVendorRoot, 'package.json'))
-      require('./out/index.js')
-      await require('./out/targets/nsis/nsisUtil.js').UninstallerReader.exec(wrapper, current)
+      if (process.platform === 'win32') {
+        // Match app-builder-lib's Windows build: the owned generator applies
+        // WriteUninstaller's PE/header/CRC work before any handoff is tested.
+        const generated = spawnSync(wrapper, ['/S'], { env, windowsHide: true, timeout: 15_000 })
+        const bytes = existsSync(current) ? readFileSync(current) : undefined
+        const metadata = { method: 'native WriteUninstaller', status: generated.status, error: generated.error?.message,
+          wrapperSha256: sha256(readFileSync(wrapper)), sourceSha256: sha256(readFileSync(path.join(root, 'current-wrapper.nsi'))),
+          currentBytes: bytes?.length, currentSha256: bytes ? sha256(bytes) : null }
+        const evidence = path.resolve('artifacts/windows-installer/guarded-two-hop')
+        mkdirSync(evidence, { recursive: true })
+        writeFileSync(path.join(evidence, 'current-generation.json'), `${JSON.stringify(metadata, null, 2)}\n`)
+        if (generated.error || generated.status !== 0 || !bytes) safeToClean = false
+        expect(generated.error, JSON.stringify(metadata)).toBeUndefined()
+        expect(generated.status, JSON.stringify(metadata)).toBe(0)
+        expect(bytes?.subarray(0, 2).toString('ascii'), JSON.stringify(metadata)).toBe('MZ')
+      } else {
+        // The official byte reader is retained solely for Mac compile-only.
+        const require = createRequire(path.join(legacyVendorRoot, 'package.json'))
+        require('./out/index.js')
+        await require('./out/targets/nsis/nsisUtil.js').UninstallerReader.exec(wrapper, current)
+      }
       for (const item of [
         { name: 'complete', expected: 0, resumes: 1, terminates: 0 },
         { name: 'wrong-code-hash', expected: 22, resumes: 0, terminates: 0 },
