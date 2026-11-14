@@ -75,6 +75,13 @@ function readonlyGit(source: string, argv: string[]) {
   return result.stdout.trim()
 }
 
+export function candidateCaptureNodeOptions(preload: string) {
+  // NODE_OPTIONS has its own quoted-argument lexer; backslashes and quotes
+  // must survive that lexer before Node resolves the exact preload file.
+  const argument = preload.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  return `--require="${argument}"`
+}
+
 // The preload only observes the existing supported NSIS build helper. Neither
 // its return values nor electron-builder's BUILD_UNINSTALLER path are changed.
 export function candidateCaptureScript(configFile: string) {
@@ -354,7 +361,7 @@ export async function runCandidatePackage() {
       guardedSha256: await sha256File(join(build, 'desktop/scripts/nsis-guarded-removal.cjs')),
       uninstaller: join(build, 'desktop/build-artifacts/electron', candidatePackage.setupName.replace(/exe$/, '__uninstaller.exe')) })
     writeFileSync(preload, candidateCaptureScript(configFile), { flag: 'wx' })
-    env.NODE_OPTIONS = `--require="${preload}"`
+    env.NODE_OPTIONS = candidateCaptureNodeOptions(preload)
     for (const item of commands.slice(4)) {
       stage = item.name
       receipt.commands.push(await command(item.argv, item.cwd, env, logs, item.name))

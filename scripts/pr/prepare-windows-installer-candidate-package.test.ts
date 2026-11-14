@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { candidateBuildCommands, candidateCaptureScript, candidatePackage, cleanupCandidateDirectory, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
+import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidatePackage, cleanupCandidateDirectory, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
 import { type SevenZipRunner } from './windows-installer-member-proof'
+import { createSandboxedTestEnvironment } from './test-environment'
 
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
 const head = 'a'.repeat(40), nonce = 'fixture-only-nonce'
@@ -88,6 +89,28 @@ describe('candidate package execution boundary', () => {
 })
 
 describe('observation of the unchanged NSIS compiler path', () => {
+  test.each([
+    String.raw`C:\Users\RUNNER~1\AppData\Local\Temp\private build with spaces\capture.cjs`,
+    String.raw`C:\private "quoted" build\capture.cjs`,
+    String.raw`C:\private\\build with spaces\capture.cjs`,
+  ])('NODE_OPTIONS preserves the exact preload request through the real Node lexer: %s', preload => {
+    const f = ownedFixture()
+    try {
+      const observed = join(f.temp, 'observed-request.json')
+      const sink = f.put(join(f.temp, 'owned-empty.cjs'), 'module.exports = true\n')
+      const bootstrap = f.put(join(f.temp, 'lexer-probe.cjs'), `const fs=require('node:fs'),Module=require('node:module'),resolve=Module._resolveFilename;Module._resolveFilename=function(request,...args){if(request.startsWith('C:')){fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify(request),{flag:'wx'});return ${JSON.stringify(sink)}};if(Module.isBuiltin(request))return resolve.call(this,request,...args);throw Error('Unexpected probe module request')}`)
+      // This bootstrap has no quote component and uses Node's supported Windows
+      // forward-slash spelling. Every target request maps to our own empty
+      // CJS, so even a malformed target never opens a system/user path.
+      const result = spawnSync('node', ['-e', ''], { cwd: f.root, encoding: 'utf8', timeout: 10_000,
+        env: createSandboxedTestEnvironment(join(f.root, 'home'), {
+          NODE_OPTIONS: `--require="${bootstrap.replaceAll('\\', '/')}" ${candidateCaptureNodeOptions(preload)}`,
+        }) })
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(readFileSync(observed, 'utf8'))).toBe(preload)
+    } finally { f.cleanup() }
+  })
+
   function fixture(outside = false) {
     const f = ownedFixture()
     const helperSource = f.put(join(f.source, 'desktop/build/guarded-removal.cs'), '// fixture; no compiler/PE execution')
@@ -100,7 +123,7 @@ describe('observation of the unchanged NSIS compiler path', () => {
     const configFile = f.put(join(f.temp, 'capture-config.json'), JSON.stringify({ source: f.source, temp: f.temp, output: f.capture, sourceHead: head, nonce,
       sourceSha256: sha(readFileSync(helperSource)), legacySha256: sha(readFileSync(legacy)), guardedSha256: sha(readFileSync(guarded)), uninstaller }))
     const preload = f.put(join(f.temp, 'capture.cjs'), candidateCaptureScript(configFile))
-    const run = (mode: string, args: string[]) => spawnSync('node', ['-e', 'console.log(require(process.argv[1]).run(process.argv[2],JSON.parse(process.argv[3])))', legacy, mode, JSON.stringify(args)], { encoding: 'utf8', timeout: 10_000, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_OPTIONS: `--require="${preload}"` } })
+    const run = (mode: string, args: string[]) => spawnSync('node', ['-e', 'console.log(require(process.argv[1]).run(process.argv[2],JSON.parse(process.argv[3])))', legacy, mode, JSON.stringify(args)], { encoding: 'utf8', timeout: 10_000, env: createSandboxedTestEnvironment(join(f.root, 'home'), { NODE_OPTIONS: candidateCaptureNodeOptions(preload) }) })
     return { ...f, helperSource, image, config, compilerOutput, uninstaller, run }
   }
   test('captures exact produced bytes before normal temp cleanup, preserving original return values', () => {
