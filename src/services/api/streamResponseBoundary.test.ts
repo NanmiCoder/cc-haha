@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantMessage } from '../../types/message.js'
 import { StreamAssistantCommitBuffer } from './streamAssistantCommitBuffer.js'
+import { getOutputLimitRetryBudget } from './outputBudget.js'
 import {
   commitOutputLimitResponse,
   createOutputLimitErrorMessage,
@@ -16,6 +17,38 @@ function assistant(uuid: string): AssistantMessage {
 }
 
 describe('stream response boundary', () => {
+  test('keeps a larger retry budget on the exact response without persisting it', () => {
+    const error = createOutputLimitErrorMessage({
+      stopReason: 'max_tokens', maxOutputTokens: 8_000, truncatedToolUse: false, retryBudget: 32_000,
+    })
+    expect(getOutputLimitRetryBudget(error)).toBe(32_000)
+    expect(getOutputLimitRetryBudget(JSON.parse(JSON.stringify(error)))).toBeUndefined()
+  })
+
+  test('allows clean replay of a truncated tool only with a larger supported budget', () => {
+    const error = createOutputLimitErrorMessage({
+      stopReason: 'max_tokens', maxOutputTokens: 8_000, truncatedToolUse: true, retryBudget: 32_000,
+    })
+    expect(error.apiError).toBe('max_output_tokens')
+    expect(getOutputLimitRetryBudget(error)).toBe(32_000)
+    expect(JSON.stringify(error.message.content)).toContain('not executed')
+  })
+
+  test('never retries the same or smaller budget or increases a context-window limit', () => {
+    for (const retryBudget of [4_096, 8_000]) {
+      const error = createOutputLimitErrorMessage({
+        stopReason: 'max_tokens', maxOutputTokens: 8_000, truncatedToolUse: true, retryBudget,
+      })
+      expect(getOutputLimitRetryBudget(error)).toBeUndefined()
+      expect(error.apiError).toBeUndefined()
+    }
+    const error = createOutputLimitErrorMessage({
+      stopReason: 'model_context_window_exceeded', maxOutputTokens: 8_000, truncatedToolUse: false, retryBudget: 32_000,
+    })
+    expect(getOutputLimitRetryBudget(error)).toBeUndefined()
+    expect(error.apiError).toBe('max_output_tokens')
+  })
+
   test('does not report an internal requested budget as a proven upstream limit', () => {
     for (const truncatedToolUse of [true, false]) {
       const error = createOutputLimitErrorMessage({
