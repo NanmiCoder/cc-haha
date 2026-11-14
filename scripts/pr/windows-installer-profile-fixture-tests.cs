@@ -622,6 +622,7 @@ namespace CcHahaInstallerProfile
       RunF1CanaryRuntimeFixTests(report);
       RunF1CanaryPidDiagnosticTests(report);
       RunF1CanaryHintTests(report);
+      RunF1CanaryDetachedConsoleTests(report);
       Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
         FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
         Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
@@ -1663,6 +1664,27 @@ namespace CcHahaInstallerProfile
         try { NativePlatform.CheckCanaryCreate(observation, "post-start", null, 1, marker, expected, expected.sha256); }
         catch (FixtureFailure failure) { first = failure.Message; }
         Assert(first == "f1-canary-create-pid" && observation.checks.Count == 1 && observation.checks[0].detail.StartsWith("f1-canary-create-post-start-", StringComparison.Ordinal), "diagnostics preserve the original denial and distinguish the calling site");
+      });
+    }
+
+    private static void RunF1CanaryDetachedConsoleTests(FixtureReport report)
+    {
+      Case(report, "f1-canary-detached-flags-keep-all-descendant-debug-and-reject-console-or-breakaway", delegate {
+        uint exact = 0x00000001u | 0x00000004u | 0x00000008u | 0x00000400u;
+        Assert(NativePlatform.CanaryProcessCreationFlags(exact) == exact, "the fixed child launch keeps DEBUG_PROCESS, SUSPENDED and UNICODE with DETACHED_PROCESS");
+        foreach (uint added in new uint[] { 0x00000002u, 0x00000010u, 0x08000000u, 0x01000000u })
+          Reject(() => NativePlatform.CanaryProcessCreationFlags(exact | added), "DEBUG_ONLY_THIS_PROCESS, NEW_CONSOLE, NO_WINDOW and breakaway are forbidden here");
+        foreach (uint removed in new uint[] { 0x00000001u, 0x00000004u, 0x00000008u, 0x00000400u })
+          Reject(() => NativePlatform.CanaryProcessCreationFlags(exact & ~removed), "no required launch property can be omitted");
+      });
+      Case(report, "f1-canary-associated-console-denies-before-canary-io", delegate {
+        NativePlatform.RequireCanaryDetachedConsole(IntPtr.Zero);
+        foreach (IntPtr window in new IntPtr[] { new IntPtr(1), new IntPtr(-1) })
+        {
+          bool ioReached = false; string denied = null;
+          try { NativePlatform.RequireCanaryDetachedConsole(window); ioReached = true; } catch (FixtureFailure failure) { denied = failure.Message; }
+          Assert(!ioReached && denied == "f1-canary-detached-console-required", "an associated or unknown non-NULL console result cannot reach canary I/O");
+        }
       });
     }
 

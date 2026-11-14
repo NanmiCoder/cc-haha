@@ -3560,6 +3560,16 @@ namespace CcHahaInstallerProfile
         throw;
       }
     }
+    internal static uint CanaryProcessCreationFlags(uint flags)
+    {
+      // This file/registry-only child must be detached, while every descendant
+      // remains debugged and stopped before its existing identity admission.
+      CorePolicy.Require(flags == (0x00000001u | 0x00000004u | 0x00000008u | 0x00000400u), "f1-canary-detached-debug-flags");
+      return flags;
+    }
+    internal static void RequireCanaryDetachedConsole(IntPtr window)
+    { CorePolicy.Require(window == IntPtr.Zero, "f1-canary-detached-console-required"); }
+    [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
     [DllImport("advapi32.dll", EntryPoint = "RegCreateKeyExW", CharSet = CharSet.Unicode)] private static extern int F1RegCreate(IntPtr root, string path, uint reserved, string cls, uint options, uint access, IntPtr security, out IntPtr key, out uint disposition);
     [DllImport("advapi32.dll", EntryPoint = "RegSetValueExW", CharSet = CharSet.Unicode)] private static extern int F1RegSet(IntPtr key, string name, uint reserved, uint type, IntPtr data, uint bytes);
     [DllImport("advapi32.dll", EntryPoint = "RegDeleteKeyW", CharSet = CharSet.Unicode)] private static extern int F1RegDelete(IntPtr root, string path);
@@ -3567,6 +3577,7 @@ namespace CcHahaInstallerProfile
     internal static int RunF1AuditChild(string file)
     {
       CorePolicy.Require(Environment.GetEnvironmentVariable("CI") == "true" && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true", "f1-canary-ci-only");
+      RequireCanaryDetachedConsole(GetConsoleWindow());
       NativePlatform api = new NativePlatform(); F1AuditCanarySpec spec = CoreJson.Read<F1AuditCanarySpec>(file);
       CorePolicy.Require(spec != null && spec.nonce != null && spec.nonce.Length == 32 && spec.nonce.All(Uri.IsHexDigit), "f1-canary-nonce");
       string root = Path.GetFullPath(spec.root), parent = Path.GetDirectoryName(root);
@@ -3637,7 +3648,7 @@ namespace CcHahaInstallerProfile
         try
         {
           StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) }; ProcessInformation process;
-          Win(CreateProcessW(binary, new StringBuilder("\"" + binary + "\" --f1-audit-child --spec \"" + specFile + "\""), IntPtr.Zero, IntPtr.Zero, false, 0x08000405, block, root, ref startup, out process), "F1 zero-account debug canary");
+          Win(CreateProcessW(binary, new StringBuilder("\"" + binary + "\" --f1-audit-child --spec \"" + specFile + "\""), IntPtr.Zero, IntPtr.Zero, false, CanaryProcessCreationFlags(0x0000040d), block, root, ref startup, out process), "F1 zero-account debug canary");
           child.process = process.process; child.thread = process.thread; child.pid = checked((int)process.pid); child.creationTime = ProcessCreation(child.process);
           Win(AssignProcessToJobObject(child.job, child.process), "F1 own canary Job"); child.assigned = true; api.CaptureProcess(child);
         }
