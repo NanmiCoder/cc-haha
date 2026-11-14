@@ -234,7 +234,6 @@ namespace CcHahaInstallerProfile
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string application, StringBuilder commandLine, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
-    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool DuplicateTokenEx(IntPtr source, uint access, IntPtr attributes, int impersonationLevel, int tokenType, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenThreadToken(IntPtr thread, uint access, bool openAsSelf, out IntPtr token);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenSCManagerW(string machine, string database, uint access);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenServiceW(IntPtr manager, string service, uint access);
@@ -2845,7 +2844,7 @@ namespace CcHahaInstallerProfile
     [DataContract]
     private sealed class AbiSpec
     {
-      [DataMember] public bool withTokenStartupFailureProbe;
+      [DataMember] public bool startupFailureProbe;
       [DataMember] public int version = 1;
       [DataMember] public string mode = "abi-owned-child";
       [DataMember] public string root;
@@ -2996,13 +2995,13 @@ namespace CcHahaInstallerProfile
     {
       CorePolicy.Require(spec != null && spec.version == 1 && spec.mode == "abi-owned-child" &&
         spec.nonce != null && spec.nonce.Length == 32 && spec.nonce.All(Uri.IsHexDigit) &&
-        spec.pipeName == "CcHaha1879-abi-" + spec.nonce + (spec.withTokenStartupFailureProbe ? "-withtoken" : ""), "ABI child spec is invalid");
+        spec.pipeName == "CcHaha1879-abi-" + spec.nonce + (spec.startupFailureProbe ? "-startup" : ""), "ABI child spec is invalid");
       CorePolicy.ValidateAbsolutePath(spec.root); CorePolicy.ValidateAbsolutePath(spec.output);
       string name = Path.GetFileName(spec.root);
       CorePolicy.Require(name != null && name.StartsWith("cc-haha-native-abi-", StringComparison.Ordinal) &&
         name.Length == "cc-haha-native-abi-".Length + 32 &&
         name.Substring("cc-haha-native-abi-".Length).All(Uri.IsHexDigit) &&
-        CorePolicy.SamePath(Path.GetDirectoryName(spec.output), spec.root) && Path.GetFileName(spec.output) == (spec.withTokenStartupFailureProbe ? "withtoken-child.json" : "child.json"),
+        CorePolicy.SamePath(Path.GetDirectoryName(spec.output), spec.root) && Path.GetFileName(spec.output) == (spec.startupFailureProbe ? "startup-child.json" : "child.json"),
         "ABI child output is not an owned bounded file");
       FileIdentity root = platform.IdentifyPath(spec.root, true);
       CorePolicy.Require(spec.rootIdentity != null && !root.reparse && root.fileId == spec.rootIdentity.fileId &&
@@ -3028,7 +3027,7 @@ namespace CcHahaInstallerProfile
         CorePolicy.ValidateAbsolutePath(specPath);
         spec = CoreJson.Read<AbiSpec>(specPath);
         ValidateAbiRoot(spec, platform);
-        CorePolicy.Require(CorePolicy.SamePath(specPath, Path.Combine(spec.root, spec.withTokenStartupFailureProbe ? "withtoken-spec.json" : "child-spec.json")) &&
+        CorePolicy.Require(CorePolicy.SamePath(specPath, Path.Combine(spec.root, spec.startupFailureProbe ? "startup-spec.json" : "child-spec.json")) &&
           CorePolicy.SamePath(CorePolicy.BinaryPath, Path.Combine(spec.root, "fixture.exe")) &&
           CorePolicy.HashFile(CorePolicy.BinaryPath) == spec.binarySha256, "ABI same-binary spec binding failed");
         verifiedOutput = spec.output;
@@ -3045,7 +3044,7 @@ namespace CcHahaInstallerProfile
             !image.reparse && image.sha256 == spec.binarySha256, "ABI parent identity changed");
         }
         finally { CloseHandle(parent); }
-        if (spec.withTokenStartupFailureProbe) throw new FixtureFailure("abi-intentional-prehello-failure");
+        if (spec.startupFailureProbe) throw new FixtureFailure("abi-intentional-prehello-failure");
         ProtocolMessage hello = new ProtocolMessage {
           kind = "abi-hello", nonce = spec.nonce, specSha256 = CorePolicy.HashFile(specPath),
           binarySha256 = spec.binarySha256, pid = checked((int)GetCurrentProcessId()),
@@ -3063,7 +3062,7 @@ namespace CcHahaInstallerProfile
       }
       catch (Exception error)
       {
-        if (spec != null && spec.withTokenStartupFailureProbe && verifiedOutput != null && channel != null)
+        if (spec != null && spec.startupFailureProbe && verifiedOutput != null && channel != null)
         {
           FixtureReport failure = new FixtureReport { mode = "abi-owned-startup-probe", status = "failed", failedStage = "abi-prehello-failure-probe",
             binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath), specSha256 = CorePolicy.HashFile(specPath) };
@@ -3081,126 +3080,34 @@ namespace CcHahaInstallerProfile
       finally { if (channel != null) channel.Dispose(); }
     }
 
-    // ABI-only ownership boundary. The production LogonUser token path is not
-    // changed. A new noninheritable primary object models that token lifetime.
-    internal abstract class AbiPrimaryTokenApi
+    internal static void RequireAbiSameUserToken(TokenIdentity expected, TokenIdentity actual)
     {
-      internal abstract IntPtr Duplicate(IntPtr source);
-      internal abstract TokenIdentity Inspect(IntPtr token);
-      internal abstract void Close(IntPtr token);
-    }
-    internal sealed class AbiPrimaryTokenLease : IDisposable
-    {
-      private readonly AbiPrimaryTokenApi api;
-      private IntPtr token;
-      private bool closeAttempted, closeUnknown;
-      private AbiPrimaryTokenLease(AbiPrimaryTokenApi operations) { api = operations; }
-      internal IntPtr Handle
-      {
-        get { CorePolicy.Require(token != IntPtr.Zero && !closeAttempted, "ABI primary clone is no longer held"); return token; }
-      }
-      internal static AbiPrimaryTokenLease Acquire(AbiPrimaryTokenApi api, IntPtr source, TokenIdentity expected)
-      {
-        CorePolicy.Require(api != null && source != IntPtr.Zero && expected != null && expected.tokenType == 1,
-          "ABI primary clone requires the current primary source");
-        AbiPrimaryTokenLease owned = new AbiPrimaryTokenLease(api);
-        IntPtr candidate = api.Duplicate(source);
-        // A poisoned duplicate result must never transfer the caller's source.
-        CorePolicy.Require(candidate != IntPtr.Zero && candidate != source, "ABI duplicate must return a separate primary handle");
-        owned.token = candidate;
-        try
-        {
-          TokenIdentity actual = api.Inspect(owned.Handle);
-          CorePolicy.Require(actual != null && actual.tokenType == 1 && actual.sid == expected.sid
-            && actual.authenticationId == expected.authenticationId && actual.sessionId == expected.sessionId
-            && TokenCoreHash(actual) == TokenCoreHash(expected), "ABI primary clone changed token identity or core");
-          return owned;
-        }
-        catch
-        {
-          // Preserve the first reject/query failure. Native Close separately
-          // latches closure uncertainty in the owned ABI state and report.
-          try { owned.Dispose(); } catch { }
-          throw;
-        }
-      }
-      internal void Launch(Action<IntPtr> launch)
-      {
-        CorePolicy.Require(launch != null, "ABI primary clone requires a launch operation");
-        bool failed = false;
-        try { launch(Handle); }
-        catch { failed = true; throw; }
-        finally
-        {
-          if (failed) { try { Dispose(); } catch { } }
-          else Dispose();
-        }
-      }
-      public void Dispose()
-      {
-        if (closeAttempted) { CorePolicy.Require(!closeUnknown, "ABI primary clone close remains unknown"); return; }
-        if (token == IntPtr.Zero) return;
-        closeAttempted = true;
-        try { api.Close(token); token = IntPtr.Zero; }
-        catch { closeUnknown = true; throw; }
-      }
-    }
-    private sealed class NativeAbiPrimaryTokenApi : AbiPrimaryTokenApi
-    {
-      private readonly NativePlatform platform;
-      private readonly FixtureState state;
-      internal NativeAbiPrimaryTokenApi(NativePlatform native, FixtureState owner) { platform = native; state = owner; }
-      internal override IntPtr Duplicate(IntPtr source)
-      {
-        IntPtr token;
-        // TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY; NULL security
-        // attributes prohibit inheritance. No MAXIMUM_ALLOWED or privilege edit.
-        Win(DuplicateTokenEx(source, 0x0000000b, IntPtr.Zero, 2, 1, out token), "DuplicateTokenEx owned ABI primary");
-        return token;
-      }
-      internal override TokenIdentity Inspect(IntPtr token) { return platform.InspectToken(token); }
-      internal override void Close(IntPtr token)
-      {
-        if (CloseHandle(token)) return;
-        int code = Marshal.GetLastWin32Error(); state.abiPrimaryTokenClosureUnknown = true;
-        state.report.Check("abi-primary-clone-close", false, "Close ABI primary clone failed (Win32 " + code.ToString(CultureInfo.InvariantCulture) + ")");
-        throw new InvalidOperationException("Close ABI primary clone failed (Win32 " + code.ToString(CultureInfo.InvariantCulture) + ")");
-      }
+      CorePolicy.Require(expected != null && actual != null && expected.tokenType == 1 && actual.tokenType == 1
+        && actual.sid == expected.sid && actual.authenticationId == expected.authenticationId
+        && actual.sessionId == expected.sessionId && TokenCoreHash(actual) == TokenCoreHash(expected),
+        "ABI same-user startup token identity or core changed");
     }
 
-    private void StartAbiWithTokenChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
+    private void StartAbiSameUserChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
     {
       AbiOperatingSystem();
       CorePolicy.Require(controllerContext == null && subjectContext == null && !subjectProductsAllowed
         && state.controllerRootOwned && state.account == null && !state.accountCreated && !state.profileCreated && !state.profileLoaded
         && state.spec.mode == "abi-harness" && state.token != IntPtr.Zero && state.subject != null
-        && state.subject.process == IntPtr.Zero && state.subject.job == IntPtr.Zero, "ABI WithToken current-token-only context");
-      TokenIdentity own = InspectCurrentToken(), target = InspectToken(state.token);
-      CorePolicy.Require(target.sid == own.sid && target.authenticationId == own.authenticationId && target.sessionId == own.sessionId
-        && target.tokenType == 1 && CorePolicy.SamePath(command.application, Path.Combine(root, "fixture.exe"))
+        && state.subject.process == IntPtr.Zero && state.subject.job == IntPtr.Zero
+        && state.station != IntPtr.Zero && state.desktop != IntPtr.Zero, "ABI same-user-only startup context");
+      TokenIdentity own = InspectCurrentToken();
+      RequireAbiSameUserToken(own, state.targetIdentity);
+      RequireAbiSameUserToken(own, InspectToken(state.token));
+      CorePolicy.Require(CorePolicy.SamePath(command.application, Path.Combine(root, "fixture.exe"))
         && command.expectedSha256 == CorePolicy.HashFile(CorePolicy.BinaryPath) && command.commandLine.Length <= 1023,
-        "ABI WithToken cannot select another identity or image");
-      FileIdentity image = IdentifyPath(command.application, false);
-      CorePolicy.Require(!image.reparse && image.sha256 == command.expectedSha256, "ABI WithToken same fixture bytes");
-      state.subject.job = NewJob();
-      IntPtr block = EnvironmentBytes(environment);
-      try
-      {
-        AbiPrimaryTokenLease primary = AbiPrimaryTokenLease.Acquire(new NativeAbiPrimaryTokenApi(this, state), state.token, target);
-        primary.Launch(delegate(IntPtr launchToken)
-        {
-          state.report.trace.Add("ABI WithToken source=current-primary; source-requested-access=0000000f; launch=dedicated-primary-clone; clone-requested-access=0000000b; inherited=false; token-core=" + TokenCoreHash(target));
-          StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
-          ProcessInformation created;
-          Win(CreateProcessWithTokenW(launchToken, 0, command.application, new StringBuilder(command.commandLine), 0x00000404 | 0x08000000,
-            block, root, ref startup, out created), "CreateProcessWithTokenW owned ABI child");
-          state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
-          state.subject.creationTime = ProcessCreation(state.subject.process);
-          Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign WithToken ABI child Job");
-          state.subject.assigned = true; CaptureProcess(state.subject);
-        });
-      }
-      finally { FreeEnvironmentBytes(block, environment); }
+        "ABI same-user startup cannot select another image");
+      // Fixed same-calling-process launch, never a fallback after WithToken.
+      // This calibrates only the owned desktop/Job/IPC failure path. Production
+      // LogonUser/CreateProcessWithTokenW eligibility remains a separate gate.
+      state.report.trace.Add("ABI startup calibration launcher=CreateProcessW; identity=calling-process; cross-user-launch-proven=false; token-core=" + TokenCoreHash(own));
+      StartChildInternal(state.subject, command, environment, root, state.desktopName, true);
+      RequireAbiSameUserToken(own, state.subject.identity);
     }
 
     internal static int AbiStartupProbeExitCode(FixtureReport failure)
@@ -3215,22 +3122,22 @@ namespace CcHahaInstallerProfile
         && failure.checks[0].detail == "abi-intentional-prehello-failure" ? 81 : 82;
     }
 
-    private static void RunAbiWithTokenStartupProbe(NativePlatform platform, FixtureState state, AbiSpec original,
+    private static void RunAbiStartupProbe(NativePlatform platform, FixtureState state, AbiSpec original,
       Dictionary<string, string> environment, FixtureReport report)
     {
       // The successful ordinary ABI child already naturally exited. Only the
-      // same current primary token, own private station and own fixture repeat.
+      // same calling process identity, own private station and own fixture repeat.
       platform.CloseChild(state.subject); state.subject = null;
-      AbiSpec spec = CoreJson.Deserialize<AbiSpec>(CoreJson.Serialize(original)); spec.withTokenStartupFailureProbe = true;
-      spec.output = Path.Combine(spec.root, "withtoken-child.json"); spec.pipeName = "CcHaha1879-abi-" + spec.nonce + "-withtoken";
-      string specPath = Path.Combine(spec.root, "withtoken-spec.json"); WriteNewJson(specPath, spec);
+      AbiSpec spec = CoreJson.Deserialize<AbiSpec>(CoreJson.Serialize(original)); spec.startupFailureProbe = true;
+      spec.output = Path.Combine(spec.root, "startup-child.json"); spec.pipeName = "CcHaha1879-abi-" + spec.nonce + "-startup";
+      string specPath = Path.Combine(spec.root, "startup-spec.json"); WriteNewJson(specPath, spec);
       using (NativePipeChannel pipe = NativePipeChannel.Server(spec.pipeName, state.runnerSid, state.runnerSid))
       {
         state.subject = new OwnedProcess();
         CommandPlan command = new CommandPlan { phase = "abi-owned-child", application = Path.Combine(spec.root, "fixture.exe"),
           expectedSha256 = spec.binarySha256, commandLine = "\"" + Path.Combine(spec.root, "fixture.exe") + "\" --abi-child --spec \"" + specPath + "\"",
           timeoutMilliseconds = 15000, expectedExitCode = 81 };
-        platform.StartAbiWithTokenChild(state, command, environment, spec.root);
+        platform.StartAbiSameUserChild(state, command, environment, spec.root);
         platform.VerifyChild(state.subject, state.runnerSid, command.application, spec.binarySha256); platform.ResumeChild(state.subject);
         try
         {
@@ -3240,24 +3147,24 @@ namespace CcHahaInstallerProfile
           spec.binarySha256, CorePolicy.HashFile(specPath), "abi-owned-startup-probe");
         int exit = platform.WaitChild(state.subject, 15000);
         FixtureReport output = CoreJson.Read<FixtureReport>(spec.output);
-        report.Check("withtoken-private-desktop-startup-failure-preserved", exit == 81 && captured.checks.Count == 1
+        report.Check("same-user-private-desktop-startup-failure-preserved", exit == 81 && captured.checks.Count == 1
           && captured.checks[0].detail == "abi-intentional-prehello-failure" && output.status == "failed" && output.cleanup == "passed"
           && output.failedStage == "abi-prehello-failure-probe" && !output.releasedPeMayHaveExecuted
           && state.subject.identity.sid == state.runnerSid && platform.controllerContext == null && platform.subjectContext == null,
-          "Same current token/private desktop only; actual natural exit=" + exit.ToString(CultureInfo.InvariantCulture)
+          "Same calling process/private desktop only; no cross-user launch proof; actual natural exit=" + exit.ToString(CultureInfo.InvariantCulture)
             + "; expected81; failed-frame checks=" + captured.checks.Count.ToString(CultureInfo.InvariantCulture)
             + "; no account/profile/product context.");
         }
         catch
         {
           try { report.subjectStartup = ObserveHeldStartup(state.subject, platform.InspectCurrentToken().sessionId, state.targetIdentity.sessionId); }
-          catch (Exception observation) { report.Check("abi-withtoken-exit-observation", false, SafeFailure(observation)); }
+          catch (Exception observation) { report.Check("abi-startup-exit-observation", false, SafeFailure(observation)); }
           if (File.Exists(spec.output))
           {
             try
             {
               CheckResult failure = CoreJson.Read<CheckResult>(spec.output);
-              if (failure.name == "abi-child" && failure.status == "failed") report.Check("abi-withtoken-child", false, SafeFailure(new FixtureFailure(failure.detail)));
+              if (failure.name == "abi-child" && failure.status == "failed") report.Check("abi-startup-child", false, SafeFailure(new FixtureFailure(failure.detail)));
             }
             catch { }
           }
@@ -3276,7 +3183,7 @@ namespace CcHahaInstallerProfile
       }
       FileIdentity actual = platform.IdentifyPath(root, true);
       CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI cleanup root changed");
-      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "withtoken-spec.json", "withtoken-child.json" };
+      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json" };
       foreach (string path in Directory.GetFileSystemEntries(root))
       {
         CorePolicy.Require(names.Contains(Path.GetFileName(path), StringComparer.Ordinal) &&
@@ -3328,7 +3235,7 @@ namespace CcHahaInstallerProfile
         if (root == null || expected == null) return;
         FileIdentity actual = platform.IdentifyPath(root, true);
         CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI inventory root changed");
-        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "withtoken-spec.json", "withtoken-child.json" };
+        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "startup-spec.json", "startup-child.json" };
         int count = 0;
         // Only inspect the immediate owned-root entries. Never traverse an
         // unknown directory or reparse point to obtain diagnostic evidence.
@@ -3566,7 +3473,7 @@ namespace CcHahaInstallerProfile
         report.Check("nonce-bound-private-ipc", exit == 0 && output != null && output.nonce == nonce &&
           output.pid == state.subject.pid && output.creationTime == state.subject.creationTime && output.sid == state.runnerSid,
           "Actual endpoint PID, held creation identity, same binary and two-way nonce acknowledgement matched");
-        RunAbiWithTokenStartupProbe(platform, state, spec, environment, report);
+        RunAbiStartupProbe(platform, state, spec, environment, report);
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI assertion failed");
         report.Check("stage-a-no-real-profile-or-product", platform.controllerContext == null && platform.subjectContext == null &&
           !platform.subjectProductsAllowed && !state.accountCreated && !state.profileCreated && !state.profileLoaded,
@@ -3604,7 +3511,6 @@ namespace CcHahaInstallerProfile
             RecordAbiRootInventory(report, "before-root-cleanup", root, rootIdentity, platform);
             RemoveAbiRoot(root, rootIdentity, platform);
           }
-          CorePolicy.Require(!state.abiPrimaryTokenClosureUnknown, "ABI primary clone closure is unknown");
           cleaned = true;
           report.cleanup = "passed";
           report.Check("owned-native-cleanup", true, "Owned processes/Job/thread/UI/IPC/environment/token handles closed and private ABI files removed");

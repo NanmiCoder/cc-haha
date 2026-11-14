@@ -205,7 +205,6 @@ namespace CcHahaInstallerProfile
     public bool profileOwnershipProven;
     public bool f1AuditResourceUncertain;
     public bool functionalResourceUncertain;
-    public bool abiPrimaryTokenClosureUnknown;
     public bool f1AuditArmOutcomeUnknown;
     public List<F1AuditLease> f1AuditLeases = new List<F1AuditLease>();
     // Only this process's successful creation may supply an ownership context.
