@@ -574,7 +574,9 @@ Function ${CC_HAHA_GUARD_PREFIX}CcHahaGuardLaunch
   !insertmacro CcHahaGuardEnvironmentEntry "WINDIR=$WINDIR"
   ; 32-bit NSIS: STARTUPINFOW=68, STARTUPINFOEXW=72, PI=16, HANDLE=4.
   ; The primary thread cannot run before every parent weak handle is closed.
-  System::Call 'kernel32::CreateProcessW(w "$ccHahaGuardApplication", w "$ccHahaGuardCommand", p 0, p 0, i 1, i 0x8080404, p $ccHahaGuardEnvironment, w "$SYSDIR", p $ccHahaGuardStartup, p $ccHahaGuardProcessInformation) i.R0'
+  ; The quoted CLI is data, not part of System::Call's argument syntax.
+  StrCpy $R0 $ccHahaGuardCommand
+  System::Call 'kernel32::CreateProcessW(w "$ccHahaGuardApplication", w R0, p 0, p 0, i 1, i 0x8080404, p $ccHahaGuardEnvironment, w "$SYSDIR", p $ccHahaGuardStartup, p $ccHahaGuardProcessInformation) i.R0'
   StrCmp $R0 0 cc_haha_guard_launch_done
   System::Call '*$ccHahaGuardProcessInformation(p.R1, p.R2, i, i)'
   StrCpy $ccHahaGuardProcess $R1

@@ -245,7 +245,10 @@ public static class OwnedHandoff {
   ClearErrors
   FileOpen $0 "${file}" a
   ${'${IfNot}'} ${'${Errors}'}
-    FileWrite $0 "${role};${'${_TEXT}'}$\r$\n"
+    FileSeek $0 0 END
+    ${'${IfNot}'} ${'${Errors}'}
+      FileWrite $0 "${role};${'${_TEXT}'}$\r$\n"
+    ${'${EndIf}'}
     FileClose $0
   ${'${EndIf}'}
   ${'${If}'} $1 == 1
@@ -278,7 +281,7 @@ public static class OwnedHandoff {
       if (line.includes("System::Call 'kernel32::GetProcessId(p $ccHahaGuardParent)")) detail = 'receive-parent-pid;actual=$R0;expected=$ccHahaGuardParentPid'
       if (line.includes("System::Call 'kernel32::GetProcessTimes(p $ccHahaGuardParent,")) detail = 'receive-parent-times;result=$R4'
       if (line.includes("System::Call 'kernel32::UpdateProcThreadAttribute(")) detail = 'inherit-list;result=$R1;count=$ccHahaGuardCount'
-      if (line.includes("System::Call 'kernel32::CreateProcessW(")) detail = 'create;result=$R0;count=$ccHahaGuardCount;application=$ccHahaGuardApplication'
+      if (line.includes("System::Call 'kernel32::CreateProcessW(")) detail = 'create;result=$R0;count=$ccHahaGuardCount;application=$ccHahaGuardApplication;command=$ccHahaGuardCommand'
       if (line.trim() === 'Call ${CC_HAHA_GUARD_PREFIX}CcHahaGuardCloseWeak') detail = 'weak-close-before-resume;ok=$ccHahaGuardOk;count=$ccHahaGuardCount'
       if (line.includes("System::Call 'kernel32::CloseHandle(p $ccHahaGuardOwnProcess)")) detail = 'self-cap-close;result=$R0'
       if (line.includes("System::Call 'kernel32::ResumeThread(")) detail = 'resume;previous=$R0'
@@ -457,6 +460,59 @@ SectionEnd
       }
     } finally { if (safeToClean) rmSync(root, { recursive: true, force: true }) }
   }, 120_000)
+
+  test.skipIf(process.platform !== 'win32' && process.env.CC_HAHA_TEST_NSIS_COMPILE_ONLY !== '1')('passes a quoted CLI through the actual System command parameter (Mac compiles only)', () => {
+    const compiler = process.env.CC_HAHA_TEST_MAKENSIS
+    if (!compiler) throw new Error('Run the prepared pinned Windows installer lane')
+    const production = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const parameter = production.match(/^  System::Call 'kernel32::CreateProcessW\(w "\$ccHahaGuardApplication", (w R0|w "\$ccHahaGuardCommand"), p 0,/m)?.[1]
+    if (!parameter) throw new Error('Missing production CreateProcessW command parameter')
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'cc-haha-guarded-command-')))
+    const env = createSandboxedTestEnvironment(path.join(root, 'home'))
+    const command = String.raw`"C:\Owned argv\fixture.exe" --root="C:\Owned path\root" --capabilities="120:1:2:3,124:1:4:5" --parent="128:41:42:43"`
+    try {
+      for (const item of [{ name: 'old-interpolated', parameter: 'w "$ccHahaGuardCommand"' }, { name: 'production', parameter }]) {
+        const executable = path.join(root, `${item.name}.exe`)
+        const journal = path.join(root, `${item.name}.log`)
+        const source = path.join(root, `${item.name}.nsi`)
+        writeFileSync(source, String.raw`Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+Name "Owned System parameter receiver"
+OutFile "${executable}"
+Var ccHahaGuardCommand
+Section
+  StrCpy $ccHahaGuardCommand '${command}'
+  StrCpy $R0 $ccHahaGuardCommand
+  StrCpy $R1 2147483646
+  System::Call 'kernel32::lstrlenW(${item.parameter}) i.R1'
+  FileOpen $0 "${journal}" w
+  FileWrite $0 "received-length=$R1;expected-length=${command.length};"
+  FileClose $0
+  SetErrorLevel $R1
+SectionEnd
+`)
+        const prefix = process.platform === 'win32' ? '/' : '-'
+        const compiled = spawnSync(compiler, [`${prefix}WX`, `${prefix}V2`, source], {
+          env: { ...env, NSISDIR: path.resolve(path.dirname(compiler), '..') }, encoding: 'utf8', timeout: 30_000,
+        })
+        expect(compiled.error, compiled.stderr || compiled.stdout).toBeUndefined()
+        expect(compiled.status, compiled.stderr || compiled.stdout).toBe(0)
+        if (process.platform !== 'win32') continue
+        const run = spawnSync(executable, ['/S'], { env, windowsHide: true, timeout: 15_000 })
+        const evidence = path.resolve('artifacts/windows-installer/guarded-two-hop')
+        mkdirSync(evidence, { recursive: true })
+        const metadata = { name: item.name, parameter: item.parameter, expectedLength: command.length, status: run.status,
+          error: run.error?.message, journal: existsSync(journal) ? readFileSync(journal, 'utf8').slice(0, 4096) : 'missing receiver journal' }
+        writeFileSync(path.join(evidence, `command-parameter-${item.name}.json`), `${JSON.stringify(metadata, null, 2)}\n`)
+        expect(run.error, JSON.stringify(metadata)).toBeUndefined()
+        if (item.name === 'production') {
+          expect(run.status, JSON.stringify(metadata)).toBe(command.length)
+          expect(metadata.journal).toBe(`received-length=${command.length};expected-length=${command.length};`)
+        } else expect(run.status, JSON.stringify(metadata)).not.toBe(command.length)
+      }
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }, 90_000)
 
   test('keeps suspended exact-handle inheritance and guarded removal separate from default recursive removal', () => {
     const launch = readFileSync('desktop/build/guarded-removal-launch.nsh', 'utf8').replace(/\r\n/g, '\n')
