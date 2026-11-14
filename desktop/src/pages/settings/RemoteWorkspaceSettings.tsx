@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PlugZap, Unplug } from 'lucide-react'
+import { History, PlugZap, Trash2, Unplug } from 'lucide-react'
 
 import {
   SettingsBlock,
@@ -35,7 +35,7 @@ const DEPLOY_COMMAND = 'bun run scripts/remote-workspace/deploy.ts --host <ssh-h
 
 export function RemoteWorkspaceSettings() {
   const t = useTranslation()
-  const { profile, status, error, load, verify, connect, disconnect } = useRemoteWorkspaceStore()
+  const { profile, history, status, error, load, verify, connect, disconnect, forgetMachine } = useRemoteWorkspaceStore()
   const [serverUrl, setServerUrl] = useState('')
   const [sshHost, setSshHost] = useState('')
   const [token, setToken] = useState('')
@@ -115,6 +115,46 @@ export function RemoteWorkspaceSettings() {
           </SettingsBlock>
         </SettingsGroup>
       </SettingsSection>
+
+      {history.length > 0 && (
+        <SettingsSection
+          title={t('settings.remoteWorkspace.historyTitle')}
+          description={t('settings.remoteWorkspace.historyHint')}
+        >
+          <SettingsGroup>
+            {history.map((machine) => (
+              <SettingsRow
+                key={machine.url}
+                title={machine.sshHost}
+                description={machine.url}
+                data-testid="remote-workspace-machine"
+              >
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<History size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  disabled={busy || connected}
+                  onClick={() => {
+                    setServerUrl(machine.url)
+                    setSshHost(machine.sshHost)
+                    setToken(machine.token ?? '')
+                  }}
+                >
+                  {t('settings.remoteWorkspace.useMachine')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  disabled={busy}
+                  aria-label={t('settings.remoteWorkspace.removeMachine')}
+                  onClick={() => forgetMachine(machine.url)}
+                />
+              </SettingsRow>
+            ))}
+          </SettingsGroup>
+        </SettingsSection>
+      )}
 
       <SettingsSection title={t('settings.remoteWorkspace.connectionTitle')}>
         <SettingsGroup>

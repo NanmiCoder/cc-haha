@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,7 +24,10 @@ vi.mock('@/lib/desktopRuntime', () => ({
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useRemoteWorkspaceStore } from '@/stores/remoteWorkspaceStore'
-import { writeRemoteWorkspace } from '@/lib/remoteWorkspace'
+import {
+  rememberRemoteWorkspaceMachine,
+  writeRemoteWorkspace,
+} from '@/lib/remoteWorkspace'
 import { RemoteWorkspaceSettings } from './RemoteWorkspaceSettings'
 
 const REMOTE_URL = 'http://127.0.0.1:9411'
@@ -35,6 +38,10 @@ function urlField() {
 
 function hostField() {
   return screen.getByLabelText('SSH host')
+}
+
+function tokenField() {
+  return screen.getByLabelText('Access token')
 }
 
 describe('remote workspace settings', () => {
@@ -149,5 +156,41 @@ describe('remote workspace settings', () => {
     render(<RemoteWorkspaceSettings />)
     expect(urlField()).toBeDisabled()
     expect(hostField()).toBeDisabled()
+  })
+
+  it('lists remembered machines and fills the form from a click', () => {
+    rememberRemoteWorkspaceMachine({ url: REMOTE_URL, sshHost: 'my-gpu-server', token: 'k3y-minted-by-deploy-0123456789abcdef' }, '2026-11-14T00:00:00.000Z')
+    rememberRemoteWorkspaceMachine({ url: 'http://127.0.0.1:9412', sshHost: 'second-box' }, '2026-11-13T00:00:00.000Z')
+
+    render(<RemoteWorkspaceSettings />)
+
+    expect(screen.getAllByTestId('remote-workspace-machine')).toHaveLength(2)
+    expect(screen.getByText('second-box')).toBeInTheDocument()
+
+    // Clicking an older machine pre-fills the form with its details — the
+    // user then reviews and presses the same "Switch to remote" as always.
+    // History is newest-first: the second machine remembered sits first.
+    const secondRow = screen.getAllByTestId('remote-workspace-machine')[0]!
+    fireEvent.click(within(secondRow).getByRole('button', { name: 'Use' }))
+    expect(urlField()).toHaveValue('http://127.0.0.1:9412')
+    expect(hostField()).toHaveValue('second-box')
+    expect(tokenField()).toHaveValue('')
+  })
+
+  it('fills the token from the remembered machine too', () => {
+    rememberRemoteWorkspaceMachine({ url: REMOTE_URL, sshHost: 'my-gpu-server', token: 'k3y-minted-by-deploy-0123456789abcdef' }, '2026-11-14T00:00:00.000Z')
+    render(<RemoteWorkspaceSettings />)
+    fireEvent.click(screen.getByRole('button', { name: 'Use' }))
+    expect(tokenField()).toHaveValue('k3y-minted-by-deploy-0123456789abcdef')
+  })
+
+  it('removes a machine from the reconnect list', () => {
+    rememberRemoteWorkspaceMachine({ url: REMOTE_URL, sshHost: 'my-gpu-server', token: 'k3y-minted-by-deploy-0123456789abcdef' }, '2026-11-14T00:00:00.000Z')
+    render(<RemoteWorkspaceSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from list' }))
+
+    expect(useRemoteWorkspaceStore.getState().history).toHaveLength(0)
+    expect(screen.queryByTestId('remote-workspace-machine')).not.toBeInTheDocument()
   })
 })

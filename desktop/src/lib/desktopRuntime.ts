@@ -12,6 +12,7 @@ import {
   clearRemoteWorkspace,
   getEnabledRemoteWorkspace,
   normalizeRemoteWorkspaceToken as normalizeRemoteToken,
+  rememberRemoteWorkspaceMachine,
   writeRemoteWorkspace,
 } from './remoteWorkspace'
 
@@ -190,13 +191,15 @@ export async function connectRemoteWorkspace(serverUrl: string, sshHost: string,
 
   setBaseUrl(normalizedUrl)
   setAuthToken(normalizeRemoteToken(token))
+  const connectedAt = new Date().toISOString()
   writeRemoteWorkspace({
     url: normalizedUrl,
     sshHost: normalizedHost,
     ...(token ? { token } : {}),
     enabled: true,
-    connectedAt: new Date().toISOString(),
+    connectedAt,
   })
+  rememberRemoteWorkspaceMachine({ url: normalizedUrl, sshHost: normalizedHost, ...(token ? { token } : {}) }, connectedAt)
   return normalizedUrl
 }
 

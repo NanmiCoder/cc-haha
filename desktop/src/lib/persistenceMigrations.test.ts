@@ -8,7 +8,10 @@ import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
 import {
+  REMOTE_WORKSPACE_HISTORY_KEY,
   REMOTE_WORKSPACE_STORAGE_KEY,
+  REMOTE_WORKSPACE_STORAGE_VERSION,
+  parseRemoteWorkspaceHistory,
   serializeRemoteWorkspaceProfile,
 } from './remoteWorkspace'
 
@@ -528,6 +531,39 @@ describe('desktop persistence migrations', () => {
     localStorage.setItem(REMOTE_WORKSPACE_STORAGE_KEY, '{"version":99,"url":"http://127.0.0.1:9411"}')
     expect(runDesktopPersistenceMigrations().migratedKeys).toContain(REMOTE_WORKSPACE_STORAGE_KEY)
     expect(localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)).toBeNull()
+  })
+
+  test('keeps readable machine history, drops bad rows, and never invents an empty list', () => {
+    const goodHistory = JSON.stringify({
+      version: REMOTE_WORKSPACE_STORAGE_VERSION,
+      machines: [{ url: 'http://127.0.0.1:9411', sshHost: 'my-gpu-server', lastUsedAt: '2026-11-14T00:00:00.000Z' }],
+    })
+    localStorage.setItem(REMOTE_WORKSPACE_HISTORY_KEY, goodHistory)
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(REMOTE_WORKSPACE_HISTORY_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_HISTORY_KEY)).toBe(goodHistory)
+
+    // One bad row must not erase the whole history: valid rows survive, and
+    // the entry is rewritten instead of deleted outright.
+    localStorage.setItem(REMOTE_WORKSPACE_HISTORY_KEY, JSON.stringify({
+      version: REMOTE_WORKSPACE_STORAGE_VERSION,
+      machines: [
+        { url: 'http://127.0.0.1:9411', sshHost: 'my-gpu-server', lastUsedAt: '2026-11-14T00:00:00.000Z' },
+        { url: 'http://127.0.0.1:9412', sshHost: '   ', lastUsedAt: '2026-11-14T01:00:00.000Z' },
+      ],
+    }))
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain(REMOTE_WORKSPACE_HISTORY_KEY)
+    expect(parseRemoteWorkspaceHistory(localStorage.getItem(REMOTE_WORKSPACE_HISTORY_KEY)))
+      .toHaveLength(1)
+
+    // All rows bad → the entry goes away entirely...
+    localStorage.setItem(REMOTE_WORKSPACE_HISTORY_KEY, '{"version":99,"machines":[]}')
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain(REMOTE_WORKSPACE_HISTORY_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_HISTORY_KEY)).toBeNull()
+
+    // ...but an install that never recorded a machine keeps no entry at all.
+    localStorage.removeItem(REMOTE_WORKSPACE_HISTORY_KEY)
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(REMOTE_WORKSPACE_HISTORY_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_HISTORY_KEY)).toBeNull()
   })
 
 })

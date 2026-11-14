@@ -6,12 +6,19 @@ import {
   disconnectRemoteWorkspace,
   waitForHealth,
 } from '@/lib/desktopRuntime'
-import { readRemoteWorkspace, type RemoteWorkspaceProfile } from '@/lib/remoteWorkspace'
+import {
+  forgetRemoteWorkspaceMachine,
+  readRemoteWorkspace,
+  readRemoteWorkspaceHistory,
+  type RemoteWorkspaceMachine,
+  type RemoteWorkspaceProfile,
+} from '@/lib/remoteWorkspace'
 
 export type RemoteWorkspaceStatus = 'idle' | 'connecting' | 'connected' | 'error'
 
 type RemoteWorkspaceStore = {
   profile: RemoteWorkspaceProfile | null
+  history: RemoteWorkspaceMachine[]
   status: RemoteWorkspaceStatus
   error: string | null
   load: () => void
@@ -21,6 +28,8 @@ type RemoteWorkspaceStore = {
   connect: (url: string, sshHost: string, token?: string) => Promise<string>
   /** Forget the remote choice and return to the local server. */
   disconnect: () => void
+  /** Drop one remembered machine from the reconnect list. */
+  forgetMachine: (url: string) => void
 }
 
 /**
@@ -34,13 +43,14 @@ type RemoteWorkspaceStore = {
  */
 export const useRemoteWorkspaceStore = create<RemoteWorkspaceStore>((set, get) => ({
   profile: null,
+  history: [],
   status: 'idle',
   error: null,
 
   load: () => {
     const profile = readRemoteWorkspace()
     const active = !!profile?.enabled && profile.url === getBaseUrl()
-    set({ profile, status: active ? 'connected' : 'idle', error: null })
+    set({ profile, history: readRemoteWorkspaceHistory(), status: active ? 'connected' : 'idle', error: null })
   },
 
   verify: async (url) => {
@@ -63,7 +73,7 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceStore>((set, get) =
       // The renderer's session list, file browser and diffs were resolved
       // against the old server. Reload so startup re-resolves every one of them
       // against the remote, rather than leaving the app split across machines.
-      set({ profile: readRemoteWorkspace(), status: 'connected', error: null })
+      set({ profile: readRemoteWorkspace(), history: readRemoteWorkspaceHistory(), status: 'connected', error: null })
       reloadWindow()
       return connectedUrl
     } catch (error) {
@@ -76,6 +86,11 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceStore>((set, get) =
     disconnectRemoteWorkspace()
     set({ profile: null, status: 'idle', error: null })
     reloadWindow()
+  },
+
+  forgetMachine: (url) => {
+    forgetRemoteWorkspaceMachine(url)
+    set({ history: readRemoteWorkspaceHistory() })
   },
 }))
 
