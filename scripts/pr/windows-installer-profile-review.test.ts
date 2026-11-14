@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { profileOnlyBootstrapEnvironment, profileOnlyPowerShell51, claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
+import { f1Preparation, inspectF1ProposedSpec, profileOnlyBootstrapEnvironment, profileOnlyPowerShell51, claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
 
 const head = profileReview.admittedHead
 function context() {
@@ -584,5 +584,72 @@ describe('separate profile-only review', () => {
     const historical = readFileSync('.github/workflows/windows-installer-profile-review.yml', 'utf8')
     expect(historical).toContain("github.run_id == '43380589124'")
     expect(historical).toContain("github.event.pull_request.head.sha == '9578b040d3f41060fc9b1e0a16fab2233939287c'")
+  })
+})
+
+
+describe('separate F1 proposed runner bindings', () => {
+  const proposal = () => JSON.parse(readFileSync('scripts/pr/windows-installer-f1/controller-spec.proposed.json', 'utf8'))
+  const bound = () => {
+    const value = proposal()
+    Object.assign(value, { gitRoot: 'D:\\source\\cc-haha', sourceRoot: 'C:\\F1Inputs\\sources', controllerRoot: 'C:\\F1Controller\\new',
+      output: 'C:\\F1Controller\\new\\result.json', setupPath: 'C:\\F1Inputs\\old-setup.exe', expectedBinarySha256: 'a'.repeat(64),
+      sourcePins: ['windows-installer-profile-fixture.cs', 'windows-installer-profile-native.cs', 'windows-installer-profile-fixture-tests.cs']
+        .map(file => ({ file, sha256: reviewHash(canonicalReviewBytes(readFileSync(join('scripts/pr', file)))) })) })
+    const blob = (name: string) => ({ file: `C:\\F1Inputs\\${name}`, bytes: 1024, sha256: 'b'.repeat(64) })
+    Object.assign(value.f1, { candidateSourceHead: 'c'.repeat(40), stageASourceHead: 'd'.repeat(40), stageARunId: 1, stageAArtifactId: 2,
+      fixtureBytes: 300000, stageAArtifactSha256: 'e'.repeat(64), stageAReceipt: blob('stage-a.json'), oldMemberReceipt: blob('old-member.json'),
+      newPackage: { sourceHead: 'c'.repeat(40), displayVersion: '0.7.8', setup: { file: 'C:\\F1Inputs\\current-full-setup.exe', bytes: 200000000, sha256: 'f'.repeat(64) },
+        buildReceipt: blob('build.json'), memberReceipt: blob('member.json'), archiveLiteral: '$R0\\Uninstall Claude Code Haha.exe',
+        uninstallerBytes: 180000, uninstallerSha256: 'c'.repeat(64), guardedRemovalBytes: 40000, guardedRemovalSha256: '9'.repeat(64),
+        payloads: [{ kind: 'app-exe', relativePath: 'Claude Code Haha.exe', bytes: 1000, sha256: '1'.repeat(64) },
+          { kind: 'app-asar', relativePath: 'resources\\app.asar', bytes: 1000, sha256: '2'.repeat(64) },
+          { kind: 'sidecar', relativePath: 'resources\\sidecars\\claude-sidecar.exe', bytes: 1000, sha256: '3'.repeat(64) }] } })
+    return value
+  }
+  test('keeps draft inputs unadmitted and source/A/package gaps explicit', () => {
+    const result = inspectF1ProposedSpec(resolve('.'), proposal())
+    expect(result.status).toBe('not_proven')
+    expect(result.preparation).toBe('incomplete')
+    expect(result.missing).toContain('newPackage')
+    expect(result.missing).toContain('stageAReceipt')
+    expect(result.missing).toContain('sourcePins')
+    expect(result.command).toBeNull()
+    expect(result.claim).toBeNull()
+    expect(result.nativeExecutionAdmitted).toBe(false)
+  })
+  test('binds complete current source metadata without treating equal version or metadata as F1', () => {
+    const result = inspectF1ProposedSpec(resolve('.'), bound())
+    expect(result.preparation).toBe('metadata-bound-only')
+    expect(result.sourceBinding).toBe('canonical-reviewed-bytes-matched')
+    expect(result.fullF1).toBe('not_proven')
+    expect(result.nativeAuditAvailable).toBe(false)
+    expect(result.activationHead).toBeNull()
+    expect(result.command).toBeNull()
+  })
+  test.each(['old-role', 'profile-only', 'admission', 'activation', 'wrong-plan', 'wrong-source', 'wrong-package-source', 'tiny-package', 'old-package', 'old-uninstaller', 'component', 'traversal', 'input-boundary', 'archive-wildcard'])('rejects %s rather than inheriting another role or proof', fault => {
+    const value = bound()
+    if (fault === 'old-role') value.mode = 'historical-v078-controller'
+    if (fault === 'profile-only') { value.mode = 'createprofile-only-controller'; value.executionStage = 'profile-only' }
+    if (fault === 'admission') value.realExecutionAdmitted = true
+    if (fault === 'activation') value.f1.activationHead = 'a'.repeat(40)
+    if (fault === 'wrong-plan') value.frozenPlanManifestSha256 = profileReview.specSha256
+    if (fault === 'wrong-source') value.sourcePins[0].sha256 = '0'.repeat(64)
+    if (fault === 'wrong-package-source') value.f1.newPackage.sourceHead = 'e'.repeat(40)
+    if (fault === 'tiny-package') value.f1.newPackage.setup.bytes = 65536
+    if (fault === 'old-package') value.f1.newPackage.setup.sha256 = profileReview.setupSha256
+    if (fault === 'old-uninstaller') value.f1.newPackage.uninstallerSha256 = 'b0242b31b839cc8bf40ba4ac492004629bcf8ed28f8648d8c46b1797f7befb60'
+    if (fault === 'component') value.f1.newPackage.guardedRemovalSha256 = null
+    if (fault === 'traversal') value.f1.newPackage.payloads[0].relativePath = '..\\outside.exe'
+    if (fault === 'input-boundary') value.sourceRoot = value.controllerRoot
+    if (fault === 'archive-wildcard') value.f1.newPackage.archiveLiteral = '$R0\\*Uninstall*.exe'
+    expect(() => inspectF1ProposedSpec(resolve('.'), value)).toThrow()
+  })
+  test('pins the separate proposed plans and leaves historical B identifiers unchanged', () => {
+    expect(reviewHash(canonicalReviewBytes(readFileSync('scripts/pr/windows-installer-f1/plan.proposed.json')))).toBe(f1Preparation.planSha256)
+    expect(reviewHash(canonicalReviewBytes(readFileSync('scripts/pr/windows-installer-f1/argv-env-plan.proposed.json')))).toBe(f1Preparation.environmentSha256)
+    expect(profileReview.admittedHead).toBe('9578b040d3f41060fc9b1e0a16fab2233939287c')
+    expect(profileReview.consumedRunId).toBe(43380589124)
+    expect(f1Preparation.nativeAuditAvailable).toBe(false)
   })
 })

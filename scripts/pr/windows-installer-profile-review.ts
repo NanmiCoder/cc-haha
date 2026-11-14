@@ -252,7 +252,101 @@ export function collectProfileReviewEvidence(stageBase: string, destination: str
   return report
 }
 
+// Read-only F1 preparation. This is deliberately not a claim/activation mode.
+// A complete metadata packet still cannot launch the new native role: the
+// source's native audit adapter and a separate exact-head first-run grant are absent.
+export const f1Preparation = {
+  controllerMode: 'guarded-f1-controller', subjectMode: 'guarded-f1-subject', executionStage: 'F1',
+  planSha256: '2de900f8e84dd881a9654f202dfcb651f8e143f1a817a5c1cee3db62e4ea82ad',
+  environmentSha256: 'af4ce4ad3d0efb7b67b36b92149fde28a7723b79bd60e65eecc22c56402c67bd',
+  nativeAuditAvailable: false, activationHead: null,
+} as const
+
+export function inspectF1ProposedSpec(workspace: string, value: unknown) {
+  const spec = value as Record<string, any>
+  requireReview(spec && spec.version === 1 && spec.mode === f1Preparation.controllerMode && spec.executionStage === 'F1', 'Separate F1 proposed controller spec required')
+  requireReview(spec.realExecutionAdmitted === false && spec.runId === profileReview.runId && spec.owner === profileReview.owner && spec.generation === 1, 'F1 proposal cannot inherit an admission or another owner')
+  requireReview(spec.frozenPlanManifestSha256 === f1Preparation.planSha256 && spec.argvEnvPlanSha256 === f1Preparation.environmentSha256, 'F1 proposal plan binding changed')
+  const bindings = spec.f1
+  requireReview(bindings && bindings.version === 1 && bindings.status === 'proposed' && bindings.activationHead === null, 'F1 activation must remain null and proposed')
+  const missing: string[] = []
+  const hash = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)
+  const commit = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v)
+  const required = (name: string, v: unknown, valid: (value: any) => boolean) => {
+    if (v === null || v === undefined) missing.push(name)
+    else requireReview(valid(v), `Invalid proposed F1 ${name}`)
+  }
+  const absolute = (v: unknown) => typeof v === 'string' && /^[A-Za-z]:[\\/]/.test(v) && !/[\0\r\n"*?]/.test(v) && v.indexOf(':', 2) < 0 && !v.split(/[\\/]/).some(v => v === '.' || v === '..')
+  for (const name of ['gitRoot', 'sourceRoot', 'controllerRoot', 'output', 'setupPath']) required(name, spec[name], absolute)
+  if (spec.gitRoot && spec.sourceRoot && spec.controllerRoot && spec.output) {
+    const inside = (root: string, file: string) => win32.normalize(file).toLowerCase().startsWith(win32.normalize(root).replace(/[\\/]$/, '').toLowerCase() + '\\')
+    requireReview(!inside(spec.gitRoot, spec.controllerRoot) && win32.normalize(spec.gitRoot).toLowerCase() !== win32.normalize(spec.controllerRoot).toLowerCase()
+      && inside(spec.controllerRoot, spec.output) && !inside(spec.controllerRoot, spec.sourceRoot) && win32.normalize(spec.controllerRoot).toLowerCase() !== win32.normalize(spec.sourceRoot).toLowerCase(), 'F1 private source and controller boundaries changed')
+  }
+  required('candidateSourceHead', bindings.candidateSourceHead, commit)
+  required('stageASourceHead', bindings.stageASourceHead, commit)
+  required('stageARunId', bindings.stageARunId, v => Number.isSafeInteger(v) && v > 0)
+  required('stageAArtifactId', bindings.stageAArtifactId, v => Number.isSafeInteger(v) && v > 0)
+  required('stageAArtifactSha256', bindings.stageAArtifactSha256, hash)
+  required('fixtureBytes', bindings.fixtureBytes, v => Number.isSafeInteger(v) && v > 0)
+  required('expectedBinarySha256', spec.expectedBinarySha256, hash)
+  const blob = (name: string, pin: any) => {
+    if (pin === null || pin === undefined) { missing.push(name); return }
+    requireReview(typeof pin.file === 'string' && /^[A-Za-z]:[\\/]/.test(pin.file) && !/[\0\r\n"*?]/.test(pin.file)
+      && pin.file.indexOf(':', 2) < 0 && !pin.file.split(/[\\/]/).some((v: string) => v === '.' || v === '..')
+      && Number.isSafeInteger(pin.bytes) && pin.bytes > 0 && pin.bytes <= 4_294_967_296 && hash(pin.sha256), `Invalid proposed F1 ${name}`)
+  }
+  blob('stageAReceipt', bindings.stageAReceipt)
+  blob('oldMemberReceipt', bindings.oldMemberReceipt)
+  let sourceBinding = 'missing'
+  if (spec.sourcePins === null || spec.sourcePins === undefined) missing.push('sourcePins')
+  else {
+    const names = ['windows-installer-profile-fixture.cs', 'windows-installer-profile-native.cs', 'windows-installer-profile-fixture-tests.cs']
+    requireReview(Array.isArray(spec.sourcePins) && spec.sourcePins.length === names.length
+      && new Set(spec.sourcePins.map((pin: any) => pin?.file)).size === names.length, 'F1 exact three reviewed sources required')
+    for (const pin of spec.sourcePins) {
+      requireReview(names.includes(pin?.file) && hash(pin.sha256), 'Invalid F1 source pin')
+      requireReview(reviewHash(canonicalReviewBytes(ordinaryFile(join(workspace, 'scripts/pr', pin.file), 1048576))) === pin.sha256, 'F1 proposed source bytes changed')
+    }
+    sourceBinding = 'canonical-reviewed-bytes-matched'
+  }
+  const pkg = bindings.newPackage
+  if (pkg === null || pkg === undefined) missing.push('newPackage')
+  else {
+    required('newPackage.sourceHead', pkg.sourceHead, commit)
+    if (pkg.sourceHead && bindings.candidateSourceHead) requireReview(pkg.sourceHead === bindings.candidateSourceHead, 'F1 full package is from another candidate source')
+    requireReview(typeof pkg.displayVersion === 'string' && pkg.displayVersion.length > 0 && pkg.displayVersion.length <= 32, 'F1 package version metadata required')
+    blob('newPackage.setup', pkg.setup); blob('newPackage.buildReceipt', pkg.buildReceipt); blob('newPackage.memberReceipt', pkg.memberReceipt)
+    if (pkg.setup) requireReview(pkg.setup.bytes >= 104_857_600 && pkg.setup.sha256 !== profileReview.setupSha256, 'F1 requires the actual full current package, not old or tiny setup')
+    requireReview(Number.isSafeInteger(pkg.uninstallerBytes) && pkg.uninstallerBytes > 0 && hash(pkg.uninstallerSha256)
+      && pkg.uninstallerSha256 !== 'b0242b31b839cc8bf40ba4ac492004629bcf8ed28f8648d8c46b1797f7befb60'
+      && Number.isSafeInteger(pkg.guardedRemovalBytes) && pkg.guardedRemovalBytes > 0 && hash(pkg.guardedRemovalSha256), 'F1 current uninstaller and packaged component pins required')
+    requireReview(typeof pkg.archiveLiteral === 'string' && pkg.archiveLiteral.length < 256 && !/[:*?\0\r\n]/.test(pkg.archiveLiteral)
+      && !/^[\\/]/.test(pkg.archiveLiteral) && !pkg.archiveLiteral.split(/[\\/]/).some((v: string) => !v || v === '.' || v === '..'), 'F1 exact current archive literal required')
+    requireReview(Array.isArray(pkg.payloads) && pkg.payloads.length >= 3 && pkg.payloads.length <= 20000
+      && new Set(pkg.payloads.map((pin: any) => pin?.relativePath?.toLowerCase())).size === pkg.payloads.length, 'F1 current payload manifest required')
+    for (const pin of pkg.payloads) requireReview(pin && ['app-exe', 'app-asar', 'sidecar', 'payload'].includes(pin.kind)
+      && typeof pin.relativePath === 'string' && pin.relativePath.length < 512 && !/^[\\/]|[:*?\0\r\n]/.test(pin.relativePath)
+      && !pin.relativePath.split(/[\\/]/).some((v: string) => !v || v === '.' || v === '..')
+      && Number.isSafeInteger(pin.bytes) && pin.bytes > 0 && hash(pin.sha256), 'Invalid F1 relative payload pin')
+    requireReview(pkg.payloads.filter((pin: any) => pin.kind === 'app-asar' && pin.relativePath === 'resources\\app.asar').length === 1
+      && pkg.payloads.filter((pin: any) => pin.kind === 'app-exe' && pin.relativePath === 'Claude Code Haha.exe').length === 1
+      && pkg.payloads.some((pin: any) => pin.kind === 'sidecar'), 'F1 exact app, asar and sidecar identities required')
+  }
+  return { version: 1, status: 'not_proven', preparation: missing.length ? 'incomplete' : 'metadata-bound-only', sourceBinding,
+    missing, nativeAuditAvailable: false, nativeExecutionAdmitted: false, activationHead: null, claim: null, command: null,
+    fullF1: 'not_proven', compatibilityEnabled: false, oldExit22Policy: 'fatal' } as const
+}
+
 async function main() {
+  if (process.argv[2] === '--f1-proposed-check') {
+    requireReview(process.argv.length === 4, 'F1 proposed check accepts only its JSON file; no execution arguments')
+    const value = JSON.parse(ordinaryFile(process.argv[3], 4194304).toString('utf8'))
+    console.log(JSON.stringify(inspectF1ProposedSpec(process.cwd(), value)))
+    process.exitCode = 2 // Valid proposal is still not native evidence or admission.
+    return
+  }
+  requireReview(!process.argv[2]?.startsWith('--f1-'), 'F1 claim and execution modes are not admitted')
   if (process.argv[2] === '--profile-only-bootstrap-preflight') return profileOnlyBootstrapPreflight()
   if (process.argv[2]?.startsWith('--profile-only-')) return profileOnlyMain()
   requireReview(process.argv.length === 3 && ['--claim', '--prepare', '--collect'].includes(process.argv[2]), 'Explicit claim/prepare/collect mode required; no native execution mode exists')

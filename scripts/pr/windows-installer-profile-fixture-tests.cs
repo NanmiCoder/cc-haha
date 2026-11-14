@@ -306,8 +306,340 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private static FixtureSpec F1PreparedSpec()
+    {
+      Func<string, F1BlobPin> blob = name => new F1BlobPin { file = @"C:\FixtureInputs\" + name, bytes = 1024, sha256 = new String('b', 64) };
+      FixtureSpec spec = new FixtureSpec {
+        version = 1, mode = F1Policy.ControllerMode, executionStage = "F1", realExecutionAdmitted = false,
+        runId = "52f4ce19-5ded-4b27-8268-a2840809e0ca", owner = "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c", generation = 1,
+        gitRoot = @"D:\source\cc-haha", sourceRoot = @"C:\FixtureInputs\sources", controllerRoot = @"C:\FixtureController\f1-new",
+        setupPath = @"C:\FixtureInputs\old-setup.exe", output = @"C:\FixtureController\f1-new\result.json",
+        nonce = new String('a', 32), expectedBinarySha256 = new String('a', 64), frozenPlanManifestSha256 = F1Policy.PlanHash,
+        argvEnvPlanSha256 = F1Policy.EnvironmentHash,
+        sourcePins = CorePolicy.SourceNames.Select(name => new SourcePin { file = name, sha256 = new String('a', 64) }).ToList(),
+        f1 = new F1InputBindings { version = 1, status = "proposed", activationHead = null,
+          candidateSourceHead = new String('c', 40), stageASourceHead = new String('d', 40), stageARunId = 1, stageAArtifactId = 2,
+          fixtureBytes = 1000, stageAArtifactSha256 = new String('e', 64), stageAReceipt = blob("stage-a.json"), oldMemberReceipt = blob("old-member.json"),
+          newPackage = new F1PackagePin { sourceHead = new String('c', 40), displayVersion = "0.7.8",
+            setup = new F1BlobPin { file = @"C:\FixtureInputs\new-full-setup.exe", bytes = 200000000, sha256 = new String('f', 64) },
+            buildReceipt = blob("new-build.json"), memberReceipt = blob("new-member.json"), archiveLiteral = "$R0\\Uninstall Claude Code Haha.exe",
+            uninstallerBytes = 180000, uninstallerSha256 = new String('c', 64), guardedRemovalBytes = 40000, guardedRemovalSha256 = new String('9', 64),
+            payloads = new List<F1PayloadPin> {
+              new F1PayloadPin { kind = "app-exe", relativePath = "Claude Code Haha.exe", bytes = 1000, sha256 = new String('1', 64) },
+              new F1PayloadPin { kind = "app-asar", relativePath = @"resources\app.asar", bytes = 1000, sha256 = new String('2', 64) },
+              new F1PayloadPin { kind = "sidecar", relativePath = @"resources\sidecars\claude-sidecar.exe", bytes = 1000, sha256 = new String('3', 64) }
+            } }
+        }
+      }; return spec;
+    }
+
+    private static F1AuditEvidence F1ReplayAudit(FixtureSpec spec, string phase)
+    {
+      F1AuditEvidence a = new F1AuditEvidence { status = "replay-complete", phase = phase, nonce = spec.nonce,
+        specSha256 = new String('b', 64), rootPid = 17, rootCreationTime = "123456789", fileWriteRestoreCalibrated = true,
+        registrySetRestoreCalibrated = true, calibrationFinalStateEqual = true, mapsComplete = true, rootsAndRegistryParentsComplete = true,
+        stagingIdentityCoverage = true, allPeJobsNaturallyExited = true, closed = true, armedSequence = 1, ackSequence = 10, endSequence = 40,
+        oldUninstallerExitCode = 22, oldUninstallerExit22Sequence = 12, trustedRemovalStartSequence = 15, oldUninstallerSha256 = CorePolicy.UninstallerHash,
+        trustedRemovalSha256 = spec.f1.newPackage.guardedRemovalSha256 };
+      if (phase == "guarded-new-upgrade")
+      {
+        a.oldPayloadObjects.AddRange(new string[] { new String('1', 64), new String('2', 64) });
+        a.oldRegistryObjects.AddRange(new string[] { new String('3', 64), new String('4', 64) });
+        long sequence = 20;
+        foreach (string id in a.oldPayloadObjects) a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = sequence++, kind = "delete", scope = "old-payload", objectId = id });
+        foreach (string id in a.oldRegistryObjects) a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = sequence++, kind = "delete", scope = "old-registry", objectId = id });
+        a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = sequence++, kind = "create", scope = "new-payload", objectId = new String('5', 64) });
+        a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = sequence++, kind = "create", scope = "new-registry", objectId = new String('6', 64) });
+      }
+      return a;
+    }
+
+    private sealed class F1ReplayLease : F1AuditLease
+    {
+      private readonly F1AuditEvidence arming, completed;
+      internal int disposeCount, ackCount, queryCount;
+      internal bool throwDispose, throwClosureQuery, closeBeforeThrow;
+      private bool closed;
+      internal F1ReplayLease(FixtureSpec spec, string phase)
+      {
+        completed = F1ReplayAudit(spec, phase); arming = F1ReplayAudit(spec, phase); arming.status = "armed"; arming.ackSequence = 0;
+      }
+      public override F1AuditEvidence Arming { get { return arming; } }
+      public override bool AllResourcesKnownClosed { get { queryCount++; if (throwClosureQuery) throw new FixtureFailure("f1-replay-closure-query-unknown"); return closed; } }
+      public override void BeforeAck() { ackCount++; }
+      public override F1AuditEvidence Complete() { return completed; }
+      public override void Dispose() { disposeCount++; if (closeBeforeThrow) closed = true; if (throwDispose) throw new FixtureFailure("f1-replay-dispose-unknown"); closed = true; }
+    }
+
+    private static ProtocolMessage F1Start(string phase)
+    {
+      return new ProtocolMessage { phase = phase, pid = 17, creationTime = "123456789" };
+    }
+    private static ProtocolMessage F1End(string phase)
+    {
+      return new ProtocolMessage { phase = phase, evidence = new PhaseEvidence { phase = phase, payloadRemoved = true,
+        registrationRemoved = true, keptDataUnchanged = true, oldStateEquivalent = true, newPackageInstalled = true,
+        legacyOnlyCanaryRemoved = true, helperAlive = true, shortcutTargetsUnchanged = true } };
+    }
+
+    private static void RunF1PureTests(FixtureReport report)
+    {
+      Case(report, "f1-proposed-inputs-bind-full-current-package-without-version-bump-or-activation", delegate {
+        FixtureSpec spec = F1PreparedSpec(); F1Policy.ValidatePrepared(spec, false);
+        Assert(spec.f1.newPackage.displayVersion == "0.7.8" && spec.f1.activationHead == null && !spec.realExecutionAdmitted, "same version is allowed but never an admission");
+        Reject(delegate { F1Policy.RequireNativeAdmission(spec, true); }, "proposed data is not a native grant");
+        spec.realExecutionAdmitted = true; spec.f1.status = "admitted"; spec.f1.activationHead = new String('a', 40);
+        Reject(delegate { F1Policy.RequireNativeAdmission(spec, false); }, "missing native audit stops before SID budget");
+      });
+      foreach (string fault in new string[] { "old-mode", "profile-only", "plan", "activation", "head", "stage-a", "tiny-setup", "old-setup", "old-uninstaller", "missing-helper", "payload-traversal", "missing-asar", "missing-sidecar" })
+        Case(report, "f1-rejects-unbound-input-" + fault, delegate {
+          FixtureSpec s = F1PreparedSpec();
+          if (fault == "old-mode") s.mode = "historical-v078-controller";
+          if (fault == "profile-only") { s.mode = "createprofile-only-controller"; s.executionStage = "profile-only"; }
+          if (fault == "plan") s.frozenPlanManifestSha256 = CorePolicy.PlanHash;
+          if (fault == "activation") s.f1.activationHead = new String('a', 40);
+          if (fault == "head") s.f1.newPackage.sourceHead = new String('e', 40);
+          if (fault == "stage-a") s.f1.stageAArtifactId = 0;
+          if (fault == "tiny-setup") s.f1.newPackage.setup.bytes = 65536;
+          if (fault == "old-setup") s.f1.newPackage.setup.sha256 = CorePolicy.SetupHash;
+          if (fault == "old-uninstaller") s.f1.newPackage.uninstallerSha256 = CorePolicy.UninstallerHash;
+          if (fault == "missing-helper") s.f1.newPackage.guardedRemovalSha256 = null;
+          if (fault == "payload-traversal") s.f1.newPackage.payloads[0].relativePath = @"..\outside.exe";
+          if (fault == "missing-asar") s.f1.newPackage.payloads[1].kind = "payload";
+          if (fault == "missing-sidecar") s.f1.newPackage.payloads[2].kind = "payload";
+          Reject(delegate { F1Policy.ValidatePrepared(s, false); }, "every bound input is independent: " + fault);
+        });
+      Case(report, "f1-subject-accepts-only-new-owned-readonly-input-copies", delegate {
+        FixtureSpec s = F1PreparedSpec(); KnownPaths paths = Paths(); string input = Path.Combine(s.controllerRoot, "subject-input");
+        s.mode = F1Policy.SubjectMode; s.profilePath = paths.profile; s.knownPaths = paths;
+        s.expectedSid = "S-1-5-21-1-2-3-4001"; s.expectedControllerSid = "S-1-5-21-1-2-3-1000"; s.expectedControllerPid = 101; s.expectedControllerCreationTime = "1";
+        s.fixtureRoot = Path.Combine(paths.local, "CcHaha1879Fixture", s.nonce); s.tempRoot = Path.Combine(s.fixtureRoot, "temp");
+        s.installRoot = Path.Combine(paths.userPrograms, "Claude Code Haha"); s.uninstallerCopy = Path.Combine(s.fixtureRoot, "old-uninstaller.exe");
+        s.output = Path.Combine(s.fixtureRoot, "subject-result.json"); s.subjectSpecPath = Path.Combine(input, "subject.json");
+        s.sourceRoot = Path.Combine(input, "sources"); s.setupPath = Path.Combine(input, "old-setup.exe");
+        s.f1.stageAReceipt.file = Path.Combine(input, "f1-stage-a-receipt.json"); s.f1.oldMemberReceipt.file = Path.Combine(input, "f1-old-member-proof.json");
+        s.f1.newPackage.buildReceipt.file = Path.Combine(input, "f1-build-receipt.json"); s.f1.newPackage.memberReceipt.file = Path.Combine(input, "f1-new-member-proof.json");
+        s.f1.newPackage.setup.file = Path.Combine(input, "f1-new-full-setup.exe"); s.pipeName = "CcHaha1879-" + s.nonce;
+        s.hiveKey = @"Software\CcHaha1879Fixture\" + s.nonce; s.hiveNonce = new String('b', 32); s.desktopName = "CcHaha1879-f1\\fixture";
+        F1Policy.ValidatePrepared(s, true); s.f1.newPackage.setup.file = @"C:\outside\new-setup.exe";
+        Reject(delegate { F1Policy.ValidatePrepared(s, true); }, "a subject cannot substitute an input path after readonly copy");
+      });
+      Case(report, "f1-bound-metadata-survives-only-readonly-input-relocation", delegate {
+        FixtureSpec spec = F1PreparedSpec(); string hash = F1Policy.BindingHash(spec);
+        spec.sourceRoot = @"C:\FixtureController\f1-new\subject-input\sources";
+        spec.setupPath = @"C:\FixtureController\f1-new\subject-input\old-setup.exe";
+        spec.f1.newPackage.setup.file = @"C:\FixtureController\f1-new\subject-input\new-setup.exe";
+        Assert(F1Policy.BindingHash(spec) == hash, "Native may copy exactly pinned bytes without altering reviewed metadata");
+        spec.f1.newPackage.setup.sha256 = new String('8', 64);
+        Assert(F1Policy.BindingHash(spec) != hash, "relocation cannot silently substitute package bytes");
+        spec = F1PreparedSpec(); spec.f1.version = 2;
+        Assert(F1Policy.BindingHash(spec) != hash, "schema versions are bound too");
+      });
+      Case(report, "f1-transient-write-restore-is-rejected-even-with-equal-snapshots", delegate {
+        F1AuditEvidence a = F1ReplayAudit(F1PreparedSpec(), "old22-negative");
+        a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 20, kind = "write", scope = "kept-data", objectId = new String('1', 64) });
+        a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 21, kind = "write", scope = "kept-data", objectId = new String('1', 64) });
+        Assert(a.calibrationFinalStateEqual, "positive calibration restores final bytes");
+        Reject(delegate { F1Policy.RequireCompleteAudit(a, "old22-negative", false); }, "final equality cannot hide any protected write");
+      });
+      foreach (string fault in new string[] { "file-calibration", "registry-calibration", "maps", "parents", "gap", "events-lost", "buffers-lost", "job-alive", "not-closed", "ack-order", "unknown-kind", "unknown-scope", "native-claim" })
+        Case(report, "f1-audit-fails-closed-" + fault, delegate {
+          F1AuditEvidence a = F1ReplayAudit(F1PreparedSpec(), "old22-negative");
+          if (fault == "file-calibration") a.fileWriteRestoreCalibrated = false;
+          if (fault == "registry-calibration") a.registrySetRestoreCalibrated = false;
+          if (fault == "maps") a.mapsComplete = false;
+          if (fault == "parents") a.rootsAndRegistryParentsComplete = false;
+          if (fault == "gap") a.gap = true;
+          if (fault == "events-lost") a.eventsLost = 1;
+          if (fault == "buffers-lost") a.buffersLost = 1;
+          if (fault == "job-alive") a.allPeJobsNaturallyExited = false;
+          if (fault == "not-closed") a.closed = false;
+          if (fault == "ack-order") a.ackSequence = a.armedSequence;
+          if (fault == "unknown-kind" || fault == "unknown-scope") a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 20, kind = fault == "unknown-kind" ? "unknown" : "read", scope = fault == "unknown-scope" ? "unknown" : "old-payload", objectId = new String('1', 64) });
+          Reject(delegate { F1Policy.RequireCompleteAudit(a, "old22-negative", fault == "native-claim"); }, "unknown streams never become native proof: " + fault);
+        });
+      Case(report, "f1-upgrade-replay-requires-old-payload-and-registry-deletion-before-new-creation", delegate {
+        F1Policy.RequireCompleteAudit(F1ReplayAudit(F1PreparedSpec(), "guarded-new-upgrade"), "guarded-new-upgrade", false);
+      });
+      foreach (string fault in new string[] { "registry-overwrite-only", "payload-overwrite-only", "rename-only", "new-before-delete", "kept-write", "shortcut-during-removal", "old22-missing", "wrong-old-exit", "wrong-old-pe", "component-before-old22", "staging-gap", "failed-delete", "pending-delete", "unknown-result" })
+        Case(report, "f1-upgrade-order-rejects-" + fault, delegate {
+          F1AuditEvidence a = F1ReplayAudit(F1PreparedSpec(), "guarded-new-upgrade");
+          if (fault == "registry-overwrite-only") a.operations.RemoveAll(op => op.scope == "old-registry");
+          if (fault == "payload-overwrite-only") a.operations.RemoveAll(op => op.scope == "old-payload");
+          if (fault == "rename-only") foreach (F1AuditOperation op in a.operations.Where(op => op.scope == "old-payload")) op.kind = "rename";
+          if (fault == "new-before-delete") { a.operations[0].scope = "new-payload"; a.operations[0].kind = "create"; }
+          if (fault == "kept-write" || fault == "shortcut-during-removal") a.operations.Insert(0, new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 19, kind = "write", scope = fault == "kept-write" ? "kept-data" : "shortcut", objectId = new String('8', 64) });
+          if (fault == "old22-missing") a.oldUninstallerExit22Sequence = 0;
+          if (fault == "wrong-old-exit") a.oldUninstallerExitCode = 0;
+          if (fault == "wrong-old-pe") a.oldUninstallerSha256 = new String('8', 64);
+          if (fault == "component-before-old22") a.trustedRemovalStartSequence = 11;
+          if (fault == "staging-gap") a.stagingIdentityCoverage = false;
+          if (fault == "failed-delete") a.operations[0].succeeded = false;
+          if (fault == "pending-delete") a.operations[0].objectRetired = false;
+          if (fault == "unknown-result") a.operations[0].resultKnown = false;
+          Reject(delegate { F1Policy.RequireCompleteAudit(a, "guarded-new-upgrade", false); }, "post-state cannot prove a missing removal: " + fault);
+        });
+      Case(report, "f1-ordered-phase-replay-arms-before-ack-and-keeps-native-report-unpromoted", delegate {
+        FixtureSpec spec = F1PreparedSpec(); List<F1ReplayLease> audits = new List<F1ReplayLease>();
+        using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+        {
+          foreach (string phase in F1Policy.Phases)
+          {
+            F1ReplayLease audit = F1Policy.Audited(phase) ? new F1ReplayLease(spec, phase) : null;
+            if (audit != null) audits.Add(audit);
+            state.Prepare(F1Start(phase), audit); state.BeforeAck(); state.Complete(F1End(phase));
+          }
+          state.RequireFinished();
+        }
+        Assert(audits.Count == 2 && audits.All(a => a.ackCount == 1 && a.disposeCount == 1 && a.AllResourcesKnownClosed), "two isolated audit leases close once");
+        Assert(report.member_proven == "not_run" && report.old22_before_protected_mutation == "not_run" && report.full_old_to_new == "not_run", "pure replay cannot promote native F1");
+      });
+      Case(report, "f1-unknown-arming-and-wrong-phase-close-without-ack", delegate {
+        FixtureSpec spec = F1PreparedSpec(); F1ReplayLease lease = new F1ReplayLease(spec, "old22-negative");
+        using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+          Reject(delegate { state.Prepare(F1Start("old22-negative"), lease); }, "cannot skip earlier verified phases");
+        Assert(lease.disposeCount == 1 && lease.ackCount == 0 && lease.AllResourcesKnownClosed, "rejected lease is closed before any ACK");
+      });
+      Case(report, "f1-audit-close-failure-preserves-first-proof-failure-and-unknown-resources", delegate {
+        FixtureSpec spec = F1PreparedSpec(); F1ReplayLease lease = new F1ReplayLease(spec, "old22-negative");
+        lease.throwDispose = true; F1AuditEvidence a = lease.Complete();
+        a.operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 20, kind = "write", scope = "old-registry", objectId = new String('1', 64) });
+        using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+        {
+          foreach (string phase in F1Policy.Phases.TakeWhile(phase => phase != "old22-negative")) { state.Prepare(F1Start(phase), null); state.BeforeAck(); state.Complete(F1End(phase)); }
+          state.Prepare(F1Start("old22-negative"), lease); state.BeforeAck();
+          string first = null; try { state.Complete(F1End("old22-negative")); } catch (FixtureFailure failure) { first = failure.Message; }
+          Assert(first == "f1-old22-no-protected-mutation-observed" && !lease.AllResourcesKnownClosed && lease.disposeCount == 1,
+            "proof failure remains primary, uncertain audit closure cannot be called cleaned");
+        }
+      });
+      Case(report, "f1-no-completion-before-ack-or-duplicate-ack", delegate {
+        FixtureSpec spec = F1PreparedSpec();
+        using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+        {
+          state.Prepare(F1Start(F1Policy.Phases[0]), null);
+          Reject(delegate { state.Complete(F1End(F1Policy.Phases[0])); }, "suspended child cannot finish before ACK");
+          state.BeforeAck(); Reject(delegate { state.BeforeAck(); }, "one ACK attempt only");
+          state.Complete(F1End(F1Policy.Phases[0])); Reject(delegate { state.RequireFinished(); }, "partial phase history is not F1");
+        }
+      });
+    }
+
+    private static ProtectedSnapshot F1RebuildSnapshot(string payloadIdentity)
+    {
+      ProtectedSnapshot snapshot = new ProtectedSnapshot();
+      snapshot.values["payload/@directory"] = payloadIdentity + "-directory";
+      snapshot.values["payload/app.bin"] = payloadIdentity + "-file:4:" + new String('a', 64);
+      snapshot.rebuildPayloadEntries["payload/@directory"] = new RebuiltPayloadEntry { kind = "directory" };
+      snapshot.rebuildPayloadEntries["payload/app.bin"] = new RebuiltPayloadEntry { kind = "file", bytes = 4, sha256 = new String('a', 64) };
+      snapshot.values["registry/Registry32/product/@key"] = "present";
+      snapshot.values["registry/Registry32/product/Version"] = "String:0.7.8";
+      snapshot.values["registry/Registry64/product/@key"] = "present";
+      snapshot.values["registry/Registry64/product/Flag"] = "DWord:1";
+      snapshot.values["claude/@directory"] = "kept-directory";
+      snapshot.values["claude/settings.json"] = "kept-file:4:" + new String('b', 64);
+      snapshot.values["updater/@directory"] = "kept-updater";
+      snapshot.values["desktop/CcHaha1879-canary.txt"] = "kept-canary:4:" + new String('c', 64);
+      snapshot.values["claude/Claude Code Haha.lnk"] = "kept-user-link:4:" + new String('d', 64);
+      foreach (string location in new string[] { "desktop", "programs" })
+      {
+        string shortcut = location + "/Claude Code Haha.lnk";
+        snapshot.values[shortcut] = payloadIdentity + "-rewritten-link:100:" + new String(payloadIdentity == "old" ? 'e' : 'f', 64);
+        snapshot.verifiedProductShortcutTargets[shortcut] = @"C:\OwnedInstall\Claude Code Haha.exe";
+      }
+      return snapshot;
+    }
+
+    private static void RunF1RebuildTests(FixtureReport report)
+    {
+      Case(report, "f1-rebuild-accepts-new-payload-identities-and-rewritten-product-links-only", delegate {
+        ProtectedSnapshot original = F1RebuildSnapshot("old"), rebuilt = F1RebuildSnapshot("new");
+        Assert(!original.Same(rebuilt), "negative Same retains original payload and shortcut identities/bytes");
+        Assert(original.SameRebuiltInstallation(rebuilt, @"C:\OwnedInstall\Claude Code Haha.exe"), "rebuild compares actual inventory/content and verified product targets");
+      });
+      foreach (string fault in new string[] { "missing", "extra", "type", "bytes", "hash", "unknown", "unmapped-payload", "kept-id", "kept-bytes",
+        "canary", "updater", "user-link", "registry-kind", "registry-data", "registry-missing", "registry-extra", "shortcut-target", "shortcut-unverified", "shortcut-missing" })
+        Case(report, "f1-rebuild-rejects-" + fault, delegate {
+          ProtectedSnapshot original = F1RebuildSnapshot("old"), rebuilt = F1RebuildSnapshot("new");
+          if (fault == "missing") { rebuilt.values.Remove("payload/app.bin"); rebuilt.rebuildPayloadEntries.Remove("payload/app.bin"); }
+          if (fault == "extra") { rebuilt.values["payload/extra.bin"] = "new-extra:4:" + new String('a', 64); rebuilt.rebuildPayloadEntries["payload/extra.bin"] = new RebuiltPayloadEntry { kind = "file", bytes = 4, sha256 = new String('a', 64) }; }
+          if (fault == "type") rebuilt.rebuildPayloadEntries["payload/app.bin"] = new RebuiltPayloadEntry { kind = "directory" };
+          if (fault == "bytes") rebuilt.rebuildPayloadEntries["payload/app.bin"].bytes++;
+          if (fault == "hash") rebuilt.rebuildPayloadEntries["payload/app.bin"].sha256 = new String('b', 64);
+          if (fault == "unknown") rebuilt.rebuildPayloadEntries["payload/app.bin"].kind = "unknown";
+          if (fault == "unmapped-payload") { original.rebuildPayloadEntries.Remove("payload/app.bin"); rebuilt.rebuildPayloadEntries.Remove("payload/app.bin"); }
+          if (fault == "kept-id") rebuilt.values["claude/@directory"] += "-new";
+          if (fault == "kept-bytes") rebuilt.values["claude/settings.json"] += "-changed";
+          if (fault == "canary") rebuilt.values["desktop/CcHaha1879-canary.txt"] += "-changed";
+          if (fault == "updater") rebuilt.values["updater/@directory"] += "-changed";
+          if (fault == "user-link") rebuilt.values["claude/Claude Code Haha.lnk"] += "-changed";
+          if (fault == "registry-kind") rebuilt.values["registry/Registry64/product/Flag"] = "String:1";
+          if (fault == "registry-data") rebuilt.values["registry/Registry64/product/Flag"] = "DWord:2";
+          if (fault == "registry-missing") rebuilt.values.Remove("registry/Registry64/product/@key");
+          if (fault == "registry-extra") rebuilt.values["registry/Registry32/product/Unexpected"] = "String:extra";
+          if (fault == "shortcut-target") rebuilt.verifiedProductShortcutTargets["desktop/Claude Code Haha.lnk"] = @"C:\Other\Claude Code Haha.exe";
+          if (fault == "shortcut-unverified") rebuilt.verifiedProductShortcutTargets.Remove("desktop/Claude Code Haha.lnk");
+          if (fault == "shortcut-missing") rebuilt.values["desktop/Claude Code Haha.lnk"] = "absent";
+          Assert(!original.SameRebuiltInstallation(rebuilt, @"C:\OwnedInstall\Claude Code Haha.exe"), "rebuild must not broaden retained or logical facts: " + fault);
+        });
+    }
+
+    private static void RunF1ClosureTests(FixtureReport report)
+    {
+      foreach (bool disposeThrows in new bool[] { false, true })
+        Case(report, "f1-proof-remains-first-with-throwing-closure-query-dispose-" + disposeThrows, delegate {
+          FixtureSpec spec = F1PreparedSpec();
+          F1ReplayLease lease = new F1ReplayLease(spec, "old22-negative") { throwDispose = disposeThrows, throwClosureQuery = true };
+          lease.Complete().operations.Add(new F1AuditOperation { resultKnown = true, succeeded = true, objectRetired = true, sequence = 20, kind = "write", scope = "old-registry", objectId = new String('1', 64) });
+          using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+          {
+            foreach (string phase in F1Policy.Phases.TakeWhile(phase => phase != "old22-negative")) { state.Prepare(F1Start(phase), null); state.BeforeAck(); state.Complete(F1End(phase)); }
+            state.Prepare(F1Start("old22-negative"), lease); state.BeforeAck();
+            string first = null; try { state.Complete(F1End("old22-negative")); } catch (FixtureFailure error) { first = error.Message; }
+            Assert(first == "f1-old22-no-protected-mutation-observed" && lease.disposeCount == 1 && lease.ClosureFailed, "closure/dispose must preserve first proof failure and unknown state without disposal retry");
+          }
+        });
+      Case(report, "f1-dispose-failure-latches-unknown-even-if-a-later-query-says-closed", delegate {
+        FixtureSpec spec = F1PreparedSpec(); F1ReplayLease lease = new F1ReplayLease(spec, "old22-negative") { throwDispose = true, closeBeforeThrow = true };
+        using (F1PhaseState state = new F1PhaseState(spec, new String('b', 64), false))
+        {
+          foreach (string phase in F1Policy.Phases.TakeWhile(phase => phase != "old22-negative")) { state.Prepare(F1Start(phase), null); state.BeforeAck(); state.Complete(F1End(phase)); }
+          state.Prepare(F1Start("old22-negative"), lease); state.BeforeAck();
+          Reject(delegate { state.Complete(F1End("old22-negative")); }, "a failed resource close is a phase failure");
+          Assert(lease.AllResourcesKnownClosed && lease.ClosureFailed && lease.disposeCount == 1, "a later getter cannot clear the original closure exception");
+        }
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunF1RebuildTests(report);
+      RunF1ClosureTests(report);
+      RunF1PureTests(report);
+      RunF1NativeSliceTests(report);
+      RunF1SafetyFixTests(report);
+      Case(report, "fake-f1-unavailable-audit-denies-before-account-and-profile", delegate {
+        FakePlatform api = new FakePlatform(); FixtureState state = Execute(api, F1PreparedSpec());
+        Assert(state.report.status == "failed" && !api.Calls.Contains("CreateDisabledAccount") && !api.Calls.Contains("CreateFreshProfile")
+          && !api.Calls.Contains("Logon") && !api.Calls.Contains("LoadProfile"), "proposed F1 consumes no SID or profile budget");
+        AssertNoNativePromotion(state);
+      });
+      Case(report, "fake-f1-unknown-audit-resource-retains-profile-disabled-without-unload-or-delete", delegate {
+        FakePlatform api = new FakePlatform { Fault = "f1-audit-cleanup-unknown" }; FixtureState state = Execute(api, Spec());
+        Assert(state.report.status == "failed" && state.accountDisabled && !api.Calls.Contains("UnloadProfile")
+          && !api.Calls.Contains("DeleteOwnedProfile") && !api.Calls.Contains("DeleteOwnedAccount"), "unknown audit resources permit disable-only cleanup");
+        AssertNoNativePromotion(state);
+      });
+      foreach (string fault in new string[] { "f1-audit-closure-query-throw", "f1-audit-dispose-and-query-throw" })
+        Case(report, "fake-" + fault + "-still-disables-and-retains", delegate {
+          FakePlatform api = new FakePlatform { Fault = fault }; FixtureState state = Execute(api, Spec());
+          Assert(state.report.status == "failed" && state.accountDisabled && state.f1AuditResourceUncertain
+            && api.Calls.Contains("StopOwnedJobs") && api.Calls.Contains("CloseRuntimeResources") && api.Calls.Contains("DisableAccount")
+            && !api.Calls.Contains("UnloadProfile") && !api.Calls.Contains("DeleteOwnedProfile") && !api.Calls.Contains("DeleteOwnedAccount"), "getter/dispose exception cannot bypass disable-only cleanup");
+          Assert(state.report.checks.First(check => check.status == "failed").detail == "subject-complete", "first subject/proof failure remains first");
+          Assert(((F1ReplayLease)state.f1AuditLeases.Single()).disposeCount == 1, "finally does not repeat a failed Dispose");
+          AssertNoNativePromotion(state);
+        });
       RunProfileBoundaryTests(report);
       RunProfileLeasePolicyTests(report);
       Case(report, "fake-abi-system-context-preserves-parent-presence-and-redacts-observations", delegate {
@@ -1049,8 +1381,17 @@ namespace CcHahaInstallerProfile
           });
         }
         Assert(Acknowledged, "subject cannot send product completion before ACK");
+        if (api.Fault == "f1-audit-cleanup-unknown") { state.f1AuditResourceUncertain = true; state.f1AuditArmOutcomeUnknown = true; }
+        bool auditClosureFault = api.Fault == "f1-audit-closure-query-throw" || api.Fault == "f1-audit-dispose-and-query-throw";
+        if (auditClosureFault)
+        {
+          state.f1AuditResourceUncertain = true;
+          F1ReplayLease lease = new F1ReplayLease(F1PreparedSpec(), "old22-negative") { throwClosureQuery = true, throwDispose = api.Fault == "f1-audit-dispose-and-query-throw" };
+          state.f1AuditLeases.Add(lease);
+          try { lease.Dispose(); } catch (FixtureFailure) { lease.RecordClosureFailure(); }
+        }
         return CoreJson.Serialize(new ProtocolMessage { kind = "complete", nonce = api.Fault == "complete-nonce" ? "wrong" : state.spec.nonce,
-          report = new FixtureReport { status = api.Fault == "complete-failed" ? "failed" : "passed",
+          report = new FixtureReport { status = api.Fault == "complete-failed" || auditClosureFault ? "failed" : "passed",
             cleanup = api.Fault == "complete-cleanup-failed" ? "failed" : "passed" } });
       }
       public override void WriteLine(string line)
@@ -1074,6 +1415,201 @@ namespace CcHahaInstallerProfile
         if (state.profileOwnershipProven) Assert(state.report.trace.Last() == "ledger-durable", "creation pin must survive the proven ledger");
         if (api.Fault == "profile-admin-pin-close") throw new FixtureFailure("fake-profile-pin-close-failed");
       }
+    }
+
+
+    private sealed class F1ReplayDebugApi : F1DebugApi
+    {
+      internal readonly Queue<F1DebugRecord> events = new Queue<F1DebugRecord>();
+      internal readonly List<string> calls = new List<string>();
+      internal bool empty, terminated, pending, throwContinue, throwTerminate, throwDispose;
+      public F1DebugRecord Wait(int milliseconds) { calls.Add("wait"); if (events.Count == 0) return null; pending = true; return events.Dequeue(); }
+      public F1DebugNotice Capture(F1DebugRecord e) { calls.Add("capture:" + e.pid); return new F1DebugNotice { pid = e.pid, tid = e.tid, creationTime = "epoch-" + e.pid, image = new FileIdentity { sha256 = new String('a', 64) } }; }
+      public void CloseImage(F1DebugRecord e) { if (e != null && e.file != IntPtr.Zero) { calls.Add("close-image"); e.file = IntPtr.Zero; } }
+      public void Continue(F1DebugRecord e, uint disposition) { calls.Add("continue:" + e.code); if (throwContinue) throw new FixtureFailure("replay-continue-failed"); pending = false; if (events.Count == 0 && e.code == 5) empty = true; }
+      public void TerminateOwnedJob() { calls.Add("terminate-owned-job"); if (throwTerminate) throw new FixtureFailure("replay-termination-unknown"); terminated = true; }
+      public bool JobEmpty { get { return empty; } }
+      public void WaitNaturalExit(int milliseconds) { Assert(!pending && empty, "kernel wait must follow continued EXIT"); calls.Add("natural-wait"); }
+      public void Dispose() { calls.Add("close-readonly-caps"); if (throwDispose) throw new FixtureFailure("replay-cap-close-unknown"); }
+      internal void Process(int pid)
+      { events.Enqueue(new F1DebugRecord { code = 3, pid = pid, tid = pid + 100, file = new IntPtr(1) }); events.Enqueue(new F1DebugRecord { code = 1, pid = pid, tid = pid + 100, exception = 0x80000003, firstChance = true }); events.Enqueue(new F1DebugRecord { code = 5, pid = pid, tid = pid + 100 }); }
+    }
+    private sealed class F1PoisonBytes : F1MetadataBytes
+    {
+      internal byte[] bytes; internal int poisonStart, poisonLength, secondStart, secondLength, reads;
+      public byte Read(int offset) { if ((offset >= poisonStart && offset < poisonStart + poisonLength) || (offset >= secondStart && offset < secondStart + secondLength)) throw new Exception("CapturedData was read"); reads++; return bytes[offset]; }
+    }
+    private static void RunF1NativeSliceTests(FixtureReport report)
+    {
+      Case(report, "f1-debug-real-machine-continues-exit-before-kernel-wait-and-closes-images", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi(); api.Process(10); List<string> notices = new List<string>();
+        using (F1DebugPump pump = new F1DebugPump(api, n => { notices.Add(n.kind); return new F1DebugReply { accept = true, sequence = n.sequence, barrier = n.barrier }; }, "old22-negative", new String('a', 32)))
+        { pump.Run(1000); Assert(pump.Finished, "natural pump finished"); }
+        Assert(notices.SequenceEqual(new string[] { "create", "continued", "exit" }), "preallocated continue confirmation and EXIT ACK");
+        Assert(api.calls.IndexOf("close-image") < api.calls.IndexOf("continue:3") && api.calls.IndexOf("continue:5") < api.calls.IndexOf("natural-wait"), "hFile closure and EXIT order");
+      });
+      Case(report, "f1-debug-twelve-process-epochs-without-filter-retirement", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi();
+        for (int i = 1; i <= 12; i++) api.events.Enqueue(new F1DebugRecord { code = 3, pid = i, tid = i + 100 });
+        for (int i = 1; i <= 12; i++) api.events.Enqueue(new F1DebugRecord { code = 1, pid = i, tid = i + 100, exception = 0x80000003, firstChance = true });
+        for (int i = 1; i <= 12; i++) api.events.Enqueue(new F1DebugRecord { code = 5, pid = i, tid = i + 100 });
+        int creates = 0;
+        using (F1DebugPump pump = new F1DebugPump(api, n => { if (n.kind == "create") creates++; return new F1DebugReply { accept = true, sequence = n.sequence, barrier = n.barrier }; }, "guarded-new-upgrade", new String('a', 32))) pump.Run(1000);
+        Assert(creates == 12 && api.calls.Count(c => c == "continue:1") == 12, "each process has its own loader gate; no eight-PID cap");
+      });
+      Case(report, "f1-debug-rejected-ack-aborts-and-drains-same-pending-event", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi(); api.Process(10);
+        using (F1DebugPump pump = new F1DebugPump(api, n => new F1DebugReply { accept = false, sequence = n.sequence, barrier = n.barrier }, "old22-negative", new String('a', 32)))
+          Reject(() => pump.Run(1000), "ACK rejection remains failure");
+        Assert(api.terminated && api.empty && !api.calls.Contains("natural-wait") && api.calls.IndexOf("terminate-owned-job") < api.calls.IndexOf("continue:3"), "abort releases EXIT without pretending natural completion");
+      });
+
+      Case(report, "f1-debug-machine-rejects-work-moved-off-creating-thread", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi { empty = true }; bool rejected = false;
+        using (F1DebugPump pump = new F1DebugPump(api, n => null, "old22-negative", new String('a', 32)))
+        { Thread other = new Thread(delegate() { try { pump.Step(1); } catch (FixtureFailure) { rejected = true; } }); other.Start(); other.Join(); Assert(rejected && !api.calls.Contains("wait"), "no wait/continue on an async worker"); }
+      });
+      Case(report, "f1-debug-continue-failure-never-confirms-trusted-start", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi(); api.Process(10); int confirmed = 0;
+        F1DebugPump pump = new F1DebugPump(api, n => { if (n.kind == "continued") confirmed++; return new F1DebugReply { accept = true, sequence = n.sequence, barrier = n.barrier }; }, "guarded-new-upgrade", new String('a', 32));
+        api.throwContinue = true; Reject(() => pump.Run(1000), "Continue failure rejects"); Assert(confirmed == 0, "a failed Continue is never trustedStart");
+      });
+      Case(report, "f1-metadata-nonzero-registry-values-skipped-without-reading-payload", delegate {
+        F1MetadataPlan plan = new F1MetadataPlan(); plan.fields.Add(new F1MetadataField { name = "DataSize", inputType = 8 });
+        plan.fields.Add(new F1MetadataField { name = "CapturedData", inputType = 14, lengthProperty = 0, skipValue = true });
+        plan.fields.Add(new F1MetadataField { name = "Status", inputType = 8 });
+        F1PoisonBytes input = new F1PoisonBytes { bytes = new byte[] { 4,0,0,0, 99,98,97,96, 0,0,0,0 }, poisonStart = 4, poisonLength = 4 };
+        Dictionary<string, object> decoded = plan.Read(input, input.bytes.Length, 8);
+        Assert((ulong)decoded["DataSize"] == 4 && (ulong)decoded["Status"] == 0 && input.reads == 8 && !decoded.ContainsKey("CapturedData"), "normal nonzero value is metadata, no byte payload read");
+      });
+
+      Case(report, "f1-metadata-skips-both-current-and-previous-nonzero-value-spans", delegate {
+        F1MetadataPlan plan = new F1MetadataPlan();
+        foreach (string name in new string[] { "Type", "DataSize", "CapturedDataSize" }) plan.fields.Add(new F1MetadataField { name = name, inputType = 8 });
+        plan.fields.Add(new F1MetadataField { name = "CapturedData", inputType = 14, lengthProperty = 2, skipValue = true });
+        foreach (string name in new string[] { "PreviousDataType", "PreviousDataSize", "PreviousDataCapturedSize" }) plan.fields.Add(new F1MetadataField { name = name, inputType = 8 });
+        plan.fields.Add(new F1MetadataField { name = "PreviousData", inputType = 14, lengthProperty = 6, skipValue = true });
+        plan.fields.Add(new F1MetadataField { name = "Status", inputType = 8 });
+        byte[] bytes = new byte[36]; bytes[0] = 3; bytes[4] = 4; bytes[8] = 4; bytes[16] = 3; bytes[20] = 4; bytes[24] = 4;
+        F1PoisonBytes poison = new F1PoisonBytes { bytes = bytes, poisonStart = 12, poisonLength = 4, secondStart = 28, secondLength = 4 };
+        Dictionary<string, object> metadata = plan.Read(poison, 36, 4);
+        Assert(poison.reads == 28 && (ulong)metadata["DataSize"] == 4 && !metadata.ContainsKey("PreviousData"), "x86 nonzero blobs skipped; only metadata touched");
+      });
+      Case(report, "f1-metadata-schema-tuple-rejects-extra-fields-and-wrong-version", delegate {
+        string[] names = { "Irp", "FileObject", "FileKey", "ExtraInformation", "IssuingThreadId", "InfoClass" };
+        Assert(F1KnownMetadataSchemas.Matches(false, 19, 1, 0, names), "actual 4a rename metadata tuple");
+        Assert(!F1KnownMetadataSchemas.Matches(false, 19, 0, 0, names) && !F1KnownMetadataSchemas.Matches(false, 19, 1, 0, names.Concat(new string[] { "opaque" })), "unknown body/version never generalized");
+      });
+      Case(report, "f1-observed-registry-requires-absolute-anchor-and-retires-generations", delegate {
+        F1ObservedNamespaces graph = new F1ObservedNamespaces { CanaryRegistry = @"\REGISTRY\USER\owned\Software\fixture" };
+        graph.Registry(2, 0, new Dictionary<string, object> { { "Status", 0UL }, { "KeyObject", 1UL }, { "RelativeName", @"\REGISTRY\USER\owned\Software" } }, 1);
+        graph.Registry(1, 0, new Dictionary<string, object> { { "Status", 0UL }, { "KeyObject", 2UL }, { "BaseObject", 1UL }, { "RelativeName", "fixture" } }, 2);
+        graph.Registry(5, 0, new Dictionary<string, object> { { "Status", 0UL }, { "KeyObject", 2UL }, { "DataSize", 4UL } }, 3);
+        Assert(graph.RegistrySets == 1 && !graph.Gap, "actual namespace chain can map normal nonzero sets");
+        graph.Registry(13, 0, new Dictionary<string, object> { { "Status", 0UL }, { "KeyObject", 2UL } }, 4);
+        graph.Registry(5, 0, new Dictionary<string, object> { { "Status", 0UL }, { "KeyObject", 2UL } }, 5);
+        Assert(graph.RegistrySets == 1 && graph.Gap, "post-close pointer reuse needs a new observed generation");
+      });
+      Case(report, "f1-observed-file-write-needs-matching-successful-irp-and-strict-capture-order", delegate {
+        F1ObservedNamespaces graph = new F1ObservedNamespaces { CanaryFile = @"\Device\Owned\canary.bin" };
+        graph.File(12, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 10UL }, { "FileName", graph.CanaryFile } }, 1);
+        graph.File(30, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 10UL }, { "FileName", graph.CanaryFile } }, 2);
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 11UL } }, 3);
+        Assert(graph.FileWrites == 0 && graph.PendingCount == 1, "initiation is not successful completion");
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 11UL }, { "Status", 0UL } }, 4);
+        Assert(graph.FileWrites == 1 && graph.PendingCount == 0 && !graph.Gap, "exact IRP completed");
+        graph.File(16, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 12UL } }, 5);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 12UL }, { "Status", 0UL } }, 5);
+        Assert(graph.FileWrites == 1 && graph.Gap, "equal timestamps cannot create a favorable order");
+      });
+      Case(report, "f1-observed-file-close-never-promotes-delete-or-rename-proof", delegate {
+        F1ObservedNamespaces graph = new F1ObservedNamespaces { CanaryFile = @"\Device\Owned\canary.bin" };
+        graph.File(12, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 10UL }, { "FileName", graph.CanaryFile } }, 1);
+        graph.File(14, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 20UL } }, 2);
+        graph.File(24, 0, new Dictionary<string, object> { { "Irp", 20UL }, { "Status", 0UL } }, 3);
+        Assert(graph.FileCloses == 1 && graph.operations.Count == 0, "close does not retire an old inventory link");
+        graph.File(27, 1, new Dictionary<string, object> { { "FileObject", 1UL }, { "Irp", 21UL }, { "FileName", @"\Device\Owned\stage" } }, 4);
+        Assert(graph.Gap && graph.operations.Count == 0, "target path semantics/identity missing is unknown");
+      });
+
+      Case(report, "f1-debug-sdk-union-uses-176-bytes-and-explicit-x64-offsets", delegate {
+        Assert(System.Runtime.InteropServices.Marshal.SizeOf(typeof(NativePlatform.F1DebugEvent)) == 176, "SDK x64 DEBUG_EVENT size");
+        Assert(System.Runtime.InteropServices.Marshal.OffsetOf(typeof(NativePlatform.F1DebugEvent), "file").ToInt32() == 16
+          && System.Runtime.InteropServices.Marshal.OffsetOf(typeof(NativePlatform.F1DebugEvent), "firstChance").ToInt32() == 168, "union and exception firstChance offsets");
+      });
+      Case(report, "f1-pointer-fields-require-one-explicit-event-header-width", delegate {
+        F1MetadataPlan plan = new F1MetadataPlan(); plan.fields.Add(new F1MetadataField { name = "FileObject", inputType = 16 });
+        Assert(plan.PointerWidth(0x20) == 4 && plan.PointerWidth(0x40) == 8, "target payload width comes from event flags");
+        Reject(() => plan.PointerWidth(0), "unknown pointer width"); Reject(() => plan.PointerWidth(0x60), "conflicting pointer width");
+      });
+
+      Case(report, "f1-native-unknown-counters-remain-null-before-any-session-call", delegate {
+        F1EtwSession session = new F1EtwSession(new string[] { "owned.exe" }); F1SessionObservation o = session.Observation();
+        Assert(!o.startAttempted && !o.started && o.eventsLost == null && o.buffersLost == null && o.processTraceResult == null && o.scopeSupport == "not_proven", "an exit-zero tool or default struct cannot imply loss-free capture");
+        session.Dispose(); Assert(session.Observation().closed, "a never-started session owns no native resource and is never stopped by name");
+      });
+      Case(report, "f1-managed-sdk-layout-and-literal-executable-filter-boundaries", delegate {
+        Assert(F1EtwSession.Abi(), "documented x64 sizes/offsets; managed layout only, not a Windows SDK run");
+        string[] names = Enumerable.Range(0, 12).Select(i => "owned-" + i + ".exe").ToArray(); new F1EtwSession(names);
+        Reject(() => new F1EtwSession(new string[] { "*.exe" }), "no wildcard");
+        Reject(() => new F1EtwSession(new string[] { "cmd.exe;other.exe" }), "no delimiter injection");
+        Reject(() => new F1EtwSession(new string[] { new String('a', 512) }), "limit counts UTF16 bytes and terminator");
+      });
+
+      Case(report, "f1-metadata-actual-extra-information-and-malformed-tail", delegate {
+        F1MetadataPlan plan = new F1MetadataPlan(); plan.fields.Add(new F1MetadataField { name = "ExtraInformation", inputType = 10 });
+        Assert((ulong)plan.Read(new F1ArrayMetadataBytes(new byte[8]), 8, 8)["ExtraInformation"] == 0, "actual 4a metadata field admitted");
+        Reject(() => plan.Read(new F1ArrayMetadataBytes(new byte[9]), 9, 8), "unclaimed body tail is unknown");
+        plan.fields.Add(new F1MetadataField { name = "opaque", inputType = 8 });
+        Reject(() => plan.Read(new F1ArrayMetadataBytes(new byte[12]), 12, 8), "unknown body not called a read");
+      });
+    }
+
+
+    private static void RunF1SafetyFixTests(FixtureReport report)
+    {
+      Case(report, "f1-actual-tdh-fixed-zero-reg5-skips-both-value-spans", delegate {
+        foreach (bool fixedZero in new bool[] { true, false })
+        {
+          string[] names = { "KeyObject", "Status", "Type", "DataSize", "KeyName", "ValueName", "CapturedDataSize", "CapturedData", "PreviousDataType", "PreviousDataSize", "PreviousDataCapturedSize", "PreviousData" };
+          Assert(F1KnownMetadataSchemas.Matches(true, 5, 0, 36, names), "same actual known Reg5/v0/op36 tuple"); F1MetadataPlan plan = new F1MetadataPlan();
+          for (int i = 0; i < names.Length; i++)
+          {
+            bool text = names[i] == "KeyName" || names[i] == "ValueName", blob = names[i] == "CapturedData" || names[i] == "PreviousData";
+            plan.fields.Add(F1MetadataPlan.Project(names[i], (ushort)(text ? 1 : blob ? 14 : i == 0 ? 10 : 8), text && fixedZero ? 0x10 : blob ? 2 : 0, 1, i == 7 ? 6 : i == 11 ? 10 : 0, i));
+          }
+          int shift = fixedZero ? 0 : 4; byte[] bytes = new byte[44 + shift]; bytes[0] = 1; bytes[12] = 3; bytes[16] = 4; bytes[20 + shift] = 4;
+          bytes[28 + shift] = 3; bytes[32 + shift] = 4; bytes[36 + shift] = 4;
+          F1PoisonBytes poison = new F1PoisonBytes { bytes = bytes, poisonStart = 24 + shift, poisonLength = 4, secondStart = 40 + shift, secondLength = 4 };
+          Dictionary<string, object> metadata = plan.Read(poison, bytes.Length, 8);
+          Assert((ulong)metadata["DataSize"] == 4 && (ulong)metadata["CapturedDataSize"] == 4 && (string)metadata["KeyName"] == "" && (string)metadata["ValueName"] == "" && poison.reads == bytes.Length - 8 && !metadata.ContainsKey("CapturedData") && !metadata.ContainsKey("PreviousData"), "actual Project+Read preserve fixed-zero vs nul and never read either nonzero blob");
+        }
+      });
+      Case(report, "f1-unsupported-explicit-string-or-unspecified-blob-rejected-before-body", delegate {
+        foreach (int kind in new int[] { 0, 1, 2 })
+        {
+          F1MetadataPlan plan = new F1MetadataPlan(); plan.fields.Add(F1MetadataPlan.Project("DataSize", 8, 0, 1, 0, 0));
+          plan.fields.Add(F1MetadataPlan.Project(kind == 2 ? "CapturedData" : "KeyName", (ushort)(kind == 2 ? 14 : 1), kind == 0 ? 0x10 : kind == 1 ? 2 : 0, 1, kind == 0 ? 4 : 0, 1));
+          F1PoisonBytes poison = new F1PoisonBytes { bytes = new byte[16], poisonStart = 0, poisonLength = 16 };
+          Reject(() => plan.Read(poison, 16, 8), "unsupported shape must be denied before reading even earlier metadata"); Assert(poison.reads == 0, "body not touched");
+        }
+      });
+      Case(report, "f1-direct-abort-failure-latches-unknown-and-retains-readonly-caps", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi { throwTerminate = true }; F1DebugPump pump = new F1DebugPump(api, n => null, "old22-negative", new String('a', 32));
+        Reject(() => pump.Abort(), "termination failure"); api.throwTerminate = false;
+        Reject(() => pump.Abort(), "uncertainty cannot be retried into success"); Reject(() => pump.Dispose(), "unknown abort cannot close caps");
+        Assert(!api.empty && api.calls.Count(c => c == "terminate-owned-job") == 1 && !api.calls.Contains("close-readonly-caps"), "the exact frozen failure path no longer disposes caps");
+      });
+      Case(report, "f1-readonly-cap-dispose-failure-is-permanently-latched", delegate {
+        F1ReplayDebugApi api = new F1ReplayDebugApi(); api.Process(1); F1DebugPump pump = new F1DebugPump(api, n => new F1DebugReply { accept = true, sequence = n.sequence, barrier = n.barrier }, "old22-negative", new String('a', 32)); pump.Run(1000); api.throwDispose = true;
+        Reject(() => pump.Dispose(), "cap close failure"); api.throwDispose = false; Reject(() => pump.Dispose(), "unknown close cannot be retried as known");
+        Assert(api.calls.Count(c => c == "close-readonly-caps") == 1, "no second close attempt after uncertain cap disposition");
+      });
+      Case(report, "f1-canary-registry-cleanup-requires-natural-zero-after-any-resume-attempt", delegate {
+        Assert(F1Policy.CanaryRegistryCleanupKnown(false, false), "never-resumed child cannot create its user-mode volatile leaf");
+        Assert(F1Policy.CanaryRegistryCleanupKnown(true, true), "natural exit0 occurs only after child close/delete finally succeeds");
+        Assert(!F1Policy.CanaryRegistryCleanupKnown(true, false), "timeout/forced exit/nonzero including registry cleanup failure remains unknown even with empty files");
+      });
     }
 
     private sealed class FakePlatform : ProfilePlatform

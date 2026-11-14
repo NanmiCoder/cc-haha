@@ -20,7 +20,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace CcHahaInstallerProfile
 {
-  internal sealed class NativePlatform : ProfilePlatform
+  internal sealed partial class NativePlatform : ProfilePlatform
   {
     private const uint TokenQuery = 0x0008;
     private const uint TokenAdjustPrivileges = 0x0020;
@@ -43,6 +43,7 @@ namespace CcHahaInstallerProfile
     private readonly Dictionary<int, string> preexistingProcesses = new Dictionary<int, string>();
     private FixtureSpec controllerContext;
     private FixtureSpec subjectContext;
+    private string f1BoundInputsSha256;
     private FixtureState abiEnvironmentContext;
     private bool subjectPeerAuthenticated;
     private bool subjectProductsAllowed;
@@ -320,21 +321,51 @@ namespace CcHahaInstallerProfile
     {
       CorePolicy.Require(state != null && Object.ReferenceEquals(state.spec, controllerContext), "Native Controller adapter is not bound");
       if (state.spec.mode == "createprofile-only-controller") CorePolicy.ValidateProfileOnlySpec(state.spec);
+      else if (state.spec.mode == F1Policy.ControllerMode) F1Identity(state.spec, false);
       else StageBIdentity(state.spec, "historical-v078-controller");
     }
 
     private void HistoricalController(FixtureState state)
     {
       Real(state);
-      StageBIdentity(state.spec, "historical-v078-controller");
+      if (state.spec.mode == F1Policy.ControllerMode) F1Identity(state.spec, false);
+      else StageBIdentity(state.spec, "historical-v078-controller");
     }
 
     private void Subject(FixtureSpec spec, bool products)
     {
       CorePolicy.Require(Object.ReferenceEquals(spec, subjectContext) && subjectPeerAuthenticated, "Native subject adapter is not authenticated");
-      StageBIdentity(spec, "historical-v078-subject");
+      if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
+      else StageBIdentity(spec, "historical-v078-subject");
       CorePolicy.Require(!products || subjectProductsAllowed, "Product launch has not received authenticated ACK");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
+    }
+
+    // This source prepares the separate role only. Until a reviewed native ETW
+    // adapter can prove arming/calibration/loss/identity, deny BEFORE any SID.
+    public override bool F1AuditAvailable { get { return false; } }
+    public override bool F1SubjectProtocolAvailable { get { return Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8; } }
+    private void F1Identity(FixtureSpec spec, bool subject)
+    {
+      F1Policy.RequireRoleIdentity(spec, subject);
+      F1Policy.RequireNativeAdmission(spec, subject ? F1SubjectProtocolAvailable : F1AuditAvailable);
+      CorePolicy.Require(f1BoundInputsSha256 != null && F1Policy.BindingHash(spec) == f1BoundInputsSha256, "f1-bound-input-metadata-changed");
+    }
+    internal void BindF1ControllerContext(FixtureSpec spec)
+    {
+      CorePolicy.Require(controllerContext == null && subjectContext == null, "f1-adapter-not-already-bound");
+      F1Policy.ValidatePrepared(spec, false); F1Policy.RequireNativeAdmission(spec, F1AuditAvailable);
+      CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8
+        && Environment.GetEnvironmentVariable("CI") == "true", "f1-controller-windows-x64-ci-only");
+      CorePolicy.ValidateF1Bindings(spec, this); f1BoundInputsSha256 = F1Policy.BindingHash(spec); controllerContext = spec;
+    }
+    internal void BindF1SubjectContext(FixtureSpec spec)
+    {
+      CorePolicy.Require(controllerContext == null && subjectContext == null, "f1-adapter-not-already-bound");
+      F1Policy.ValidatePrepared(spec, true); F1Policy.RequireNativeAdmission(spec, F1SubjectProtocolAvailable);
+      CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8, "f1-subject-windows-x64-only");
+      CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
+      CorePolicy.ValidateF1Bindings(spec, this); f1BoundInputsSha256 = F1Policy.BindingHash(spec); subjectContext = spec;
     }
 
     internal void BindControllerContext(FixtureSpec spec)
@@ -1660,6 +1691,14 @@ namespace CcHahaInstallerProfile
         File.Copy(source, destination, false);
         CorePolicy.Require(IdentifyPath(destination, false).sha256 == pin.sha256, "Subject source copy hash mismatch");
       }
+      if (state.spec.mode == F1Policy.ControllerMode)
+      {
+        CopyF1Input(input, "f1-stage-a-receipt.json", state.spec.f1.stageAReceipt);
+        CopyF1Input(input, "f1-old-member-proof.json", state.spec.f1.oldMemberReceipt);
+        CopyF1Input(input, "f1-build-receipt.json", state.spec.f1.newPackage.buildReceipt);
+        CopyF1Input(input, "f1-new-member-proof.json", state.spec.f1.newPackage.memberReceipt);
+        CopyF1Input(input, "f1-new-full-setup.exe", state.spec.f1.newPackage.setup);
+      }
       state.spec.sourceRoot = sources;
       state.spec.setupPath = setupCopy;
       state.spec.subjectSpecPath = Path.Combine(input, "subject.json");
@@ -1828,7 +1867,7 @@ namespace CcHahaInstallerProfile
       FileIdentity image = IdentifyPath(state.subjectBinaryPath, false);
       CorePolicy.Require(!image.reparse && image.sha256 == state.spec.expectedBinarySha256 &&
         CorePolicy.HashFile(state.spec.subjectSpecPath) == state.spec.subjectSpecSha256, "Trusted subject input binding changed");
-      string command = CorePolicy.SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath);
+      string command = (state.spec.mode == F1Policy.ControllerMode ? CorePolicy.F1SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath) : CorePolicy.SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath));
       CorePolicy.Require(command.Length <= 1023, "WithToken command exceeds its Unicode limit");
       StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
       ProcessInformation created;
@@ -1936,12 +1975,13 @@ namespace CcHahaInstallerProfile
         ProcessInformation process;
         if (!abi) Subject(subjectContext, true);
         Win(CreateProcessW(command.application, new StringBuilder(command.commandLine), IntPtr.Zero, IntPtr.Zero, false,
-          0x00000404 | 0x08000000, block, cwd, ref startup, out process), "CreateProcessW owned child");
+          0x00000404 | 0x08000000 | (child.debugExchange == null ? 0u : 1u), block, cwd, ref startup, out process), "CreateProcessW owned child");
         child.process = process.process; child.thread = process.thread; child.pid = checked((int)process.pid); child.image = image;
         child.creationTime = ProcessCreation(child.process);
         Win(AssignProcessToJobObject(child.job, child.process), "AssignProcessToJobObject owned child");
         child.assigned = true;
         CaptureProcess(child);
+        if (child.debugExchange != null) child.debugPump = new F1DebugPump(new F1WinDebug(this, child, subjectContext.expectedSid), child.debugExchange, command.phase, subjectContext.nonce);
       }
       finally { FreeEnvironmentBytes(block, environment); }
     }
@@ -1970,7 +2010,8 @@ namespace CcHahaInstallerProfile
       string[] powershellPhases = { "powershell-normal-capability-1", "powershell-normal-capability-2", "powershell-unavailable-capability" };
       if (csvPhases.Contains(command.phase)) expected = Path.Combine(windows, @"SysWOW64\cmd.exe");
       else if (powershellPhases.Contains(command.phase)) expected = Path.Combine(windows, @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
-      else if (command.phase == "fresh-install")
+      else if (subjectContext.mode == F1Policy.SubjectMode && command.phase == "upgrade-negative-preflight") expected = Path.Combine(windows, @"SysWOW64\cmd.exe");
+      else if (command.phase == "fresh-install" || (subjectContext.mode == F1Policy.SubjectMode && command.phase == "rebuild-old-install"))
       {
         expected = subjectContext.setupPath;
         CorePolicy.Require(command.expectedSha256 == CorePolicy.SetupHash &&
@@ -1983,6 +2024,13 @@ namespace CcHahaInstallerProfile
         CorePolicy.Require(command.expectedSha256 == CorePolicy.UninstallerHash &&
           command.commandLine == CorePolicy.UninstallerCommand(expected, subjectContext.installRoot) &&
           IdentifyPath(expected, false).bytes == CorePolicy.UninstallerBytes, "Released old-uninstaller command/pin changed");
+      }
+      else if (subjectContext.mode == F1Policy.SubjectMode && command.phase == "guarded-new-upgrade")
+      {
+        F1BlobPin setup = subjectContext.f1.newPackage.setup; expected = setup.file;
+        FileIdentity identity = IdentifyPath(expected, false);
+        CorePolicy.Require(!identity.reparse && identity.bytes == setup.bytes && identity.sha256 == setup.sha256
+          && command.expectedSha256 == setup.sha256 && command.commandLine == CorePolicy.SetupCommand(expected, subjectContext.installRoot), "f1-exact-full-current-setup-command");
       }
       else if (command.phase == "foreign-helper")
       {
@@ -2006,7 +2054,9 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(child != null && child.assigned && !child.resumed && child.identity != null && child.image != null, "Child resume order failed");
       CheckHeldProcess(child, child.identity.sid, child.image.canonicalPath, child.image.sha256, child.job);
       if (subjectContext != null) CorePolicy.AssertStandard(ProcessToken(child.process), subjectContext.expectedSid);
-      Win(ResumeThread(child.thread) != Infinite, "ResumeThread child");
+      uint previous = ResumeThread(child.thread);
+      Win(previous != Infinite, "ResumeThread child");
+      if (child.debugPump != null) CorePolicy.Require(previous == 1, "f1-resume-exactly-one");
       child.resumed = true;
     }
 
@@ -2014,7 +2064,9 @@ namespace CcHahaInstallerProfile
     {
       CorePolicy.Require(child != null && child.process != IntPtr.Zero && child.assigned && timeoutMilliseconds > 0 && timeoutMilliseconds <= 300000, "Invalid bounded child wait");
       Stopwatch deadline = Stopwatch.StartNew();
-      uint wait = WaitForSingleObject(child.process, (uint)timeoutMilliseconds);
+      uint wait;
+      if (child.debugPump != null) { child.debugPump.Run(timeoutMilliseconds); wait = WaitForSingleObject(child.process, (uint)Math.Max(0, timeoutMilliseconds - Math.Min(timeoutMilliseconds, deadline.ElapsedMilliseconds))); }
+      else wait = WaitForSingleObject(child.process, (uint)timeoutMilliseconds);
       CorePolicy.Require(wait == 0, wait == 258 ? "Owned child timed out" : "Owned child wait failed");
       int remaining = timeoutMilliseconds - checked((int)Math.Min(deadline.ElapsedMilliseconds, Int32.MaxValue));
       CorePolicy.Require(remaining > 0, "Owned process descendants exceeded the phase deadline");
@@ -2028,6 +2080,7 @@ namespace CcHahaInstallerProfile
     public override void StopChild(OwnedProcess child)
     {
       if (child == null) return;
+      if (child.debugPump != null && !child.debugPump.Finished) child.debugPump.Abort();
       if (child.process != IntPtr.Zero && ProcessAlive(child.process))
       {
         if (child.resumed)
@@ -2055,6 +2108,7 @@ namespace CcHahaInstallerProfile
     {
       if (child == null) return;
       StopChild(child);
+      if (child.debugPump != null) { child.debugPump.Dispose(); child.debugPump = null; }
       if (child.thread != IntPtr.Zero) { Win(CloseHandle(child.thread), "Close owned thread"); child.thread = IntPtr.Zero; }
       if (child.process != IntPtr.Zero) { Win(CloseHandle(child.process), "Close owned process"); child.process = IntPtr.Zero; }
       if (child.job != IntPtr.Zero) { Win(CloseHandle(child.job), "Close owned child Job"); child.job = IntPtr.Zero; }
@@ -2091,6 +2145,16 @@ namespace CcHahaInstallerProfile
     }
 
     internal string CurrentCreationTime() { return ProcessCreation(GetCurrentProcess()); }
+
+    private void CopyF1Input(string directory, string name, F1BlobPin pin)
+    {
+      F1Policy.Blob(pin); FileIdentity source = IdentifyPath(pin.file, false);
+      CorePolicy.Require(!source.reparse && source.sha256 == pin.sha256 && source.bytes == pin.bytes, "f1-source-input-before-copy");
+      string destination = Path.Combine(directory, name); File.Copy(pin.file, destination, false);
+      FileIdentity copy = IdentifyPath(destination, false);
+      CorePolicy.Require(!copy.reparse && copy.sha256 == pin.sha256 && copy.bytes == pin.bytes, "f1-subject-readonly-input-copy");
+      pin.file = destination;
+    }
 
     private static string UserObjectName(IntPtr handle)
     {
@@ -2262,7 +2326,8 @@ namespace CcHahaInstallerProfile
     public override FixtureChannel ConnectSubjectChannel(FixtureSpec spec)
     {
       CorePolicy.Require(Object.ReferenceEquals(spec, subjectContext), "Native subject context is not bound");
-      StageBIdentity(spec, "historical-v078-subject");
+      if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
+      else StageBIdentity(spec, "historical-v078-subject");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
       NativePipeChannel pipe = NativePipeChannel.Client(spec.pipeName);
       try
@@ -3020,6 +3085,508 @@ namespace CcHahaInstallerProfile
       report.finishedAtUtc = DateTime.UtcNow.ToString("o");
       report.trace.AddRange(platform.tokenProbeDiagnostics);
       report.status = cleaned && report.checks.Count > 0 && report.checks.All(check => check.status == "passed") ? "passed" : "failed";
+      return report;
+    }
+  }
+
+  internal sealed partial class NativePlatform
+  {
+    // DEBUG_EVENT x64 is 176 bytes; explicit union begins at 16. We copy only
+    // documented scalar/handle members, never pointers into target memory.
+    [StructLayout(LayoutKind.Explicit, Size = 176)]
+    internal struct F1DebugEvent
+    {
+      [FieldOffset(0)] internal uint code;
+      [FieldOffset(4)] internal uint pid;
+      [FieldOffset(8)] internal uint tid;
+      [FieldOffset(16)] internal IntPtr file;
+      [FieldOffset(16)] internal uint exceptionOrExit;
+      [FieldOffset(168)] internal uint firstChance;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool WaitForDebugEvent(out F1DebugEvent message, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ContinueDebugEvent(uint pid, uint tid, uint disposition);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenThread(uint access, bool inherit, uint tid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessIdOfThread(IntPtr thread);
+
+    private sealed class F1WinDebug : F1DebugApi
+    {
+      private readonly NativePlatform owner;
+      private readonly OwnedProcess child;
+      private readonly string sid;
+      private readonly List<IntPtr> caps = new List<IntPtr>();
+      private readonly int thread = Thread.CurrentThread.ManagedThreadId;
+      private readonly uint nativeThread; private bool imageClosureUnknown;
+      internal F1WinDebug(NativePlatform parent, OwnedProcess process, string expectedSid) { owner = parent; child = process; sid = expectedSid; nativeThread = GetCurrentThreadId(); }
+      private void Owner() { CorePolicy.Require(thread == Thread.CurrentThread.ManagedThreadId && nativeThread == GetCurrentThreadId(), "f1-debug-native-owner"); }
+      public F1DebugRecord Wait(int milliseconds)
+      {
+        Owner(); F1DebugEvent e;
+        if (!WaitForDebugEvent(out e, (uint)Math.Max(1, milliseconds)))
+        { int code = Marshal.GetLastWin32Error(); if (code == 121) return null; throw new Win32Exception(code); }
+        return new F1DebugRecord { code = checked((int)e.code), pid = checked((int)e.pid), tid = checked((int)e.tid),
+          file = e.code == 3 || e.code == 6 ? e.file : IntPtr.Zero, exitCode = unchecked((int)e.exceptionOrExit),
+          exception = e.exceptionOrExit, firstChance = e.firstChance != 0 };
+      }
+      public F1DebugNotice Capture(F1DebugRecord e)
+      {
+        Owner(); IntPtr process = OpenProcess(ProcessQueryLimited | 0x00100000, false, checked((uint)e.pid));
+        Win(process != IntPtr.Zero, "F1 readonly process cap"); caps.Add(process);
+        bool member; Win(IsProcessInJob(process, child.job, out member), "F1 readonly Job");
+        CorePolicy.Require(member && owner.ProcessToken(process).sid == sid, "f1-debug-owned-job-and-sid");
+        IntPtr threadCap = OpenThread(0x0800 | 0x00100000, false, checked((uint)e.tid));
+        Win(threadCap != IntPtr.Zero, "F1 readonly thread cap"); caps.Add(threadCap);
+        CorePolicy.Require(GetProcessIdOfThread(threadCap) == (uint)e.pid, "f1-debug-thread-process");
+        FileIdentity image = null;
+        if (e.code == 3)
+        {
+          CorePolicy.Require(e.file != IntPtr.Zero && e.file != new IntPtr(-1), "f1-actual-create-image-handle");
+          image = ReadHandleIdentity(e.file, false, false);
+          using (SafeFileHandle borrowed = new SafeFileHandle(e.file, false))
+          using (FileStream input = new FileStream(borrowed, FileAccess.Read))
+          using (System.Security.Cryptography.SHA256 hash = System.Security.Cryptography.SHA256.Create()) image.sha256 = CorePolicy.Hex(hash.ComputeHash(input));
+          FileIdentity mapped = owner.ProcessImage(process);
+          CorePolicy.Require(!mapped.reparse && !image.reparse && mapped.fileId == image.fileId && mapped.sha256 == image.sha256
+            && CorePolicy.SamePath(mapped.canonicalPath, image.canonicalPath), "f1-debug-mapped-create-file");
+        }
+        return new F1DebugNotice { pid = e.pid, tid = e.tid, creationTime = ProcessCreation(process), sid = sid, image = image };
+      }
+      public void CloseImage(F1DebugRecord e)
+      { Owner(); if (e != null && e.file != IntPtr.Zero) { IntPtr file = e.file; e.file = IntPtr.Zero; if (!CloseHandle(file)) { imageClosureUnknown = true; throw new Win32Exception(Marshal.GetLastWin32Error()); } } }
+      public void Continue(F1DebugRecord e, uint disposition) { Owner(); Win(ContinueDebugEvent((uint)e.pid, (uint)e.tid, disposition), "ContinueDebugEvent"); }
+      public bool JobEmpty { get { return JobActive(child.job) == 0; } }
+      public void WaitNaturalExit(int milliseconds)
+      { Owner(); CorePolicy.Require(WaitForSingleObject(child.process, (uint)Math.Max(1, milliseconds)) == 0, "f1-post-continue-kernel-exit"); WaitJobEmpty(child.job, Math.Max(1, milliseconds)); }
+      public void TerminateOwnedJob()
+      {
+        Owner(); bool member; Win(IsProcessInJob(child.process, child.job, out member), "F1 abort Job identity");
+        CorePolicy.Require(member && ProcessCreation(child.process) == child.creationTime, "f1-abort-original-owned-root");
+        Win(TerminateJobObject(child.job, 241), "F1 abort exact owned Job");
+      }
+      public void Dispose() { Owner(); CorePolicy.Require(!imageClosureUnknown, "f1-debug-image-closure-unknown"); while (caps.Count > 0) { int index = caps.Count - 1; IntPtr cap = caps[index]; caps.RemoveAt(index); if (!CloseHandle(cap)) { imageClosureUnknown = true; throw new Win32Exception(Marshal.GetLastWin32Error()); } } }
+    }
+
+    private F1NativeLease preparedF1;
+    public override F1AuditLease PrepareF1Audit(FixtureState state, string phase)
+    {
+      Real(state); CorePolicy.Require(preparedF1 == null && F1Policy.Audited(phase), "f1-single-prepared-session");
+      preparedF1 = new F1NativeLease(this, state, phase); return preparedF1;
+    }
+    public override F1AuditLease ArmF1Audit(FixtureState state, ProtocolMessage phase)
+    {
+      Real(state); CorePolicy.Require(preparedF1 != null, "f1-session-before-process");
+      F1NativeLease result = preparedF1; result.AttachRoot(phase); preparedF1 = null; return result;
+    }
+
+    private sealed class F1NativeLease : F1AuditLease
+    {
+      private readonly NativePlatform owner; private readonly FixtureState state; private readonly string phase;
+      private readonly List<IntPtr> caps = new List<IntPtr>(); private readonly HashSet<int> live = new HashSet<int>();
+      private readonly Dictionary<string, HashSet<string>> roles = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+      private readonly F1EtwSession session; private readonly F1AuditEvidence evidence;
+      private readonly Dictionary<int, string> epochHashes = new Dictionary<int, string>();
+      private readonly Dictionary<int, long> createBarriers = new Dictionary<int, long>();
+      private long sequence, barrier; private bool acked, disposed;
+      internal F1NativeLease(NativePlatform parent, FixtureState context, string name)
+      {
+        owner = parent; state = context; phase = name;
+        evidence = new F1AuditEvidence { phase = phase, nonce = state.spec.nonce, specSha256 = state.report.specSha256 };
+        Add("old-uninstaller.exe", CorePolicy.UninstallerHash); Add("Uninstall Claude Code Haha.exe", CorePolicy.UninstallerHash);
+        if (state.spec.f1 != null) { Add("f1-new-full-setup.exe", state.spec.f1.newPackage.setup.sha256); Add("cc-haha-current-uninstaller.exe", state.spec.f1.newPackage.uninstallerSha256); Add("cc-haha-guarded-removal.exe", state.spec.f1.newPackage.guardedRemovalSha256); }
+        string windows = ActualWindowsDirectory();
+        foreach (string tool in new string[] { "cmd.exe", "tasklist.exe", "findstr.exe", @"WindowsPowerShell\v1.0\powershell.exe" })
+          foreach (string directory in new string[] { "System32", "SysWOW64" })
+            Add(Path.GetFileName(tool), owner.IdentifyPath(Path.Combine(windows, directory, tool), false).sha256);
+        session = new F1EtwSession(roles.Keys.ToArray()); session.Start();
+      }
+      private void Add(string name, string hash) { HashSet<string> hashes; if (!roles.TryGetValue(name, out hashes)) roles.Add(name, hashes = new HashSet<string>()); hashes.Add(hash); }
+      public override void AttachRoot(ProtocolMessage root)
+      { CorePolicy.Require(!disposed && evidence.rootPid == 0 && root != null && root.phase == phase && root.pid > 0, "f1-root-once"); evidence.rootPid = root.pid; evidence.rootCreationTime = root.creationTime; }
+      public override F1AuditEvidence Arming { get { return evidence; } }
+      public override void BeforeAck()
+      {
+        CorePolicy.Require(!acked && evidence.rootPid > 0 && session.Ready, "f1-native-session-ready-before-ack");
+        // Operational readiness is distinct from the separately reviewed full
+        // calibration/inventory admission still required by RequireArmed.
+        acked = true;
+      }
+      public override F1DebugReply Debug(F1DebugNotice n)
+      {
+        CorePolicy.Require(!disposed && acked && n != null && n.nonce == state.spec.nonce && n.phase == phase && n.sequence == sequence + 1, "f1-debug-controller-sequence");
+        if (n.kind == "create")
+        {
+          CorePolicy.Require(n.barrier == barrier + 1 && n.image != null && !live.Contains(n.pid), "f1-debug-controller-create");
+          IntPtr cap = OpenProcess(ProcessQueryLimited | 0x00100000, false, checked((uint)n.pid)); Win(cap != IntPtr.Zero, "F1 Controller process cap"); caps.Add(cap);
+          bool member; Win(IsProcessInJob(cap, state.job, out member), "F1 Controller Job"); FileIdentity actual = owner.ProcessImage(cap);
+          HashSet<string> hashes; TokenIdentity token = owner.ProcessToken(cap); CorePolicy.AssertStandard(token, state.account.sid);
+          CorePolicy.Require(member && token.sid == state.account.sid && ProcessCreation(cap) == n.creationTime
+            && actual.fileId == n.image.fileId && actual.sha256 == n.image.sha256 && CorePolicy.SamePath(actual.canonicalPath, n.image.canonicalPath)
+            && roles.TryGetValue(Path.GetFileName(actual.canonicalPath), out hashes) && hashes.Contains(actual.sha256), "f1-controller-real-role-image");
+          string path = actual.canonicalPath, baseName = Path.GetFileName(path), windows = ActualWindowsDirectory();
+          bool systemTool = new string[] { "cmd.exe", "tasklist.exe", "findstr.exe", "powershell.exe" }.Contains(baseName, StringComparer.OrdinalIgnoreCase);
+          if (systemTool) { string relative = String.Equals(baseName, "powershell.exe", StringComparison.OrdinalIgnoreCase) ? @"WindowsPowerShell\v1.0\powershell.exe" : baseName;
+            CorePolicy.Require(new string[] { "System32", "SysWOW64" }.Any(directory => CorePolicy.SamePath(path, owner.IdentifyPath(Path.Combine(windows, directory, relative), false).canonicalPath)), "f1-fixed-system-role-path"); }
+          else CorePolicy.Require(CorePolicy.IsInside(state.spec.fixtureRoot, path) || CorePolicy.IsInside(state.spec.installRoot, path) || CorePolicy.IsInside(Path.Combine(state.spec.controllerRoot, "subject-input"), path), "f1-controlled-private-role-path");
+          live.Add(n.pid); epochHashes.Add(n.pid, actual.sha256); createBarriers.Add(n.pid, n.barrier); session.AddEpoch(n.pid, n.tid, n.creationTime); barrier = n.barrier;
+        }
+        else if (n.kind == "thread") { CorePolicy.Require(live.Contains(n.pid) && n.barrier == barrier, "f1-controller-thread-epoch"); IntPtr cap = OpenThread(0x0800 | 0x00100000, false, (uint)n.tid); Win(cap != IntPtr.Zero, "F1 Controller thread cap"); caps.Add(cap); CorePolicy.Require(GetProcessIdOfThread(cap) == (uint)n.pid, "f1-controller-real-thread-owner"); session.AddThread(n.pid, n.tid); }
+        else if (n.kind == "continued") { CorePolicy.Require(n.continued && n.barrier == barrier && live.Contains(n.pid), "f1-confirm-preallocated-barrier"); session.ConfirmContinued(n.pid, n.barrier); if (epochHashes[n.pid] == state.spec.f1.newPackage.guardedRemovalSha256) { CorePolicy.Require(evidence.oldUninstallerExitCode == 22 && evidence.oldUninstallerSha256 == CorePolicy.UninstallerHash && evidence.oldUninstallerExit22Sequence > 0 && n.barrier > evidence.oldUninstallerExit22Sequence, "f1-real-old22-before-helper-continue"); evidence.trustedRemovalSha256 = epochHashes[n.pid]; evidence.trustedRemovalStartSequence = createBarriers[n.pid]; } }
+        else if (n.kind == "exit") { CorePolicy.Require(live.Remove(n.pid) && n.barrier == barrier + 1, "f1-controller-exit"); barrier = n.barrier; session.ExitEpoch(n.pid); if (n.exitCode == 22 && epochHashes[n.pid] == CorePolicy.UninstallerHash) { evidence.oldUninstallerExitCode = 22; evidence.oldUninstallerSha256 = CorePolicy.UninstallerHash; evidence.oldUninstallerExit22Sequence = n.barrier; } }
+        else throw new FixtureFailure("f1-controller-unknown-debug-kind");
+        sequence = n.sequence; return new F1DebugReply { accept = true, sequence = sequence, barrier = n.barrier };
+      }
+      public override F1AuditEvidence Complete()
+      {
+        CorePolicy.Require(acked && live.Count == 0, "f1-all-debug-exits-continued-before-stop"); session.Stop();
+        evidence.status = "native-collected-not-proven"; evidence.closed = session.Closed; evidence.gap = session.Gap;
+        evidence.eventsLost = session.EventsLost; evidence.buffersLost = session.BuffersLost;
+        // No inventory bridge or provider support certificate is synthesized
+        // from a successful StartTrace, an empty queue or the final filesystem.
+        return evidence;
+      }
+      public override bool AllResourcesKnownClosed { get { return disposed && session.Closed && caps.Count == 0 && !ClosureFailed; } }
+      public override void Dispose()
+      {
+        if (disposed) return;
+        try { session.Dispose(); CorePolicy.Require(session.Closed, "f1-stop-drain-before-closing-epoch-caps");
+          while (caps.Count > 0) { int index = caps.Count - 1; IntPtr cap = caps[index]; caps.RemoveAt(index); Win(CloseHandle(cap), "F1 close Controller readonly cap"); }
+          disposed = true;
+        }
+        catch { RecordClosureFailure(); throw; }
+      }
+    }
+  }
+
+  internal sealed class F1EtwSession : IDisposable
+  {
+    [StructLayout(LayoutKind.Sequential)] private struct Wnode { internal uint size, provider; internal ulong context; internal long time; internal Guid guid; internal uint clock, flags; }
+    [StructLayout(LayoutKind.Sequential)] private struct Props { internal Wnode w; internal uint buffer, min, max, maxFile, mode, flush, enable, age, number, free, lost, written, logLost, realLost; internal IntPtr thread; internal uint fileOffset, nameOffset; }
+    [StructLayout(LayoutKind.Sequential)] private struct Filter { internal ulong pointer; internal uint size, type; }
+    [StructLayout(LayoutKind.Sequential)] private struct Enable { internal uint version, property, flags; internal Guid source; internal IntPtr filter; internal uint count; }
+    [StructLayout(LayoutKind.Sequential)] private struct LogHeader { internal uint buffer, version, provider, cpus; internal long end; internal uint timer, maxFile, mode, written, startBuffers, pointer, lost, mhz; internal IntPtr logger, file; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 172)] internal byte[] zone; internal long boot, frequency, start; internal uint flags, buffersLost; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct LogFile { [MarshalAs(UnmanagedType.LPWStr)] internal string file; [MarshalAs(UnmanagedType.LPWStr)] internal string logger; internal long time; internal uint read, mode; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 88)] internal byte[] current; internal LogHeader header; internal IntPtr bufferCallback; internal uint bufferSize, filled, lost; internal IntPtr eventCallback; internal uint kernel; internal IntPtr context; }
+    [StructLayout(LayoutKind.Sequential)] private struct Descriptor { internal ushort id; internal byte version, channel, level, opcode; internal ushort task; internal ulong keywords; }
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] private delegate void EventCallback(IntPtr record);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)] private static extern uint StartTraceW(out ulong handle, string name, IntPtr properties);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)] private static extern uint ControlTraceW(ulong handle, string name, IntPtr properties, uint control);
+    [DllImport("advapi32.dll")] private static extern uint EnableTraceEx2(ulong handle, ref Guid provider, uint control, byte level, ulong any, ulong all, uint timeout, ref Enable parameters);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern ulong OpenTraceW(ref LogFile file);
+    [DllImport("advapi32.dll")] private static extern uint ProcessTrace([In] ulong[] handles, uint count, IntPtr start, IntPtr end);
+    [DllImport("advapi32.dll")] private static extern uint CloseTrace(ulong handle);
+    [DllImport("tdh.dll")] private static extern uint TdhGetManifestEventInformation(ref Guid provider, ref Descriptor descriptor, IntPtr info, ref uint size);
+    private static readonly Guid FileProvider = new Guid("edd08927-9cc4-4e65-b970-c2560fb5c289"), RegistryProvider = new Guid("70eb4f03-c1de-4f73-a051-33d13d5413bd");
+    private readonly string[] names;
+    private readonly string name = "CcHaha1879-F1-" + Guid.NewGuid().ToString("D");
+    private readonly Guid id = Guid.NewGuid(); private readonly object gate = new object();
+    private readonly EventCallback callback;
+    private readonly Dictionary<int, HashSet<int>> epochs = new Dictionary<int, HashSet<int>>();
+    private readonly Dictionary<string, F1MetadataPlan> plans = new Dictionary<string, F1MetadataPlan>();
+    private readonly Dictionary<string, int> schemas = new Dictionary<string, int>();
+    private readonly Dictionary<string, string> shapes = new Dictionary<string, string>();
+    private readonly HashSet<int> continued = new HashSet<int>();
+    private ulong handle, trace = UInt64.MaxValue; private Thread consumer; private bool startAttempted, created, stopping, stopped, closed, gap, consumerFinished;
+    private uint processResult = UInt32.MaxValue; private uint? fileEnableCode, registryEnableCode; private long bodyBytes;
+    private sealed class SafeRecord { internal bool registry; internal int id, version; internal long qpc; internal Dictionary<string, object> metadata; }
+    private readonly List<SafeRecord> records = new List<SafeRecord>();
+    private readonly F1ObservedNamespaces graph = new F1ObservedNamespaces();
+    internal long EventsLost, BuffersLost, OwnedRecords, OtherHeaders, UnknownRecords;
+    internal long FileWrites { get { lock (gate) return graph.FileWrites; } }
+    internal long RegistrySets { get { lock (gate) return graph.RegistrySets; } }
+    internal void CanaryNamespace(string file, string registry) { lock (gate) { graph.CanaryFile = file; graph.CanaryRegistry = registry; } }
+    internal bool Ready { get { return created && consumer != null && consumer.IsAlive && !stopping; } }
+    internal bool Closed { get { return closed; } }
+    internal bool Gap { get { lock (gate) return gap || graph.Gap || graph.PendingCount != 0; } }
+    internal F1EtwSession(string[] exactNames)
+    {
+      names = exactNames; callback = OnEvent;
+      CorePolicy.Require(names != null && names.Length > 0 && names.Distinct(StringComparer.OrdinalIgnoreCase).Count() == names.Length
+        && names.All(n => !String.IsNullOrEmpty(n) && n.IndexOfAny(new char[] { '\0', ';', '*', '?', '\\', '/' }) < 0), "f1-literal-executable-filter");
+      CorePolicy.Require(Encoding.Unicode.GetByteCount(String.Join(";", names) + "\0") <= 1024, "f1-executable-filter-byte-bound");
+    }
+    private static void Check(uint value) { if (value != 0) throw new Win32Exception(unchecked((int)value)); }
+    private IntPtr Properties()
+    {
+      int size = Marshal.SizeOf(typeof(Props)); byte[] text = Encoding.Unicode.GetBytes(name + "\0"); IntPtr p = Marshal.AllocHGlobal(size + text.Length);
+      Marshal.Copy(new byte[size + text.Length], 0, p, size + text.Length);
+      Marshal.StructureToPtr(new Props { w = new Wnode { size = (uint)(size + text.Length), guid = id, clock = 1, flags = 0x20000 }, buffer = 64, min = 16, max = 64, mode = 0x100, flush = 1, nameOffset = (uint)size }, p, false);
+      Marshal.Copy(text, 0, IntPtr.Add(p, size), text.Length); return p;
+    }
+    private Props QueryOwn()
+    {
+      IntPtr p = Properties(); try
+      {
+        Check(ControlTraceW(handle, name, p, 0)); Props value = (Props)Marshal.PtrToStructure(p, typeof(Props));
+        int expected = Marshal.SizeOf(typeof(Props));
+        CorePolicy.Require(created && handle != 0 && value.w.context == handle && value.w.guid == id && value.nameOffset == expected
+          && Marshal.PtrToStringUni(IntPtr.Add(p, expected), name.Length + 1) == name + "\0", "f1-exact-owned-session-query"); return value;
+      }
+      finally { Marshal.FreeHGlobal(p); }
+    }
+    internal static bool Abi()
+    { return IntPtr.Size == 8 && Marshal.SizeOf(typeof(Props)) == 120 && Marshal.SizeOf(typeof(Filter)) == 16 && Marshal.SizeOf(typeof(Enable)) == 48
+        && Marshal.SizeOf(typeof(LogFile)) == 448 && Marshal.OffsetOf(typeof(LogFile), "eventCallback").ToInt32() == 424; }
+    internal void Start()
+    {
+      CorePolicy.Require(!created && consumer == null && Abi(), "f1-etw-x64-abi");
+      IntPtr p = Properties(); try { uint before = ControlTraceW(0, name, p, 0); CorePolicy.Require(before == 4201, "f1-new-session-only"); } finally { Marshal.FreeHGlobal(p); }
+      p = Properties(); try { startAttempted = true; Check(StartTraceW(out handle, name, p)); created = true; CorePolicy.Require(handle != 0, "f1-session-handle"); } finally { Marshal.FreeHGlobal(p); }
+      try
+      {
+        QueryOwn(); EnableNames(FileProvider, 0x1fff); EnableNames(RegistryProvider, 0x7901);
+        LogFile source = new LogFile { logger = name, current = new byte[88], header = new LogHeader { zone = new byte[172] }, mode = 0x10001100, eventCallback = Marshal.GetFunctionPointerForDelegate(callback) };
+        trace = OpenTraceW(ref source); CorePolicy.Require(trace != UInt64.MaxValue, "f1-real-time-consumer-open");
+        consumer = new Thread(delegate() { try { processResult = ProcessTrace(new ulong[] { trace }, 1, IntPtr.Zero, IntPtr.Zero); } catch { lock (gate) gap = true; } finally { consumerFinished = true; } });
+        consumer.IsBackground = true; consumer.Start();
+      }
+      catch { try { Dispose(); } catch { } throw; }
+    }
+    private void EnableNames(Guid provider, ulong keywords)
+    {
+      byte[] bytes = Encoding.Unicode.GetBytes(String.Join(";", names) + "\0"); IntPtr text = Marshal.AllocHGlobal(bytes.Length), filter = Marshal.AllocHGlobal(16);
+      try
+      {
+        Marshal.Copy(bytes, 0, text, bytes.Length); Marshal.StructureToPtr(new Filter { pointer = unchecked((ulong)text.ToInt64()), size = (uint)bytes.Length, type = 0x80000008 }, filter, false);
+        Enable e = new Enable { version = 2, source = id, filter = filter, count = 1 }; uint code = EnableTraceEx2(handle, ref provider, 1, 5, keywords, 0, 5000, ref e);
+        if (provider == FileProvider) fileEnableCode = code; else registryEnableCode = code; Check(code);
+      }
+      finally { Marshal.FreeHGlobal(filter); Marshal.FreeHGlobal(text); }
+    }
+    internal void AddEpoch(int pid, int tid, string creation)
+    { lock (gate) { CorePolicy.Require(pid > 0 && tid > 0 && !epochs.ContainsKey(pid) && !String.IsNullOrEmpty(creation), "f1-retained-epoch-before-continue"); epochs.Add(pid, new HashSet<int> { tid }); } }
+    internal void AddThread(int pid, int tid) { lock (gate) { CorePolicy.Require(epochs.ContainsKey(pid) && tid > 0, "f1-thread-known-epoch"); CorePolicy.Require(epochs[pid].Add(tid), "f1-thread-id-reuse-unknown"); } }
+    internal void ConfirmContinued(int pid, long barrier) { lock (gate) { CorePolicy.Require(epochs.ContainsKey(pid) && barrier > 0 && continued.Add(pid), "f1-confirm-one-continue"); } }
+    internal void ExitEpoch(int pid) { lock (gate) { CorePolicy.Require(epochs.ContainsKey(pid), "f1-exit-retained-epoch"); /* Keep maps/caps until final stop; no slot retirement. */ } }
+    private sealed class NativeBytes : F1MetadataBytes
+    {
+      private readonly IntPtr bytes; private readonly int length;
+      internal NativeBytes(IntPtr p, int n) { bytes = p; length = n; }
+      public byte Read(int offset) { CorePolicy.Require(offset >= 0 && offset < length, "f1-native-metadata-range"); return Marshal.ReadByte(bytes, offset); }
+    }
+    private static string InfoString(IntPtr info, int size, int offset)
+    {
+      CorePolicy.Require(offset >= 112 && offset < size && (offset & 1) == 0, "f1-schema-string-offset"); StringBuilder result = new StringBuilder();
+      for (int i = offset; i + 1 < size; i += 2) { ushort c = unchecked((ushort)Marshal.ReadInt16(info, i)); if (c == 0) return result.ToString(); CorePolicy.Require(result.Length < 256, "f1-schema-name-bound"); result.Append((char)c); }
+      throw new FixtureFailure("f1-schema-string-truncated");
+    }
+    private F1MetadataPlan Plan(Guid provider, Descriptor descriptor)
+    {
+      string key = provider.ToString("D") + "/" + descriptor.id + "/" + descriptor.version;
+      F1MetadataPlan result; if (plans.TryGetValue(key, out result)) return result;
+      uint size = 0; uint code = TdhGetManifestEventInformation(ref provider, ref descriptor, IntPtr.Zero, ref size);
+      CorePolicy.Require(code == 122 && size >= 112 && size <= 65536, "f1-native-schema-size"); IntPtr info = Marshal.AllocHGlobal((int)size);
+      try
+      {
+        Check(TdhGetManifestEventInformation(ref provider, ref descriptor, info, ref size));
+        int count = Marshal.ReadInt32(info, 100), top = Marshal.ReadInt32(info, 104);
+        CorePolicy.Require(count >= 0 && count <= 128 && count == top && 112 + checked(count * 24) <= size, "f1-flat-schema-only"); result = new F1MetadataPlan();
+        List<string> shape = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+          int at = 112 + i * 24, flags = Marshal.ReadInt32(info, at); CorePolicy.Require((flags & ~0x36) == 0, "f1-schema-flags");
+          string name = InfoString(info, (int)size, Marshal.ReadInt32(info, at + 4)); ushort type = unchecked((ushort)Marshal.ReadInt16(info, at + 8));
+          int countValue = unchecked((ushort)Marshal.ReadInt16(info, at + 16)), lengthValue = unchecked((ushort)Marshal.ReadInt16(info, at + 18));
+          shape.Add(name + ":type=" + type + ",flags=" + flags + ",count=" + countValue + ",length=" + lengthValue);
+          result.fields.Add(F1MetadataPlan.Project(name, type, flags, countValue, lengthValue, i));
+        }
+        if (!shapes.ContainsKey(key)) { CorePolicy.Require(shapes.Count < 64, "f1-schema-shape-bound"); shapes.Add(key, String.Join(";", shape)); }
+        CorePolicy.Require(F1KnownMetadataSchemas.Matches(provider == RegistryProvider, descriptor.id, descriptor.version, descriptor.opcode, result.fields.Select(field => field.name)), "f1-unverified-native-schema-tuple");
+        plans.Add(key, result); return result;
+      }
+      finally { Marshal.FreeHGlobal(info); }
+    }
+    private void OnEvent(IntPtr record)
+    {
+      try
+      {
+        int pid = Marshal.ReadInt32(record, 12), tid = Marshal.ReadInt32(record, 8);
+        lock (gate)
+        {
+          HashSet<int> threads; if (!epochs.TryGetValue(pid, out threads)) { OtherHeaders++; return; }
+          CorePolicy.Require(OwnedRecords < 100000, "f1-native-operation-bound");
+          Guid provider = (Guid)Marshal.PtrToStructure(IntPtr.Add(record, 24), typeof(Guid));
+          if (provider != FileProvider && provider != RegistryProvider) { gap = true; UnknownRecords++; return; }
+          Descriptor descriptor = (Descriptor)Marshal.PtrToStructure(IntPtr.Add(record, 40), typeof(Descriptor));
+          string schema = provider.ToString("D") + "/" + descriptor.id + "/" + descriptor.version; int n; schemas.TryGetValue(schema, out n); schemas[schema] = n + 1;
+          int bytes = unchecked((ushort)Marshal.ReadInt16(record, 86)); bodyBytes = checked(bodyBytes + bytes); CorePolicy.Require(bodyBytes <= 33554432, "f1-native-metadata-total-bound"); IntPtr body = Marshal.ReadIntPtr(record, 96);
+          int flags = unchecked((ushort)Marshal.ReadInt16(record, 4)); F1MetadataPlan plan = Plan(provider, descriptor);
+          Dictionary<string, object> metadata = plan.Read(new NativeBytes(body, bytes), bytes, plan.PointerWidth(flags));
+          object issuer; int actualTid = metadata.TryGetValue("IssuingThreadId", out issuer) ? checked((int)(ulong)issuer) : tid;
+          CorePolicy.Require(actualTid > 0 && threads.Contains(actualTid), "f1-explicit-own-issuer");
+          OwnedRecords++;
+          long qpc = Marshal.ReadInt64(record, 16);
+          records.Add(new SafeRecord { registry = provider == RegistryProvider, id = descriptor.id, version = descriptor.version, qpc = qpc, metadata = metadata });
+          // Values were never read. Retain only metadata operation state in the
+          // Controller reducer; no body/XML/ETL or unrelated namespace export.
+        }
+      }
+      catch { lock (gate) { gap = true; UnknownRecords++; } }
+    }
+    internal string[] SchemaCounts() { lock (gate) return schemas.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + " count=" + pair.Value).ToArray(); }
+    internal F1SessionObservation Observation()
+    {
+      lock (gate) return new F1SessionObservation { name = name, guid = id.ToString("D"), retainedHandle = handle,
+        startAttempted = startAttempted, started = created, stopAttempted = stopping, stopped = stopped,
+        consumerDrained = consumerFinished && processResult == 0, closed = closed, gap = gap || graph.Gap || graph.PendingCount != 0,
+        eventsLost = stopped ? (long?)EventsLost : null, buffersLost = stopped ? (long?)BuffersLost : null,
+        processTraceResult = consumerFinished && processResult != UInt32.MaxValue ? (uint?)processResult : null,
+        fileEnableCode = fileEnableCode, registryEnableCode = registryEnableCode, ownedRecords = OwnedRecords,
+        otherHeaders = OtherHeaders, unknownRecords = UnknownRecords, mappedFileWrites = graph.FileWrites, mappedRegistrySets = graph.RegistrySets,
+        nativeSchemaShapes = shapes.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + " " + pair.Value).ToList() };
+    }
+    internal void Stop()
+    {
+      if (stopped) return; CorePolicy.Require(created && !stopping, "f1-stop-once-owned-session"); QueryOwn(); stopping = true;
+      IntPtr p = Properties(); try { Check(ControlTraceW(handle, name, p, 1)); Props final = (Props)Marshal.PtrToStructure(p, typeof(Props)); EventsLost = final.lost; BuffersLost = (long)final.logLost + final.realLost; stopped = true; } finally { Marshal.FreeHGlobal(p); }
+      if (consumer != null) CorePolicy.Require(consumer.Join(5000) && processResult == 0, "f1-consumer-end-after-stop");
+      if (trace != UInt64.MaxValue) { Check(CloseTrace(trace)); trace = UInt64.MaxValue; }
+      lock (gate) { foreach (SafeRecord record in records.OrderBy(record => record.qpc)) { if (record.registry) graph.Registry(record.id, record.version, record.metadata, record.qpc); else graph.File(record.id, record.version, record.metadata, record.qpc); } records.Clear(); }
+      closed = true; if (EventsLost != 0 || BuffersLost != 0) lock (gate) gap = true;
+    }
+    public void Dispose()
+    {
+      if (closed) return;
+      if (!startAttempted && !created && consumer == null && trace == UInt64.MaxValue) { closed = true; return; }
+      if (created && !stopping) Stop();
+      CorePolicy.Require(closed, "f1-session-closure-unknown-retain");
+      GC.KeepAlive(callback);
+    }
+  }
+
+  [DataContract]
+  internal sealed class F1AuditCanarySpec
+  {
+    [DataMember] public string root, nonce, binarySha256, sid, parentCreationTime;
+    [DataMember] public int parentPid;
+    [DataMember] public FileIdentity rootIdentity;
+  }
+  internal sealed partial class NativePlatform
+  {
+    [DllImport("advapi32.dll", EntryPoint = "RegCreateKeyExW", CharSet = CharSet.Unicode)] private static extern int F1RegCreate(IntPtr root, string path, uint reserved, string cls, uint options, uint access, IntPtr security, out IntPtr key, out uint disposition);
+    [DllImport("advapi32.dll", EntryPoint = "RegSetValueExW", CharSet = CharSet.Unicode)] private static extern int F1RegSet(IntPtr key, string name, uint reserved, uint type, IntPtr data, uint bytes);
+    [DllImport("advapi32.dll", EntryPoint = "RegDeleteKeyW", CharSet = CharSet.Unicode)] private static extern int F1RegDelete(IntPtr root, string path);
+    [DllImport("advapi32.dll", EntryPoint = "RegCloseKey")] private static extern int F1RegClose(IntPtr key);
+    internal static int RunF1AuditChild(string file)
+    {
+      CorePolicy.Require(Environment.GetEnvironmentVariable("CI") == "true" && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true", "f1-canary-ci-only");
+      NativePlatform api = new NativePlatform(); F1AuditCanarySpec spec = CoreJson.Read<F1AuditCanarySpec>(file);
+      CorePolicy.Require(spec != null && spec.nonce != null && spec.nonce.Length == 32 && spec.nonce.All(Uri.IsHexDigit), "f1-canary-nonce");
+      string root = Path.GetFullPath(spec.root), parent = Path.GetDirectoryName(root);
+      CorePolicy.Require(Path.GetFileName(root) == "cc-haha-f1-audit-" + spec.nonce && CorePolicy.IsInside(parent, root)
+        && CorePolicy.SamePath(file, Path.Combine(root, "child-spec.json")) && CorePolicy.SamePath(CorePolicy.BinaryPath, Path.Combine(root, "profile-fixture.exe"))
+        && CorePolicy.HashFile(CorePolicy.BinaryPath) == spec.binarySha256 && api.InspectCurrentToken().sid == spec.sid, "f1-canary-private-input-binding");
+      FileIdentity actual = api.IdentifyPath(root, true);
+      CorePolicy.Require(!actual.reparse && spec.rootIdentity != null && actual.fileId == spec.rootIdentity.fileId && actual.volumePath == spec.rootIdentity.volumePath, "f1-canary-root-identity");
+      IntPtr controller = OpenProcess(ProcessQueryLimited | 0x00100000, false, (uint)spec.parentPid); Win(controller != IntPtr.Zero, "F1 canary readonly parent");
+      try { CorePolicy.Require(ProcessCreation(controller) == spec.parentCreationTime && api.ProcessToken(controller).sid == spec.sid
+          && api.ProcessImage(controller).sha256 == spec.binarySha256 && ProcessAlive(controller), "f1-canary-live-parent"); }
+      finally { CloseHandle(controller); }
+      string source = Path.Combine(root, "canary.bin"), stage = Path.Combine(root, "stage"), restored = Path.Combine(root, "restored-stage");
+      string keyName = @"Software\CcHaha-CI-Fixture-" + spec.nonce; IntPtr key = IntPtr.Zero; bool created = false;
+      try
+      {
+        using (FileStream stream = new FileStream(source, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read))
+        { foreach (byte value in new byte[] { 0, 1, 0 }) { stream.Position = 0; stream.WriteByte(value); stream.Flush(true); } stream.Position = 0; CorePolicy.Require(stream.Length == 1 && stream.ReadByte() == 0, "f1-canary-file-restore"); }
+        using (FileStream stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read)) CorePolicy.Require(stream.ReadByte() == 0, "f1-canary-file-reopen");
+        int error; Win(CreatePrivateDirectoryAtomically(stage, spec.sid, null, out error), "F1 create own canary stage");
+        File.Move(source, Path.Combine(stage, "renamed.bin")); Directory.Move(stage, restored);
+        using (FileStream stream = new FileStream(Path.Combine(restored, "renamed.bin"), FileMode.Open, FileAccess.Read, FileShare.Read)) CorePolicy.Require(stream.Length == 1 && stream.ReadByte() == 0, "f1-canary-rename-restore");
+        File.Delete(Path.Combine(restored, "renamed.bin")); Directory.Delete(restored);
+        uint disposition; int code = F1RegCreate(new IntPtr(unchecked((int)0x80000001)), keyName, 0, null, 1, 0x20006 | 0x100, IntPtr.Zero, out key, out disposition);
+        if (code != 0) throw new Win32Exception(code); created = disposition == 1; CorePolicy.Require(created, "f1-canary-created-new-key-only");
+        foreach (uint type in new uint[] { 0, 3, 0 }) { code = F1RegSet(key, "canary", 0, type, IntPtr.Zero, 0); if (code != 0) throw new Win32Exception(code); }
+        CoreJson.Write(Path.Combine(root, "child.json"), new ProtocolMessage { kind = "f1-canary-finished", nonce = spec.nonce, pid = checked((int)GetCurrentProcessId()) });
+        return 0;
+      }
+      finally
+      {
+        if (key != IntPtr.Zero) { int close = F1RegClose(key); if (close != 0) throw new Win32Exception(close); }
+        if (created) { int deleted = F1RegDelete(new IntPtr(unchecked((int)0x80000001)), keyName); if (deleted != 0) throw new Win32Exception(deleted); }
+      }
+    }
+    internal static FixtureReport RunF1AuditCanary(string output)
+    {
+      CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8 && Environment.GetEnvironmentVariable("CI") == "true" && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true", "f1-zero-account-hosted-windows-only");
+      NativePlatform api = new NativePlatform(); string sid = api.InspectCurrentToken().sid, nonce = Guid.NewGuid().ToString("N");
+      string root = Path.Combine(Path.GetFullPath(Path.GetTempPath()), "cc-haha-f1-audit-" + nonce), binary = Path.Combine(root, "profile-fixture.exe");
+      FixtureReport report = new FixtureReport { mode = "f1-native-zero-account", status = "failed", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath) };
+      OwnedProcess child = new OwnedProcess(); F1EtwSession session = null; FileIdentity rootIdentity = null; bool owned = false, resumeAttempted = false, naturalExitZero = false;
+      try
+      {
+        int error; owned = CreatePrivateDirectoryAtomically(root, sid, null, out error); Win(owned, "F1 new private canary arena"); rootIdentity = api.IdentifyPath(root, true);
+        CorePolicy.Require(!rootIdentity.reparse, "f1-own-canary-arena-no-reparse"); File.Copy(CorePolicy.BinaryPath, binary, false);
+        F1AuditCanarySpec spec = new F1AuditCanarySpec { root = root, nonce = nonce, rootIdentity = rootIdentity, binarySha256 = report.binarySha256, sid = sid,
+          parentPid = checked((int)GetCurrentProcessId()), parentCreationTime = ProcessCreation(GetCurrentProcess()) };
+        string specFile = Path.Combine(root, "child-spec.json"); CoreJson.Write(specFile, spec);
+        Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { { "CI", "true" }, { "GITHUB_ACTIONS", "true" }, { "SystemRoot", ActualWindowsDirectory() }, { "WINDIR", ActualWindowsDirectory() }, { "PATH", Path.Combine(ActualWindowsDirectory(), "System32") } };
+        foreach (string field in new string[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP" })
+        { string directory = Path.Combine(root, field.ToLowerInvariant()); Directory.CreateDirectory(directory); environment.Add(field, directory); }
+        session = new F1EtwSession(new string[] { "profile-fixture.exe" });
+        IntPtr namespaceHandle = CreateFileW(root, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        CorePolicy.Require(namespaceHandle != new IntPtr(-1), "f1-canary-readonly-namespace");
+        try { session.CanaryNamespace(HandlePath(namespaceHandle, 2).TrimEnd('\\') + @"\canary.bin", @"\REGISTRY\USER\" + sid + @"\Software\CcHaha-CI-Fixture-" + nonce); }
+        finally { CloseHandle(namespaceHandle); }
+        session.Start();
+        child.job = NewJob(); IntPtr block = EnvironmentBytes(environment);
+        try
+        {
+          StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) }; ProcessInformation process;
+          Win(CreateProcessW(binary, new StringBuilder("\"" + binary + "\" --f1-audit-child --spec \"" + specFile + "\""), IntPtr.Zero, IntPtr.Zero, false, 0x08000405, block, root, ref startup, out process), "F1 zero-account debug canary");
+          child.process = process.process; child.thread = process.thread; child.pid = checked((int)process.pid); child.creationTime = ProcessCreation(child.process);
+          Win(AssignProcessToJobObject(child.job, child.process), "F1 own canary Job"); child.assigned = true; api.CaptureProcess(child);
+        }
+        finally { FreeEnvironmentBytes(block, environment); }
+        F1EtwSession current = session;
+        child.debugPump = new F1DebugPump(new F1WinDebug(api, child, sid), delegate(F1DebugNotice notice) {
+          if (notice.kind == "create") { CorePolicy.Require(notice.pid == child.pid && notice.image != null && notice.image.sha256 == report.binarySha256 && CorePolicy.SamePath(notice.image.canonicalPath, binary), "f1-canary-exact-create-image"); current.AddEpoch(notice.pid, notice.tid, notice.creationTime); }
+          else if (notice.kind == "thread") current.AddThread(notice.pid, notice.tid);
+          else if (notice.kind == "continued") current.ConfirmContinued(notice.pid, notice.barrier);
+          else if (notice.kind == "exit") current.ExitEpoch(notice.pid);
+          return new F1DebugReply { accept = true, sequence = notice.sequence, barrier = notice.barrier };
+        }, "zero-account-canary", nonce);
+        resumeAttempted = true; CorePolicy.Require(ResumeThread(child.thread) == 1, "f1-canary-resume-one"); child.resumed = true;
+        child.debugPump.Run(30000); uint exit; Win(GetExitCodeProcess(child.process, out exit), "F1 canary exit"); CorePolicy.Require(exit == 0, "f1-canary-natural-exit-zero"); naturalExitZero = child.debugPump.Finished; child.exited = true;
+        session.Stop(); report.trace.AddRange(session.SchemaCounts());
+        report.trace.Add("native-metadata-owned=" + session.OwnedRecords + ";other-headers=" + session.OtherHeaders + ";unknown=" + session.UnknownRecords + ";file-writes=" + session.FileWrites + ";registry-sets=" + session.RegistrySets);
+        report.Check("f1-real-debug-pump-and-owned-metadata", session.OwnedRecords > 0 && session.FileWrites >= 3 && session.RegistrySets >= 3 && session.EventsLost == 0 && session.BuffersLost == 0 && !session.Gap,
+          "Runtime observations only; provider scope support, complete lifecycle/namespace and F1 remain not_proven.");
+        report.status = report.checks.All(c => c.status == "passed") ? "passed" : "failed";
+      }
+      catch (Exception e) { report.Check("f1-zero-account-native", false, SafeFailure(e)); }
+      finally
+      {
+        Exception cleanupFailure = null; bool jobStopped = false, traceClosed = session == null;
+        try { api.StopChild(child); jobStopped = true; } catch (Exception failure) { cleanupFailure = failure; }
+        // A stopped/failed child does not suppress the independently owned trace stop.
+        try { if (session != null) session.Dispose(); traceClosed = true; } catch (Exception failure) { if (cleanupFailure == null) cleanupFailure = failure; }
+        if (jobStopped && traceClosed) { try { api.CloseChild(child); } catch (Exception failure) { if (cleanupFailure == null) cleanupFailure = failure; } }
+        bool registryKnown = F1Policy.CanaryRegistryCleanupKnown(resumeAttempted, naturalExitZero);
+        try
+        {
+          CorePolicy.Require(cleanupFailure == null && jobStopped && traceClosed, "f1-canary-native-resource-closure-unknown");
+          CorePolicy.Require(registryKnown, "f1-canary-registry-cleanup-not-proven");
+          if (owned && rootIdentity != null)
+          {
+            FileIdentity actual = api.IdentifyPath(root, true); CorePolicy.Require(!actual.reparse && actual.fileId == rootIdentity.fileId && actual.volumePath == rootIdentity.volumePath, "f1-canary-cleanup-original-root");
+            // Retain unexpected files, tags or CLR/runtime-created children. No
+            // recursive deletion and no cleanup based on a name prefix alone.
+            foreach (string file in new string[] { "profile-fixture.exe", "child-spec.json", "child.json" })
+            { string path = Path.Combine(root, file); if (File.Exists(path)) { CorePolicy.Require(!api.IdentifyPath(path, false).reparse, "f1-canary-cleanup-plain-file"); File.Delete(path); } }
+            foreach (string runtime in new string[] { "CLR_v4.0", "CLR_v4.0_32", "CLR_v4.0_64" })
+            {
+              string clr = Path.Combine(root, "localappdata", "Microsoft", runtime), logs = Path.Combine(clr, "UsageLogs"), usage = Path.Combine(logs, "profile-fixture.exe.log");
+              if (File.Exists(usage)) { CorePolicy.Require(!api.IdentifyPath(usage, false).reparse, "f1-own-runtime-log-plain"); File.Delete(usage); }
+              foreach (string directory in new string[] { logs, clr }) if (Directory.Exists(directory)) { CorePolicy.Require(!api.IdentifyPath(directory, true).reparse && Directory.GetFileSystemEntries(directory).Length == 0, "f1-runtime-unknown-residue-retained"); Directory.Delete(directory); }
+            }
+            string microsoft = Path.Combine(root, "localappdata", "Microsoft"); if (Directory.Exists(microsoft)) { CorePolicy.Require(!api.IdentifyPath(microsoft, true).reparse && Directory.GetFileSystemEntries(microsoft).Length == 0, "f1-known-runtime-parent-only"); Directory.Delete(microsoft); }
+            foreach (string field in new string[] { "home", "userprofile", "appdata", "localappdata", "temp", "tmp" })
+            { string path = Path.Combine(root, field); CorePolicy.Require(!api.IdentifyPath(path, true).reparse && Directory.GetFileSystemEntries(path).Length == 0, "f1-canary-empty-private-environment"); Directory.Delete(path); }
+            CorePolicy.Require(Directory.GetFileSystemEntries(root).Length == 0, "f1-canary-unknown-residue-retained"); Directory.Delete(root);
+          }
+          report.cleanup = "passed";
+        }
+        catch (Exception e) { report.cleanup = "unknown"; report.status = "failed"; report.Check("f1-canary-cleanup", false, SafeFailure(cleanupFailure ?? e)); }
+        if (session != null) { report.f1NativeCanary = session.Observation(); report.f1NativeCanary.childPid = child.pid; report.f1NativeCanary.childCreationTime = child.creationTime; report.f1NativeCanary.childResumeAttempted = resumeAttempted; report.f1NativeCanary.childResumed = child.resumed; report.f1NativeCanary.childExited = child.exited; }
+        report.finishedAtUtc = DateTime.UtcNow.ToString("o");
+      }
       return report;
     }
   }
