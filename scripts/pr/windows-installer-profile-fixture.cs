@@ -33,6 +33,7 @@ namespace CcHahaInstallerProfile
     [DataMember] public List<CheckResult> checks = new List<CheckResult>();
     [DataMember(EmitDefaultValue = false)] public F1SessionObservation f1NativeCanary;
     [DataMember(EmitDefaultValue = false)] public FunctionalUpgradeFacts functionalFacts;
+    [DataMember(EmitDefaultValue = false)] public SubjectStartupEvidence subjectStartup;
     [DataMember] public int realAccountsCreated;
     [DataMember] public int realProfilesCreated;
     [DataMember] public bool releasedPeExecuted;
@@ -331,6 +332,11 @@ namespace CcHahaInstallerProfile
     public abstract void CreatePrivateDesktop(FixtureState state);
     public abstract FixtureChannel CreateControllerChannel(FixtureState state);
     public abstract FixtureChannel ConnectSubjectChannel(FixtureSpec spec);
+    public virtual FixtureChannel ConnectSubjectChannel(FixtureSpec spec, Action<FixtureChannel> afterEndpointIdentity)
+    { FixtureChannel channel = ConnectSubjectChannel(spec); if (afterEndpointIdentity != null) afterEndpointIdentity(channel); return channel; }
+    public virtual SubjectStartupEvidence ObserveSubjectStartup(FixtureState state)
+    { return new SubjectStartupEvidence { status = "unavailable", beforeOwnedJobStop = true }; }
+
     public abstract void CreateSubjectSuspended(FixtureState state);
     public abstract void AssignSubjectToOwnedJob(FixtureState state);
     public abstract void VerifySubject(FixtureState state);
@@ -597,6 +603,16 @@ namespace CcHahaInstallerProfile
     public abstract void BeforeAck();
     public abstract F1AuditEvidence Complete();
     public abstract void Dispose();
+  }
+
+  [DataContract]
+  internal sealed class SubjectStartupEvidence
+  {
+    [DataMember] public string status = "unknown", creationTime;
+    [DataMember] public int pid, controllerSession, logonTokenSession, subjectSession;
+    [DataMember] public uint? exitCode;
+    [DataMember] public int? nativeError;
+    [DataMember] public bool beforeOwnedJobStop;
   }
 
   [DataContract]
@@ -1685,6 +1701,12 @@ namespace CcHahaInstallerProfile
         Stage(state, "resume-trusted-subject", delegate { api.ResumeSubject(state); });
         Stage(state, "authenticate-subject-hello", delegate {
           ProtocolMessage hello = CoreJson.Deserialize<ProtocolMessage>(state.channel.ReadLine(30000));
+          if (functional && hello != null && hello.kind == "failed")
+          {
+            RequireStartupFailure(state.report, hello, state.channel.PeerProcessId, state.subject.pid, state.spec.nonce,
+              state.spec.expectedBinarySha256, state.spec.subjectSpecSha256, FunctionalPolicy.SubjectMode);
+            throw new FixtureFailure("subject-reported-startup-failure-before-hello");
+          }
           CorePolicy.Require(hello.version == 1 && hello.kind == "hello" && hello.nonce == state.spec.nonce
             && hello.pid == state.subject.pid && state.channel.PeerProcessId == state.subject.pid
             && hello.creationTime == state.subject.creationTime && hello.binarySha256 == state.spec.expectedBinarySha256
@@ -1707,6 +1729,11 @@ namespace CcHahaInstallerProfile
       catch (Exception error)
       {
         state.report.failedStage = state.stage ?? "source-binding";
+        if (state.stage == "authenticate-subject-hello" && state.subject != null && state.subject.resumed)
+        {
+          try { state.report.subjectStartup = api.ObserveSubjectStartup(state); }
+          catch (Exception observation) { state.report.Check("subject-startup-exit-observation", false, NativePlatform.SafeFailure(observation)); }
+        }
         state.report.Check(state.report.failedStage, false, NativePlatform.SafeFailure(error));
       }
       finally
@@ -1842,6 +1869,33 @@ namespace CcHahaInstallerProfile
         state.report.finishedAtUtc = DateTime.UtcNow.ToString("o");
       }
       return state.report;
+    }
+
+    // A failed bootstrap never authorizes an ACK or product launch. The caller
+    // supplies the already-held child's endpoint PID and exact readonly pins.
+    internal static void RequireStartupFailure(FixtureReport parent, ProtocolMessage message, int peerPid,
+      int expectedPid, string nonce, string binaryHash, string specHash, string expectedMode)
+    {
+      CorePolicy.Require(message != null && message.version == 1 && message.kind == "failed" && message.nonce == nonce
+        && expectedPid > 0 && peerPid == expectedPid && message.report != null, "subject-startup-failure-endpoint-binding");
+      FixtureReport child = message.report;
+      CorePolicy.Require(child.mode == expectedMode && child.status == "failed" && child.binarySha256 == binaryHash && child.specSha256 == specHash
+        && !child.releasedPeExecuted && !child.releasedPeMayHaveExecuted && child.releasedPeExecutionStatus == "not_run"
+        && child.realAccountsCreated == 0 && child.realProfilesCreated == 0 && child.phases != null && child.phases.Count == 0
+        && child.checks != null && child.checks.Count > 0 && child.checks.Count <= 8 && child.checks.Any(check => check != null && check.status == "failed"),
+        "subject-startup-failure-readonly-pins-and-no-product");
+      FunctionalPolicy.NoF1Promotion(child);
+      string[] stages = { "subject-bindings", "subject-connect-server", "subject-token", "subject-known-folders", "subject-private-desktop",
+        "subject-hive", "subject-write-hello", "subject-read-ack", "subject-ack", "abi-prehello-failure-probe" };
+      CorePolicy.Require(stages.Contains(child.failedStage), "subject-startup-failure-known-stage");
+      foreach (CheckResult check in child.checks)
+      {
+        CorePolicy.Require(check != null && check.status == "failed" && check.name != null && check.name.Length <= 64
+          && check.detail != null && check.detail.Length <= 192, "subject-startup-failure-bounded-check");
+        // SafeFailure is also applied at this receiving boundary. Never echo
+        // arbitrary exception text, paths, argv or environment from a frame.
+        parent.Check("subject-startup-" + child.failedStage, false, NativePlatform.SafeFailure(new FixtureFailure(check.detail)));
+      }
     }
 
     internal static void SendPhaseAck(FixtureReport report, FixtureChannel channel, string nonce, string phase, bool native)
@@ -2476,33 +2530,43 @@ namespace CcHahaInstallerProfile
         specSha256 = CorePolicy.HashFile(spec.subjectSpecPath) };
       FixtureChannel channel = null;
       Subject subject = null;
+      string stage = "subject-bindings";
       try
       {
         if (spec.mode == FunctionalPolicy.SubjectMode) { FunctionalPolicy.ValidatePrepared(spec, true); api.BindFunctionalContext(spec, true); }
         else if (spec.mode == F1Policy.SubjectMode) { F1Policy.ValidatePrepared(spec, true); api.BindF1SubjectContext(spec); }
         else { CorePolicy.ValidateSubjectSpec(spec); api.BindSubjectContext(spec); }
-        channel = api.ConnectSubjectChannel(spec);
+        stage = "subject-connect-server";
+        channel = api.ConnectSubjectChannel(spec, delegate(FixtureChannel owned) { channel = owned; });
+        stage = "subject-token";
         TokenIdentity actual = api.InspectCurrentToken();
         CorePolicy.AssertStandard(actual, spec.expectedSid);
+        stage = "subject-known-folders";
         KnownPaths paths = api.QueryKnownPaths(IntPtr.Zero);
         CorePolicy.Require(CorePolicy.SamePaths(paths, spec.knownPaths), "subject-actual-known-folders");
+        stage = "subject-private-desktop";
         CorePolicy.Require(String.Equals(api.CurrentPrivateDesktopName(), spec.desktopName, StringComparison.OrdinalIgnoreCase), "subject-actual-private-desktop");
+        stage = "subject-hive";
         string response = api.SubjectHiveChallenge(spec);
+        stage = "subject-write-hello";
         channel.WriteLine(CoreJson.Serialize(new ProtocolMessage {
           kind = "hello", nonce = spec.nonce, specSha256 = report.specSha256, binarySha256 = report.binarySha256,
           pid = Process.GetCurrentProcess().Id, creationTime = api.CurrentCreationTime(),
           sid = actual.sid, identity = actual, knownPaths = paths, hiveResponse = response
         }));
+        stage = "subject-read-ack";
         ProtocolMessage acknowledgement = CoreJson.Deserialize<ProtocolMessage>(channel.ReadLine(30000));
+        stage = "subject-ack";
         CorePolicy.Require(acknowledgement.version == 1 && acknowledgement.kind == "ack" && acknowledgement.nonce == spec.nonce
           && acknowledgement.specSha256 == report.specSha256 && acknowledgement.binarySha256 == report.binarySha256, "subject-authenticated-ack");
         api.AllowSubjectProducts(spec, acknowledgement);
+        stage = "subject-products";
         subject = new Subject(spec, api, channel, report);
         if (spec.mode == FunctionalPolicy.SubjectMode) subject.FunctionalProfile(); else subject.HistoricalProfile();
       }
       catch (Exception error)
       {
-        report.status = "failed"; report.Check("historical-subject", false, NativePlatform.SafeFailure(error));
+        report.status = "failed"; report.failedStage = stage; report.Check(stage, false, NativePlatform.SafeFailure(error));
       }
       finally
       {

@@ -798,8 +798,90 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private static ProtocolMessage StartupFailed(FixtureSpec spec, string binary, string specHash)
+    {
+      FixtureReport child = new FixtureReport { mode = FunctionalPolicy.SubjectMode, status = "failed", failedStage = "subject-connect-server",
+        binarySha256 = binary, specSha256 = specHash };
+      child.Check("subject-connect-server", false, "Open named pipe server for read-only verification failed (Win32 5)");
+      return new ProtocolMessage { kind = "failed", nonce = spec.nonce, report = child };
+    }
+    internal static void RunSubjectStartupTests(FixtureReport report)
+    {
+      Case(report, "startup-failed-frame-retains-safe-first-cause-without-authorizing-hello", delegate {
+        FixtureSpec spec = FunctionalSpec(); spec.nonce = new String('a', 32);
+        ProtocolMessage failed = StartupFailed(spec, new String('b', 64), new String('c', 64));
+        FixtureReport parent = new FixtureReport();
+        Controller.RequireStartupFailure(parent, failed, 50, 50, spec.nonce, new String('b', 64), new String('c', 64), FunctionalPolicy.SubjectMode);
+        Assert(parent.checks.Count == 1 && parent.checks[0].status == "failed" && parent.checks[0].detail == failed.report.checks[0].detail,
+          "safe exact failure retained as failure, never an ACK or product result");
+        foreach (string fault in new string[] { "peer", "nonce", "binary", "spec", "mode", "stage", "product", "accounts", "f1", "oversize" })
+        {
+          ProtocolMessage bad = CoreJson.Deserialize<ProtocolMessage>(CoreJson.Serialize(failed));
+          if (fault == "nonce") bad.nonce = "wrong"; if (fault == "binary") bad.report.binarySha256 = new String('0', 64);
+          if (fault == "spec") bad.report.specSha256 = new String('0', 64); if (fault == "mode") bad.report.mode = "other";
+          if (fault == "stage") bad.report.failedStage = "unknown"; if (fault == "product") bad.report.releasedPeMayHaveExecuted = true;
+          if (fault == "accounts") bad.report.realAccountsCreated = 1; if (fault == "f1") bad.report.full_old_to_new = "passed";
+          if (fault == "oversize") bad.report.checks[0].detail = new String('a', 193);
+          Reject(delegate { Controller.RequireStartupFailure(new FixtureReport(), bad, fault == "peer" ? 51 : 50, 50,
+            spec.nonce, new String('b', 64), new String('c', 64), FunctionalPolicy.SubjectMode); }, "reject startup " + fault);
+        }
+      });
+      Case(report, "startup-untrusted-pipe-owner-or-pid-cannot-transfer-channel", delegate {
+        FixtureSpec spec = new FixtureSpec { expectedControllerPid = 70, expectedControllerSid = RunnerSid, expectedSid = TargetSid };
+        NativePlatform.RequireServerEndpoint(spec, 70, RunnerSid);
+        Reject(delegate { NativePlatform.RequireServerEndpoint(spec, 71, RunnerSid); }, "different endpoint PID rejected");
+        Reject(delegate { NativePlatform.RequireServerEndpoint(spec, 70, TargetSid); }, "different actual owner rejected");
+        Reject(delegate { NativePlatform.RequireServerEndpoint(null, 70, RunnerSid); }, "no unbound ownership handoff");
+      });
+      Case(report, "startup-finish-before-subject-object-preserves-existing-failed-frame", delegate {
+        FixtureSpec spec = FunctionalSpec(); spec.nonce = new String('a', 32);
+        ProtocolMessage failed = StartupFailed(spec, new String('b', 64), new String('c', 64));
+        ProtocolTestChannel channel = new ProtocolTestChannel();
+        Subject.Finish(new FakePlatform(), new List<OwnedProcess>(), channel, failed.report, spec.nonce, null);
+        Assert(channel.Disposed && channel.Messages.Count == 1, "owned channel written then closed even without Subject or fixture directory");
+        ProtocolMessage wire = CoreJson.Deserialize<ProtocolMessage>(channel.Messages.Single());
+        Controller.RequireStartupFailure(new FixtureReport(), wire, 50, 50, spec.nonce, new String('b', 64), new String('c', 64), FunctionalPolicy.SubjectMode);
+        Assert(wire.kind == "failed" && wire.report.cleanup == "passed" && !wire.report.releasedPeMayHaveExecuted, "failure metadata survives production framing");
+      });
+      Case(report, "startup-eof-or-safe-failed-frame-observes-held-exit-before-owned-job-stop", delegate {
+        foreach (string fault in new string[] { "hello-eof", "hello-startup-failed" })
+        {
+          FakePlatform api = new FakePlatform { Fault = fault }; FixtureState state = Execute(api, FunctionalSpec());
+          Assert(state.report.status == "failed" && state.report.failedStage == "authenticate-subject-hello" && !api.Channel.Acknowledged,
+            "no ACK or further phase after bootstrap failure");
+          Assert(state.report.subjectStartup != null && state.report.subjectStartup.beforeOwnedJobStop && state.report.subjectStartup.exitCode == 0xc0000142u
+            && api.Calls.IndexOf("ObserveSubjectStartup") < api.Calls.IndexOf("StopOwnedJobs"), "retain original exit before any cleanup termination can replace it");
+          Assert(!state.report.releasedPeMayHaveExecuted && state.report.phases.Count == 0, "startup diagnostic cannot become a product result");
+          if (fault == "hello-startup-failed") Assert(state.report.checks.Any(check => check.name == "subject-startup-subject-connect-server"
+            && check.detail.Contains("Win32 5")), "original safe startup error is retained instead of only EOF");
+          FunctionalPolicy.NoF1Promotion(state.report);
+        }
+      });
+    }
+
+    internal static void RunAbiStartupExitTests(FixtureReport report)
+    {
+      Case(report, "abi-controlled-startup-exit-rejects-late-finish-persist-write-and-close-failures", delegate {
+        foreach (string fault in new string[] { "none", "persist", "write", "close" })
+        {
+          FixtureReport child = new FixtureReport { mode = "abi-owned-startup-probe", status = "failed", failedStage = "abi-prehello-failure-probe" };
+          child.Check("abi-prehello-failure-probe", false, "abi-intentional-prehello-failure");
+          ProtocolTestChannel channel = new ProtocolTestChannel { FailWrite = fault == "write", FailDispose = fault == "close" };
+          Subject.Finish(new FakePlatform(), new List<OwnedProcess>(), channel, child, new String('a',32),
+            fault == "persist" ? (Action)delegate { throw new FixtureFailure("fake-persist-failed"); } : (Action)delegate { });
+          Assert(channel.Disposed && channel.Messages.Count == 1, "actual Finish exercises message and close "+fault);
+          ProtocolMessage delivered = CoreJson.Deserialize<ProtocolMessage>(channel.Messages.Single());
+          if (fault == "write" || fault == "close") Assert(delivered.report.checks.Count == 1 && child.checks.Count > 1,
+            "earlier delivered frame cannot reveal later Finish failure; exit must carry failure");
+          Assert(NativePlatform.AbiStartupProbeExitCode(child) == (fault == "none" ? 81 : 82), "late "+fault+" cannot satisfy intentional81");
+        }
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunSubjectStartupTests(report);
+      RunAbiStartupExitTests(report);
       RunFunctionalTests(report);
       RunF1RebuildTests(report);
       RunF1ClosureTests(report);
@@ -1564,6 +1646,8 @@ namespace CcHahaInstallerProfile
         api.Gate(state, "ReadLine");
         if (reads++ == 0)
         {
+          if (api.Fault == "hello-eof") throw new FixtureFailure("Private IPC closed before a complete message");
+          if (api.Fault == "hello-startup-failed") return CoreJson.Serialize(StartupFailed(state.spec, state.spec.expectedBinarySha256, state.spec.subjectSpecSha256));
           TokenIdentity identity = Standard(); KnownPaths paths = Paths();
           if (api.Fault == "hello-admin") identity.groups.Add("S-1-5-32-544|16");
           if (api.Fault == "hello-path") paths.local = @"C:\Users\other\Local";
@@ -2280,6 +2364,12 @@ namespace CcHahaInstallerProfile
       public override void AssignSubjectToOwnedJob(FixtureState state) { Gate(state, "AssignSubjectToOwnedJob"); state.job = new IntPtr(501); state.subject.assigned = true; }
       public override void VerifySubject(FixtureState state) { Gate(state, "VerifySubject"); Assert(state.subject.assigned && !state.subject.resumed, "must inspect suspended assigned process"); }
       public override void ResumeSubject(FixtureState state) { Gate(state, "ResumeSubject"); Assert(state.subject.assigned, "no resume before job assignment"); state.subject.resumed = true; }
+      public override SubjectStartupEvidence ObserveSubjectStartup(FixtureState state)
+      {
+        Gate(state, "ObserveSubjectStartup"); Assert(!state.jobsEmpty && state.subject.resumed, "observation must precede cleanup Job stop");
+        return new SubjectStartupEvidence { status = "exited-before-cleanup", beforeOwnedJobStop = true, pid = state.subject.pid,
+          creationTime = state.subject.creationTime, exitCode = 0xc0000142u, controllerSession = 4, logonTokenSession = 0, subjectSession = 4 };
+      }
       public override int WaitSubjectExit(FixtureState state, int timeoutMilliseconds)
       {
         Gate(state, "WaitSubjectExit");

@@ -1968,6 +1968,40 @@ namespace CcHahaInstallerProfile
       state.subject.resumed = true;
     }
 
+    // Observe the retained, pre-resume-verified process before any cleanup can
+    // terminate its Job. No PID reopen, wait extension or termination occurs.
+    public override SubjectStartupEvidence ObserveSubjectStartup(FixtureState state)
+    {
+      Real(state);
+      OwnedProcess child = state.subject;
+      CorePolicy.Require(child != null && child.process != IntPtr.Zero && child.assigned && child.resumed
+        && child.identity != null && child.image != null && child.pid > 0 && state.targetIdentity != null,
+        "subject-startup-held-cap-required");
+      CorePolicy.Require(GetProcessId(child.process) == (uint)child.pid && ProcessCreation(child.process) == child.creationTime
+        && child.identity.sid == state.account.sid && child.image.sha256 == state.spec.expectedBinarySha256,
+        "subject-startup-held-cap-identity-changed");
+      return ObserveHeldStartup(child, InspectCurrentToken().sessionId, state.targetIdentity.sessionId);
+    }
+
+    private static SubjectStartupEvidence ObserveHeldStartup(OwnedProcess child, int controllerSession, int logonSession)
+    {
+      CorePolicy.Require(child != null && child.process != IntPtr.Zero && child.assigned && child.resumed && child.identity != null
+        && GetProcessId(child.process) == (uint)child.pid && ProcessCreation(child.process) == child.creationTime,
+        "subject-startup-snapshot-held-identity");
+      SubjectStartupEvidence result = new SubjectStartupEvidence { beforeOwnedJobStop = true, pid = child.pid, creationTime = child.creationTime,
+        controllerSession = controllerSession, logonTokenSession = logonSession, subjectSession = child.identity.sessionId };
+      uint signal = WaitForSingleObject(child.process, 0); int waitError = Marshal.GetLastWin32Error();
+      if (signal == 0)
+      {
+        uint exit; bool known = GetExitCodeProcess(child.process, out exit); int exitError = Marshal.GetLastWin32Error();
+        if (known) { result.status = "exited-before-cleanup"; result.exitCode = exit; }
+        else { result.status = "exit-code-unknown"; result.nativeError = exitError; }
+      }
+      else if (signal == 258) result.status = "running-before-cleanup";
+      else { result.status = "signal-unknown"; result.nativeError = waitError; }
+      return result;
+    }
+
     public override int WaitSubjectExit(FixtureState state, int timeoutMilliseconds)
     {
       HistoricalController(state);
@@ -2587,11 +2621,20 @@ namespace CcHahaInstallerProfile
       return NativePipeChannel.Server(state.spec.pipeName, state.runnerSid, state.account.sid);
     }
 
-    private void VerifyServer(FixtureSpec spec, FixtureChannel pipe)
+    internal static void RequireServerEndpoint(FixtureSpec spec, int peerPid, string ownerSid)
     {
-      CorePolicy.Require(pipe.PeerProcessId == spec.expectedControllerPid && spec.expectedControllerPid > 0 &&
-        spec.expectedControllerSid != spec.expectedSid && ((NativePipeChannel)pipe).OwnerSid == spec.expectedControllerSid,
+      CorePolicy.Require(spec != null && peerPid == spec.expectedControllerPid && spec.expectedControllerPid > 0
+        && spec.expectedControllerSid != spec.expectedSid && ownerSid == spec.expectedControllerSid,
         "Named pipe server PID/actual owner SID is not the expected Controller");
+    }
+
+    private void VerifyServer(FixtureSpec spec, FixtureChannel pipe, Action<FixtureChannel> afterEndpointIdentity)
+    {
+      RequireServerEndpoint(spec, pipe.PeerProcessId, ((NativePipeChannel)pipe).OwnerSid);
+      // Ownership may move to Subject only after the existing endpoint PID and
+      // actual owner gate. Later process/canonical/hash failures remain fatal,
+      // but the same bound endpoint can carry a safe failed frame before close.
+      if (afterEndpointIdentity != null) afterEndpointIdentity(pipe);
       IntPtr process = OpenProcess(ProcessQueryLimited, false, checked((uint)spec.expectedControllerPid));
       Win(process != IntPtr.Zero, "Open named pipe server for read-only verification");
       try
@@ -2608,6 +2651,9 @@ namespace CcHahaInstallerProfile
     }
 
     public override FixtureChannel ConnectSubjectChannel(FixtureSpec spec)
+    { return ConnectSubjectChannel(spec, null); }
+
+    public override FixtureChannel ConnectSubjectChannel(FixtureSpec spec, Action<FixtureChannel> afterEndpointIdentity)
     {
       CorePolicy.Require(Object.ReferenceEquals(spec, subjectContext), "Native subject context is not bound");
       if (spec.mode == FunctionalPolicy.SubjectMode) FunctionalIdentity(spec, true);
@@ -2615,13 +2661,16 @@ namespace CcHahaInstallerProfile
       else StageBIdentity(spec, "historical-v078-subject");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
       NativePipeChannel pipe = NativePipeChannel.Client(spec.pipeName);
+      bool transferred = false;
       try
       {
-        VerifyServer(spec, pipe);
+        VerifyServer(spec, pipe, delegate(FixtureChannel endpoint) {
+          if (afterEndpointIdentity != null) { transferred = true; afterEndpointIdentity(endpoint); }
+        });
         subjectPeerAuthenticated = true;
         return pipe;
       }
-      catch { pipe.Dispose(); throw; }
+      catch { if (!transferred) pipe.Dispose(); throw; }
     }
 
     public override void StopOwnedJobs(FixtureState state)
@@ -2795,6 +2844,7 @@ namespace CcHahaInstallerProfile
     [DataContract]
     private sealed class AbiSpec
     {
+      [DataMember] public bool withTokenStartupFailureProbe;
       [DataMember] public int version = 1;
       [DataMember] public string mode = "abi-owned-child";
       [DataMember] public string root;
@@ -2945,13 +2995,13 @@ namespace CcHahaInstallerProfile
     {
       CorePolicy.Require(spec != null && spec.version == 1 && spec.mode == "abi-owned-child" &&
         spec.nonce != null && spec.nonce.Length == 32 && spec.nonce.All(Uri.IsHexDigit) &&
-        spec.pipeName == "CcHaha1879-abi-" + spec.nonce, "ABI child spec is invalid");
+        spec.pipeName == "CcHaha1879-abi-" + spec.nonce + (spec.withTokenStartupFailureProbe ? "-withtoken" : ""), "ABI child spec is invalid");
       CorePolicy.ValidateAbsolutePath(spec.root); CorePolicy.ValidateAbsolutePath(spec.output);
       string name = Path.GetFileName(spec.root);
       CorePolicy.Require(name != null && name.StartsWith("cc-haha-native-abi-", StringComparison.Ordinal) &&
         name.Length == "cc-haha-native-abi-".Length + 32 &&
         name.Substring("cc-haha-native-abi-".Length).All(Uri.IsHexDigit) &&
-        CorePolicy.SamePath(Path.GetDirectoryName(spec.output), spec.root) && Path.GetFileName(spec.output) == "child.json",
+        CorePolicy.SamePath(Path.GetDirectoryName(spec.output), spec.root) && Path.GetFileName(spec.output) == (spec.withTokenStartupFailureProbe ? "withtoken-child.json" : "child.json"),
         "ABI child output is not an owned bounded file");
       FileIdentity root = platform.IdentifyPath(spec.root, true);
       CorePolicy.Require(spec.rootIdentity != null && !root.reparse && root.fileId == spec.rootIdentity.fileId &&
@@ -2965,6 +3015,7 @@ namespace CcHahaInstallerProfile
       NativePlatform platform = new NativePlatform();
       NativePipeChannel channel = null;
       string verifiedOutput = null;
+      AbiSpec spec = null;
       try
       {
         AbiOperatingSystem();
@@ -2974,9 +3025,9 @@ namespace CcHahaInstallerProfile
         TokenIdentity identity = platform.InspectCurrentToken();
         KnownPaths paths = platform.QueryKnownPaths(IntPtr.Zero);
         CorePolicy.ValidateAbsolutePath(specPath);
-        AbiSpec spec = CoreJson.Read<AbiSpec>(specPath);
+        spec = CoreJson.Read<AbiSpec>(specPath);
         ValidateAbiRoot(spec, platform);
-        CorePolicy.Require(CorePolicy.SamePath(specPath, Path.Combine(spec.root, "child-spec.json")) &&
+        CorePolicy.Require(CorePolicy.SamePath(specPath, Path.Combine(spec.root, spec.withTokenStartupFailureProbe ? "withtoken-spec.json" : "child-spec.json")) &&
           CorePolicy.SamePath(CorePolicy.BinaryPath, Path.Combine(spec.root, "fixture.exe")) &&
           CorePolicy.HashFile(CorePolicy.BinaryPath) == spec.binarySha256, "ABI same-binary spec binding failed");
         verifiedOutput = spec.output;
@@ -2993,6 +3044,7 @@ namespace CcHahaInstallerProfile
             !image.reparse && image.sha256 == spec.binarySha256, "ABI parent identity changed");
         }
         finally { CloseHandle(parent); }
+        if (spec.withTokenStartupFailureProbe) throw new FixtureFailure("abi-intentional-prehello-failure");
         ProtocolMessage hello = new ProtocolMessage {
           kind = "abi-hello", nonce = spec.nonce, specSha256 = CorePolicy.HashFile(specPath),
           binarySha256 = spec.binarySha256, pid = checked((int)GetCurrentProcessId()),
@@ -3010,6 +3062,14 @@ namespace CcHahaInstallerProfile
       }
       catch (Exception error)
       {
+        if (spec != null && spec.withTokenStartupFailureProbe && verifiedOutput != null && channel != null)
+        {
+          FixtureReport failure = new FixtureReport { mode = "abi-owned-startup-probe", status = "failed", failedStage = "abi-prehello-failure-probe",
+            binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath), specSha256 = CorePolicy.HashFile(specPath) };
+          failure.Check("abi-prehello-failure-probe", false, SafeFailure(error));
+          CcHahaInstallerProfile.Subject.Finish(platform, new List<OwnedProcess>(), channel, failure, spec.nonce, delegate { WriteNewJson(verifiedOutput, failure); });
+          channel = null; return AbiStartupProbeExitCode(failure);
+        }
         if (verifiedOutput != null && !File.Exists(verifiedOutput))
         {
           try { WriteNewJson(verifiedOutput, new CheckResult { name = "abi-child", status = "failed", detail = SafeFailure(error) }); }
@@ -3018,6 +3078,99 @@ namespace CcHahaInstallerProfile
         return 81;
       }
       finally { if (channel != null) channel.Dispose(); }
+    }
+
+    private void StartAbiWithTokenChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
+    {
+      AbiOperatingSystem();
+      CorePolicy.Require(controllerContext == null && subjectContext == null && !subjectProductsAllowed
+        && state.controllerRootOwned && state.account == null && !state.accountCreated && !state.profileCreated && !state.profileLoaded
+        && state.spec.mode == "abi-harness" && state.token != IntPtr.Zero && state.subject != null
+        && state.subject.process == IntPtr.Zero && state.subject.job == IntPtr.Zero, "ABI WithToken current-token-only context");
+      TokenIdentity own = InspectCurrentToken(), target = InspectToken(state.token);
+      CorePolicy.Require(target.sid == own.sid && target.authenticationId == own.authenticationId && target.sessionId == own.sessionId
+        && target.tokenType == 1 && CorePolicy.SamePath(command.application, Path.Combine(root, "fixture.exe"))
+        && command.expectedSha256 == CorePolicy.HashFile(CorePolicy.BinaryPath) && command.commandLine.Length <= 1023,
+        "ABI WithToken cannot select another identity or image");
+      FileIdentity image = IdentifyPath(command.application, false);
+      CorePolicy.Require(!image.reparse && image.sha256 == command.expectedSha256, "ABI WithToken same fixture bytes");
+      state.subject.job = NewJob();
+      IntPtr block = EnvironmentBytes(environment);
+      try
+      {
+        StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
+        ProcessInformation created;
+        Win(CreateProcessWithTokenW(state.token, 0, command.application, new StringBuilder(command.commandLine), 0x00000404 | 0x08000000,
+          block, root, ref startup, out created), "CreateProcessWithTokenW owned ABI child");
+        state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
+        state.subject.creationTime = ProcessCreation(state.subject.process);
+        Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign WithToken ABI child Job");
+        state.subject.assigned = true; CaptureProcess(state.subject);
+      }
+      finally { FreeEnvironmentBytes(block, environment); }
+    }
+
+    internal static int AbiStartupProbeExitCode(FixtureReport failure)
+    {
+      // Finish may add a late persistence/write/close failure after an earlier
+      // frame/file was delivered. Only the unchanged controlled failure earns81.
+      return failure != null && failure.mode == "abi-owned-startup-probe" && failure.status == "failed" && failure.cleanup == "passed"
+        && failure.failedStage == "abi-prehello-failure-probe" && !failure.releasedPeExecuted && !failure.releasedPeMayHaveExecuted
+        && failure.realAccountsCreated == 0 && failure.realProfilesCreated == 0
+        && failure.checks != null && failure.checks.Count == 1 && failure.checks[0] != null
+        && failure.checks[0].name == "abi-prehello-failure-probe" && failure.checks[0].status == "failed"
+        && failure.checks[0].detail == "abi-intentional-prehello-failure" ? 81 : 82;
+    }
+
+    private static void RunAbiWithTokenStartupProbe(NativePlatform platform, FixtureState state, AbiSpec original,
+      Dictionary<string, string> environment, FixtureReport report)
+    {
+      // The successful ordinary ABI child already naturally exited. Only the
+      // same current primary token, own private station and own fixture repeat.
+      platform.CloseChild(state.subject); state.subject = null;
+      AbiSpec spec = CoreJson.Deserialize<AbiSpec>(CoreJson.Serialize(original)); spec.withTokenStartupFailureProbe = true;
+      spec.output = Path.Combine(spec.root, "withtoken-child.json"); spec.pipeName = "CcHaha1879-abi-" + spec.nonce + "-withtoken";
+      string specPath = Path.Combine(spec.root, "withtoken-spec.json"); WriteNewJson(specPath, spec);
+      using (NativePipeChannel pipe = NativePipeChannel.Server(spec.pipeName, state.runnerSid, state.runnerSid))
+      {
+        state.subject = new OwnedProcess();
+        CommandPlan command = new CommandPlan { phase = "abi-owned-child", application = Path.Combine(spec.root, "fixture.exe"),
+          expectedSha256 = spec.binarySha256, commandLine = "\"" + Path.Combine(spec.root, "fixture.exe") + "\" --abi-child --spec \"" + specPath + "\"",
+          timeoutMilliseconds = 15000, expectedExitCode = 81 };
+        platform.StartAbiWithTokenChild(state, command, environment, spec.root);
+        platform.VerifyChild(state.subject, state.runnerSid, command.application, spec.binarySha256); platform.ResumeChild(state.subject);
+        try
+        {
+        ProtocolMessage failed = CoreJson.Deserialize<ProtocolMessage>(pipe.ReadLine(10000));
+        FixtureReport captured = new FixtureReport();
+        Controller.RequireStartupFailure(captured, failed, pipe.PeerProcessId, state.subject.pid, spec.nonce,
+          spec.binarySha256, CorePolicy.HashFile(specPath), "abi-owned-startup-probe");
+        int exit = platform.WaitChild(state.subject, 15000);
+        FixtureReport output = CoreJson.Read<FixtureReport>(spec.output);
+        report.Check("withtoken-private-desktop-startup-failure-preserved", exit == 81 && captured.checks.Count == 1
+          && captured.checks[0].detail == "abi-intentional-prehello-failure" && output.status == "failed" && output.cleanup == "passed"
+          && output.failedStage == "abi-prehello-failure-probe" && !output.releasedPeMayHaveExecuted
+          && state.subject.identity.sid == state.runnerSid && platform.controllerContext == null && platform.subjectContext == null,
+          "Same current token/private desktop only; actual natural exit=" + exit.ToString(CultureInfo.InvariantCulture)
+            + "; expected81; failed-frame checks=" + captured.checks.Count.ToString(CultureInfo.InvariantCulture)
+            + "; no account/profile/product context.");
+        }
+        catch
+        {
+          try { report.subjectStartup = ObserveHeldStartup(state.subject, platform.InspectCurrentToken().sessionId, state.targetIdentity.sessionId); }
+          catch (Exception observation) { report.Check("abi-withtoken-exit-observation", false, SafeFailure(observation)); }
+          if (File.Exists(spec.output))
+          {
+            try
+            {
+              CheckResult failure = CoreJson.Read<CheckResult>(spec.output);
+              if (failure.name == "abi-child" && failure.status == "failed") report.Check("abi-withtoken-child", false, SafeFailure(new FixtureFailure(failure.detail)));
+            }
+            catch { }
+          }
+          throw;
+        }
+      }
     }
 
     private static void RemoveAbiRoot(string root, FileIdentity expected, NativePlatform platform)
@@ -3030,7 +3183,7 @@ namespace CcHahaInstallerProfile
       }
       FileIdentity actual = platform.IdentifyPath(root, true);
       CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI cleanup root changed");
-      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt" };
+      string[] names = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "withtoken-spec.json", "withtoken-child.json" };
       foreach (string path in Directory.GetFileSystemEntries(root))
       {
         CorePolicy.Require(names.Contains(Path.GetFileName(path), StringComparer.Ordinal) &&
@@ -3082,7 +3235,7 @@ namespace CcHahaInstallerProfile
         if (root == null || expected == null) return;
         FileIdentity actual = platform.IdentifyPath(root, true);
         CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI inventory root changed");
-        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt" };
+        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt", "withtoken-spec.json", "withtoken-child.json" };
         int count = 0;
         // Only inspect the immediate owned-root entries. Never traverse an
         // unknown directory or reparse point to obtain diagnostic evidence.
@@ -3248,7 +3401,7 @@ namespace CcHahaInstallerProfile
         RunProfilesParentProbe(report, state.runnerSid);
         state.spec.controllerRoot = root;
         state.profilePath = state.paths.profile;
-        Win(OpenProcessToken(GetCurrentProcess(), TokenQuery | 0x0002 | 0x0004, out state.token), "Open ABI token");
+        Win(OpenProcessToken(GetCurrentProcess(), TokenQuery | 0x0002 | 0x0004 | 0x0001, out state.token), "Open ABI token");
         // Only this internal harness owns the lease, after AbiOperatingSystem,
         // atomic private-root creation and OpenProcessToken(current process).
         // Do not route Stage A through the historical Controller admission.
@@ -3320,6 +3473,7 @@ namespace CcHahaInstallerProfile
         report.Check("nonce-bound-private-ipc", exit == 0 && output != null && output.nonce == nonce &&
           output.pid == state.subject.pid && output.creationTime == state.subject.creationTime && output.sid == state.runnerSid,
           "Actual endpoint PID, held creation identity, same binary and two-way nonce acknowledgement matched");
+        RunAbiWithTokenStartupProbe(platform, state, spec, environment, report);
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "ABI assertion failed");
         report.Check("stage-a-no-real-profile-or-product", platform.controllerContext == null && platform.subjectContext == null &&
           !platform.subjectProductsAllowed && !state.accountCreated && !state.profileCreated && !state.profileLoaded,
