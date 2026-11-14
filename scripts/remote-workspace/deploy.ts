@@ -101,6 +101,15 @@ function fail(message: string): never {
   process.exit(1)
 }
 
+// A helper that lingers after a crash burns a full CPU core for as long as the
+// machine stays up — observed once at 99% for sixteen hours. The hold promise
+// below never settles, so without this an exception thrown after a failed
+// deploy leaves a detached process spinning instead of dying with its error.
+process.on('uncaughtException', (error) => {
+  console.error(`\n[remote-workspace] crashed: ${error instanceof Error ? error.stack : error}\n`)
+  process.exit(1)
+})
+
 function info(message: string): void {
   console.log(`[remote-workspace] ${message}`)
 }
