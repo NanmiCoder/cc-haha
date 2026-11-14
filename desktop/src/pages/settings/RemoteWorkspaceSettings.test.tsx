@@ -85,7 +85,7 @@ describe('remote workspace settings', () => {
     })
 
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
-    expect(mocks.connectRemoteWorkspace).toHaveBeenCalledWith(REMOTE_URL, 'my-gpu-server')
+    expect(mocks.connectRemoteWorkspace).toHaveBeenCalledWith(REMOTE_URL, 'my-gpu-server', undefined)
     expect(useRemoteWorkspaceStore.getState().status).toBe('connected')
   })
 

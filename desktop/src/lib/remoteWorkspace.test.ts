@@ -62,6 +62,29 @@ describe('remote workspace profile', () => {
     expect(readRemoteWorkspace()).toBeNull()
   })
 
+  it('round-trips the process credential the deploy helper minted', () => {
+    const withToken = { ...profile, token: 'k3y-minted-by-deploy-0123456789abcdef' }
+    writeRemoteWorkspace(withToken)
+    expect(readRemoteWorkspace()).toEqual(withToken)
+    expect(JSON.parse(serializeRemoteWorkspaceProfile(withToken)).token).toBe(withToken.token)
+  })
+
+  it.each([
+    ['a short token', 'abc'],
+    ['a token with shell metacharacters', 'token;rm -rf /'],
+    ['a non-string token', 42],
+  ])('drops %s instead of sending it as a credential', (_label, token) => {
+    const parsed = parseRemoteWorkspaceProfile(JSON.stringify({
+      version: REMOTE_WORKSPACE_STORAGE_VERSION,
+      url: profile.url,
+      sshHost: profile.sshHost,
+      token,
+      enabled: true,
+      connectedAt: null,
+    }))
+    expect(parsed?.token).toBeUndefined()
+  })
+
   it.each([
     ['not json', 'not-json'],
     ['an array', '[]'],

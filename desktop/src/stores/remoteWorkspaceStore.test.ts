@@ -73,7 +73,7 @@ describe('remote workspace store', () => {
   it('connects then reloads so every view re-resolves against the remote', async () => {
     mocks.connectRemoteWorkspace.mockResolvedValue(REMOTE_URL)
     await expect(useRemoteWorkspaceStore.getState().connect(REMOTE_URL, 'my-gpu-server')).resolves.toBe(REMOTE_URL)
-    expect(mocks.connectRemoteWorkspace).toHaveBeenCalledWith(REMOTE_URL, 'my-gpu-server')
+    expect(mocks.connectRemoteWorkspace).toHaveBeenCalledWith(REMOTE_URL, 'my-gpu-server', undefined)
     expect(mocks.reload).toHaveBeenCalledTimes(1)
   })
 

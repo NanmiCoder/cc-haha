@@ -71,12 +71,27 @@ describe('remote workspace runtime', () => {
       await expect(connectRemoteWorkspace(REMOTE_URL, 'my-gpu-server')).resolves.toBe(REMOTE_URL)
 
       expect(clientMocks.setBaseUrl).toHaveBeenCalledWith(REMOTE_URL)
-      // The tunnel reaches the server as a loopback peer, so no token is sent.
+      // Without a token the renderer presents no credential; the remote must
+      // classify it the way a tokenless loopback origin is classified.
       expect(clientMocks.setAuthToken).toHaveBeenCalledWith(null)
       expect(JSON.parse(window.localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)!)).toMatchObject({
         url: REMOTE_URL,
         sshHost: 'my-gpu-server',
         enabled: true,
+      })
+    })
+
+    it('persists and presents the token the deploy helper minted', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(healthOkResponse()) as typeof fetch
+
+      await expect(
+        connectRemoteWorkspace(REMOTE_URL, 'my-gpu-server', 'k3y-minted-by-deploy-0123456789abcdef'),
+      ).resolves.toBe(REMOTE_URL)
+
+      expect(clientMocks.setAuthToken).toHaveBeenCalledWith('k3y-minted-by-deploy-0123456789abcdef')
+      expect(JSON.parse(window.localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)!)).toMatchObject({
+        url: REMOTE_URL,
+        token: 'k3y-minted-by-deploy-0123456789abcdef',
       })
     })
 
@@ -122,6 +137,24 @@ describe('remote workspace runtime', () => {
       expect(clientMocks.setAuthToken).toHaveBeenCalledWith(null)
       // The local sidecar is never asked for its URL when a remote is active.
       expect(window.desktopHost.runtime.getServerUrl).not.toHaveBeenCalled()
+    })
+
+    it('sends the remote profile token when the profile carries one', async () => {
+      // With a configured credential the remote classifies the renderer by the
+      // token it presents — the strongest signal it has — instead of origin
+      // and locality, mirroring how the local sidecar authenticates Electron.
+      writeRemoteWorkspace({
+        url: REMOTE_URL,
+        sshHost: 'my-gpu-server',
+        token: 'k3y-minted-by-deploy-0123456789abcdef',
+        enabled: true,
+        connectedAt: null,
+      })
+      window.desktopHost = desktopHostAt('http://127.0.0.1:59231')
+      globalThis.fetch = vi.fn().mockResolvedValue(healthOkResponse()) as typeof fetch
+
+      await expect(initializeDesktopServerUrl()).resolves.toBe(REMOTE_URL)
+      expect(clientMocks.setAuthToken).toHaveBeenCalledWith('k3y-minted-by-deploy-0123456789abcdef')
     })
 
     it('leaves startup on the local sidecar when no profile is stored', async () => {

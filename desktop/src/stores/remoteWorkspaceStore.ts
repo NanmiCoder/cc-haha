@@ -17,8 +17,8 @@ type RemoteWorkspaceStore = {
   load: () => void
   /** Probe a URL without switching to it, for a "test connection" button. */
   verify: (url: string) => Promise<boolean>
-  /** Switch the whole workspace to `url`, persisting the choice. */
-  connect: (url: string, sshHost: string) => Promise<string>
+  /** Switch the whole workspace to `url`, persisting the choice and its token. */
+  connect: (url: string, sshHost: string, token?: string) => Promise<string>
   /** Forget the remote choice and return to the local server. */
   disconnect: () => void
 }
@@ -55,11 +55,11 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceStore>((set, get) =
     }
   },
 
-  connect: async (url, sshHost) => {
+  connect: async (url, sshHost, token) => {
     if (get().status === 'connecting') throw new Error('already connecting')
     set({ status: 'connecting', error: null })
     try {
-      const connectedUrl = await connectRemoteWorkspace(url, sshHost)
+      const connectedUrl = await connectRemoteWorkspace(url, sshHost, token)
       // The renderer's session list, file browser and diffs were resolved
       // against the old server. Reload so startup re-resolves every one of them
       // against the remote, rather than leaving the app split across machines.

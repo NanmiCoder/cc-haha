@@ -41,6 +41,7 @@
  * host, and `bun` here for the cross-compile step (unless --sidecar/--skip-deploy).
  */
 
+import { randomBytes } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -50,6 +51,9 @@ import { fileURLToPath } from 'node:url'
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
 const desktopRoot = path.join(repoRoot, 'desktop')
+
+/** The credential minted for this deploy's remote server; printed for the GUI. */
+let remoteAccessToken = ''
 
 /**
  * Optional npm packages kept external so native modules are not embedded.
@@ -265,7 +269,16 @@ function startRemoteServer(options: Options, remoteBin: string, appRoot: string)
   // so a re-deploy does not leave two servers fighting over the port.
   sshBatch(options.host, `tmux kill-session -t ${options.session} 2>/dev/null; true`)
 
-  const serverCmd = `${remoteBin} server --app-root ${appRoot} --host 127.0.0.1 --port ${options.remotePort}`
+  // Mint a fresh process credential for the remote server on every deploy and
+  // hand the same value to the desktop renderer (the deploy output prints it
+  // for the Remote Workspace pane). With a configured credential the server
+  // classifies the renderer's requests by the token they carry — the strongest
+  // signal it has — instead of by origin and locality, which is exactly how
+  // the local sidecar is authenticated.
+  const accessToken = randomBytes(32).toString('base64url')
+  const trustedOrigin = `CC_HAHA_TRUSTED_RENDERER_ORIGIN=http://localhost:1420`
+  const tokenEnv = `CC_HAHA_LOCAL_ACCESS_TOKEN=${accessToken}`
+  const serverCmd = `env ${tokenEnv} ${trustedOrigin} ${remoteBin} server --app-root ${appRoot} --host 127.0.0.1 --port ${options.remotePort}`
   const hasTmux = sshBatch(options.host, 'command -v tmux').status === 0
   const logFile = `${workDir}/server.log`
 
@@ -276,6 +289,7 @@ function startRemoteServer(options: Options, remoteBin: string, appRoot: string)
     info(`tmux not found on remote; starting server with nohup (log: ${logFile})`)
     sshBatch(options.host, `mkdir -p ${appRoot} && nohup ${serverCmd} > ${logFile} 2>&1 &`)
   }
+  remoteAccessToken = accessToken
 }
 
 async function waitForHealth(url: string, attempts = 40): Promise<boolean> {
@@ -345,11 +359,13 @@ async function main(): Promise<void> {
 
   Server URL : ${url}
   SSH host   : ${options.host}
+  Access token: ${remoteAccessToken}
   Working dir: ${options.workDir}
 
   In the desktop app: Settings ▸ Remote Workspace ▸ paste the URL above,
-  enter the SSH host, and click "Switch to remote". The app reloads onto the
-  remote machine — files, Bash, approvals and GPU all run on ${options.host}.
+  enter the SSH host, paste the access token, and click "Switch to remote".
+  The app reloads onto the remote machine — files, Bash, approvals and GPU
+  all run on ${options.host}.
 
   This helper holds the tunnel open. Press Ctrl-C to disconnect.
 `)

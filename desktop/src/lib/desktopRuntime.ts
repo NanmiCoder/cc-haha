@@ -11,6 +11,7 @@ import { isPublicAccessRuntime } from './publicAccessRuntime'
 import {
   clearRemoteWorkspace,
   getEnabledRemoteWorkspace,
+  normalizeRemoteWorkspaceToken as normalizeRemoteToken,
   writeRemoteWorkspace,
 } from './remoteWorkspace'
 
@@ -163,13 +164,13 @@ export function isH5ConnectionRequiredError(error: unknown): error is H5Connecti
  * machine therefore moves the whole workspace there.
  *
  * Only a loopback URL is accepted: the expected transport is an `ssh -L`
- * forward, so the address is always this machine's. That keeps this path clear
- * of credentials — the forwarded server sees a loopback peer and no
- * `X-Forwarded-*` header, which is what its local-trust rule is built on — and
- * it means this feature can never point the renderer at an arbitrary origin. A
- * non-loopback server is the H5 flow's job, which carries a token.
+ * forward, so the address is always this machine's, and this feature can never
+ * point the renderer at an arbitrary origin. The remote carries the process
+ * credential the deploy helper minted for it — the strongest thing the server
+ * classifies a request by, origin and locality irrelevant — so a non-loopback
+ * server stays the H5 flow's job, which carries its own token.
  */
-export async function connectRemoteWorkspace(serverUrl: string, sshHost: string): Promise<string> {
+export async function connectRemoteWorkspace(serverUrl: string, sshHost: string, token?: string): Promise<string> {
   const normalizedUrl = normalizeServerUrl(serverUrl)
   const normalizedHost = sshHost.trim()
 
@@ -188,10 +189,11 @@ export async function connectRemoteWorkspace(serverUrl: string, sshHost: string)
   await waitForHealth(normalizedUrl)
 
   setBaseUrl(normalizedUrl)
-  setAuthToken(null)
+  setAuthToken(normalizeRemoteToken(token))
   writeRemoteWorkspace({
     url: normalizedUrl,
     sshHost: normalizedHost,
+    ...(token ? { token } : {}),
     enabled: true,
     connectedAt: new Date().toISOString(),
   })
@@ -231,7 +233,7 @@ async function initializeRemoteWorkspaceUrl(): Promise<string | null> {
   }
 
   setBaseUrl(profile.url)
-  setAuthToken(null)
+  setAuthToken(normalizeRemoteToken(profile.token))
   markDesktopServerReady()
   return profile.url
 }

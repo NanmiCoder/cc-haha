@@ -38,6 +38,7 @@ export function RemoteWorkspaceSettings() {
   const { profile, status, error, load, verify, connect, disconnect } = useRemoteWorkspaceStore()
   const [serverUrl, setServerUrl] = useState('')
   const [sshHost, setSshHost] = useState('')
+  const [token, setToken] = useState('')
 
   useEffect(() => {
     load()
@@ -49,6 +50,7 @@ export function RemoteWorkspaceSettings() {
     if (!profile) return
     setServerUrl((current) => current || profile.url)
     setSshHost((current) => current || profile.sshHost)
+    setToken((current) => current || profile.token || '')
   }, [profile])
 
   const connected = status === 'connected'
@@ -64,7 +66,7 @@ export function RemoteWorkspaceSettings() {
 
   async function handleConnect() {
     try {
-      await connect(serverUrl.trim(), sshHost.trim())
+      await connect(serverUrl.trim(), sshHost.trim(), token.trim() || undefined)
     } catch (connectError) {
       useUIStore.getState().addToast({
         type: 'error',
@@ -148,6 +150,25 @@ export function RemoteWorkspaceSettings() {
               disabled={busy || connected}
               autoComplete="off"
               onChange={(event) => setSshHost(event.target.value)}
+              containerClassName="w-full sm:w-[340px]"
+              className="font-mono text-xs"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.remoteWorkspace.token')}
+            description={t('settings.remoteWorkspace.tokenHint')}
+            htmlFor="remote-workspace-token"
+            layout="stack"
+          >
+            <Input
+              id="remote-workspace-token"
+              size="md"
+              type="password"
+              value={token}
+              placeholder={t('settings.remoteWorkspace.tokenPlaceholder')}
+              disabled={busy || connected}
+              autoComplete="off"
+              onChange={(event) => setToken(event.target.value)}
               containerClassName="w-full sm:w-[340px]"
               className="font-mono text-xs"
             />

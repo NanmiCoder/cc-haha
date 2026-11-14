@@ -17,6 +17,12 @@ export type RemoteWorkspaceProfile = {
   url: string
   /** SSH host alias the tunnel forwards to, kept so the UI can name the machine. */
   sshHost: string
+  /**
+   * The remote server's process credential, as deployed. Sent on every call so
+   * the remote classifies this renderer by its strongest credential — origin
+   * and locality stay irrelevant, exactly as for the local sidecar.
+   */
+  token?: string
   /** A disabled profile is remembered but not applied at startup. */
   enabled: boolean
   connectedAt: string | null
@@ -29,12 +35,27 @@ type StoredRemoteWorkspace = {
   version: number
   url: string
   sshHost: string
+  token?: string
   enabled: boolean
   connectedAt: string | null
 }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * The deploy helper mints tokens as base64url; anything else is dropped rather
+ * than sent as a credential.
+ */
+function isSafeToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._~-]{16,}$/.test(value)
+}
+
+/** A stored or pasted token this build will actually send, or `null`. */
+export function normalizeRemoteWorkspaceToken(token: string | null | undefined): string | null {
+  const trimmed = token?.trim()
+  return isSafeToken(trimmed) ? trimmed : null
 }
 
 /**
@@ -65,6 +86,7 @@ export function parseRemoteWorkspaceProfile(raw: string | null): RemoteWorkspace
   return {
     url: value.url,
     sshHost: value.sshHost,
+    ...(isSafeToken(value.token) ? { token: value.token } : {}),
     enabled: value.enabled,
     connectedAt: typeof value.connectedAt === 'string' ? value.connectedAt : null,
   }
@@ -75,6 +97,7 @@ export function serializeRemoteWorkspaceProfile(profile: RemoteWorkspaceProfile)
     version: REMOTE_WORKSPACE_STORAGE_VERSION,
     url: profile.url,
     sshHost: profile.sshHost,
+    ...(isSafeToken(profile.token) ? { token: profile.token } : {}),
     enabled: profile.enabled,
     connectedAt: profile.connectedAt,
   }
