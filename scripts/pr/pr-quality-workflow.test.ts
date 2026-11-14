@@ -1304,6 +1304,45 @@ describe('Windows profile fixture Stage A', () => {
     expect(() => validateF1NativeCanaryResult({ version: 1, status: 'passed' }, '0'.repeat(64))).toThrow('canary')
   })
 
+  test.each(['schema', 'counter', 'unknown-field', 'unencoded'])('owned native canary rejected %s reports publish only fixed field diagnostics and encoded failures', async fault => {
+    const f = fixture()
+    const marker = 'PRIVATE_REJECTED_NATIVE_VALUE_1879'
+    const labelSha256 = createHash('sha256').update('fixed operation label').digest('hex')
+    try {
+      expect(await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        if (command[1] !== '--f1-audit-canary') return f.run!(command, options)
+        const value = f.result('f1-native-canary') as Record<string, unknown>
+        value.status = 'failed'
+        value.cleanup = 'unknown'
+        value.checks = [{ name: 'f1-zero-account-native', status: 'failed', detail: fault === 'unencoded'
+          ? `Native operation failed (${marker})`
+          : `f1-canary-failure-operation-code-00000005-labelchars-21-labelsha-${labelSha256}` }]
+        const native = value.f1NativeCanary as Record<string, unknown>
+        if (fault === 'schema' || fault === 'unencoded') native.nativeSchemaShapes = [marker]
+        if (fault === 'counter') native.ownedRecords = -1
+        if (fault === 'unknown-field') native[marker] = marker
+        writeFileSync(command[command.indexOf('--output') + 1]!, JSON.stringify(value))
+        return { exitCode: 1, stdout: '', stderr: '' }
+      } })).toEqual({ status: 'failed', exitCode: 1 })
+      const raw = readFileSync(join(f.evidenceRoot, 'f1-native-canary-consumer.json'), 'utf8')
+      const consumer = JSON.parse(raw)
+      expect(consumer.validationFailure).toMatchObject(fault === 'schema' || fault === 'unencoded'
+        ? { path: 'f1NativeCanary.nativeSchemaShapes[0]', reason: 'metadata-shape', valueType: 'string', characters: marker.length,
+          sha256: createHash('sha256').update(marker).digest('hex') }
+        : fault === 'counter'
+          ? { path: 'f1NativeCanary.ownedRecords', reason: 'unsigned-counter', valueType: 'number' }
+          : { path: 'f1NativeCanary', reason: 'unknown-field', valueType: 'object' })
+      expect(consumer.producerFailures).toEqual(fault === 'unencoded' ? undefined : [{ check: 'f1-zero-account-native', kind: 'operation', code: '00000005',
+        labelCharacters: 21, labelHashState: 'sha256', labelSha256 }])
+      expect(consumer.status).toBe('failed')
+      expect(consumer.F1).toBe('not_proven')
+      expect(consumer.privateRootRetained).toBe(true)
+      expect(existsSync(join(f.evidenceRoot, 'f1-native-canary.raw.json'))).toBe(false)
+      expect(raw).not.toContain(marker)
+      expect(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8')).not.toContain(marker)
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
   test.each(['compile', 'self-test', 'abi-harness', 'profile-only-preflight'])('propagates a failing %s and never runs the following phase', async phase => {
     const f = fixture()
     try {

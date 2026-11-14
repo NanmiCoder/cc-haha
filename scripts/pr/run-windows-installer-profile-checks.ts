@@ -74,7 +74,13 @@ export function validateStageAResult(value: unknown, mode: StageAMode) {
 
 const canaryOutputLimit = 65_536
 const canaryReportLimit = 1_000_000
-class CanaryEvidenceSafetyError extends Error {}
+type CanaryValidationFailure = { path: string; reason: string; valueType: string; characters?: number; sha256?: string }
+type CanaryProducerFailure = { check: string; kind: string; code: string | null; labelCharacters: number;
+  labelHashState: string; labelSha256?: string }
+class CanaryEvidenceSafetyError extends Error {
+  validationFailure?: CanaryValidationFailure
+  producerFailures?: CanaryProducerFailure[]
+}
 const safeObject = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
 function knownKeys(value: Record<string, unknown>, keys: string[]) {
   if (Object.keys(value).some(key => !keys.includes(key))) throw new CanaryEvidenceSafetyError('Unsafe canary evidence shape')
@@ -84,6 +90,27 @@ const guid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const provider = '(?:edd08927-9cc4-4e65-b970-c2560fb5c289|70eb4f03-c1de-4f73-a051-33d13d5413bd)'
 const schemaCount = new RegExp(`^${provider}/[0-9]{1,5}/[0-9]{1,3} count=[0-9]{1,6}$`)
 const schemaShape = new RegExp(`^${provider}/[0-9]{1,5}/[0-9]{1,3} [A-Za-z_][A-Za-z0-9_]{0,255}:type=[0-9]{1,5},flags=[0-9]{1,10},count=[0-9]{1,5},length=[0-9]{1,5}(?:;[A-Za-z_][A-Za-z0-9_]{0,255}:type=[0-9]{1,5},flags=[0-9]{1,10},count=[0-9]{1,5},length=[0-9]{1,5})*$`)
+
+/** Rejected observations stay private; publish only fixed paths and typed/hash diagnostics. */
+function rejectNativeObservation(checks: unknown[], path: string, reason: string, value: unknown): never {
+  const error = new CanaryEvidenceSafetyError('Unsafe or promoted native observation')
+  error.validationFailure = { path, reason, valueType: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value }
+  if (typeof value === 'string') Object.assign(error.validationFailure, {
+    characters: value.length, sha256: createHash('sha256').update(value).digest('hex'),
+  })
+  error.producerFailures = []
+  for (const check of checks) {
+    if (!safeObject(check) || check.status !== 'failed' || typeof check.name !== 'string' || typeof check.detail !== 'string') continue
+    // This is the exact SafeCanaryFailure wire format, never exception text or
+    // the broader accepted diagnostic strings. Checks were validated above.
+    const match = /^f1-canary-failure-(unknown|win32|token|fixture|operation|exception)-code-(none|[0-9a-f]{8})-labelchars-([0-9]{1,10})-labelsha-(none|oversize|[0-9a-f]{64})$/.exec(check.detail)
+    if (!match || !unsigned(Number(match[3]), 0x7fffffff)) continue
+    const labelHashState = match[4] === 'none' || match[4] === 'oversize' ? match[4] : 'sha256'
+    error.producerFailures.push({ check: check.name, kind: match[1]!, code: match[2] === 'none' ? null : match[2]!,
+      labelCharacters: Number(match[3]), labelHashState, ...(labelHashState === 'sha256' ? { labelSha256: match[4] } : {}) })
+  }
+  throw error
+}
 
 /** Accept only this owned metadata producer's schema, never value payloads or F1 claims. */
 export function validateF1NativeCanaryResult(value: unknown, binarySha256: string) {
@@ -131,21 +158,31 @@ export function validateF1NativeCanaryResult(value: unknown, binarySha256: strin
   }
   if (value.f1NativeCanary != null) {
     const native = value.f1NativeCanary
-    if (!safeObject(native)) throw new CanaryEvidenceSafetyError('Invalid native observation')
+    const reject = (path: string, reason: string, observed: unknown): never => rejectNativeObservation(value.checks as unknown[], path, reason, observed)
+    if (!safeObject(native)) reject('f1NativeCanary', 'object-shape', native)
     const booleans = ['startAttempted', 'started', 'stopAttempted', 'stopped', 'consumerDrained', 'closed', 'gap', 'childResumeAttempted', 'childResumed', 'childExited']
     const counters = ['ownedRecords', 'otherHeaders', 'unknownRecords', 'mappedFileWrites', 'mappedRegistrySets', 'childPid']
-    knownKeys(native, ['status', 'F1', 'scopeSupport', 'name', 'guid', 'retainedHandle', ...booleans, 'eventsLost', 'buffersLost',
-      'processTraceResult', 'fileEnableCode', 'registryEnableCode', ...counters, 'childCreationTime', 'nativeSchemaShapes'])
+    const keys = ['status', 'F1', 'scopeSupport', 'name', 'guid', 'retainedHandle', ...booleans, 'eventsLost', 'buffersLost',
+      'processTraceResult', 'fileEnableCode', 'registryEnableCode', ...counters, 'childCreationTime', 'nativeSchemaShapes']
+    if (Object.keys(native).some(key => !keys.includes(key))) reject('f1NativeCanary', 'unknown-field', native)
+    const requireField = (key: string, valid: boolean, reason: string) => {
+      if (!valid) reject(`f1NativeCanary.${key}`, reason, native[key])
+    }
     const exactHandle = retainedHandle ?? (unsigned(native.retainedHandle) ? BigInt(native.retainedHandle as number) : undefined)
-    if (native.status !== 'not_proven' || native.F1 !== 'not_proven' || native.scopeSupport !== 'not_proven' ||
-        typeof native.name !== 'string' || !new RegExp(`^CcHaha1879-F1-${guid}$`).test(native.name) ||
-        typeof native.guid !== 'string' || !new RegExp(`^${guid}$`).test(native.guid) || exactHandle === undefined || exactHandle < 0n || exactHandle > 18_446_744_073_709_551_615n ||
-        booleans.some(key => typeof native[key] !== 'boolean') || counters.some(key => !unsigned(native[key])) ||
-        ['eventsLost', 'buffersLost', 'processTraceResult', 'fileEnableCode', 'registryEnableCode'].some(key => native[key] !== null && !unsigned(native[key], 0xffffffff * 2)) ||
-        (native.childCreationTime !== null && (typeof native.childCreationTime !== 'string' || !/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/.test(native.childCreationTime))) ||
-        !Array.isArray(native.nativeSchemaShapes) || native.nativeSchemaShapes.length > 64 ||
-        native.nativeSchemaShapes.some(row => typeof row !== 'string' || row.length > 65_536 || !schemaShape.test(row))) {
-      throw new CanaryEvidenceSafetyError('Unsafe or promoted native observation')
+    for (const key of ['status', 'F1', 'scopeSupport']) requireField(key, native[key] === 'not_proven', 'not-proven-only')
+    requireField('name', typeof native.name === 'string' && new RegExp(`^CcHaha1879-F1-${guid}$`).test(native.name), 'session-name')
+    requireField('guid', typeof native.guid === 'string' && new RegExp(`^${guid}$`).test(native.guid), 'guid')
+    requireField('retainedHandle', exactHandle !== undefined && exactHandle >= 0n && exactHandle <= 18_446_744_073_709_551_615n, 'uint64')
+    for (const key of booleans) requireField(key, typeof native[key] === 'boolean', 'boolean')
+    for (const key of counters) requireField(key, unsigned(native[key]), 'unsigned-counter')
+    for (const key of ['eventsLost', 'buffersLost', 'processTraceResult', 'fileEnableCode', 'registryEnableCode']) {
+      requireField(key, native[key] === null || unsigned(native[key], 0xffffffff * 2), 'nullable-native-code')
+    }
+    requireField('childCreationTime', native.childCreationTime === null ||
+      typeof native.childCreationTime === 'string' && /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/.test(native.childCreationTime), 'nullable-utc-timestamp')
+    requireField('nativeSchemaShapes', Array.isArray(native.nativeSchemaShapes) && native.nativeSchemaShapes.length <= 64, 'metadata-shape-array')
+    for (const [index, row] of (native.nativeSchemaShapes as unknown[]).entries()) {
+      if (typeof row !== 'string' || row.length > 65_536 || !schemaShape.test(row)) reject(`f1NativeCanary.nativeSchemaShapes[${index}]`, 'metadata-shape', row)
     }
   }
   const observation = value.f1NativeCanary as Record<string, unknown> | undefined
@@ -397,7 +434,11 @@ export async function runWindowsInstallerProfileChecks(options: {
       } catch (error) {
         canary.status = 'failed'
         canary.reason = error instanceof CanaryEvidenceSafetyError ? error.message : 'canary-invocation-or-evidence-unknown'
-        if (error instanceof CanaryEvidenceSafetyError) safetyFailure = error
+        if (error instanceof CanaryEvidenceSafetyError) {
+          safetyFailure = error
+          if (error.validationFailure) canary.validationFailure = error.validationFailure
+          if (error.producerFailures?.length) canary.producerFailures = error.producerFailures
+        }
       } finally {
         canary.privateRootRetained = retainSandbox
         writeFileSync(join(evidenceRoot, 'f1-native-canary-consumer.json'), `${JSON.stringify(canary, null, 2)}\n`)
