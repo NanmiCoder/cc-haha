@@ -34,6 +34,21 @@ function withNativeIoStubs(source: string) {
   return source.replaceAll('Marshal.AllocHGlobal(', 'GuardedRemovalIoStubs.Allocate(').replaceAll('Marshal.FreeHGlobal(', 'GuardedRemovalIoStubs.Free(')
 }
 
+function withNativeMetadataStubs(source: string) {
+  const replacements: Record<string, string> = {
+    GetFileType: 'internal static uint GetFileType(IntPtr handle) { return GuardedRemovalMetadataStubs.Kind(handle); }',
+    GetFileInformationByHandle: 'internal static bool GetFileInformationByHandle(IntPtr handle, out FileInfo information) { return GuardedRemovalMetadataStubs.Information(handle, out information); }',
+    GetFileInformationByHandleEx: 'internal static bool GetFileInformationByHandleEx(IntPtr handle, int kind, out StandardInfo information, uint length) { return GuardedRemovalMetadataStubs.StandardInformation(handle, kind, out information, length); }',
+    GetFinalPathNameByHandleW: 'internal static uint GetFinalPathNameByHandleW(IntPtr handle, StringBuilder path, uint capacity, uint flags) { return GuardedRemovalMetadataStubs.FinalPath(handle, path, capacity, flags); }',
+  }
+  for (const [name, replacement] of Object.entries(replacements)) {
+    const declaration = new RegExp(`\\[DllImport\\([^\\n]+\\)\\] internal static extern [^;\\n]+\\b${name}\\([^;]+;`, 'g')
+    if ([...source.matchAll(declaration)].length !== 1) throw new Error(`Expected one metadata declaration: ${name}`)
+    source = source.replace(declaration, replacement)
+  }
+  return source
+}
+
 test('guarded backend has no fixture CLI or alternate destructive path', () => {
   const code = readFileSync(backend, 'utf8')
   expect(code).not.toMatch(/--self-test|fixture-lifetime|CreateProcess|TerminateProcess|MoveFileEx|Directory\.Delete|File\.Delete|DeleteSubKey|RegDelete|PowerShell|System\.Net/)
@@ -41,6 +56,7 @@ test('guarded backend has no fixture CLI or alternate destructive path', () => {
   const injected = withNativeIoStubs(code)
   expect(injected).toContain('GuardedRemovalIoStubs.Rename(')
   expect(injected).toContain('GuardedRemovalIoStubs.Allocate(')
+  expect(withNativeMetadataStubs(code)).toContain('GuardedRemovalMetadataStubs.StandardInformation(')
 })
 
 function removePlainOwnedTree(root: string) {
@@ -119,13 +135,16 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
     copyFileSync(backend, sourceCopy)
     copyFileSync(harness, harnessCopy)
     const executable = join(code, 'checks.exe'), production = join(code, 'guarded-removal.exe'), stubExecutable = join(code, 'pending-stubs.exe')
+    const metadataExecutable = join(code, 'metadata-stubs.exe'), metadataSource = join(code, 'metadata-stubbed-source.cs')
     const injectedSource = join(code, 'pending-stubbed-source.cs')
     writeFileSync(injectedSource, withNativeIoStubs(readFileSync(backend, 'utf8')))
+    writeFileSync(metadataSource, withNativeMetadataStubs(readFileSync(backend, 'utf8')))
     const flags = ['/nologo', '/noconfig', '/nostdlib+', '/langversion:5', '/platform:x86', '/target:exe', '/checked+', '/warnaserror+', ...references]
     for (const [name, args] of [
       ['production', [...flags, `/out:${production}`, sourceCopy]],
       ['harness', [...flags, '/main:GuardedRemovalChecks', `/out:${executable}`, sourceCopy, harnessCopy]],
       ['pending-stubs', [...flags, '/main:GuardedRemovalIoStubs', `/out:${stubExecutable}`, injectedSource, harnessCopy]],
+      ['metadata-stubs', [...flags, '/main:GuardedRemovalMetadataStubs', `/out:${metadataExecutable}`, metadataSource, harnessCopy]],
     ] as const) {
       const compiled = spawnSync(compiler, [...args], { env, cwd: dirname(compiler), encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024 })
       writeFileSync(join(evidence, `${name}-compile.log`), `${compiled.stdout ?? ''}${compiled.stderr ?? ''}${compiled.error ?? ''}`)
@@ -150,6 +169,11 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
     expect(parentQuery.error).toBeUndefined()
     expect(parentQuery.status, parentQuery.stderr).toBe(0)
     expect(parentQuery.stdout.trim()).toBe('parent-query-control-pass:7')
+    const metadata = spawnSync(metadataExecutable, [], { env, encoding: 'utf8', windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 })
+    report.metadataControlFlow = { status: metadata.status, stdout: metadata.stdout, stderr: metadata.stderr, nativeApiCalled: false }
+    expect(metadata.error).toBeUndefined()
+    expect(metadata.status, metadata.stderr).toBe(0)
+    expect(metadata.stdout.trim()).toMatch(/^metadata-control-pass:\d+$/)
     const cases: unknown[] = []
     for (const mode of ['success', 'rollback', 'busy', 'wrong-cap', 'namespace-change', 'parent-dead',
       'data-plain', 'data-missing', 'data-config-leaf', 'data-product-leaf', 'data-config-ancestor', 'data-product-ancestor',
@@ -223,6 +247,26 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
         expect(result.firstTreeFailure.mutationStarted).toBe(result.treeMutationStarted)
       }
       if (mode === 'success' || mode === 'rollback' || mode === 'parent-dead') expect(result.namedPrunePins).toBeGreaterThan(0)
+      if (mode === 'success') {
+        expect(result.metadataObservationsTruncated).toBe(false)
+        const before = result.metadataObservations.filter((value: { role: string; phase: string }) => value.role === 'source-file' && value.phase === 'commit-prepare')
+        expect(before.length).toBeGreaterThanOrEqual(2)
+        for (const value of before) {
+          expect(value.links).toBe(1)
+          expect(value.deletePending).toBe(0)
+          expect(value.commitMarkedRead).toBe(false)
+        }
+        const marked = result.metadataObservations.filter((value: { commitMarkedRead: boolean }) => value.commitMarkedRead)
+        expect(marked).toHaveLength(2)
+        for (const value of marked) {
+          expect(value.phase).toBe('commit-prepare')
+          expect(value.role).toBe('commit-marked-source-file')
+          expect(value.directory).toBe(0)
+          expect(value.length).toBeGreaterThanOrEqual(0)
+          expect(value.links === 0 || value.links === 1).toBe(true)
+          expect(value.deletePending).toBe(1)
+        }
+      }
       if (mode === 'rollback' || mode === 'parent-dead') {
         expect(result.restored).toBe(true)
         expect(result.originalFileIdsAndBytesPreserved).toBe(true)

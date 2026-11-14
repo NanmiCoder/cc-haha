@@ -12,6 +12,29 @@ internal static class GuardedRemovalChecks
 {
   private static int Count;
   private static string ParentObservation = "null";
+  private static readonly List<GuardedRemoval.MetadataObservation> MetadataObservations = new List<GuardedRemoval.MetadataObservation>();
+  private static bool MetadataObservationsTruncated;
+  private static void ObserveMetadata(GuardedRemoval.MetadataObservation value)
+  {
+    if (value.Phase != "commit-prepare" && value.Links > 0 && value.Length >= 0 &&
+      (value.Directory != 0) == ((value.Attributes & 16) != 0)) return;
+    if (MetadataObservations.Count == 64) { MetadataObservationsTruncated = true; return; }
+    MetadataObservations.Add(value);
+  }
+  private static string MetadataJson()
+  {
+    var values = new List<string>();
+    foreach (GuardedRemoval.MetadataObservation value in MetadataObservations)
+      values.Add("{\"phase\":" + Quote(value.Phase) + ",\"role\":" + Quote(value.Role) +
+        ",\"commitMarkedRead\":" + (value.CommitMarkedRead ? "true" : "false") +
+        ",\"attributes\":" + value.Attributes.ToString(CultureInfo.InvariantCulture) +
+        ",\"directory\":" + value.Directory.ToString(CultureInfo.InvariantCulture) +
+        ",\"length\":" + value.Length.ToString(CultureInfo.InvariantCulture) +
+        ",\"links\":" + value.Links.ToString(CultureInfo.InvariantCulture) +
+        ",\"standardLinks\":" + value.StandardLinks.ToString(CultureInfo.InvariantCulture) +
+        ",\"deletePending\":" + value.DeletePending.ToString(CultureInfo.InvariantCulture) + "}");
+    return "[" + String.Join(",", values.ToArray()) + "]";
+  }
   private static void Assert(bool value, string name) { if (!value) throw new Exception(name); Count++; }
   private static void Reject(Action action, string code)
   {
@@ -359,6 +382,7 @@ internal static class GuardedRemovalChecks
       else
       {
         context = new GuardedRemoval.Context();
+        context.ObserveMetadata = ObserveMetadata;
         Receive(context, root, parentPid, false, created);
         if (mode == "busy")
         {
@@ -430,6 +454,7 @@ internal static class GuardedRemovalChecks
         ",\"namedPrunePins\":" + namedPrunePins.ToString(CultureInfo.InvariantCulture) +
         ",\"phase\":" + Quote(context == null ? "receive" : context.Phase) +
         ",\"parentCapabilityObservation\":" + ParentObservation +
+        ",\"metadataObservations\":" + MetadataJson() + ",\"metadataObservationsTruncated\":" + (MetadataObservationsTruncated ? "true" : "false") +
         ",\"firstTreeFailure\":" + (firstFailure == null ? "null" : firstFailure.Json()) +
         ",\"originalFileVerification\":" + Quote(bytesPreserved && fileIdsPreserved ? "passed" : "not_run") +
         ",\"treeMutationStarted\":" + (tree != null && tree.MutationStarted ? "true" : "false") +
@@ -554,4 +579,82 @@ internal static class GuardedRemovalIoStubs
     else return 2;
     return 0;
   }
+}
+
+// Query-only native stubs exercise the production reader and commit binding.
+// No OS handles, files, accounts or production entry point are used here.
+internal static class GuardedRemovalMetadataStubs
+{
+  private static GuardedRemoval.FileInfo File;
+  private static GuardedRemoval.StandardInfo Standard;
+  private static string Canonical;
+  private static GuardedRemoval.Context Context;
+  private static GuardedRemoval.FileNode Node;
+  private static GuardedRemoval.MetadataObservation Last;
+  private static int Count, Queries;
+  private static void Assert(bool value, string name) { if (!value) throw new Exception(name); Count++; }
+  private static void Reject(Action action, string code)
+  {
+    try { action(); }
+    catch (GuardedRemoval.Failure failure) { Assert(failure.Code == code, "metadata-wrong-code-" + failure.Code); return; }
+    throw new Exception("metadata-expected-rejection-" + code);
+  }
+  private static void Reset()
+  {
+    File = new GuardedRemoval.FileInfo { Attributes = 0x20, Volume = 7, Low = 22, Links = 0 };
+    Standard = new GuardedRemoval.StandardInfo { Length = 19, Links = 0, Pending = 1, Directory = 0 };
+    Canonical = "\\\\?\\C:\\Owned\\stage\\moved.bin";
+    Context = new GuardedRemoval.Context { Phase = "commit-prepare", StagingPath = "C:\\Owned\\stage" };
+    Context.ObserveMetadata = delegate(GuardedRemoval.MetadataObservation value) { Last = value; };
+    Node = new GuardedRemoval.FileNode { Pin = Context.Own(new IntPtr(4), "source-file"), StageLeaf = "moved.bin", Moved = true, DeleteMarked = true,
+      Original = new GuardedRemoval.Metadata { Volume = 7, Id = 22, Links = 1, Bytes = 19, Path = "C:\\Owned\\app\\a.bin" } };
+    Last = null; Queries = 0;
+  }
+  internal static uint Kind(IntPtr handle) { Queries++; return 1; }
+  internal static bool Information(IntPtr handle, out GuardedRemoval.FileInfo value) { value = File; return true; }
+  internal static bool StandardInformation(IntPtr handle, int kind, out GuardedRemoval.StandardInfo value, uint bytes)
+  { value = Standard; return kind == 1 && bytes == 24; }
+  internal static uint FinalPath(IntPtr handle, StringBuilder path, uint capacity, uint flags)
+  { path.Append(Canonical); return (uint)Canonical.Length; }
+  public static string Run()
+  {
+    Count = 0; Reset();
+    Reject(delegate { Context.Read(Node.Pin); }, "inconsistent-metadata");
+    Assert(Last != null && !Last.CommitMarkedRead && Last.Links == 0 && Last.StandardLinks == 0 && Last.DeletePending == 1,
+      "old-ordinary-wrapper-records-real-query-fields-before-rejecting");
+    GuardedRemoval.Metadata marked = Context.ReadCommitMarkedFile(Node);
+    Assert(marked.Id == 22 && marked.Volume == 7 && marked.Bytes == 19 && marked.Pending && marked.Links == 0, "bound-zero-link-pending-file-readable");
+    Assert(Last.CommitMarkedRead && Last.Role == "commit-marked-source-file" && Last.Phase == "commit-prepare" && Last.Directory == 0 && Last.Length == 19,
+      "commit-observation-keeps-role-phase-and-raw-fields");
+    Reset(); File.Links = Standard.Links = 1;
+    Assert(Context.ReadCommitMarkedFile(Node).Links == 1, "bound-pending-positive-link-control");
+    Standard.Pending = 0;
+    Assert(!Context.Read(Node.Pin).Pending, "ordinary-positive-link-admission-unchanged");
+    Reset(); Node.DeleteMarked = false; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Assert(Queries == 0, "unmarked-rejected-before-native-query");
+    Reset(); Node.Moved = false; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Context.Phase = "move"; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Node.Pin = Context.Own(new IntPtr(8), "owned-sentinel"); Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Context.Handles.Clear(); Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Node.Original.Links = 2; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Node.Original.Pending = true; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Node.Original.Directory = true; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Node.Original.Reparse = true; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-read-not-bound");
+    Reset(); Standard.Pending = 0; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); File.Attributes = 16; Standard.Directory = 1; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); Standard.Directory = 1; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); Standard.Length = -1; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); File.Volume++; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); File.Low++; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); Standard.Length++; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); File.Attributes |= 0x400; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); Standard.Links = 1; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "inconsistent-metadata");
+    Reset(); Canonical = "\\\\?\\C:\\Owned\\elsewhere\\moved.bin"; Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-identity-unknown");
+    Reset(); File.Links = Standard.Links = 1; Standard.Pending = 0;
+    Reject(delegate { Context.ReadCommitMarkedFile(Node); }, "commit-mark-identity-unknown");
+    Reset(); File.Attributes = 16; Standard.Directory = 1;
+    Reject(delegate { Context.ReadRaw(Node.Pin.Value); }, "inconsistent-metadata");
+    return "metadata-control-pass:" + Count.ToString(CultureInfo.InvariantCulture);
+  }
+  private static int Main() { Console.WriteLine(Run()); return 0; }
 }

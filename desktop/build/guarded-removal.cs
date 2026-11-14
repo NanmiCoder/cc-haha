@@ -374,6 +374,14 @@ internal static class GuardedRemoval
     internal string Path;
     internal bool Directory, Reparse, Pending;
   }
+  internal sealed class MetadataObservation
+  {
+    internal string Phase, Role;
+    internal bool CommitMarkedRead;
+    internal uint Attributes, Links, StandardLinks;
+    internal long Length;
+    internal byte Directory, DeletePending;
+  }
   internal sealed class Entry
   {
     internal string Leaf;
@@ -417,6 +425,7 @@ internal static class GuardedRemoval
     internal string ParentImage;
     internal bool Unknown, PendingIo, ParentDead;
     internal string Phase = "receive", StagingPath, StageCreation = "not-attempted";
+    internal Action<MetadataObservation> ObserveMetadata = null;
     internal Handle Own(IntPtr value, string role)
     {
       Need(value != IntPtr.Zero && value != Invalid, "invalid-owned-handle");
@@ -428,7 +437,19 @@ internal static class GuardedRemoval
       Win(value != Invalid && value != IntPtr.Zero, "open-" + role, error);
       return Own(value, role);
     }
-    internal Metadata Read(Handle handle) { return ReadRaw(handle.Value); }
+    internal Metadata Read(Handle handle) { return ReadMetadata(handle.Value, handle.Role, null); }
+    internal Metadata ReadCommitMarkedFile(FileNode file)
+    {
+      Need(Phase == "commit-prepare" && !String.IsNullOrEmpty(StagingPath) && file != null && file.Pin != null &&
+        Handles.Contains(file.Pin) && file.Pin.Value != IntPtr.Zero && !file.Pin.CloseAttempted && file.Pin.Role == "source-file" &&
+        file.Moved && file.DeleteMarked && file.Original != null && file.Original.Id != 0 && file.Original.Links == 1 &&
+        !file.Original.Directory && !file.Original.Reparse && !file.Original.Pending && ValidLeaf(file.StageLeaf), "commit-mark-read-not-bound");
+      Metadata current = ReadMetadata(file.Pin.Value, "commit-marked-source-file", file.Original);
+      Need(current.Pending && !current.Directory && !current.Reparse && current.Links <= 1 && current.Volume == file.Original.Volume &&
+        current.Id == file.Original.Id && current.Bytes == file.Original.Bytes && current.Path == ChildPath(StagingPath, file.StageLeaf),
+        "commit-mark-identity-unknown");
+      return current;
+    }
     internal void RevalidateData() { if (DataGuard != null) DataGuard.Revalidate(); }
     internal void ReceiveParent(uint[] tuple, string currentSid, string installRoot)
     {
@@ -478,6 +499,8 @@ internal static class GuardedRemoval
       Unknown = true; throw new Failure("parent-liveness-unknown", error);
     }
     internal Metadata ReadRaw(IntPtr handle)
+    { return ReadMetadata(handle, "raw-capability", null); }
+    private Metadata ReadMetadata(IntPtr handle, string role, Metadata markedOriginal)
     {
       uint kind = Native.GetFileType(handle); int error = Marshal.GetLastWin32Error();
       Win(kind == 1, "non-disk-object", error);
@@ -487,7 +510,16 @@ internal static class GuardedRemoval
       StandardInfo standard;
       bool info = Native.GetFileInformationByHandleEx(handle, 1, out standard, (uint)Marshal.SizeOf(typeof(StandardInfo))); error = Marshal.GetLastWin32Error();
       Win(info, "standard-metadata", error);
-      Need((standard.Directory != 0) == ((file.Attributes & 16) != 0) && standard.Length >= 0 && file.Links > 0, "inconsistent-metadata");
+      if (ObserveMetadata != null) ObserveMetadata(new MetadataObservation { Phase = Phase, Role = role, CommitMarkedRead = markedOriginal != null,
+        Attributes = file.Attributes, Links = file.Links, StandardLinks = standard.Links, Length = standard.Length,
+        Directory = standard.Directory, DeletePending = standard.Pending });
+      // A successfully delete-marked single-link file can report no live links.
+      // This exception is available only through the bound commit-file reader;
+      // ordinary admission and every directory retain the positive-link rule.
+      bool pendingBoundFile = markedOriginal != null && file.Links == 0 && standard.Links == 0 && standard.Pending == 1 &&
+        standard.Directory == 0 && (file.Attributes & (16u | 0x400u)) == 0 && file.Volume == markedOriginal.Volume &&
+        (((ulong)file.High << 32) | file.Low) == markedOriginal.Id && standard.Length == markedOriginal.Bytes;
+      Need((standard.Directory != 0) == ((file.Attributes & 16) != 0) && standard.Length >= 0 && (file.Links > 0 || pendingBoundFile), "inconsistent-metadata");
       var path = new StringBuilder(32768);
       uint length = Native.GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0); error = Marshal.GetLastWin32Error();
       Win(length > 0 && length < path.Capacity, "canonical-path-unknown", error);
@@ -979,7 +1011,7 @@ internal static class GuardedRemoval
       allowed.Add(Stage.SentinelLeaf, Stage.SentinelIdentity.Id);
       foreach (FileNode file in Files)
       {
-        Metadata current = Context.Read(file.Pin);
+        Metadata current = Context.ReadCommitMarkedFile(file);
         Need(file.DeleteMarked && current.Pending && !current.Directory && !current.Reparse && current.Volume == file.Original.Volume &&
           current.Id == file.Original.Id && current.Bytes == file.Original.Bytes && current.Path == ChildPath(Stage.Current.Path, file.StageLeaf),
           "commit-mark-identity-unknown");
