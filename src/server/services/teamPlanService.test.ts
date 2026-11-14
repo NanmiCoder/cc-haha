@@ -287,3 +287,68 @@ test('a running team whose owner was lost is re-owned instead of being marked in
   })
   expect((await unrecoverable.getForSession('session'))?.state).toBe('interrupted')
 })
+
+test('a GET whose launching snapshot completes during lookup returns the advanced plan without orphaning it', async () => {
+  const pending = await ready()
+  let release!: () => void
+  const launchBarrier = new Promise<void>(resolve => { release = resolve })
+  let launches = 0, stops = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    launches++
+    await launchBarrier
+    return { memberIds: { worker: 'fixture-child' } }
+  }, stop: async () => { stops++ }, isRunning: () => true, reclaimUnstarted: async () => false })
+  await service.approve('review', identity(pending))
+  const find = teamPlanStore.findTeamPlanForSession
+  let heldSnapshot: TeamPlanRecord | null = null
+  let delayed = false
+  const lookup = spyOn(teamPlanStore, 'findTeamPlanForSession').mockImplementation(async id => {
+    const observed = await find(id)
+    if (!delayed && observed?.state === 'launching') {
+      delayed = true
+      heldSnapshot = observed
+      release()
+      await settle('running')
+      for (let i = 0; service.hasActiveOperations() && i < 100; i++) await Bun.sleep(1)
+      expect(service.hasActiveOperations()).toBe(false)
+    }
+    return observed
+  })
+  try {
+    const result = await service.getForSession('session')
+    expect(heldSnapshot?.state).toBe('launching')
+    expect(result?.state).toBe('running')
+    expect(result?.planId).toBe(heldSnapshot?.planId)
+    expect(result!.revision).toBeGreaterThan(heldSnapshot!.revision)
+    expect((await readTeamPlan('review'))?.state).toBe('running')
+    expect(launches).toBe(1)
+    expect(stops).toBe(0)
+  } finally { lookup.mockRestore(); release() }
+})
+
+test('GET observation recovery does not relax stale human approval or update revisions', async () => {
+  const stale = await ready()
+  await teamPlanStore.mutateTeamPlan('review', identity(stale), current => ({ ...current, feedback: 'newer human review' }))
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => { launches++; return { memberIds: {} } }, stop: async () => {} })
+  await expect(service.approve('review', identity(stale))).rejects.toThrow('Plan changed; refresh before continuing')
+  await expect(service.update('review', identity(stale), { members: [] })).rejects.toThrow('Plan changed; refresh before continuing')
+  expect(launches).toBe(0)
+})
+
+test.each([false, true])('GET preserves a conflict without its exact advancing revision proof (other error: %s)', async otherError => {
+  const plan = await ready()
+  await approveTeamPlan('review', identity(plan), 'request', plan)
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => { throw new Error('must not replay') }, stop: async () => {} })
+  const mutate = teamPlanStore.mutateTeamPlan
+  const conflict = new teamPlanStore.TeamPlanError(otherError ? 'Other persisted plan conflict' : 'Plan changed; refresh before continuing')
+  const recovery = spyOn(teamPlanStore, 'mutateTeamPlan').mockImplementation(async (name, currentIdentity) => {
+    if (otherError) await mutate(name, currentIdentity, current => ({ ...current, state: 'running', launch: { ...current.launch, status: 'running' } }))
+    throw conflict
+  })
+  try {
+    await expect(service.getForSession('session')).rejects.toBe(conflict)
+    expect(recovery).toHaveBeenCalledTimes(1)
+    expect((await readTeamPlan('review'))?.state).toBe(otherError ? 'running' : 'launching')
+  } finally { recovery.mockRestore() }
+})
