@@ -212,6 +212,7 @@ function appendNewProviderToOrder(providerOrder: string[], providerId: string, e
 
 export class ProviderService {
   private static serverPort = 3456
+  private static mutationQueues = new Map<string, Promise<void>>()
   private managedSettingsService = new ManagedSettingsService()
   private settingsService = new SettingsService()
 
@@ -234,6 +235,22 @@ export class ProviderService {
     return path.join(this.getCcHahaDir(), 'providers.json')
   }
 
+  /** Serialize index read/modify/write across instances; settings callbacks read without this lock. */
+  private async withIndexMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const filePath = path.resolve(this.getIndexPath())
+    const previous = ProviderService.mutationQueues.get(filePath) ?? Promise.resolve()
+    const result = previous.then(operation)
+    const settled = result.then(() => {}, () => {})
+    ProviderService.mutationQueues.set(filePath, settled)
+    try {
+      return await result
+    } finally {
+      if (ProviderService.mutationQueues.get(filePath) === settled) {
+        ProviderService.mutationQueues.delete(filePath)
+      }
+    }
+  }
+
   private async readIndex(): Promise<ProvidersIndex> {
     const migration = await ensurePersistentStorageUpgraded()
     if (migration.failures.some(failure => failure.startsWith('cc-haha/settings.json:'))) {
@@ -252,7 +269,7 @@ export class ProviderService {
     const dir = path.dirname(filePath)
     await fs.mkdir(dir, { recursive: true })
 
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
+    const tmpFile = `${filePath}.tmp.${process.pid}.${crypto.randomUUID()}`
     try {
       await fs.writeFile(tmpFile, JSON.stringify(index, null, 2) + '\n', 'utf-8')
       await fs.rename(tmpFile, filePath)
@@ -375,27 +392,30 @@ export class ProviderService {
     models: ModelMapping,
     options?: { modelContextWindows?: Record<string, number> },
   ): Promise<ModelMapping> {
-    if (!isBuiltInProviderId(id)) {
-      throw ApiError.notFound(`Official provider not found: ${id}`)
-    }
-    const contextWindows = options?.modelContextWindows
-    if (contextWindows !== undefined) {
-      this.assertOfficialContextWindows(id, contextWindows)
-    }
+    const { index, normalized } = await this.withIndexMutation(async () => {
+      if (!isBuiltInProviderId(id)) {
+        throw ApiError.notFound(`Official provider not found: ${id}`)
+      }
+      const contextWindows = options?.modelContextWindows
+      if (contextWindows !== undefined) {
+        this.assertOfficialContextWindows(id, contextWindows)
+      }
 
-    const index = await this.readIndex()
-    const normalized = normalizeModelMapping(models)
-    index.officialProviderModels = {
-      ...index.officialProviderModels,
-      [id]: normalized,
-    }
-    if (contextWindows !== undefined) {
-      const { [id]: _replaced, ...others } = index.officialProviderContextWindows
-      index.officialProviderContextWindows = Object.keys(contextWindows).length > 0
-        ? { ...others, [id]: contextWindows }
-        : others
-    }
-    await this.writeIndex(index)
+      const index = await this.readIndex()
+      const normalized = normalizeModelMapping(models)
+      index.officialProviderModels = {
+        ...index.officialProviderModels,
+        [id]: normalized,
+      }
+      if (contextWindows !== undefined) {
+        const { [id]: _replaced, ...others } = index.officialProviderContextWindows
+        index.officialProviderContextWindows = Object.keys(contextWindows).length > 0
+          ? { ...others, [id]: contextWindows }
+          : others
+      }
+      await this.writeIndex(index)
+      return { index, normalized }
+    })
 
     if (id === CLAUDE_OFFICIAL_PROVIDER_ID) {
       if (index.activeId === null) {
@@ -438,14 +458,16 @@ export class ProviderService {
   }
 
   async addProvider(input: CreateProviderInput): Promise<SavedProvider> {
-    const index = await this.readIndex()
+    return this.withIndexMutation(async () => {
+      const index = await this.readIndex()
 
-    const provider = buildSavedProvider(input)
+      const provider = buildSavedProvider(input)
 
-    index.providerOrder = appendNewProviderToOrder(index.providerOrder, provider.id, index.providers)
-    index.providers.push(provider)
-    await this.writeIndex(index)
-    return provider
+      index.providerOrder = appendNewProviderToOrder(index.providerOrder, provider.id, index.providers)
+      index.providers.push(provider)
+      await this.writeIndex(index)
+      return provider
+    })
   }
 
   /**
@@ -457,84 +479,89 @@ export class ProviderService {
    * readers preserve its template fields through later edits.
    */
   async importProviders(inputs: ImportProviderInput[]): Promise<SavedProvider[]> {
-    if (inputs.length === 0) return []
+    return this.withIndexMutation(async () => {
+      if (inputs.length === 0) return []
 
-    const index = await this.readIndex()
+      const index = await this.readIndex()
 
-    const imported: SavedProvider[] = []
-    for (const input of inputs) {
-      const provider = buildSavedProvider(input)
-      index.providerOrder = appendNewProviderToOrder(index.providerOrder, provider.id, index.providers)
-      index.providers.push(provider)
-      imported.push(provider)
-    }
+      const imported: SavedProvider[] = []
+      for (const input of inputs) {
+        const provider = buildSavedProvider(input)
+        index.providerOrder = appendNewProviderToOrder(index.providerOrder, provider.id, index.providers)
+        index.providers.push(provider)
+        imported.push(provider)
+      }
 
-    await this.writeIndex(index)
-    return imported
+      await this.writeIndex(index)
+      return imported
+    })
   }
 
   async updateProvider(id: string, input: UpdateProviderInput): Promise<SavedProvider> {
-    const index = await this.readIndex()
-    const idx = index.providers.findIndex((p) => p.id === id)
-    if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
+    const { index, updated } = await this.withIndexMutation(async () => {
+      const index = await this.readIndex()
+      const idx = index.providers.findIndex((p) => p.id === id)
+      if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
 
-    const existing = index.providers[idx]
-    const imageGeneration = input.imageGeneration
-      ? normalizeImageGeneration({
-        ...existing.imageGeneration,
-        ...input.imageGeneration,
-        baseUrl: input.imageGeneration.baseUrl,
-        apiKey: input.imageGeneration.apiKey,
-      })
-      : input.imageGeneration
-    const updated: SavedProvider = {
-      ...existing,
-      ...(input.name !== undefined && { name: input.name }),
-      ...(input.apiKey !== undefined && { apiKey: input.apiKey }),
-      ...(input.authStrategy !== undefined && { authStrategy: input.authStrategy }),
-      ...(input.baseUrl !== undefined && { baseUrl: input.baseUrl }),
-      ...(input.apiFormat !== undefined && { apiFormat: input.apiFormat }),
-      ...(input.runtimeKind !== undefined && { runtimeKind: input.runtimeKind }),
-      ...(input.models !== undefined && { models: normalizeModelMapping(input.models) }),
-      ...(input.model1mSupport !== undefined && input.model1mSupport !== null && { model1mSupport: input.model1mSupport }),
-      ...(typeof input.autoCompactWindow === 'number' && { autoCompactWindow: input.autoCompactWindow }),
-      ...(input.modelContextWindows !== undefined && input.modelContextWindows !== null && { modelContextWindows: input.modelContextWindows }),
-      ...(input.modelMaxOutputTokens !== undefined && input.modelMaxOutputTokens !== null && { modelMaxOutputTokens: input.modelMaxOutputTokens }),
-      ...(input.toolSearchEnabled !== undefined && { toolSearchEnabled: input.toolSearchEnabled }),
-      ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
-      ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
-      ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
-      ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
-      ...(input.proxy !== undefined && input.proxy !== null && { proxy: input.proxy }),
-      ...(input.notes !== undefined && { notes: input.notes }),
-    }
-    if (input.proxy === null) {
-      delete updated.proxy
-    }
-    if (input.model1mSupport === null) {
-      delete updated.model1mSupport
-    }
-    if (input.autoCompactWindow === null) {
-      delete updated.autoCompactWindow
-    }
-    if (input.modelContextWindows === null) {
-      delete updated.modelContextWindows
-    }
-    if (input.modelMaxOutputTokens === null) {
-      delete updated.modelMaxOutputTokens
-    }
-    if (input.requestCompatibility === null) {
-      delete updated.requestCompatibility
-    }
-    if (input.disableExperimentalBetas === false) {
-      delete updated.disableExperimentalBetas
-    }
-    if (imageGeneration === null) {
-      delete updated.imageGeneration
-    }
+      const existing = index.providers[idx]
+      const imageGeneration = input.imageGeneration
+        ? normalizeImageGeneration({
+          ...existing.imageGeneration,
+          ...input.imageGeneration,
+          baseUrl: input.imageGeneration.baseUrl,
+          apiKey: input.imageGeneration.apiKey,
+        })
+        : input.imageGeneration
+      const updated: SavedProvider = {
+        ...existing,
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.apiKey !== undefined && { apiKey: input.apiKey }),
+        ...(input.authStrategy !== undefined && { authStrategy: input.authStrategy }),
+        ...(input.baseUrl !== undefined && { baseUrl: input.baseUrl }),
+        ...(input.apiFormat !== undefined && { apiFormat: input.apiFormat }),
+        ...(input.runtimeKind !== undefined && { runtimeKind: input.runtimeKind }),
+        ...(input.models !== undefined && { models: normalizeModelMapping(input.models) }),
+        ...(input.model1mSupport !== undefined && input.model1mSupport !== null && { model1mSupport: input.model1mSupport }),
+        ...(typeof input.autoCompactWindow === 'number' && { autoCompactWindow: input.autoCompactWindow }),
+        ...(input.modelContextWindows !== undefined && input.modelContextWindows !== null && { modelContextWindows: input.modelContextWindows }),
+        ...(input.modelMaxOutputTokens !== undefined && input.modelMaxOutputTokens !== null && { modelMaxOutputTokens: input.modelMaxOutputTokens }),
+        ...(input.toolSearchEnabled !== undefined && { toolSearchEnabled: input.toolSearchEnabled }),
+        ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
+        ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
+        ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
+        ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
+        ...(input.proxy !== undefined && input.proxy !== null && { proxy: input.proxy }),
+        ...(input.notes !== undefined && { notes: input.notes }),
+      }
+      if (input.proxy === null) {
+        delete updated.proxy
+      }
+      if (input.model1mSupport === null) {
+        delete updated.model1mSupport
+      }
+      if (input.autoCompactWindow === null) {
+        delete updated.autoCompactWindow
+      }
+      if (input.modelContextWindows === null) {
+        delete updated.modelContextWindows
+      }
+      if (input.modelMaxOutputTokens === null) {
+        delete updated.modelMaxOutputTokens
+      }
+      if (input.requestCompatibility === null) {
+        delete updated.requestCompatibility
+      }
+      if (input.disableExperimentalBetas === false) {
+        delete updated.disableExperimentalBetas
+      }
+      if (imageGeneration === null) {
+        delete updated.imageGeneration
+      }
 
-    index.providers[idx] = updated
-    await this.writeIndex(index)
+      index.providers[idx] = updated
+      await this.writeIndex(index)
+      return { index, updated }
+    })
 
     if (index.activeId === id) {
       await this.syncToSettings(updated)
@@ -544,17 +571,19 @@ export class ProviderService {
   }
 
   async deleteProvider(id: string): Promise<void> {
-    const index = await this.readIndex()
-    const idx = index.providers.findIndex((p) => p.id === id)
-    if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
+    return this.withIndexMutation(async () => {
+      const index = await this.readIndex()
+      const idx = index.providers.findIndex((p) => p.id === id)
+      if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
 
-    if (index.activeId === id) {
-      throw ApiError.conflict('Cannot delete the active provider. Switch to another provider first.')
-    }
+      if (index.activeId === id) {
+        throw ApiError.conflict('Cannot delete the active provider. Switch to another provider first.')
+      }
 
-    index.providers.splice(idx, 1)
-    index.providerOrder = index.providerOrder.filter((providerId) => providerId !== id)
-    await this.writeIndex(index)
+      index.providers.splice(idx, 1)
+      index.providerOrder = index.providerOrder.filter((providerId) => providerId !== id)
+      await this.writeIndex(index)
+    })
   }
 
   /**
@@ -566,49 +595,54 @@ export class ProviderService {
    * order without moving the built-in official rows.
    */
   async reorderProviders(orderedIds: string[]): Promise<{ providers: SavedProvider[]; providerOrder: string[] }> {
-    const index = await this.readIndex()
+    return this.withIndexMutation(async () => {
+      const index = await this.readIndex()
 
-    const currentSavedIds = savedProviderIds(index.providers)
-    const isFullDisplayPermutation = isPermutation(orderedIds, fullProviderOrderIds(index.providers))
-    const isLegacySavedPermutation = isPermutation(orderedIds, currentSavedIds)
+      const currentSavedIds = savedProviderIds(index.providers)
+      const isFullDisplayPermutation = isPermutation(orderedIds, fullProviderOrderIds(index.providers))
+      const isLegacySavedPermutation = isPermutation(orderedIds, currentSavedIds)
 
-    if (!isFullDisplayPermutation && !isLegacySavedPermutation) {
-      throw ApiError.badRequest('orderedIds must be a permutation of existing provider ids and built-in provider ids')
-    }
+      if (!isFullDisplayPermutation && !isLegacySavedPermutation) {
+        throw ApiError.badRequest('orderedIds must be a permutation of existing provider ids and built-in provider ids')
+      }
 
-    index.providerOrder = isFullDisplayPermutation
-      ? orderedIds
-      : mergeSavedOrderIntoDisplayOrder(index.providerOrder, orderedIds)
-    index.providers = sortSavedProvidersByOrder(index.providers, index.providerOrder)
-    await this.writeIndex(index)
+      index.providerOrder = isFullDisplayPermutation
+        ? orderedIds
+        : mergeSavedOrderIntoDisplayOrder(index.providerOrder, orderedIds)
+      index.providers = sortSavedProvidersByOrder(index.providers, index.providerOrder)
+      await this.writeIndex(index)
 
-    return {
-      providers: index.providers,
-      providerOrder: index.providerOrder,
-    }
+      return {
+        providers: index.providers,
+        providerOrder: index.providerOrder,
+      }
+    })
   }
 
   // --- Activation ---
 
   async activateProvider(id: string): Promise<void> {
-    const index = await this.readIndex()
-    const provider = isOpenAIOfficialProviderId(id)
-      ? this.resolveOpenAIOfficialProvider(index)
-      : isGrokOfficialProviderId(id)
-        ? {
-            ...GROK_OFFICIAL_PROVIDER,
-            models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
-          }
-        : isDeepSeekAccountProviderId(id)
+    const provider = await this.withIndexMutation(async () => {
+      const index = await this.readIndex()
+      const provider = isOpenAIOfficialProviderId(id)
+        ? this.resolveOpenAIOfficialProvider(index)
+        : isGrokOfficialProviderId(id)
           ? {
-              ...DEEPSEEK_ACCOUNT_PROVIDER,
-              models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
+              ...GROK_OFFICIAL_PROVIDER,
+              models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
             }
-          : index.providers.find((p) => p.id === id)
-    if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
+          : isDeepSeekAccountProviderId(id)
+            ? {
+                ...DEEPSEEK_ACCOUNT_PROVIDER,
+                models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
+              }
+            : index.providers.find((p) => p.id === id)
+      if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
 
-    index.activeId = id
-    await this.writeIndex(index)
+      index.activeId = id
+      await this.writeIndex(index)
+      return provider
+    })
 
     if (
       provider.runtimeKind === 'openai_oauth' ||
@@ -652,32 +686,37 @@ export class ProviderService {
   }
 
   private async syncMagpieProviders(baseUrl: string, models: MagpieModel[] | null): Promise<void> {
-    const index = await this.readIndex()
-    const limits = models ? magpieModelLimits(models) : null
-    const changed: SavedProvider[] = []
-    index.providers = index.providers.map((provider) => {
-      if (!isMagpieProvider(provider)) return provider
-      const next: SavedProvider = { ...provider, baseUrl }
-      if (limits) {
-        delete next.modelContextWindows
-        delete next.modelMaxOutputTokens
-        if (Object.keys(limits.modelContextWindows).length) next.modelContextWindows = limits.modelContextWindows
-        if (Object.keys(limits.modelMaxOutputTokens).length) next.modelMaxOutputTokens = limits.modelMaxOutputTokens
-      }
-      if (JSON.stringify(next) === JSON.stringify(provider)) return provider
-      changed.push(next)
-      return next
+    const active = await this.withIndexMutation(async () => {
+      const index = await this.readIndex()
+      const limits = models ? magpieModelLimits(models) : null
+      const changed: SavedProvider[] = []
+      index.providers = index.providers.map((provider) => {
+        if (!isMagpieProvider(provider)) return provider
+        const next: SavedProvider = { ...provider, baseUrl }
+        if (limits) {
+          delete next.modelContextWindows
+          delete next.modelMaxOutputTokens
+          if (Object.keys(limits.modelContextWindows).length) next.modelContextWindows = limits.modelContextWindows
+          if (Object.keys(limits.modelMaxOutputTokens).length) next.modelMaxOutputTokens = limits.modelMaxOutputTokens
+        }
+        if (JSON.stringify(next) === JSON.stringify(provider)) return provider
+        changed.push(next)
+        return next
+      })
+      if (!changed.length) return
+      await this.writeIndex(index)
+      return changed.find((provider) => provider.id === index.activeId)
     })
-    if (!changed.length) return
-    await this.writeIndex(index)
-    const active = changed.find((provider) => provider.id === index.activeId)
     if (active) await this.syncToSettings(active)
   }
 
   async activateOfficial(): Promise<void> {
-    const index = await this.readIndex()
-    index.activeId = null
-    await this.writeIndex(index)
+    const index = await this.withIndexMutation(async () => {
+      const index = await this.readIndex()
+      index.activeId = null
+      await this.writeIndex(index)
+      return index
+    })
     await this.clearProviderFromSettings()
     await this.settingsService.updateOfficialModelMapping(
       this.resolveOfficialProviderModels(index, CLAUDE_OFFICIAL_PROVIDER_ID),

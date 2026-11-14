@@ -45,6 +45,6 @@ export function getSessionSeedWorkDir(
   if (!workDir) return projectRoot
   const isWorktreeSession =
     session.workspaceState === 'worktree_removed' ||
-    (workDir !== projectRoot && workDir.includes(DESKTOP_WORKTREE_MARKER))
+    (workDir !== projectRoot && workDir.replaceAll('\\', '/').includes(DESKTOP_WORKTREE_MARKER))
   return isWorktreeSession ? projectRoot : workDir
 }
