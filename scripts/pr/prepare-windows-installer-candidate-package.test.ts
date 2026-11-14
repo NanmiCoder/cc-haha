@@ -1,11 +1,12 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
+import * as nativeFs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidatePackage, cleanupCandidateDirectory, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
+import { candidateBuildCommands, candidateCaptureNodeOptions, candidateCaptureScript, candidatePackage, candidatePackageFailureSummary, cleanupCandidateDirectory, finishCandidatePackage, runCandidatePackage, validateCandidatePackageTrigger, verifyCandidateOutputs } from './prepare-windows-installer-candidate-package'
 import { type SevenZipRunner } from './windows-installer-member-proof'
 import { createSandboxedTestEnvironment } from './test-environment'
 
@@ -29,6 +30,122 @@ function ownedFixture() {
   }
   return { root, temp, source, evidence, capture, put, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
+
+function completionFixture() {
+  const f = ownedFixture()
+  const directory = realpathSync(mkdtempSync(join(f.root, 'cc-haha-candidate-package-')))
+  writeFileSync(join(directory, '.owner'), nonce)
+  writeFileSync(join(directory, 'owned.txt'), 'owned disposable payload')
+  const receipt: any = { version: 1, status: 'candidate_package_prepared', sourceHead: head, runId: '12345',
+    kind: 'full-electron-nsis-package', setupSha256: 'b'.repeat(64), setupBytes: 100 * 1024 * 1024,
+    accountsCreated: 0, profilesCreated: 0, installed: false, signed: false, published: false, fullF1: 'not_proven' }
+  return { ...f, directory, receipt, options: { receipt, evidence: f.evidence, temp: directory, parent: f.root, nonce } }
+}
+
+describe('bounded candidate cleanup diagnostics', () => {
+  test.each(['EBUSY', 'PRIVATE_UNRECOGNIZED_CODE'])('retains the complete receipt and exact error without publishing arbitrary cleanup data (%s)', code => {
+    const f = completionFixture(), secret = 'PRIVATE_CLEANUP_MESSAGE_STACK_AND_PATH'
+    const nativeError = Object.assign(new Error(secret), { code, path: secret, stack: secret })
+    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    let failure: any
+    try {
+      try { finishCandidatePackage(f.options) } catch (error) { failure = error }
+      expect(remove).toHaveBeenCalledTimes(1)
+      expect(failure.cause.cause).toBe(nativeError)
+      expect(failure.cleanupCause.cause).toBe(nativeError)
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      const receipt = JSON.parse(raw)
+      expect(receipt).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        errorCode: 'candidate_package_not_proven', kind: f.receipt.kind, setupSha256: 'b'.repeat(64),
+        setupBytes: 100 * 1024 * 1024, accountsCreated: 0, profilesCreated: 0, installed: false, fullF1: 'not_proven',
+        cleanupFailure: { site: 'remove', guard: null, nativeCode: code === 'EBUSY' ? 'EBUSY' : 'UNRECOGNIZED' } })
+      expect(raw).not.toContain(secret)
+      expect(raw).not.toContain('PRIVATE_UNRECOGNIZED_CODE')
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+      expect(candidatePackageFailureSummary(nativeError)).not.toContain(secret)
+      expect(existsSync(f.directory)).toBe(true)
+      expect(readFileSync(join(f.directory, '.owner'), 'utf8')).toBe(nonce)
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('records a denied owner guard without attempting deletion', () => {
+    const f = completionFixture(), remove = spyOn(nativeFs, 'rmSync')
+    let failure: any
+    try {
+      try { finishCandidatePackage({ ...f.options, nonce: 'different-private-owner' }) } catch (error) { failure = error }
+      expect(remove).not.toHaveBeenCalled()
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown',
+        cleanupFailure: { site: 'admission', guard: 'owner-value', nativeCode: null } })
+      expect(raw).not.toContain('different-private-owner')
+      expect(failure.cause.message).toBe('Unowned candidate temporary directory')
+      expect(existsSync(f.directory)).toBe(true)
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('retains a primary build error when cleanup also fails', () => {
+    const f = completionFixture(), buildError = new Error('PRIVATE_BUILD_MESSAGE')
+    const nativeError = Object.assign(new Error('PRIVATE_SECONDARY_MESSAGE'), { code: 'EPERM' })
+    f.receipt.status = 'not_proven'; f.receipt.failedStage = 'build-full-windows-x64'; f.receipt.errorCode = 'candidate_package_not_proven'
+    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    let failure: any
+    try {
+      try { finishCandidatePackage({ ...f.options, originalError: buildError }) } catch (error) { failure = error }
+      expect(failure.cause).toBe(buildError)
+      expect(failure.cleanupCause.cause).toBe(nativeError)
+      expect(JSON.parse(readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8'))).toMatchObject({
+        status: 'not_proven', cleanup: 'unknown', failedStage: 'build-full-windows-x64',
+        cleanupFailure: { site: 'remove', guard: null, nativeCode: 'EPERM' } })
+      expect(candidatePackageFailureSummary(failure)).toBe('Candidate package not proven at build-full-windows-x64; bounded evidence preserved')
+    } finally { remove.mockRestore(); f.cleanup() }
+  })
+  test('preserves successful cleanup without adding an unknown result', () => {
+    const f = completionFixture()
+    try {
+      const receipt = finishCandidatePackage(f.options)
+      expect(receipt.status).toBe('candidate_package_prepared')
+      expect(receipt.cleanup).toBe('owned_temporary_directory_removed')
+      expect(receipt.cleanupFailure).toBeUndefined()
+      expect(receipt.failedStage).toBeUndefined()
+      expect(existsSync(f.directory)).toBe(false)
+    } finally { f.cleanup() }
+  })
+  test('exits nonzero with only the bounded CLI summary when retained causes contain private data', () => {
+    const f = completionFixture()
+    const markers = ['PRIVATE_INJECTED_MESSAGE', 'PRIVATE_INJECTED_PATH', 'PRIVATE_INJECTED_STACK']
+    const program = `
+      import { finishCandidatePackage, candidatePackageFailureSummary } from ${JSON.stringify(join(import.meta.dir, 'prepare-windows-installer-candidate-package.ts'))}
+      const options = JSON.parse(process.argv[1])
+      const original = Object.assign(new Error(${JSON.stringify(markers[0])}), { path: ${JSON.stringify(markers[1])}, stack: ${JSON.stringify(markers[2])} })
+      try { finishCandidatePackage({ ...options, nonce: 'wrong-private-owner', originalError: original }) }
+      catch (error) {
+        if (error.cause !== original) throw new Error('Original cause was not retained')
+        console.error(candidatePackageFailureSummary(error))
+        process.exitCode = 1
+      }
+    `
+    try {
+      const child = spawnSync(process.execPath, ['--no-env-file', '--eval', program, JSON.stringify(f.options)], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 64 * 1024,
+        env: createSandboxedTestEnvironment(join(f.root, 'child-home')),
+      })
+      expect(child.error).toBeUndefined()
+      expect(child.status).toBe(1)
+      expect(child.signal).toBeNull()
+      expect(child.stdout).toBe('')
+      expect(child.stderr).toBe('Candidate package not proven at cleanup; bounded evidence preserved\n')
+      for (const marker of [...markers, f.directory]) {
+        expect(child.stdout).not.toContain(marker)
+        expect(child.stderr).not.toContain(marker)
+      }
+      const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8')
+      expect(JSON.parse(raw)).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+        errorCode: 'candidate_package_not_proven', setupSha256: f.receipt.setupSha256, setupBytes: f.receipt.setupBytes,
+        cleanupFailure: { site: 'admission', guard: 'owner-value', nativeCode: null } })
+      for (const marker of markers) expect(raw).not.toContain(marker)
+      expect(existsSync(f.directory)).toBe(true)
+      expect(readFileSync(join(f.directory, '.owner'), 'utf8')).toBe(nonce)
+    } finally { f.cleanup() }
+  })
+})
 
 describe('candidate package execution boundary', () => {
   test.each(['opened', 'synchronize', 'reopened', 'ready_for_review'])('accepts only an exact checked-out ordinary %s PR after successful Windows checks', action => {

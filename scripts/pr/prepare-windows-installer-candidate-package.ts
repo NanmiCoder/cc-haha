@@ -295,14 +295,79 @@ async function command(argv: string[], cwd: string, env: Record<string, string>,
   return result
 }
 
+type CleanupGuard = 'canonical-path' | 'directory-kind' | 'parent' | 'prefix' | 'owner-kind' | 'owner-size' | 'owner-value' | null
+type CleanupDiagnostic = { site: 'admission' | 'remove' | 'unknown'; guard: CleanupGuard; nativeCode: string | null }
+const cleanupNativeCodes = new Set(['EACCES', 'EBUSY', 'EEXIST', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE',
+  'ENAMETOOLONG', 'ENFILE', 'ENOENT', 'ENOSPC', 'ENOTDIR', 'ENOTEMPTY', 'EPERM', 'EROFS', 'ETXTBSY'])
+function cleanupNativeCode(error: unknown) {
+  let code: unknown
+  try { code = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined } catch {}
+  return typeof code === 'string' && cleanupNativeCodes.has(code) ? code : 'UNRECOGNIZED'
+}
+class CandidateCleanupFailure extends Error {
+  constructor(readonly diagnostic: CleanupDiagnostic, cause: unknown, denied: boolean) {
+    super(denied ? 'Unowned candidate temporary directory' : 'Candidate temporary cleanup failed', { cause })
+  }
+}
+class CandidatePackageFailure extends Error {
+  constructor(stage: unknown, cause: unknown, cleanupCause: unknown) {
+    const known = ['archive', 'install-root', 'install-desktop', 'install-adapters', 'install-mobile', 'prepare-ripgrep',
+      'fetch-native', 'build-full-windows-x64', 'pinned-tools', 'static-output-verification', 'cleanup']
+    super(`Candidate package not proven at ${typeof stage === 'string' && known.includes(stage) ? stage : 'unknown'}; bounded evidence preserved`, { cause })
+    Object.defineProperty(this, 'cleanupCause', { value: cleanupCause })
+  }
+}
+export function candidatePackageFailureSummary(error: unknown) {
+  return error instanceof CandidatePackageFailure ? error.message : 'Candidate package preflight failed; package not proven'
+}
 export function cleanupCandidateDirectory(temp: string, parent: string, nonce: string) {
   const owner = join(temp, '.owner')
-  if (!same(realpathSync(temp), temp) || !lstatSync(temp).isDirectory() || lstatSync(temp).isSymbolicLink() ||
-      dirname(temp) !== parent || !basename(temp).startsWith('cc-haha-candidate-package-') ||
-      !lstatSync(owner).isFile() || lstatSync(owner).isSymbolicLink() || lstatSync(owner).size > 64 || readFileSync(owner, 'utf8') !== nonce) {
-    throw new Error('Unowned candidate temporary directory')
+  let site: CleanupDiagnostic['site'] = 'admission', guard: CleanupGuard = 'canonical-path', denied = false
+  const refuse = (): never => { denied = true; throw new Error('Unowned candidate temporary directory') }
+  try {
+    if (!same(realpathSync(temp), temp)) refuse()
+    guard = 'directory-kind'
+    if (!lstatSync(temp).isDirectory() || lstatSync(temp).isSymbolicLink()) refuse()
+    guard = 'parent'
+    if (dirname(temp) !== parent) refuse()
+    guard = 'prefix'
+    if (!basename(temp).startsWith('cc-haha-candidate-package-')) refuse()
+    guard = 'owner-kind'
+    if (!lstatSync(owner).isFile() || lstatSync(owner).isSymbolicLink()) refuse()
+    guard = 'owner-size'
+    if (lstatSync(owner).size > 64) refuse()
+    guard = 'owner-value'
+    if (readFileSync(owner, 'utf8') !== nonce) refuse()
+    site = 'remove'; guard = null
+    rmSync(temp, { recursive: true })
+  } catch (error) {
+    throw new CandidateCleanupFailure({ site, guard, nativeCode: denied ? null : cleanupNativeCode(error) }, error, denied)
   }
-  rmSync(temp, { recursive: true })
+}
+
+/** The real producer and fixture tests share this receipt/terminal-error path. */
+export function finishCandidatePackage(options: {
+  receipt: any, evidence: string, temp: string, parent: string, nonce: string, originalError?: unknown
+}) {
+  const { receipt, evidence, temp, parent, nonce, originalError } = options
+  let failed = originalError !== undefined || receipt.failedStage !== undefined
+  let failure = originalError, cleanupCause: unknown
+  try {
+    cleanupCandidateDirectory(temp, parent, nonce)
+    receipt.cleanup = 'owned_temporary_directory_removed'
+  } catch (error) {
+    cleanupCause = error
+    receipt.cleanup = 'unknown'
+    receipt.status = 'not_proven'
+    receipt.cleanupFailure = error instanceof CandidateCleanupFailure ? error.diagnostic
+      : { site: 'unknown', guard: null, nativeCode: cleanupNativeCode(error) }
+    receipt.failedStage ??= 'cleanup'
+    receipt.errorCode ??= 'candidate_package_not_proven'
+    if (!failed) { failed = true; failure = error }
+  }
+  json(join(evidence, 'candidate-package-receipt.json'), receipt)
+  if (failed) throw new CandidatePackageFailure(receipt.failedStage ?? 'cleanup', failure, cleanupCause)
+  return receipt
 }
 
 export async function runCandidatePackage() {
@@ -381,18 +446,8 @@ export async function runCandidatePackage() {
       if (value === undefined) delete process.env[name]
       else process.env[name] = value
     }
-    try {
-      cleanupCandidateDirectory(temp, parent, nonce)
-      receipt.cleanup = 'owned_temporary_directory_removed'
-    } catch {
-      receipt.cleanup = 'unknown'
-      receipt.status = 'not_proven'
-      originalError ??= new Error('Candidate cleanup unknown')
-    }
-    json(join(evidence, 'candidate-package-receipt.json'), receipt)
   }
-  if (originalError) throw new Error(`Candidate package not proven at ${receipt.failedStage ?? 'cleanup'}; bounded evidence preserved`)
-  return receipt
+  return finishCandidatePackage({ receipt, evidence, temp, parent, nonce, originalError })
 }
 
 if (import.meta.main) {
@@ -401,7 +456,7 @@ if (import.meta.main) {
     const result = await runCandidatePackage()
     console.log(`[candidate-package] ${result.status}; full F1 remains not_proven`)
   } catch (error) {
-    console.error(error)
+    console.error(candidatePackageFailureSummary(error))
     process.exitCode = 1
   }
 }
