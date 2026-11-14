@@ -12,8 +12,15 @@ import {
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  REMOTE_WORKSPACE_HISTORY_KEY,
+  REMOTE_WORKSPACE_STORAGE_KEY,
+  REMOTE_WORKSPACE_STORAGE_VERSION,
+  parseRemoteWorkspaceHistory,
+  parseRemoteWorkspaceProfile,
+} from './remoteWorkspace'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 7
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 8
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -386,6 +393,48 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
       storage.setItem(PREVENT_SLEEP_STORAGE_KEY, '0')
       report.migratedKeys.push(PREVENT_SLEEP_STORAGE_KEY)
     }
+  })
+  // Schema 8 adds an opt-in remote workspace. Nothing to write for an install
+  // that never set one — the absence already means "stay local". An entry this
+  // build cannot parse is dropped rather than half-applied, so a corrupt or
+  // newer-schema profile cannot leave the renderer split across two machines.
+  runMigrationStep(report, REMOTE_WORKSPACE_STORAGE_KEY, () => {
+    const stored = storage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)
+    if (stored === null) return
+    if (parseRemoteWorkspaceProfile(stored) === null) {
+      console.warn('[remote-workspace] migration: dropping unparsable profile:', stored?.slice(0, 120))
+      storage.removeItem(REMOTE_WORKSPACE_STORAGE_KEY)
+      report.migratedKeys.push(REMOTE_WORKSPACE_STORAGE_KEY)
+    }
+  })
+  // Same shape contract for the remembered machine list: the entry survives
+  // only as the faithful valid subset of what was stored — a corrupt row is
+  // dropped, an unknown schema means everything is dropped, and an install
+  // that never recorded a machine keeps no entry at all.
+  runMigrationStep(report, REMOTE_WORKSPACE_HISTORY_KEY, () => {
+    const stored = storage.getItem(REMOTE_WORKSPACE_HISTORY_KEY)
+    if (stored === null) return
+    let rows = 0
+    let version: unknown = null
+    try {
+      const parsed = JSON.parse(stored) as { version?: unknown; machines?: unknown[] }
+      version = parsed.version
+      rows = Array.isArray(parsed.machines) ? parsed.machines.length : 0
+    } catch {
+      // Unrecognizable as JSON at all: machines stays empty, the entry is dropped below.
+    }
+    const machines = parseRemoteWorkspaceHistory(stored)
+    if (version === REMOTE_WORKSPACE_STORAGE_VERSION && rows > 0 && machines.length === rows) return
+    console.warn('[remote-workspace] migration: rewriting machine history, keeping', machines.length, 'of', rows, 'rows')
+    if (machines.length > 0) {
+      storage.setItem(REMOTE_WORKSPACE_HISTORY_KEY, JSON.stringify({
+        version: REMOTE_WORKSPACE_STORAGE_VERSION,
+        machines,
+      }))
+    } else {
+      storage.removeItem(REMOTE_WORKSPACE_HISTORY_KEY)
+    }
+    report.migratedKeys.push(REMOTE_WORKSPACE_HISTORY_KEY)
   })
   try {
     storage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))

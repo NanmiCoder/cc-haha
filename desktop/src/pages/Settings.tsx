@@ -6,6 +6,7 @@ import {
   Bot,
   Box,
   ChartNoAxesColumn,
+  HardDrive,
   HeartPulse,
   Info,
   MessageSquare,
@@ -39,6 +40,7 @@ import { PetSettings } from '../features/pets/PetSettings'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
 import { AgentManager } from '../components/settings/AgentManager'
 import { H5AccessSettings } from './settings/H5AccessSettings'
+import { RemoteWorkspaceSettings } from './settings/RemoteWorkspaceSettings'
 import { GeneralSettings } from './settings/GeneralSettings'
 import { VoiceInputSettings } from './settings/VoiceInputSettings'
 import { AboutSettings } from './settings/AboutSettings'
@@ -55,6 +57,7 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { tab: 'general', icon: SlidersHorizontal, label: 'settings.tab.general' },
   { tab: 'voice', icon: Mic, label: 'settings.tab.voice' },
   { tab: 'h5Access', icon: QrCode, label: 'settings.tab.h5Access' },
+  { tab: 'remoteWorkspace', icon: HardDrive, label: 'settings.tab.remoteWorkspace' },
   { tab: 'adapters', icon: MessageSquare, label: 'settings.tab.adapters' },
   { tab: 'terminal', icon: SquareTerminal, label: 'settings.tab.terminal' },
   { tab: 'mcp', icon: Plug, label: 'settings.tab.mcp' },
@@ -124,6 +127,7 @@ export function DesktopSettings() {
             {activeTab === 'general' && <GeneralSettings />}
             {activeTab === 'voice' && <VoiceInputSettings />}
             {activeTab === 'h5Access' && <H5AccessSettings />}
+            {activeTab === 'remoteWorkspace' && <RemoteWorkspaceSettings />}
             {activeTab === 'adapters' && <AdapterSettings />}
             {activeTab === 'terminal' && <TerminalSettings showPreferences />}
             {activeTab === 'mcp' && <McpSettings />}

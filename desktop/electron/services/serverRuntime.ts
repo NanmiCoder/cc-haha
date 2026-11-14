@@ -596,6 +596,25 @@ export class ElectronServerRuntime {
   }
 
   private withLocalAccessToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    // The dev launcher can opt out of the process credential entirely. With no
+    // credential configured, the server classifies the dev renderer's loopback
+    // origin as a locally trusted page (the packaged `file://` renderer never
+    // needs any of this); with one configured, every Origin-bearing request
+    // that cannot present the exact token is demoted to an H5 browser page —
+    // and a `vite dev` renderer's credential handshake is easy to drop on the
+    // floor between host and renderer, leaving the whole UI CORS-blocked.
+    // Stripping matters, not just skipping: a launcher run from inside an
+    // already-running desktop app inherits that app's tokens through the
+    // environment, and they would otherwise arm this sidecar too.
+    if (env.CC_HAHA_DEV_NO_LOCAL_TOKEN === '1') {
+      const {
+        CC_HAHA_LOCAL_ACCESS_TOKEN: _local,
+        CC_HAHA_PET_ACCESS_TOKEN: _pet,
+        CC_HAHA_P2P_ENDPOINT_TOKEN: _p2p,
+        ...stripped
+      } = env
+      return stripped
+    }
     return {
       ...env,
       CC_HAHA_LOCAL_ACCESS_TOKEN: this.localAccessToken,
@@ -603,6 +622,7 @@ export class ElectronServerRuntime {
   }
 
   private withServerAccessTokens(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    if (env.CC_HAHA_DEV_NO_LOCAL_TOKEN === '1') return this.withLocalAccessToken(env)
     return {
       ...this.withLocalAccessToken(env),
       CC_HAHA_PET_ACCESS_TOKEN: this.petAccessToken,

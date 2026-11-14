@@ -33,6 +33,7 @@ describe('h5AccessPolicy', () => {
     expect(classifyH5Request(request, new URL(request.url), context)).toBe('h5-browser')
   })
 
+
   test('recognizes loopback hosts as local trusted requests', () => {
     expect(isLoopbackHost('localhost')).toBe(true)
     expect(isLoopbackHost('127.0.0.1')).toBe(true)

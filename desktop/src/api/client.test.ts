@@ -10,6 +10,14 @@ import {
   setBaseUrl,
 } from './client'
 import { browserHost } from '../lib/desktopHost/browserHost'
+import {
+  getEnabledRemoteWorkspace,
+  readRemoteWorkspace,
+  REMOTE_WORKSPACE_STORAGE_KEY,
+  writeRemoteWorkspace,
+} from '../lib/remoteWorkspace'
+
+const REMOTE_URL = 'http://127.0.0.1:9411'
 
 describe('api diagnostics reporting', () => {
   it('passes cache bypass to fetch for an explicit image retry while keeping authentication', async () => {
@@ -27,6 +35,7 @@ describe('api diagnostics reporting', () => {
     vi.useRealTimers()
     setAuthToken(null)
     setBaseUrl(getDefaultBaseUrl())
+    window.localStorage.removeItem(REMOTE_WORKSPACE_STORAGE_KEY)
     Reflect.deleteProperty(window, 'desktopHost')
     vi.restoreAllMocks()
   })
@@ -71,6 +80,56 @@ describe('api diagnostics reporting', () => {
       `${firstUrl}/api/sessions/session-1/messages`,
       `${recoveredUrl}/api/sessions/session-1/messages`,
     ])
+  })
+
+  it('recovers a GET to the saved remote workspace instead of the local sidecar', async () => {
+    // The failure that triggered recovery was the tunnel blipping; silently
+    // falling back to the Electron-local sidecar would move the whole
+    // workspace back local mid-session without a single error surfaced.
+    writeRemoteWorkspace({
+      url: REMOTE_URL,
+      sshHost: 'my-gpu-server',
+      token: 'k3y-minted-by-deploy-0123456789abcdef',
+      enabled: true,
+      connectedAt: null,
+    })
+    // Sanity: the profile must actually round-trip, or recovery ignores it.
+    expect(readRemoteWorkspace()).not.toBeNull()
+    expect(getEnabledRemoteWorkspace()?.token).toBe('k3y-minted-by-deploy-0123456789abcdef')
+    const getServerUrl = vi.fn()
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+        getLocalAccessToken: vi.fn().mockResolvedValue('desktop-local-token'),
+      },
+    }
+    setBaseUrl(REMOTE_URL)
+    let messageAttempts = 0
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url === `${REMOTE_URL}/api/sessions/session-1/messages`) {
+        // First attempt fails (the tunnel blip); the retry, after recovery
+        // re-pinned the same remote URL, succeeds.
+        messageAttempts++
+        if (messageAttempts === 1) return Promise.reject(new TypeError('Failed to fetch'))
+        return Promise.resolve(Response.json({ messages: ['from-remote'] }))
+      }
+      if (url === `${REMOTE_URL}/health`) {
+        return Promise.resolve(Response.json({ status: 'ok' }))
+      }
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+
+    await expect(api.get('/api/sessions/session-1/messages')).resolves.toEqual({ messages: ['from-remote'] })
+
+    // The local sidecar is never consulted, and the token rides the retry.
+    expect(getServerUrl).not.toHaveBeenCalled()
+    const retryCall = fetchMock.mock.calls.find(([url]) => String(url) === `${REMOTE_URL}/api/sessions/session-1/messages`)
+    expect(retryCall).toBeDefined()
   })
 
   it('times out a GET while desktop server recovery is still pending', async () => {
