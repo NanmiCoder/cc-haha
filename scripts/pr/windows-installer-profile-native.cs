@@ -48,6 +48,7 @@ namespace CcHahaInstallerProfile
     private FixtureState abiEnvironmentContext;
     private bool subjectPeerAuthenticated;
     private bool subjectProductsAllowed;
+    private ControllerQueryDaclLease controllerQueryDacl;
     private FileSecurity originalControllerImageSecurity;
     private FileIdentity originalControllerImageIdentity;
     private string originalControllerImagePath;
@@ -248,6 +249,10 @@ namespace CcHahaInstallerProfile
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool LookupAccountSidW(string system, IntPtr sid, StringBuilder name, ref uint nameChars, StringBuilder domain, ref uint domainChars, out int use);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string descriptor, uint revision, out IntPtr security, out uint size);
     [DllImport("advapi32.dll")] private static extern uint GetSecurityInfo(IntPtr handle, int type, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll")] private static extern uint SetSecurityInfo(IntPtr handle, int type, uint information, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetSecurityDescriptorControl(IntPtr descriptor, out ushort control, out uint revision);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetSecurityDescriptorDacl(IntPtr descriptor, [MarshalAs(UnmanagedType.Bool)] out bool present, out IntPtr dacl, [MarshalAs(UnmanagedType.Bool)] out bool defaulted);
+    [DllImport("advapi32.dll")] private static extern bool IsValidAcl(IntPtr acl);
     [DllImport("advapi32.dll")] private static extern bool IsValidSecurityDescriptor(IntPtr descriptor);
     [DllImport("advapi32.dll")] private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
     [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
@@ -1693,11 +1698,208 @@ namespace CcHahaInstallerProfile
       finally { CloseHandle(file); }
     }
 
+    internal sealed class ControllerDaclState
+    {
+      internal byte[] acl;
+      internal string owner, group;
+      internal bool protect;
+      internal bool Same(ControllerDaclState other)
+      { return other != null && owner == other.owner && group == other.group && protect == other.protect && acl != null && other.acl != null && acl.SequenceEqual(other.acl); }
+      internal ControllerDaclState WithAcl(byte[] value)
+      { return new ControllerDaclState { owner = owner, group = group, protect = protect, acl = (byte[])value.Clone() }; }
+    }
+
+    internal abstract class ControllerDaclApi
+    {
+      internal abstract ControllerDaclState Read();
+      internal abstract byte[] QueryAce(string boundSid);
+      internal abstract void Write(byte[] acl);
+      internal abstract void Close();
+    }
+
+    // One self-process DACL lease, not a general process permission API. A
+    // failed restore never overwrites a concurrent descriptor or becomes clean.
+    internal sealed class ControllerQueryDaclLease : IDisposable
+    {
+      private readonly ControllerDaclApi api;
+      private ControllerDaclState before, installed;
+      private bool attempted, closeAttempted, restoreUnknown, closeUnknown;
+      internal ControllerQueryDaclLease(ControllerDaclApi operations) { CorePolicy.Require(operations != null, "Controller query ACL operations missing"); api = operations; }
+      internal void Install(string sid)
+      {
+        CorePolicy.Require(!attempted && before == null && !closeAttempted, "Controller query ACL lease already used");
+        before = api.Read();
+        CorePolicy.Require(before != null && before.acl != null, "Controller query ACL backup missing");
+        installed = before.WithAcl(AddControllerQueryAce(before.acl, api.QueryAce(sid)));
+        CorePolicy.Require(before.Same(api.Read()), "Controller query ACL changed before installation");
+        attempted = true;
+        api.Write(installed.acl);
+        CorePolicy.Require(installed.Same(api.Read()), "Controller query ACL installation readback changed");
+      }
+      public void Dispose()
+      {
+        if (closeAttempted) { CorePolicy.Require(!restoreUnknown && !closeUnknown, "Controller query ACL cleanup remains unknown"); return; }
+        bool failed = false;
+        try
+        {
+          if (attempted)
+          {
+            ControllerDaclState actual = api.Read();
+            if (!before.Same(actual))
+            {
+              CorePolicy.Require(installed.Same(actual), "Controller query ACL changed before restoration");
+              api.Write(before.acl);
+              CorePolicy.Require(before.Same(api.Read()), "Controller query ACL restoration readback changed");
+            }
+          }
+        }
+        catch { failed = true; restoreUnknown = true; throw; }
+        finally
+        {
+          closeAttempted = true;
+          try { api.Close(); }
+          catch { closeUnknown = true; if (!failed) throw; }
+        }
+      }
+    }
+
+    internal static void RequireControllerQueryGrant(int expectedPid, int actualPid, string expectedBirth, string actualBirth,
+      string boundSid, string grantSid, uint rights)
+    {
+      CorePolicy.Require(expectedPid > 0 && actualPid == expectedPid && expectedBirth != null && expectedBirth == actualBirth
+        && boundSid != null && grantSid == boundSid && rights == ProcessQueryLimited
+        && System.Text.RegularExpressions.Regex.IsMatch(boundSid, @"\AS-1-5-21-(?:[0-9]{1,10}-){3}[0-9]{1,10}\z",
+          System.Text.RegularExpressions.RegexOptions.CultureInvariant), "Controller query grant is not the exact owned process/SID/read-only mask");
+    }
+
+    internal static byte[] AddControllerQueryAce(byte[] original, byte[] ace)
+    {
+      CorePolicy.Require(original != null && original.Length >= 8 && original.Length <= 32768 && (original[0] == 2 || original[0] == 4)
+        && BitConverter.ToUInt16(original, 2) == original.Length && BitConverter.ToUInt16(original, 4) <= 128,
+        "Controller query original ACL is unbounded");
+      CorePolicy.Require(ace != null && ace.Length >= 20 && ace.Length <= 76 && ace[0] == 0 && ace[1] == 0
+        && BitConverter.ToUInt16(ace, 2) == ace.Length && BitConverter.ToUInt32(ace, 4) == ProcessQueryLimited
+        && ace[8] == 1 && ace[9] <= 15 && ace.Length == 16 + 4 * ace[9], "Controller query ACE is not one noninheritable QUERY_LIMITED grant");
+      int count = BitConverter.ToUInt16(original, 4), cursor = 8, insertion = -1;
+      for (int i = 0; i < count; i++)
+      {
+        CorePolicy.Require(cursor + 4 <= original.Length, "Controller query old ACE header truncated");
+        int size = BitConverter.ToUInt16(original, cursor + 2);
+        CorePolicy.Require(size >= 4 && (size & 3) == 0 && cursor + size <= original.Length, "Controller query old ACE length invalid");
+        if ((original[cursor + 1] & 0x10) != 0 && insertion < 0) insertion = cursor;
+        cursor += size;
+      }
+      if (insertion < 0) insertion = cursor;
+      CorePolicy.Require(original.Length + ace.Length <= 32768, "Controller query augmented ACL too large");
+      byte[] result = new byte[original.Length + ace.Length];
+      Buffer.BlockCopy(original, 0, result, 0, insertion);
+      Buffer.BlockCopy(ace, 0, result, insertion, ace.Length);
+      Buffer.BlockCopy(original, insertion, result, insertion + ace.Length, original.Length - insertion);
+      Buffer.BlockCopy(BitConverter.GetBytes((ushort)result.Length), 0, result, 2, 2);
+      Buffer.BlockCopy(BitConverter.GetBytes((ushort)(count + 1)), 0, result, 4, 2);
+      return result;
+    }
+
+    private sealed class NativeControllerDaclApi : ControllerDaclApi
+    {
+      private IntPtr process;
+      private readonly int pid;
+      private readonly string birth, boundSid;
+      internal NativeControllerDaclApi(int expectedPid, string expectedBirth, string targetSid)
+      {
+        pid = expectedPid; birth = expectedBirth; boundSid = targetSid;
+        RequireControllerQueryGrant(pid, checked((int)GetCurrentProcessId()), birth, ProcessCreation(GetCurrentProcess()), boundSid, targetSid, ProcessQueryLimited);
+        process = OpenProcess(0x00060000 | ProcessQueryLimited, false, checked((uint)pid));
+        Win(process != IntPtr.Zero, "Open own Controller process DACL cap");
+      }
+      private void Held()
+      {
+        CorePolicy.Require(process != IntPtr.Zero && GetCurrentProcessId() == (uint)pid && GetProcessId(process) == (uint)pid
+          && ProcessCreation(process) == birth, "Controller DACL cap is not the same owned self process");
+      }
+      private static byte[] AclBytes(IntPtr acl)
+      {
+        CorePolicy.Require(acl != IntPtr.Zero && IsValidAcl(acl), "Controller process DACL must be present and valid");
+        int size = unchecked((ushort)Marshal.ReadInt16(acl, 2));
+        CorePolicy.Require(size >= 8 && size <= 32768, "Controller process DACL is unbounded");
+        byte[] bytes = new byte[size]; Marshal.Copy(acl, bytes, 0, size); return bytes;
+      }
+      internal override ControllerDaclState Read()
+      {
+        Held(); IntPtr owner, group, dacl, sacl, descriptor = IntPtr.Zero;
+        uint status = GetSecurityInfo(process, 6, 7, out owner, out group, out dacl, out sacl, out descriptor);
+        try
+        {
+          CorePolicy.Require(status == 0 && descriptor != IntPtr.Zero && IsValidSecurityDescriptor(descriptor) && owner != IntPtr.Zero && group != IntPtr.Zero,
+            "Read own Controller process DACL failed (Win32 " + status.ToString(CultureInfo.InvariantCulture) + ")");
+          ushort control; uint revision;
+          Win(GetSecurityDescriptorControl(descriptor, out control, out revision), "Read Controller process DACL protection");
+          CorePolicy.Require(revision == 1, "Controller process descriptor revision changed");
+          return new ControllerDaclState { acl = AclBytes(dacl), owner = Sid(owner), group = Sid(group), protect = (control & 0x1000) != 0 };
+        }
+        finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
+      }
+      internal override byte[] QueryAce(string sid)
+      {
+        Held(); RequireControllerQueryGrant(pid, pid, birth, birth, boundSid, sid, ProcessQueryLimited);
+        IntPtr descriptor = IntPtr.Zero; uint bytes;
+        Win(ConvertStringSecurityDescriptorToSecurityDescriptorW("D:(A;;0x1000;;;" + sid + ")", 1, out descriptor, out bytes), "Build one Controller query ACE");
+        try
+        {
+          bool present, defaulted; IntPtr acl;
+          Win(GetSecurityDescriptorDacl(descriptor, out present, out acl, out defaulted), "Read one Controller query ACE");
+          byte[] encoded = AclBytes(acl);
+          CorePolicy.Require(present && !defaulted && BitConverter.ToUInt16(encoded, 4) == 1, "Controller query descriptor is not one explicit ACE");
+          int size = BitConverter.ToUInt16(encoded, 10);
+          CorePolicy.Require(size >= 20 && size + 8 <= encoded.Length, "Controller query ACE bounds changed");
+          byte[] result = new byte[size]; Buffer.BlockCopy(encoded, 8, result, 0, size); return result;
+        }
+        finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
+      }
+      internal override void Write(byte[] acl)
+      {
+        Held(); CorePolicy.Require(acl != null && acl.Length >= 8 && acl.Length <= 32768, "Controller DACL write bounds invalid");
+        IntPtr memory = Marshal.AllocHGlobal(acl.Length);
+        try
+        {
+          Marshal.Copy(acl, 0, memory, acl.Length); CorePolicy.Require(IsValidAcl(memory), "Controller DACL write is invalid");
+          uint status = SetSecurityInfo(process, 6, 4, IntPtr.Zero, IntPtr.Zero, memory, IntPtr.Zero);
+          CorePolicy.Require(status == 0, "Set own Controller process DACL failed (Win32 " + status.ToString(CultureInfo.InvariantCulture) + ")");
+        }
+        finally { Marshal.FreeHGlobal(memory); }
+      }
+      internal override void Close()
+      {
+        if (process == IntPtr.Zero) return;
+        IntPtr held = process; process = IntPtr.Zero;
+        Win(CloseHandle(held), "Close own Controller process DACL cap");
+      }
+    }
+
+    private void GrantControllerQuery(FixtureState state, string sid, bool abi)
+    {
+      CorePolicy.Require(controllerQueryDacl == null && state != null && state.controllerRootOwned,
+        "Controller query grant is already owned or lacks a private root");
+      if (abi) CorePolicy.Require(state.spec.mode == "abi-harness" && state.account == null && !state.accountCreated && !state.profileCreated
+        && !state.profileLoaded && sid == state.runnerSid && sid == InspectCurrentToken().sid, "ABI Controller query probe requires only the calling identity");
+      else
+      {
+        HistoricalController(state); VerifyOwnedAccount(state, false);
+        CorePolicy.Require(state.accountBound && state.accountCreated && state.profileLoaded && state.account != null && sid == state.account.sid
+          && sid != state.runnerSid && state.spec.mode == FunctionalPolicy.ControllerMode, "Controller query grant requires the one fresh bound Subject SID");
+      }
+      RequireControllerQueryGrant(state.runnerPid, checked((int)GetCurrentProcessId()), state.runnerCreationTime,
+        ProcessCreation(GetCurrentProcess()), sid, sid, ProcessQueryLimited);
+      controllerQueryDacl = new ControllerQueryDaclLease(new NativeControllerDaclApi(state.runnerPid, state.runnerCreationTime, sid));
+      controllerQueryDacl.Install(sid);
+    }
+
     public override void PrepareSubjectAccess(FixtureState state)
     {
       HistoricalController(state);
       CorePolicy.Require(state.controllerRootOwned && state.accountBound && state.profileLoaded, "Subject input ownership is incomplete");
       VerifyOwnedAccount(state, false);
+      if (state.spec.mode == FunctionalPolicy.ControllerMode) GrantControllerQuery(state, state.account.sid, false);
       string input = Path.Combine(state.spec.controllerRoot, "subject-input");
       CorePolicy.Require(!Directory.Exists(input) && !File.Exists(input), "Subject input directory already exists");
       Directory.CreateDirectory(input, PrivateDirectorySecurity(state.runnerSid, state.account.sid));
@@ -2749,6 +2951,7 @@ namespace CcHahaInstallerProfile
       if (state.station != IntPtr.Zero) { Win(CloseWindowStation(state.station), "Close owned WindowStation"); state.station = IntPtr.Zero; }
       // GetProcessWindowStation / GetThreadDesktop returned borrowed handles.
       state.originalStation = IntPtr.Zero; state.originalDesktop = IntPtr.Zero;
+      if (controllerQueryDacl != null) { controllerQueryDacl.Dispose(); controllerQueryDacl = null; }
       if (originalControllerImageSecurity != null)
       {
         FileIdentity image = IdentifyPath(originalControllerImagePath, false);
@@ -3411,6 +3614,10 @@ namespace CcHahaInstallerProfile
         finally { platform.abiEnvironmentContext = null; }
         report.Check("private-runtime-context-bound", true,
           "Parent and child share the verified compiler sandbox home/config/local/tmp paths; environment is not SID/profile evidence");
+        platform.GrantControllerQuery(state, state.runnerSid, true);
+        platform.controllerQueryDacl.Dispose(); platform.controllerQueryDacl = null;
+        report.Check("owned-controller-query-dacl-roundtrip", true,
+          "Only the calling process/current SID gained an exact noninheritable QUERY_LIMITED ACE; original ACE bytes, owner/group/protection read back after grant and exact restoration; no cross-user qualification.");
         platform.CreatePrivateDesktop(state);
         report.Check("private-station-desktop", state.station != IntPtr.Zero && state.desktop != IntPtr.Zero &&
           !state.desktopName.StartsWith("winsta0\\", StringComparison.OrdinalIgnoreCase), "Created private noninteractive UI objects; shared UI DACLs untouched");

@@ -902,8 +902,106 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private static byte[] QueryTestAce(byte type, byte flags, uint rights, uint rid)
+    {
+      byte[] ace = new byte[20]; ace[0] = type; ace[1] = flags;
+      Buffer.BlockCopy(BitConverter.GetBytes((ushort)ace.Length), 0, ace, 2, 2);
+      Buffer.BlockCopy(BitConverter.GetBytes(rights), 0, ace, 4, 4);
+      ace[8] = 1; ace[9] = 1; ace[15] = 5;
+      Buffer.BlockCopy(BitConverter.GetBytes(rid), 0, ace, 16, 4); return ace;
+    }
+    private static byte[] QueryTestAcl()
+    {
+      byte[][] rows = { QueryTestAce(1, 0, 2, 11), QueryTestAce(0, 0, 8, 12), QueryTestAce(0, 0x10, 16, 13) };
+      byte[] acl = new byte[8 + rows.Sum(row => row.Length)]; acl[0] = 2;
+      Buffer.BlockCopy(BitConverter.GetBytes((ushort)acl.Length), 0, acl, 2, 2);
+      Buffer.BlockCopy(BitConverter.GetBytes((ushort)rows.Length), 0, acl, 4, 2);
+      int offset = 8; foreach (byte[] row in rows) { Buffer.BlockCopy(row, 0, acl, offset, row.Length); offset += row.Length; }
+      return acl;
+    }
+    private sealed class FakeControllerDacl : NativePlatform.ControllerDaclApi
+    {
+      internal NativePlatform.ControllerDaclState current = new NativePlatform.ControllerDaclState { acl = QueryTestAcl(), owner = RunnerSid, group = "S-1-5-32-545", protect = true };
+      internal int writes, closes;
+      internal int failWrite;
+      internal bool skipWrite, failClose;
+      internal string grantSid;
+      internal override NativePlatform.ControllerDaclState Read() { return current.WithAcl(current.acl); }
+      internal override byte[] QueryAce(string sid) { grantSid = sid; return QueryTestAce(0, 0, 0x1000, 1001); }
+      internal override void Write(byte[] value)
+      {
+        writes++;
+        if (!skipWrite) current = current.WithAcl(value);
+        if (writes == failWrite) throw new FixtureFailure("fake-controller-dacl-write");
+      }
+      internal override void Close() { closes++; if (failClose) throw new FixtureFailure("fake-controller-dacl-close"); }
+    }
+    internal static void RunControllerQueryAclTests(FixtureReport report)
+    {
+      Case(report, "controller-query-acl-retains-every-old-ace-and-only-adds-fixed-read-grant", delegate {
+        byte[] original = QueryTestAcl(), ace = QueryTestAce(0, 0, 0x1000, 1001);
+        byte[] installed = NativePlatform.AddControllerQueryAce(original, ace);
+        Assert(BitConverter.ToUInt16(installed, 4) == 4 && installed.Skip(8).Take(40).SequenceEqual(original.Skip(8).Take(40))
+          && installed.Skip(48).Take(20).SequenceEqual(ace) && installed.Skip(68).SequenceEqual(original.Skip(48)),
+          "all existing explicit and inherited ACE bytes/order preserved; only one exact noinherit QUERY_LIMITED grant inserted");
+        foreach (string fault in new string[] { "write", "inherit", "deny", "length", "truncated" })
+        {
+          byte[] bad = (byte[])ace.Clone(); byte[] old = (byte[])original.Clone();
+          if (fault == "write") bad[4] = 1; if (fault == "inherit") bad[1] = 1; if (fault == "deny") bad[0] = 1;
+          if (fault == "length") bad[2]--; if (fault == "truncated") old[10] = 250;
+          Reject(delegate { NativePlatform.AddControllerQueryAce(old, bad); }, "reject nonexact query ACL " + fault);
+        }
+      });
+      Case(report, "controller-query-grant-rejects-third-party-process-sid-birth-and-extra-rights", delegate {
+        NativePlatform.RequireControllerQueryGrant(70, 70, "132000000000000000", "132000000000000000", TargetSid, TargetSid, 0x1000);
+        foreach (string fault in new string[] { "pid", "birth", "sid", "write-dac", "terminate", "sync", "all", "malformed" })
+          Reject(delegate { NativePlatform.RequireControllerQueryGrant(70, fault == "pid" ? 71 : 70, "132000000000000000", fault == "birth" ? "132000000000000001" : "132000000000000000",
+            TargetSid, fault == "sid" ? RunnerSid : fault == "malformed" ? TargetSid + ")(A;;GA;;;WD)" : TargetSid,
+            fault == "write-dac" ? 0x41000u : fault == "terminate" ? 0x1001u : fault == "sync" ? 0x101000u : fault == "all" ? 0x1fffffu : 0x1000u); }, "reject wrong Controller query request " + fault);
+      });
+      Case(report, "controller-query-acl-exact-backup-readback-and-restoration-before-close", delegate {
+        FakeControllerDacl api = new FakeControllerDacl(); NativePlatform.ControllerDaclState original = api.Read();
+        NativePlatform.ControllerQueryDaclLease lease = new NativePlatform.ControllerQueryDaclLease(api);
+        lease.Install(TargetSid);
+        Assert(api.grantSid == TargetSid && api.writes == 1 && !original.Same(api.Read()) && api.closes == 0, "only bound SID installed and cap remains held");
+        lease.Dispose(); lease.Dispose();
+        Assert(original.Same(api.Read()) && api.writes == 2 && api.closes == 1, "original ACE/owner/group/protection restored before exact one close");
+        FakeControllerDacl skipped = new FakeControllerDacl { skipWrite = true };
+        NativePlatform.ControllerQueryDaclLease missing = new NativePlatform.ControllerQueryDaclLease(skipped);
+        Reject(delegate { missing.Install(TargetSid); }, "successful tool return without actual ACL delta cannot pass readback"); missing.Dispose();
+        Assert(skipped.closes == 1, "unchanged original can close after failed installation, never installation success");
+      });
+      Case(report, "controller-query-acl-install-write-error-restores-owned-delta", delegate {
+        FakeControllerDacl api = new FakeControllerDacl { failWrite = 1 }; NativePlatform.ControllerDaclState original = api.Read();
+        NativePlatform.ControllerQueryDaclLease lease = new NativePlatform.ControllerQueryDaclLease(api);
+        Reject(delegate { lease.Install(TargetSid); }, "failed native write stays failed even if kernel applied it");
+        lease.Dispose(); Assert(original.Same(api.Read()) && api.writes == 2 && api.closes == 1, "known installed effect restored after first failure");
+      });
+      Case(report, "controller-query-acl-drift-never-clobbered-and-late-cleanup-failure-latches", delegate {
+        foreach (string fault in new string[] { "owner", "group", "protect", "acl", "restore", "close", "restore-and-close" })
+        {
+          FakeControllerDacl api = new FakeControllerDacl(); NativePlatform.ControllerQueryDaclLease lease = new NativePlatform.ControllerQueryDaclLease(api); lease.Install(TargetSid);
+          if (fault == "owner") api.current.owner = TargetSid; if (fault == "group") api.current.group = TargetSid;
+          if (fault == "protect") api.current.protect = false; if (fault == "acl") api.current.acl[12] ^= 1;
+          if (fault == "restore" || fault == "restore-and-close") api.failWrite = 2;
+          if (fault == "close" || fault == "restore-and-close") api.failClose = true;
+          string cause = null; try { lease.Dispose(); } catch (FixtureFailure error) { cause = error.Message; }
+          Assert(cause != null && api.closes == 1, "cleanup " + fault + " cannot become passed");
+          if (fault == "restore-and-close") Assert(cause == "fake-controller-dacl-write", "restore first error retained despite later close failure");
+          int writes = api.writes; Reject(delegate { lease.Dispose(); }, "unknown cannot become clean by retry " + fault);
+          Assert(api.writes == writes && api.closes == 1, "no retry or overwrite of unknown descriptor " + fault);
+          if (new string[] { "owner", "group", "protect", "acl" }.Contains(fault)) Assert(writes == 1, "drift must be retained without restoration write");
+        }
+      });
+      Case(report, "controller-query-acl-runtime-cleanup-requires-ended-owned-jobs", delegate {
+        FixtureState state = new FixtureState { jobsEmpty = false };
+        Reject(delegate { new NativePlatform().CloseRuntimeResources(state); }, "no native handle or ACL cleanup before all owned Jobs are empty");
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
+      RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);
       RunSubjectStartupTests(report);
       RunAbiStartupExitTests(report);
