@@ -7,7 +7,7 @@ import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, pinnedNsisResources, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
-import { profileFixtureSources, profileOnlyPacketSources, runWindowsInstallerProfileChecks, validateProfileOnlyPreflightResult, validateStageAResult } from './run-windows-installer-profile-checks'
+import { profileFixtureSources, profileOnlyPacketSources, runWindowsInstallerProfileChecks, validateF1NativeCanaryResult, validateProfileOnlyPreflightResult, validateStageAResult } from './run-windows-installer-profile-checks'
 import { createHash } from 'node:crypto'
 
 type WorkflowJob = {
@@ -971,7 +971,20 @@ describe('Windows profile fixture Stage A', () => {
       releasedPeExecuted: false, compatibilityEnabled: false, oldExit22Policy: 'fatal',
       releasedPeMayHaveExecuted: false, releasedPeExecutionStatus: 'not_run',
       member_proven: 'not_run', installed_bytes_equal: 'not_run', old22_before_protected_mutation: 'not_run',
-      removal_equivalence: 'not_run', full_old_to_new: 'not_run' }
+      removal_equivalence: 'not_run', full_old_to_new: 'not_run',
+      ...(mode === 'f1-native-canary' ? {
+        mode: 'f1-native-zero-account', cleanup: 'passed', specSha256: null, failedStage: null,
+        startedAtUtc: '2026-11-14T00:00:00.0000000Z', finishedAtUtc: '2026-11-14T00:00:01.0000000Z',
+        checks: [{ name: 'f1-real-debug-pump-and-owned-metadata', status: 'passed', detail: 'Runtime observations only; provider scope support, complete lifecycle/namespace and F1 remain not_proven.' }],
+        trace: [], phases: [], observations: [], evidenceFiles: {},
+        f1NativeCanary: { status: 'not_proven', F1: 'not_proven', scopeSupport: 'not_proven',
+          name: 'CcHaha1879-F1-00000000-0000-0000-0000-000000000001', guid: '00000000-0000-0000-0000-000000000002', retainedHandle: 2,
+          startAttempted: true, started: true, stopAttempted: true, stopped: true, consumerDrained: true, closed: true, gap: false,
+          childResumeAttempted: true, childResumed: true, childExited: true, eventsLost: 0, buffersLost: 0, processTraceResult: 0,
+          fileEnableCode: 0, registryEnableCode: 0, ownedRecords: 10, otherHeaders: 1, unknownRecords: 0, mappedFileWrites: 3, mappedRegistrySets: 3,
+          childPid: 123, childCreationTime: '2026-11-14T00:00:00.0000000Z', nativeSchemaShapes: [] },
+      } : {}),
+    }
     const calls: string[][] = []
     const run: NonNullable<Parameters<typeof runWindowsInstallerProfileChecks>[0]>['run'] = async (command, options) => {
       calls.push(command)
@@ -988,15 +1001,15 @@ describe('Windows profile fixture Stage A', () => {
         writeFileSync(output, JSON.stringify(result('profile-only-preflight')))
       } else {
         const output = command[command.indexOf('--output') + 1]!
-        writeFileSync(output, JSON.stringify(result(command[1]!.slice(2))))
+        writeFileSync(output, JSON.stringify(result(command[1] === '--f1-audit-canary' ? 'f1-native-canary' : command[1]!.slice(2))))
       }
-      return { exitCode: 0, stdout: 'owned fixture test double', stderr: '' }
+      return { exitCode: 0, stdout: command[1] === '--f1-audit-canary' ? '' : 'owned fixture test double', stderr: '' }
     }
     return { root, sourceRoot, tempParent, compiler, powershell, evidenceRoot, calls, run, result,
       options: { platform: 'win32' as const, sourceRoot, tempParent, compiler, powershell, run } }
   }
 
-  test('wires compile/self-test/owned ABI only, before always-upload, without a Stage B switch', () => {
+  test('wires ordinary Stage A after preparation even when offline regressions fail', () => {
     const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
     const steps = jobs['windows-installer-checks'].steps ?? []
     const checks = steps.findIndex(step => step.run === 'bun --no-env-file scripts/pr/run-windows-installer-checks.ts')
@@ -1006,6 +1019,7 @@ describe('Windows profile fixture Stage A', () => {
     expect(profile).toBeGreaterThan(checks)
     expect(profile).toBeLessThan(upload)
     expect(steps[profile]['continue-on-error']).not.toBe(true)
+    expect(steps[profile].if).toBe("always() && steps.prepare.outcome == 'success'")
     expect(primitives).toBeGreaterThan(profile)
     expect(primitives).toBeLessThan(upload)
     expect(steps[primitives].if).toBe("always() && steps.prepare.outcome == 'success'")
@@ -1131,7 +1145,8 @@ describe('Windows profile fixture Stage A', () => {
     const f = fixture()
     try {
       expect(await runWindowsInstallerProfileChecks(f.options)).toEqual({ status: 'passed', exitCode: 0 })
-      expect(f.calls).toHaveLength(4)
+      expect(f.calls).toHaveLength(5)
+      expect(f.calls[4]![1]).toBe('--f1-audit-canary')
       expect(f.calls[0]).toContain('/platform:x64')
       expect(f.calls[0]).toContain('/r:System.Management.dll')
       expect(f.calls[0]!.filter(arg => arg.endsWith('.cs'))).toHaveLength(3)
@@ -1147,6 +1162,7 @@ describe('Windows profile fixture Stage A', () => {
       expect(report.realAccountsCreated).toBe(0)
       expect(report.full_old_to_new).toBe('not_run')
       expect(report.privateRootRemoved).toBe(true)
+      expect(report.f1NativeCanary.status).toBe('not_proven')
       expect(existsSync(report.temporaryRoot)).toBe(false)
       expect(report.sources[0].sha256).not.toBe(report.sources[0].canonicalSha256)
       expect(report.executableSha256).toBe(createHash('sha256').update('MZ-owned-fixture-double').digest('hex'))
@@ -1154,6 +1170,138 @@ describe('Windows profile fixture Stage A', () => {
     } finally {
       rmSync(f.root, { recursive: true, force: true })
     }
+  })
+
+
+  test('owned native canary preserves exact raw provenance without upgrading F1 or Stage A semantics', async () => {
+    const f = fixture()
+    try {
+      let raw = ''
+      expect(await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        const result = await f.run!(command, options)
+        if (command[1] === '--f1-audit-canary') {
+          expect(options.env.CI).toBe('true')
+          expect(options.env.GITHUB_ACTIONS).toBe('true')
+          expect(options.timeoutMs).toBeLessThanOrEqual(60_000)
+          raw = JSON.stringify(f.result('f1-native-canary')).replace('"retainedHandle":2', '"retainedHandle":18446744073709551615')
+          writeFileSync(command[command.indexOf('--output') + 1]!, raw)
+        }
+        return result
+      } })).toEqual({ status: 'passed', exitCode: 0 })
+      expect(readFileSync(join(f.evidenceRoot, 'f1-native-canary.raw.json'), 'utf8')).toBe(raw)
+      const consumer = JSON.parse(readFileSync(join(f.evidenceRoot, 'f1-native-canary-consumer.json'), 'utf8'))
+      expect(consumer.status).toBe('not_proven')
+      expect(consumer.capability).toBe('not_proven')
+      expect(consumer.F1).toBe('not_proven')
+      expect(consumer.reportSha256).toBe(createHash('sha256').update(raw).digest('hex'))
+      expect(consumer.privateRootRetained).toBe(false)
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
+
+  test.each(['safe-report', 'unsafe-report'])('owned native canary safety repair keeps %s stdio markers private before every publication path', async fault => {
+    const f = fixture()
+    const marker = 'CapturedData=PRIVATE_CANARY_MARKER_1879'
+    try {
+      expect(await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        if (command[1] !== '--f1-audit-canary') return f.run!(command, options)
+        f.calls.push(command)
+        const value = f.result('f1-native-canary') as Record<string, unknown>
+        if (fault === 'unsafe-report') value.CapturedData = marker
+        writeFileSync(command[command.indexOf('--output') + 1]!, JSON.stringify(value))
+        return { exitCode: 0, stdout: fault === 'safe-report' ? marker : '', stderr: fault === 'unsafe-report' ? marker : '' }
+      } })).toEqual({ status: 'failed', exitCode: 1 })
+      const checks = readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8')
+      const report = JSON.parse(checks)
+      expect(checks).not.toContain(marker)
+      expect(readFileSync(join(f.evidenceRoot, 'f1-native-canary.log'), 'utf8')).not.toContain(marker)
+      expect(readFileSync(join(f.evidenceRoot, 'f1-native-canary-consumer.json'), 'utf8')).not.toContain(marker)
+      expect(existsSync(join(f.evidenceRoot, 'f1-native-canary.raw.json'))).toBe(false)
+      expect(report.privateRootRemoved).toBe(false)
+      const privateLog = join(report.temporaryRoot, `f1-native-canary.${fault === 'safe-report' ? 'stdout' : 'stderr'}.private.log`)
+      expect(readFileSync(privateLog, 'utf8')).toContain(marker)
+      const command = report.commands.find((entry: { name: string }) => entry.name === 'f1-native-canary')
+      expect(command.stdout).toBeUndefined()
+      expect(command.stderr).toBeUndefined()
+      expect(command.stdoutSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(command.stderrSha256).toMatch(/^[0-9a-f]{64}$/)
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
+  test.each(['18446744073709551616', '-1', '1.0', '1e0'])('owned native canary safety repair rejects lossless invalid UInt64 token %s', token => {
+    const f = fixture()
+    try {
+      const value = f.result('f1-native-canary')
+      const raw = JSON.stringify(value).replace('"retainedHandle":2', `"retainedHandle":${token}`)
+      expect(() => validateF1NativeCanaryResult(raw, value.binarySha256)).toThrow('UInt64')
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
+  test.each(['unsupported', 'missing-report', 'timeout'])('owned native canary keeps %s advisory evidence unproven and preserves unknown resources', async fault => {
+    const f = fixture()
+    try {
+      expect(await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        if (command[1] !== '--f1-audit-canary') return f.run!(command, options)
+        f.calls.push(command)
+        if (fault !== 'missing-report') {
+          const value = f.result('f1-native-canary')
+          value.status = 'failed'
+          value.checks = [{ name: 'f1-zero-account-native', status: 'failed', detail: 'f1-native-provider-unsupported' }]
+          value.cleanup = fault === 'timeout' ? 'unknown' : 'passed'
+          writeFileSync(command[command.indexOf('--output') + 1]!, JSON.stringify(value))
+        }
+        return { exitCode: 1, stdout: '', stderr: 'Installer profile fixture stopped: Native operation failed (Win32 50)\n', timedOut: fault === 'timeout' }
+      } })).toEqual({ status: 'passed', exitCode: 0 })
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      const consumer = JSON.parse(readFileSync(join(f.evidenceRoot, 'f1-native-canary-consumer.json'), 'utf8'))
+      expect(consumer.status).not.toBe('passed')
+      expect(consumer.F1).toBe('not_proven')
+      expect(report.status).toBe('passed')
+      expect(report.privateRootRemoved).toBe(fault === 'unsupported')
+      expect(existsSync(report.temporaryRoot)).toBe(fault !== 'unsupported')
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
+  test.each(['account', 'profile', 'product', 'promoted', 'payload', 'unknown-field', 'wrong-hash', 'false-success', 'oversize', 'changed-binary', 'output-link', 'cleanup-contradiction', 'duplicate-key'])('owned native canary rejects unsafe %s reports without publishing their raw bytes', async fault => {
+    const f = fixture()
+    try {
+      expect(await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        if (command[1] !== '--f1-audit-canary') return f.run!(command, options)
+        f.calls.push(command)
+        const value = f.result('f1-native-canary') as Record<string, unknown>
+        const native = value.f1NativeCanary as Record<string, unknown>
+        if (fault === 'account') value.realAccountsCreated = 1
+        if (fault === 'profile') value.realProfilesCreated = 1
+        if (fault === 'product') value.releasedPeMayHaveExecuted = true
+        if (fault === 'promoted') value.full_old_to_new = 'passed'
+        if (fault === 'payload') native.CapturedData = 'never publish'
+        if (fault === 'unknown-field') value.extra = { value: 'never publish' }
+        if (fault === 'wrong-hash') value.binarySha256 = '0'.repeat(64)
+        if (fault === 'false-success') native.eventsLost = null
+        if (fault === 'cleanup-contradiction') { value.status = 'failed'; native.closed = false }
+        const output = command[command.indexOf('--output') + 1]!
+        if (fault === 'output-link') {
+          const outside = join(f.root, 'owned-outside.json')
+          writeFileSync(outside, JSON.stringify(value))
+          symlinkSync(outside, output)
+        } else {
+          const raw = JSON.stringify(value)
+          writeFileSync(output, fault === 'duplicate-key' ? raw.replace('"trace":[]', '"trace":{"CapturedData":"never publish"},"trace":[]') : raw)
+        }
+        if (fault === 'changed-binary') writeFileSync(command[0]!, 'MZ-mutated-after-canary')
+        return { exitCode: 0, stdout: '', stderr: fault === 'oversize' ? 'x'.repeat(65_537) : '' }
+      } })).toEqual({ status: 'failed', exitCode: 1 })
+      expect(existsSync(join(f.evidenceRoot, 'f1-native-canary.raw.json'))).toBe(false)
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      expect(report.status).toBe('failed')
+      expect(report.privateRootRemoved).toBe(false)
+      expect(existsSync(report.temporaryRoot)).toBe(true)
+      expect(JSON.parse(readFileSync(join(f.evidenceRoot, 'f1-native-canary-consumer.json'), 'utf8')).status).toBe('failed')
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+
+  test('owned native canary validator rejects a summary-only exit-zero report', () => {
+    expect(() => validateF1NativeCanaryResult({ version: 1, status: 'passed' }, '0'.repeat(64))).toThrow('canary')
   })
 
   test.each(['compile', 'self-test', 'abi-harness', 'profile-only-preflight'])('propagates a failing %s and never runs the following phase', async phase => {

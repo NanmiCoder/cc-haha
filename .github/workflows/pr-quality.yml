@@ -409,6 +409,7 @@ jobs:
       - name: Run offline native installer regressions
         run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts
       - name: Compile and test the owned profile fixture (Stage A only)
+        if: always() && steps.prepare.outcome == 'success'
         run: bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts
       - name: Test the profile-only bootstrap producer without accounts or profiles
         run: |

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { isScalar, parseDocument } from 'yaml'
 import { assertOutsideSourceGit, isInsideDirectory, sha256File } from './prepare-windows-installer-tests'
 import { createSandboxedTestEnvironment } from './test-environment'
 
@@ -48,7 +49,7 @@ export function validateProfileOnlyPreflightResult(value: unknown) {
 
 const evidenceFields = ['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new'] as const
 type StageAMode = 'self-test' | 'abi-harness'
-type CommandResult = { exitCode: number; stdout: string; stderr: string; timedOut?: boolean }
+type CommandResult = { exitCode: number; stdout: string; stderr: string; timedOut?: boolean; outputLimitExceeded?: boolean }
 type FixtureRunner = (command: string[], options: { cwd: string; env: Record<string, string>; timeoutMs: number }) => Promise<CommandResult>
 
 export function validateStageAResult(value: unknown, mode: StageAMode) {
@@ -68,6 +69,127 @@ export function validateStageAResult(value: unknown, mode: StageAMode) {
   }
   if (mode === 'abi-harness' && report.cleanup !== 'passed') throw new Error('Owned ABI cleanup was not proven successful')
   return report
+}
+
+
+const canaryOutputLimit = 65_536
+const canaryReportLimit = 1_000_000
+class CanaryEvidenceSafetyError extends Error {}
+const safeObject = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
+function knownKeys(value: Record<string, unknown>, keys: string[]) {
+  if (Object.keys(value).some(key => !keys.includes(key))) throw new CanaryEvidenceSafetyError('Unsafe canary evidence shape')
+}
+const unsigned = (value: unknown, max = Number.MAX_SAFE_INTEGER) => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= max
+const guid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const provider = '(?:edd08927-9cc4-4e65-b970-c2560fb5c289|70eb4f03-c1de-4f73-a051-33d13d5413bd)'
+const schemaCount = new RegExp(`^${provider}/[0-9]{1,5}/[0-9]{1,3} count=[0-9]{1,6}$`)
+const schemaShape = new RegExp(`^${provider}/[0-9]{1,5}/[0-9]{1,3} [A-Za-z_][A-Za-z0-9_]{0,255}:type=[0-9]{1,5},flags=[0-9]{1,10},count=[0-9]{1,5},length=[0-9]{1,5}(?:;[A-Za-z_][A-Za-z0-9_]{0,255}:type=[0-9]{1,5},flags=[0-9]{1,10},count=[0-9]{1,5},length=[0-9]{1,5})*$`)
+
+/** Accept only this owned metadata producer's schema, never value payloads or F1 claims. */
+export function validateF1NativeCanaryResult(value: unknown, binarySha256: string) {
+  let retainedHandle: bigint | undefined
+  if (typeof value === 'string') {
+    try {
+      const text = value.replace(/^\uFEFF/, '')
+      value = JSON.parse(text)
+      const document = parseDocument(text, { schema: 'json', intAsBigInt: true, uniqueKeys: true, strict: true, prettyErrors: false })
+      if (document.errors.length) throw new Error('invalid JSON keys')
+      const token = document.getIn(['f1NativeCanary', 'retainedHandle'], true)
+      if (token !== undefined) {
+        if (!isScalar(token) || typeof token.value !== 'bigint' || typeof token.source !== 'string' || !/^(?:0|[1-9][0-9]{0,19})$/.test(token.source)) throw new Error('invalid UInt64 token')
+        retainedHandle = BigInt(token.source)
+        if (retainedHandle > 18_446_744_073_709_551_615n) throw new Error('UInt64 overflow')
+      }
+    } catch { throw new CanaryEvidenceSafetyError('Invalid canary JSON or UInt64 remains private') }
+  }
+  if (!safeObject(value)) throw new CanaryEvidenceSafetyError('Invalid canary report')
+  knownKeys(value, ['version', 'mode', 'status', 'checks', 'f1NativeCanary', 'realAccountsCreated', 'realProfilesCreated',
+    'releasedPeExecuted', 'releasedPeMayHaveExecuted', 'releasedPeExecutionStatus', 'compatibilityEnabled', 'oldExit22Policy',
+    ...evidenceFields, 'binarySha256', 'specSha256', 'startedAtUtc', 'finishedAtUtc', 'failedStage', 'cleanup', 'trace', 'phases', 'observations', 'evidenceFiles'])
+  if (value.version !== 1 || value.mode !== 'f1-native-zero-account' || !['passed', 'failed'].includes(String(value.status)) ||
+      value.binarySha256 !== binarySha256 || !['passed', 'unknown'].includes(String(value.cleanup)) ||
+      value.realAccountsCreated !== 0 || value.realProfilesCreated !== 0 || value.releasedPeExecuted !== false ||
+      value.releasedPeMayHaveExecuted !== false || value.releasedPeExecutionStatus !== 'not_run' ||
+      value.compatibilityEnabled !== false || value.oldExit22Policy !== 'fatal' || evidenceFields.some(field => value[field] !== 'not_run') ||
+      !Array.isArray(value.phases) || value.phases.length !== 0 || !Array.isArray(value.observations) || value.observations.length !== 0 ||
+      !safeObject(value.evidenceFiles) || Object.keys(value.evidenceFiles).length !== 0 || value.specSha256 != null || value.failedStage != null ||
+      !['startedAtUtc', 'finishedAtUtc'].every(key => typeof value[key] === 'string' && /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/.test(value[key] as string))) {
+    throw new CanaryEvidenceSafetyError('Invalid canary identity or forbidden account/profile/product effect')
+  }
+  const successDetail = 'Runtime observations only; provider scope support, complete lifecycle/namespace and F1 remain not_proven.'
+  if (!Array.isArray(value.checks) || value.checks.length < 1 || value.checks.length > 8 || value.checks.some(check => {
+    if (!safeObject(check)) return true
+    knownKeys(check, ['name', 'status', 'detail'])
+    return !['f1-real-debug-pump-and-owned-metadata', 'f1-zero-account-native', 'f1-canary-cleanup', 'fixture-entry'].includes(String(check.name)) ||
+      !['passed', 'failed'].includes(String(check.status)) || typeof check.detail !== 'string' || check.detail.length > 256 ||
+      !(check.detail === successDetail || /^f1-[a-z0-9-]+$/.test(check.detail) || /^Native operation failed \([A-Za-z0-9 ._-]{1,160}\)$/.test(check.detail) ||
+        /^[A-Za-z][A-Za-z0-9 _-]{0,95} failed \((?:Win32|NET_API_STATUS) [0-9]{1,10}\)$/.test(check.detail))
+  })) throw new CanaryEvidenceSafetyError('Unsafe canary diagnostics')
+  if (!Array.isArray(value.trace) || value.trace.length > 128 || value.trace.some(row => typeof row !== 'string' || row.length > 512 ||
+      !(schemaCount.test(row) || /^native-metadata-owned=[0-9]+;other-headers=[0-9]+;unknown=[0-9]+;file-writes=[0-9]+;registry-sets=[0-9]+$/.test(row)))) {
+    throw new CanaryEvidenceSafetyError('Unsafe canary metadata trace')
+  }
+  if (value.f1NativeCanary != null) {
+    const native = value.f1NativeCanary
+    if (!safeObject(native)) throw new CanaryEvidenceSafetyError('Invalid native observation')
+    const booleans = ['startAttempted', 'started', 'stopAttempted', 'stopped', 'consumerDrained', 'closed', 'gap', 'childResumeAttempted', 'childResumed', 'childExited']
+    const counters = ['ownedRecords', 'otherHeaders', 'unknownRecords', 'mappedFileWrites', 'mappedRegistrySets', 'childPid']
+    knownKeys(native, ['status', 'F1', 'scopeSupport', 'name', 'guid', 'retainedHandle', ...booleans, 'eventsLost', 'buffersLost',
+      'processTraceResult', 'fileEnableCode', 'registryEnableCode', ...counters, 'childCreationTime', 'nativeSchemaShapes'])
+    const exactHandle = retainedHandle ?? (unsigned(native.retainedHandle) ? BigInt(native.retainedHandle as number) : undefined)
+    if (native.status !== 'not_proven' || native.F1 !== 'not_proven' || native.scopeSupport !== 'not_proven' ||
+        typeof native.name !== 'string' || !new RegExp(`^CcHaha1879-F1-${guid}$`).test(native.name) ||
+        typeof native.guid !== 'string' || !new RegExp(`^${guid}$`).test(native.guid) || exactHandle === undefined || exactHandle < 0n || exactHandle > 18_446_744_073_709_551_615n ||
+        booleans.some(key => typeof native[key] !== 'boolean') || counters.some(key => !unsigned(native[key])) ||
+        ['eventsLost', 'buffersLost', 'processTraceResult', 'fileEnableCode', 'registryEnableCode'].some(key => native[key] !== null && !unsigned(native[key], 0xffffffff * 2)) ||
+        (native.childCreationTime !== null && (typeof native.childCreationTime !== 'string' || !/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/.test(native.childCreationTime))) ||
+        !Array.isArray(native.nativeSchemaShapes) || native.nativeSchemaShapes.length > 64 ||
+        native.nativeSchemaShapes.some(row => typeof row !== 'string' || row.length > 65_536 || !schemaShape.test(row))) {
+      throw new CanaryEvidenceSafetyError('Unsafe or promoted native observation')
+    }
+  }
+  const observation = value.f1NativeCanary as Record<string, unknown> | undefined
+  if (value.cleanup === 'passed' && observation && (observation.closed !== true || (observation.childResumeAttempted === true && observation.childExited !== true))) {
+    throw new CanaryEvidenceSafetyError('Contradictory canary cleanup success')
+  }
+  if (value.status === 'passed') {
+    const native = value.f1NativeCanary as Record<string, unknown> | undefined
+    if (value.cleanup !== 'passed' || value.checks.some(check => (check as Record<string, unknown>).status !== 'passed') || !native ||
+        ['startAttempted', 'started', 'stopAttempted', 'stopped', 'consumerDrained', 'closed', 'childResumeAttempted', 'childResumed', 'childExited'].some(key => native[key] !== true) ||
+        native.gap !== false || native.eventsLost !== 0 || native.buffersLost !== 0 || native.processTraceResult !== 0 ||
+        native.fileEnableCode !== 0 || native.registryEnableCode !== 0 || !unsigned(native.childPid) || native.childPid === 0 ||
+        typeof native.childCreationTime !== 'string' || Number(native.mappedFileWrites) < 3 || Number(native.mappedRegistrySets) < 3) {
+      throw new CanaryEvidenceSafetyError('Contradictory canary producer success')
+    }
+  }
+  return value
+}
+
+async function runCanaryCommand(command: string[], options: Parameters<FixtureRunner>[1]): Promise<CommandResult> {
+  const child = Bun.spawn(command, { cwd: options.cwd, env: options.env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+  let timedOut = false
+  let outputLimitExceeded = false
+  const timer = setTimeout(() => { timedOut = true; child.kill() }, options.timeoutMs)
+  const read = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader()
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      while (true) {
+        const part = await reader.read()
+        if (part.done) break
+        const remaining = canaryOutputLimit - size
+        chunks.push(part.value.subarray(0, Math.max(0, remaining)))
+        size += part.value.length
+        if (size > canaryOutputLimit) { outputLimitExceeded = true; child.kill(); await reader.cancel(); break }
+      }
+    } finally { reader.releaseLock() }
+    return Buffer.concat(chunks).toString('utf8')
+  }
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([child.exited, read(child.stdout), read(child.stderr)])
+    return { exitCode, stdout, stderr, timedOut, outputLimitExceeded }
+  } finally { clearTimeout(timer) }
 }
 
 function assertRegularFile(file: string, root: string) {
@@ -156,6 +278,7 @@ export async function runWindowsInstallerProfileChecks(options: {
     ...Object.fromEntries(evidenceFields.map(field => [field, 'not_run'])), commands,
   }
   let exitCode = 1
+  let retainSandbox = false
   try {
     const sourceCopies = profileFixtureSources.map(path => {
       const file = join(sandbox, path.split('/').at(-1)!)
@@ -225,6 +348,65 @@ export async function runWindowsInstallerProfileChecks(options: {
       throw new Error('Preflight packet source binding changed')
     }
     writeFileSync(join(evidenceRoot, 'profile-only-preflight.json'), `${JSON.stringify(preflight, null, 2)}\n`)
+
+    const canary: Record<string, unknown> = { version: 1, status: 'not_run', capability: 'not_proven', F1: 'not_proven',
+      advisory: true, producer: 'f1-native-zero-account', executableSha256: report.executableSha256, sourceSetSha256 }
+    report.f1NativeCanary = canary
+    if (options.run || (process.platform === 'win32' && process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true')) {
+      const output = join(env.TEMP!, 'f1-native-canary.json')
+      const command = [executable, '--f1-audit-canary', '--output', output]
+      let safetyFailure: unknown
+      retainSandbox = true
+      try {
+        if (existsSync(output) || await sha256File(executable) !== report.executableSha256) throw new CanaryEvidenceSafetyError('Canary output already exists or binary changed')
+        const startedAtUtc = new Date().toISOString()
+        const result = await (options.run ?? runCanaryCommand)(command, { cwd: sandbox, env: options.run ? { ...env, CI: 'true', GITHUB_ACTIONS: 'true' } : env, timeoutMs: 60_000 })
+        const oversized = Buffer.byteLength(result.stdout) > canaryOutputLimit || Buffer.byteLength(result.stderr) > canaryOutputLimit
+        const bounded = { ...result, stdout: Buffer.from(result.stdout).subarray(0, canaryOutputLimit).toString('utf8'),
+          stderr: Buffer.from(result.stderr).subarray(0, canaryOutputLimit).toString('utf8') }
+        const stdout = Buffer.from(bounded.stdout)
+        const stderr = Buffer.from(bounded.stderr)
+        writeFileSync(join(sandbox, 'f1-native-canary.stdout.private.log'), stdout)
+        writeFileSync(join(sandbox, 'f1-native-canary.stderr.private.log'), stderr)
+        const diagnostic = { stdoutBytes: stdout.length, stdoutSha256: createHash('sha256').update(stdout).digest('hex'),
+          stderrBytes: stderr.length, stderrSha256: createHash('sha256').update(stderr).digest('hex') }
+        commands.push({ name: 'f1-native-canary', command, timeoutMs: 60_000, startedAtUtc, finishedAtUtc: new Date().toISOString(),
+          exitCode: result.exitCode, timedOut: result.timedOut === true, outputLimitExceeded: result.outputLimitExceeded === true || oversized,
+          diagnosticPolicy: 'private-raw;published-counts-and-hashes-only', ...diagnostic })
+        writeFileSync(join(evidenceRoot, 'f1-native-canary.log'), `Owned canary diagnostics retained privately.\n${JSON.stringify(diagnostic)}\n`)
+        const safeStderr = bounded.stderr === '' || /^Installer profile fixture stopped: (?:f1-[a-z0-9-]+|Native operation failed \([A-Za-z0-9 ._-]{1,160}\)|[A-Za-z][A-Za-z0-9 _-]{0,95} failed \((?:Win32|NET_API_STATUS) [0-9]{1,10}\))\r?\n?$/.test(bounded.stderr)
+        if (bounded.stdout !== '' || !safeStderr) throw new CanaryEvidenceSafetyError('Unsupported canary diagnostics remain private')
+        Object.assign(canary, { command, output, exitCode: result.exitCode, timedOut: result.timedOut === true,
+          outputLimitExceeded: result.outputLimitExceeded === true || oversized, startedAtUtc })
+        if (oversized || result.outputLimitExceeded) throw new CanaryEvidenceSafetyError('Canary diagnostic output exceeded its bound')
+        if (await sha256File(executable) !== report.executableSha256) throw new CanaryEvidenceSafetyError('Canary binary changed during execution')
+        if (!existsSync(output)) { canary.status = 'not_proven'; canary.reason = 'missing-producer-report' }
+        else {
+          try { assertRegularFile(output, sandbox) } catch { throw new CanaryEvidenceSafetyError('Canary output was not an owned ordinary file') }
+          if (lstatSync(output).size > canaryReportLimit) throw new CanaryEvidenceSafetyError('Canary report exceeded its metadata bound')
+          const raw = readFileSync(output)
+          Object.assign(canary, { reportBytes: raw.length, reportSha256: createHash('sha256').update(raw).digest('hex') })
+          const validated = validateF1NativeCanaryResult(raw.toString('utf8'), String(report.executableSha256))
+          // Preserve exact bytes: TRACEHANDLE can exceed JS's safe integer range.
+          writeFileSync(join(evidenceRoot, 'f1-native-canary.raw.json'), raw)
+          canary.status = validated.status === 'failed' || result.exitCode !== 0 || result.timedOut || result.outputLimitExceeded || oversized ? 'failed' : 'not_proven'
+          canary.producerStatus = validated.status
+          canary.cleanup = validated.cleanup
+          retainSandbox = validated.cleanup !== 'passed' || result.timedOut === true || result.outputLimitExceeded === true || oversized
+        }
+      } catch (error) {
+        canary.status = 'failed'
+        canary.reason = error instanceof CanaryEvidenceSafetyError ? error.message : 'canary-invocation-or-evidence-unknown'
+        if (error instanceof CanaryEvidenceSafetyError) safetyFailure = error
+      } finally {
+        canary.privateRootRetained = retainSandbox
+        writeFileSync(join(evidenceRoot, 'f1-native-canary-consumer.json'), `${JSON.stringify(canary, null, 2)}\n`)
+      }
+      if (safetyFailure) throw safetyFailure
+    } else {
+      canary.reason = 'requires-actual-windows-hosted-ci'
+      writeFileSync(join(evidenceRoot, 'f1-native-canary-consumer.json'), `${JSON.stringify(canary, null, 2)}\n`)
+    }
     exitCode = 0
     report.status = 'passed'
     report.realAccountsCreated = 0
@@ -236,8 +418,8 @@ export async function runWindowsInstallerProfileChecks(options: {
     report.error = error instanceof Error ? error.message : String(error)
   } finally {
     try {
-      rmSync(sandbox, { recursive: true, force: true })
-      report.privateRootRemoved = !existsSync(sandbox)
+      if (retainSandbox) { report.privateRootRemoved = false; report.privateRootRetained = 'native-canary-closure-or-evidence-unknown' }
+      else { rmSync(sandbox, { recursive: true, force: true }); report.privateRootRemoved = !existsSync(sandbox) }
     } catch (error) {
       report.cleanupError = error instanceof Error ? error.message : String(error)
       report.status = 'failed'
