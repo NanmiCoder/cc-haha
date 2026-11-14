@@ -1,0 +1,535 @@
+[
+  {
+    "messages": [
+      {
+        "id": "cross-filler-3",
+        "type": "user",
+        "content": "Cross-boundary filler 3",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-4",
+        "type": "user",
+        "content": "Cross-boundary filler 4",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-5",
+        "type": "user",
+        "content": "Cross-boundary filler 5",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-6",
+        "type": "user",
+        "content": "Cross-boundary filler 6",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-7",
+        "type": "user",
+        "content": "Cross-boundary filler 7",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-8",
+        "type": "user",
+        "content": "Cross-boundary filler 8",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-9",
+        "type": "user",
+        "content": "Cross-boundary filler 9",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-10",
+        "type": "user",
+        "content": "Cross-boundary filler 10",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-11",
+        "type": "user",
+        "content": "Cross-boundary filler 11",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-12",
+        "type": "user",
+        "content": "Cross-boundary filler 12",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-13",
+        "type": "user",
+        "content": "Cross-boundary filler 13",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-14",
+        "type": "user",
+        "content": "Cross-boundary filler 14",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-15",
+        "type": "user",
+        "content": "Cross-boundary filler 15",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-16",
+        "type": "user",
+        "content": "Cross-boundary filler 16",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-17",
+        "type": "user",
+        "content": "Cross-boundary filler 17",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-18",
+        "type": "user",
+        "content": "Cross-boundary filler 18",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-19",
+        "type": "user",
+        "content": "Cross-boundary filler 19",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-20",
+        "type": "user",
+        "content": "Cross-boundary filler 20",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-21",
+        "type": "user",
+        "content": "Cross-boundary filler 21",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-22",
+        "type": "user",
+        "content": "Cross-boundary filler 22",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-23",
+        "type": "user",
+        "content": "Cross-boundary filler 23",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-24",
+        "type": "user",
+        "content": "Cross-boundary filler 24",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-25",
+        "type": "user",
+        "content": "Cross-boundary filler 25",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-26",
+        "type": "user",
+        "content": "Cross-boundary filler 26",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-27",
+        "type": "user",
+        "content": "Cross-boundary filler 27",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-28",
+        "type": "user",
+        "content": "Cross-boundary filler 28",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-29",
+        "type": "user",
+        "content": "Cross-boundary filler 29",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-30",
+        "type": "user",
+        "content": "Cross-boundary filler 30",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-31",
+        "type": "user",
+        "content": "Cross-boundary filler 31",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-32",
+        "type": "user",
+        "content": "Cross-boundary filler 32",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-33",
+        "type": "user",
+        "content": "Cross-boundary filler 33",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-34",
+        "type": "user",
+        "content": "Cross-boundary filler 34",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-35",
+        "type": "user",
+        "content": "Cross-boundary filler 35",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-36",
+        "type": "user",
+        "content": "Cross-boundary filler 36",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-37",
+        "type": "user",
+        "content": "Cross-boundary filler 37",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-38",
+        "type": "user",
+        "content": "Cross-boundary filler 38",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-39",
+        "type": "user",
+        "content": "Cross-boundary filler 39",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-40",
+        "type": "user",
+        "content": "Cross-boundary filler 40",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-41",
+        "type": "user",
+        "content": "Cross-boundary filler 41",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-42",
+        "type": "user",
+        "content": "Cross-boundary filler 42",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-43",
+        "type": "user",
+        "content": "Cross-boundary filler 43",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-44",
+        "type": "user",
+        "content": "Cross-boundary filler 44",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-45",
+        "type": "user",
+        "content": "Cross-boundary filler 45",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-46",
+        "type": "user",
+        "content": "Cross-boundary filler 46",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-47",
+        "type": "user",
+        "content": "Cross-boundary filler 47",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-48",
+        "type": "user",
+        "content": "Cross-boundary filler 48",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-49",
+        "type": "user",
+        "content": "Cross-boundary filler 49",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-50",
+        "type": "user",
+        "content": "Cross-boundary filler 50",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-51",
+        "type": "user",
+        "content": "Cross-boundary filler 51",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-52",
+        "type": "user",
+        "content": "Cross-boundary filler 52",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-filler-53",
+        "type": "user",
+        "content": "Cross-boundary filler 53",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-call",
+        "type": "tool_use",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Cross-boundary synthetic plan"
+          },
+          {
+            "type": "tool_use",
+            "id": "cross-read",
+            "name": "Read",
+            "input": {
+              "file_path": "/fixture/cross.txt"
+            }
+          }
+        ],
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-result",
+        "type": "tool_result",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "cross-read",
+            "content": "Cross-boundary synthetic result"
+          }
+        ],
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-answer",
+        "type": "assistant",
+        "content": "Cross-boundary final answer",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      }
+    ],
+    "taskNotifications": [],
+    "page": {
+      "nextCursor": "replay-page-1",
+      "previousCursor": null,
+      "hasMore": true,
+      "historyComplete": false,
+      "sourceVersion": "synthetic-replay-version",
+      "scannedBytes": 34164736,
+      "omittedOversizedEntries": 0,
+      "contextScanBytes": 0
+    }
+  },
+  {
+    "messages": [
+      {
+        "id": "cross-filler-2",
+        "type": "user",
+        "content": "Cross-boundary filler 2",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      }
+    ],
+    "taskNotifications": [],
+    "page": {
+      "nextCursor": "replay-page-2",
+      "previousCursor": "newer-page-1",
+      "hasMore": true,
+      "historyComplete": false,
+      "sourceVersion": "synthetic-replay-version",
+      "scannedBytes": 1404928,
+      "omittedOversizedEntries": 0,
+      "contextScanBytes": 0
+    }
+  },
+  {
+    "messages": [
+      {
+        "id": "cross-filler-1",
+        "type": "user",
+        "content": "Cross-boundary filler 1",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      }
+    ],
+    "taskNotifications": [],
+    "page": {
+      "nextCursor": "replay-page-3",
+      "previousCursor": "newer-page-2",
+      "hasMore": true,
+      "historyComplete": false,
+      "sourceVersion": "synthetic-replay-version",
+      "scannedBytes": 1341223,
+      "omittedOversizedEntries": 0,
+      "contextScanBytes": 0
+    }
+  },
+  {
+    "messages": [
+      {
+        "id": "cross-filler-0",
+        "type": "user",
+        "content": "Cross-boundary filler 0",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      }
+    ],
+    "taskNotifications": [],
+    "page": {
+      "nextCursor": "replay-page-4",
+      "previousCursor": "newer-page-3",
+      "hasMore": true,
+      "historyComplete": false,
+      "sourceVersion": "synthetic-replay-version",
+      "scannedBytes": 685526,
+      "omittedOversizedEntries": 0,
+      "contextScanBytes": 0
+    }
+  },
+  {
+    "messages": [
+      {
+        "id": "cross-prompt",
+        "type": "user",
+        "content": "Cross-boundary replay fixture",
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-call",
+        "type": "tool_use",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Cross-boundary synthetic plan"
+          },
+          {
+            "type": "tool_use",
+            "id": "cross-read",
+            "name": "Read",
+            "input": {
+              "file_path": "/fixture/cross.txt"
+            }
+          }
+        ],
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      },
+      {
+        "id": "cross-result",
+        "type": "tool_result",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "cross-read",
+            "content": "Cross-boundary synthetic result"
+          }
+        ],
+        "timestamp": "2026-11-01T01:00:00.000Z",
+        "cwd": "/var/folders/sx/hl8zlmxd7gx9b58_1t2zhp5r0000gn/T/cc-haha-qa-issue1876-4MrEA7/synthetic-workspace"
+      }
+    ],
+    "taskNotifications": [],
+    "page": {
+      "nextCursor": null,
+      "previousCursor": "newer-page-4",
+      "hasMore": false,
+      "historyComplete": false,
+      "sourceVersion": "synthetic-replay-version",
+      "scannedBytes": 25733,
+      "omittedOversizedEntries": 0,
+      "contextScanBytes": 0
+    }
+  }
+]

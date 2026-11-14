@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBaseUrl } from './client'
-import { sessionsApi } from './sessions'
+import { sessionsApi, type SessionHistoryPage } from './sessions'
+import { mapHistoryMessagesToUiMessages } from '@/stores/chatStore'
+import type { MessageEntry } from '@/types/session'
+import fullHistoryReplayPages from './__fixtures__/full-history-replay-pages.json'
 
 describe('sessionsApi', () => {
   afterEach(() => {
@@ -431,6 +434,63 @@ describe('full session history assembly', () => {
       'http://127.0.0.1:3456/api/sessions/fixture/messages?cursor=middle',
       'http://127.0.0.1:3456/api/sessions/fixture/messages?cursor=oldest',
     ])
+  })
+
+  // Captured from the real loopback reader for a synthetic 35,410,048-byte
+  // transcript with 60 records / 58 UUIDs. Only opaque cursors and sourceVersion
+  // are normalized; the five response slices reproduce the full-budget seam.
+  it('projects replayed thinking and tool records once after joining real history pages (#1876)', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    for (const captured of fullHistoryReplayPages) fetchMock.mockResolvedValueOnce(response(captured))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(result.messages).toHaveLength(58)
+    const ui = mapHistoryMessagesToUiMessages(result.messages)
+    expect(new Set(ui.map(message => message.id)).size).toBe(ui.length)
+    expect(ui.filter(message => message.type === 'thinking')).toHaveLength(1)
+    expect(ui.filter(message => message.type === 'tool_use')).toHaveLength(1)
+    expect(ui.filter(message => message.type === 'tool_result')).toHaveLength(1)
+    expect(mapHistoryMessagesToUiMessages(result.messages).map(message => message.id)).toEqual(ui.map(message => message.id))
+    expect(result.page).toMatchObject({ nextCursor: null, hasMore: false, historyComplete: true })
+  })
+
+  it('keeps the last replay record in chronological position with its parent tool metadata', async () => {
+    const oldCall: MessageEntry = {
+      id: 'call', type: 'assistant', parentToolUseId: 'old-parent',
+      content: [{ type: 'tool_use', id: 'shared-tool', name: 'Read', input: {} }],
+      timestamp: '2026-11-01T00:00:00Z',
+    }
+    const newCall: MessageEntry = {
+      ...oldCall, parentToolUseId: 'new-parent',
+      content: [{ type: 'tool_use', id: 'shared-tool', name: 'Read', input: { file_path: '/fixture/new.txt' } }],
+    }
+    const prompt: MessageEntry = { id: 'prompt', type: 'user', content: 'Same body', timestamp: oldCall.timestamp }
+    const answer: MessageEntry = { id: 'answer', type: 'assistant', content: 'Same body', timestamp: oldCall.timestamp }
+    const older: SessionHistoryPage = { ...page('unused', null), messages: [oldCall, prompt], taskNotifications: [] }
+    const newer: SessionHistoryPage = { ...page('unused', 'older'), messages: [answer, newCall], taskNotifications: [] }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response(newer)).mockResolvedValueOnce(response(older))
+
+    expect((await sessionsApi.getFullHistory('fixture')).messages).toEqual([prompt, answer, newCall])
+  })
+
+  it('preserves equal bodies, shared tool ids, and records without a usable message identity', async () => {
+    const message = (id: unknown, type: MessageEntry['type'] = 'user'): MessageEntry => ({
+      id: id as string, type,
+      content: type === 'assistant'
+        ? [{ type: 'tool_use', id: 'same-tool', name: 'Read', input: {} }]
+        : 'Same body',
+      timestamp: '2026-11-01T00:00:00Z',
+    })
+    const olderMessages = [message('first'), message('first-call', 'assistant'), message(undefined), message(''), message('  ')]
+    const newerMessages = [message('second'), message('second-call', 'assistant'), message(undefined), message(''), message('  ')]
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({ ...page('unused', 'older'), messages: newerMessages }))
+      .mockResolvedValueOnce(response({ ...page('unused', null), messages: olderMessages }))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    // JSON transport omits an absent id; keep those weak records independently.
+    expect(result.messages).toEqual(JSON.parse(JSON.stringify([...olderMessages, ...newerMessages])))
   })
 
   it('keeps the single-request fast path', async () => {
