@@ -45,6 +45,32 @@ describe('remote workspace store', () => {
     expect(state.status).toBe('connected')
   })
 
+  it('seeds the machine history from a profile saved before the history existed', () => {
+    // Connections made before the upgrade recorded no machine; the saved
+    // profile is still a machine the user connected to, so loading the pane
+    // must offer it instead of asking them to re-type everything.
+    writeRemoteWorkspace({
+      url: REMOTE_URL,
+      sshHost: 'my-gpu-server',
+      token: 'k3y-minted-by-deploy-0123456789abcdef',
+      enabled: true,
+      connectedAt: '2026-11-12T09:00:00.000Z',
+    })
+    useRemoteWorkspaceStore.getState().load()
+
+    const history = useRemoteWorkspaceStore.getState().history
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      url: REMOTE_URL,
+      sshHost: 'my-gpu-server',
+      token: 'k3y-minted-by-deploy-0123456789abcdef',
+      lastUsedAt: '2026-11-12T09:00:00.000Z',
+    })
+    // The seed persists, so the next load does not duplicate it.
+    useRemoteWorkspaceStore.getState().load()
+    expect(useRemoteWorkspaceStore.getState().history).toHaveLength(1)
+  })
+
   it('reports idle when the stored profile is remembered but not in use', () => {
     writeRemoteWorkspace({ url: REMOTE_URL, sshHost: 'my-gpu-server', enabled: false, connectedAt: null })
     useRemoteWorkspaceStore.getState().load()

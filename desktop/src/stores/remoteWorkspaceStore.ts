@@ -10,6 +10,7 @@ import {
   forgetRemoteWorkspaceMachine,
   readRemoteWorkspace,
   readRemoteWorkspaceHistory,
+  rememberRemoteWorkspaceMachine,
   type RemoteWorkspaceMachine,
   type RemoteWorkspaceProfile,
 } from '@/lib/remoteWorkspace'
@@ -49,8 +50,23 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceStore>((set, get) =
 
   load: () => {
     const profile = readRemoteWorkspace()
+    // The saved profile is itself a machine the user connected to before the
+    // history feature existed — seed the list from it once, so reconnecting
+    // never requires re-typing a connection made before the upgrade.
+    let history = readRemoteWorkspaceHistory()
+    if (history.length === 0 && profile) {
+      rememberRemoteWorkspaceMachine(
+        {
+          url: profile.url,
+          sshHost: profile.sshHost,
+          ...(profile.token ? { token: profile.token } : {}),
+        },
+        profile.connectedAt ?? undefined,
+      )
+      history = readRemoteWorkspaceHistory()
+    }
     const active = !!profile?.enabled && profile.url === getBaseUrl()
-    set({ profile, history: readRemoteWorkspaceHistory(), status: active ? 'connected' : 'idle', error: null })
+    set({ profile, history, status: active ? 'connected' : 'idle', error: null })
   },
 
   verify: async (url) => {
