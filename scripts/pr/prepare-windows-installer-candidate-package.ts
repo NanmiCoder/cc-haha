@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { assertOutsideSourceGit, downloadPinnedInstaller, isInsideDirectory, pinnedNsisCompiler, pinnedNsisResources, sha256File, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { bootstrapFullSevenZip, parseSevenZipListing, pinnedFullSevenZip, proveNsisMember, selectLiteralMember, type NsisMemberProof, type SevenZipExtractor, type SevenZipRunner } from './windows-installer-member-proof'
@@ -296,13 +296,58 @@ async function command(argv: string[], cwd: string, env: Record<string, string>,
 }
 
 type CleanupGuard = 'canonical-path' | 'directory-kind' | 'parent' | 'prefix' | 'owner-kind' | 'owner-size' | 'owner-value' | null
-type CleanupDiagnostic = { site: 'admission' | 'remove' | 'unknown'; guard: CleanupGuard; nativeCode: string | null }
+type CleanupRemovalDetails = {
+  syscall: string | null, errno: number | null, relativePath: string | null,
+  entryKind: 'file' | 'directory' | 'missing' | 'other' | null, modeWriteBits: number | null,
+}
+type CleanupDiagnostic = {
+  site: 'admission' | 'remove' | 'unknown'; guard: CleanupGuard; nativeCode: string | null
+} & Partial<CleanupRemovalDetails>
 const cleanupNativeCodes = new Set(['EACCES', 'EBUSY', 'EEXIST', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE',
   'ENAMETOOLONG', 'ENFILE', 'ENOENT', 'ENOSPC', 'ENOTDIR', 'ENOTEMPTY', 'EPERM', 'EROFS', 'ETXTBSY'])
+const cleanupSyscalls = new Set(['unlink', 'rmdir', 'scandir', 'lstat', 'stat', 'rm'])
+function cleanupErrorField(error: unknown, key: 'code' | 'syscall' | 'errno' | 'path') {
+  try { return error && typeof error === 'object' ? Reflect.get(error, key) : undefined } catch { return undefined }
+}
 function cleanupNativeCode(error: unknown) {
-  let code: unknown
-  try { code = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined } catch {}
+  const code = cleanupErrorField(error, 'code')
   return typeof code === 'string' && cleanupNativeCodes.has(code) ? code : 'UNRECOGNIZED'
+}
+function cleanupRemovalDetails(error: unknown, temp: string): CleanupRemovalDetails {
+  const syscall = cleanupErrorField(error, 'syscall'), errno = cleanupErrorField(error, 'errno')
+  const unknown: CleanupRemovalDetails = {
+    syscall: typeof syscall === 'string' && cleanupSyscalls.has(syscall) ? syscall : null,
+    errno: typeof errno === 'number' && Number.isInteger(errno) && errno >= -2147483648 && errno <= 2147483647 ? errno : null,
+    relativePath: null, entryKind: null, modeWriteBits: null,
+  }
+  const path = cleanupErrorField(error, 'path')
+  if (typeof path !== 'string' || path.length > 32767 || /[\p{Cc}\p{Cf}]/u.test(path) || !isAbsolute(path)
+    || path.replaceAll('\\', '/').split('/').some(part => part === '.' || part === '..')) return unknown
+  const taskRelative = relative(temp, path), parts = taskRelative.split(sep)
+  if (!taskRelative || taskRelative.length > 512 || isAbsolute(taskRelative) || parts.length > 64
+    || parts.some(part => !part || part === '.' || part === '..' || /[\\/:<>"|?*]/.test(part) || /[ .]$/.test(part)
+      || /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(part))) return unknown
+  try {
+    const root = lstatSync(temp)
+    if (!root.isDirectory() || root.isSymbolicLink()) return unknown
+    let current = temp
+    for (const [index, part] of parts.entries()) {
+      current = join(current, part)
+      let stat: ReturnType<typeof lstatSync>
+      try { stat = lstatSync(current) }
+      catch (metadataError) {
+        return index === parts.length - 1 && cleanupErrorField(metadataError, 'code') === 'ENOENT'
+          ? { ...unknown, relativePath: parts.join('/'), entryKind: 'missing' } : unknown
+      }
+      // Never descend through a link/junction or a non-directory ancestor.
+      if (stat.isSymbolicLink() || index < parts.length - 1 && !stat.isDirectory()) return unknown
+      if (index === parts.length - 1) return { ...unknown, relativePath: parts.join('/'),
+        entryKind: stat.isFile() ? 'file' : stat.isDirectory() ? 'directory' : 'other',
+        // POSIX-style mode hint only; not Windows ReadOnly or Win32LastError.
+        modeWriteBits: Number(stat.mode) & 0o222 }
+    }
+  } catch {}
+  return unknown
 }
 class CandidateCleanupFailure extends Error {
   constructor(readonly diagnostic: CleanupDiagnostic, cause: unknown, denied: boolean) {
@@ -341,7 +386,8 @@ export function cleanupCandidateDirectory(temp: string, parent: string, nonce: s
     site = 'remove'; guard = null
     rmSync(temp, { recursive: true })
   } catch (error) {
-    throw new CandidateCleanupFailure({ site, guard, nativeCode: denied ? null : cleanupNativeCode(error) }, error, denied)
+    throw new CandidateCleanupFailure({ site, guard, nativeCode: denied ? null : cleanupNativeCode(error),
+      ...(site === 'remove' ? cleanupRemovalDetails(error, temp) : {}) }, error, denied)
   }
 }
 

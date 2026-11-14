@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import * as nativeFs from 'node:fs'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -143,6 +143,140 @@ describe('bounded candidate cleanup diagnostics', () => {
       for (const marker of markers) expect(raw).not.toContain(marker)
       expect(existsSync(f.directory)).toBe(true)
       expect(readFileSync(join(f.directory, '.owner'), 'utf8')).toBe(nonce)
+    } finally { f.cleanup() }
+  })
+})
+
+describe('scoped remove diagnostics', () => {
+  function removalFailure(f: ReturnType<typeof completionFixture>, nativeError: Error) {
+    const remove = spyOn(nativeFs, 'rmSync').mockImplementation(() => { throw nativeError })
+    let error: any
+    try {
+      try { finishCandidatePackage(f.options) } catch (failure) { error = failure }
+      expect(remove).toHaveBeenCalledTimes(1)
+    } finally { remove.mockRestore() }
+    expect(error.cause.cause).toBe(nativeError)
+    expect(candidatePackageFailureSummary(error)).toBe('Candidate package not proven at cleanup; bounded evidence preserved')
+    const raw = readFileSync(join(f.evidence, 'candidate-package-receipt.json'), 'utf8'), receipt = JSON.parse(raw)
+    expect(receipt).toMatchObject({ status: 'not_proven', cleanup: 'unknown', failedStage: 'cleanup',
+      cleanupFailure: { site: 'remove', guard: null, nativeCode: 'EPERM' } })
+    expect(raw).not.toContain('PRIVATE_REMOVE_MESSAGE')
+    expect(raw).not.toContain('PRIVATE_REMOVE_STACK')
+    expect(existsSync(f.directory)).toBe(true)
+    return { receipt, raw }
+  }
+  function fault(fields: Record<string, unknown>) {
+    return Object.assign(new Error('PRIVATE_REMOVE_MESSAGE'), { code: 'EPERM', stack: 'PRIVATE_REMOVE_STACK', ...fields })
+  }
+  test.each(['file', 'directory', 'missing'])('publishes only the admitted task-relative target and metadata hint (%s)', kind => {
+    const f = completionFixture(), parent = join(f.directory, 'source'), target = join(parent, 'public-dependency')
+    mkdirSync(parent)
+    if (kind === 'file') writeFileSync(target, 'owned public build fixture')
+    if (kind === 'directory') mkdirSync(target)
+    const modeWriteBits = kind === 'missing' ? null : lstatSync(target).mode & 0o222
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toEqual({ site: 'remove', guard: null, nativeCode: 'EPERM',
+        syscall: 'unlink', errno: -4048, relativePath: 'source/public-dependency', entryKind: kind, modeWriteBits })
+      expect(raw).not.toContain(f.directory)
+      expect(receipt.cleanupFailure).not.toHaveProperty('win32LastError')
+      expect(receipt.cleanupFailure).not.toHaveProperty('nativeReadonly')
+    } finally { f.cleanup() }
+  })
+  test('retains the rm syscall in the actual failure receipt projection', () => {
+    const f = completionFixture(), target = join(f.directory, 'owned.txt')
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'rm', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toEqual({ site: 'remove', guard: null, nativeCode: 'EPERM', syscall: 'rm',
+        errno: -4048, relativePath: 'owned.txt', entryKind: 'file', modeWriteBits: lstatSync(target).mode & 0o222 })
+      expect(raw).not.toContain(f.directory)
+    } finally { f.cleanup() }
+  })
+  test.each(['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³'])('withholds reserved %s components before any component lstat', device => {
+    for (const suffix of ['', '.txt']) for (const position of ['leaf', 'ancestor']) {
+      const f = completionFixture(), source = join(f.directory, 'source')
+      mkdirSync(source)
+      const target = join(source, device + suffix, ...(position === 'ancestor' ? ['public-child'] : []))
+      const originalStat = nativeFs.lstatSync, seen: string[] = []
+      const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+        seen.push(String(args[0])); return (originalStat as any)(...args)
+      }) as any)
+      try {
+        const { receipt } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+        expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+        expect(seen.every(path => path === f.directory || path === join(f.directory, '.owner'))).toBe(true)
+      } finally { stat.mockRestore(); f.cleanup() }
+    }
+  })
+  test.each(['outside', 'relative', 'control', 'c1', 'format', 'escape', 'prefix', 'root', 'oversize', 'stream'])('withholds a %s path before reading its metadata', kind => {
+    const f = completionFixture()
+    const paths = {
+      outside: join(f.root, 'PRIVATE_OUTSIDE_FILE'), relative: 'PRIVATE_RELATIVE_FILE',
+      control: f.directory + '/PRIVATE_CONTROL\nFILE', escape: f.directory + '/source/../../PRIVATE_ESCAPE_FILE',
+      c1: f.directory + '/PRIVATE_CONTROL\u0085FILE', format: f.directory + '/PRIVATE_FORMAT\u202eFILE',
+      prefix: f.directory + '-neighbor/PRIVATE_PREFIX_FILE', root: f.directory,
+      oversize: f.directory + '/' + 'PRIVATE_LONG_FILE'.repeat(40), stream: f.directory + '/PRIVATE_FILE:stream',
+    }
+    const originalStat = nativeFs.lstatSync, seen: string[] = []
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      seen.push(String(args[0])); return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'rmdir', errno: -4048, path: paths[kind as keyof typeof paths] }))
+      expect(receipt.cleanupFailure).toMatchObject({ syscall: 'rmdir', errno: -4048,
+        relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(seen.every(path => path === f.directory || path === join(f.directory, '.owner'))).toBe(true)
+      expect(raw).not.toContain('PRIVATE_')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test.each(['leaf', 'ancestor'])('stops at a %s junction without following it', kind => {
+    const f = completionFixture(), outside = join(f.root, 'outside-owned'), link = join(f.directory, 'link')
+    mkdirSync(outside); writeFileSync(join(outside, 'PRIVATE_OUTSIDE_FILE'), 'outside sentinel unchanged')
+    symlinkSync(outside, link, 'junction')
+    const target = kind === 'leaf' ? link : join(link, 'PRIVATE_OUTSIDE_FILE')
+    const originalStat = nativeFs.lstatSync, seen: string[] = []
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      seen.push(String(args[0])); return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(seen).toContain(link)
+      expect(seen).not.toContain(join(link, 'PRIVATE_OUTSIDE_FILE'))
+      expect(seen.some(path => path.startsWith(outside))).toBe(false)
+      expect(raw).not.toContain(outside)
+      expect(readFileSync(join(outside, 'PRIVATE_OUTSIDE_FILE'), 'utf8')).toBe('outside sentinel unchanged')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test('withholds unavailable metadata without replacing the original remove error', () => {
+    const f = completionFixture(), target = join(f.directory, 'public-dependency')
+    const originalStat = nativeFs.lstatSync
+    const stat = spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: any[]) => {
+      if (String(args[0]) === target) throw Object.assign(new Error('PRIVATE_METADATA_ERROR'), { code: 'EACCES' })
+      return (originalStat as any)(...args)
+    }) as any)
+    try {
+      const { receipt, raw } = removalFailure(f, fault({ syscall: 'unlink', errno: -4048, path: target }))
+      expect(receipt.cleanupFailure).toMatchObject({ relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(raw).not.toContain('PRIVATE_METADATA_ERROR')
+    } finally { stat.mockRestore(); f.cleanup() }
+  })
+  test.each([-2147483648, 2147483647, 2147483648, -2147483649, 0.5, '-4048'])('accepts only an int32 errno (%s)', errno => {
+    const f = completionFixture()
+    try {
+      const { receipt } = removalFailure(f, fault({ syscall: 'PRIVATE_SYSCALL', errno }))
+      expect(receipt.cleanupFailure.syscall).toBeNull()
+      expect(receipt.cleanupFailure.errno).toBe(typeof errno === 'number' && Number.isInteger(errno)
+        && errno >= -2147483648 && errno <= 2147483647 ? errno : null)
+    } finally { f.cleanup() }
+  })
+  test('does not publish or substitute throwing error accessors', () => {
+    const f = completionFixture(), error = fault({})
+    for (const key of ['syscall', 'errno', 'path']) Object.defineProperty(error, key, { get() { throw new Error('PRIVATE_ACCESSOR') } })
+    try {
+      const { receipt, raw } = removalFailure(f, error)
+      expect(receipt.cleanupFailure).toMatchObject({ syscall: null, errno: null, relativePath: null, entryKind: null, modeWriteBits: null })
+      expect(raw).not.toContain('PRIVATE_ACCESSOR')
     } finally { f.cleanup() }
   })
 })
