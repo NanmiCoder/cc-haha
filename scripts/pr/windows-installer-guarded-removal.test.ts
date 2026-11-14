@@ -211,8 +211,17 @@ test.skipIf(process.platform !== 'win32')('compiles CLR4 x86 and exercises share
         expect(readFileSync(join(arena, 'profile/.claude/owned-data-canary'), 'utf8')).toBe('owned protected config')
         expect(readFileSync(join(arena, 'roaming/Claude Code Haha/owned-data-canary'), 'utf8')).toBe('owned protected product data')
       }
-      if (mode === 'success') expect(result.operationOutcome).toBe('removed')
+      if (mode === 'success') {
+        expect(result.operationOutcome).toBe('removed')
+        expect(result.firstTreeFailure).toBeNull()
+      }
       else expect(result.originalBytesPreserved).toBe(true)
+      if (['rollback', 'busy', 'namespace-change', 'parent-dead'].includes(mode)) {
+        expect(result.firstTreeFailure.code).toBe(result.errorCode)
+        expect(result.firstTreeFailure.nativeError).toBe(result.nativeError)
+        expect(result.firstTreeFailure.restored).toBe(result.restored)
+        expect(result.firstTreeFailure.mutationStarted).toBe(result.treeMutationStarted)
+      }
       if (mode === 'success' || mode === 'rollback' || mode === 'parent-dead') expect(result.namedPrunePins).toBeGreaterThan(0)
       if (mode === 'rollback' || mode === 'parent-dead') {
         expect(result.restored).toBe(true)

@@ -26,6 +26,70 @@ internal static class GuardedRemovalChecks
     return new GuardedRemoval.Registration { Guid = GuardedRemoval.ProductGuid, Version = "0.7.8", Root = "C:\\Apps\\Claude Code Haha",
       Uninstall = "\"C:\\Apps\\Claude Code Haha\\Uninstall Claude Code Haha.exe\" /currentuser", MachineAbsent = true, User32Absent = true };
   }
+  private sealed class CapturedTreeFailure
+  {
+    internal string Code, Phase;
+    internal int NativeError, Files, Directories, MovedFiles, DeleteMarkedFiles, NamedPrunePins;
+    internal bool Restored, MutationStarted, CommitStarted, Unknown, PendingIo;
+    internal string Json()
+    {
+      return "{\"code\":" + Quote(Code) + ",\"nativeError\":" + NativeError.ToString(CultureInfo.InvariantCulture) +
+        ",\"phase\":" + Quote(Phase) + ",\"restored\":" + (Restored ? "true" : "false") +
+        ",\"mutationStarted\":" + (MutationStarted ? "true" : "false") + ",\"commitStarted\":" + (CommitStarted ? "true" : "false") +
+        ",\"unknown\":" + (Unknown ? "true" : "false") + ",\"pendingIo\":" + (PendingIo ? "true" : "false") +
+        ",\"files\":" + Files.ToString(CultureInfo.InvariantCulture) + ",\"directories\":" + Directories.ToString(CultureInfo.InvariantCulture) +
+        ",\"movedFiles\":" + MovedFiles.ToString(CultureInfo.InvariantCulture) + ",\"deleteMarkedFiles\":" + DeleteMarkedFiles.ToString(CultureInfo.InvariantCulture) +
+        ",\"namedPrunePins\":" + NamedPrunePins.ToString(CultureInfo.InvariantCulture) + "}";
+    }
+  }
+  private static int CountNamedPrunePins(GuardedRemoval.Context context)
+  {
+    int count = 0;
+    if (context != null) foreach (GuardedRemoval.Handle handle in context.Handles)
+      if (handle.Role == "prune-named-delete-pin") count++;
+    return count;
+  }
+  private static GuardedRemoval.Failure RunTreeOperation(string mode, GuardedRemoval.Context context, GuardedRemoval.Tree tree,
+    Action operation, out CapturedTreeFailure captured)
+  {
+    captured = null;
+    try { operation(); return null; }
+    catch (GuardedRemoval.Failure failure)
+    {
+      captured = new CapturedTreeFailure { Code = failure.Code, NativeError = failure.NativeError, Phase = context.Phase,
+        Restored = tree.Restored, MutationStarted = tree.MutationStarted, CommitStarted = tree.CommitStarted,
+        Unknown = context.Unknown, PendingIo = context.PendingIo, Files = tree.Files.Count, Directories = tree.Directories.Count,
+        NamedPrunePins = CountNamedPrunePins(context) };
+      foreach (GuardedRemoval.FileNode file in tree.Files)
+      { if (file.Moved) captured.MovedFiles++; if (file.DeleteMarked) captured.DeleteMarkedFiles++; }
+      // Keep this success fixture failed and preserve the original exception.
+      // An Assert here used to replace its code with a generic Exception.
+      if (mode == "success") throw;
+      return failure;
+    }
+  }
+  private static void ManagedFailureCapture()
+  {
+    var context = new GuardedRemoval.Context { Phase = "restored-after-failure" };
+    var tree = (GuardedRemoval.Tree)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(GuardedRemoval.Tree));
+    tree.Restored = true; tree.MutationStarted = true;
+    typeof(GuardedRemoval.Tree).GetField("Files", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+      .SetValue(tree, new List<GuardedRemoval.FileNode> { new GuardedRemoval.FileNode() });
+    typeof(GuardedRemoval.Tree).GetField("Directories", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+      .SetValue(tree, new List<GuardedRemoval.DirectoryNode> { new GuardedRemoval.DirectoryNode() });
+    var original = new GuardedRemoval.Failure("fixture-native-failure", 32);
+    CapturedTreeFailure captured = null;
+    try { RunTreeOperation("success", context, tree, delegate { throw original; }, out captured); throw new Exception("unexpected-success-fixture-pass"); }
+    catch (GuardedRemoval.Failure failure) { Assert(Object.ReferenceEquals(failure, original), "success-rethrows-the-original-native-failure"); }
+    Assert(captured.Code == original.Code && captured.NativeError == 32, "original-code-and-native-error-captured-before-rethrow");
+    Assert(captured.Restored && captured.MutationStarted && !captured.CommitStarted && !captured.Unknown && !captured.PendingIo, "failure-snapshot-uses-real-tree-flags");
+    Assert(captured.Phase == context.Phase && captured.Files == 1 && captured.Directories == 1 && captured.MovedFiles == 0, "failure-stage-and-tree-counts");
+    Assert(Object.ReferenceEquals(RunTreeOperation("rollback", context, tree, delegate { throw original; }, out captured), original), "expected-failure-keeps-native-identity");
+    Assert(captured.Restored && captured.NativeError == 32, "expected-failure-capture-keeps-observed-restoration");
+    Assert(RunTreeOperation("success", context, tree, delegate { }, out captured) == null && captured == null, "normal-operation-has-no-fabricated-failure");
+    try { RunTreeOperation("success", context, tree, delegate { throw new InvalidOperationException(); }, out captured); throw new Exception("non-native-error-hidden"); }
+    catch (InvalidOperationException) { Assert(captured == null, "non-native-error-is-not-relabelled-as-native-failure"); }
+  }
   public static string Managed()
   {
     Count = 0;
@@ -123,6 +187,7 @@ internal static class GuardedRemovalChecks
     Assert(GuardedRemoval.NamedPruneReason(null, movedWeak, namedExpected, namedParent, "Claude Code Haha") == "canonical-drift", "named-renamed-away-rejected");
     movedWeak.Path = root; movedWeak.Id++;
     Assert(GuardedRemoval.NamedPruneReason(namedExpected, movedWeak, namedExpected, namedParent, "Claude Code Haha") == "weak-identity-mismatch", "named-retained-weak-id-required");
+    ManagedFailureCapture();
     return "managed-pass:" + Count.ToString(CultureInfo.InvariantCulture);
   }
 
@@ -268,6 +333,7 @@ internal static class GuardedRemovalChecks
     bool passed = false, rejected = false, restored = false, rawClosed = false, fileIdsPreserved = false, bytesPreserved = false;
     int nativeError = 0, namedPrunePins = 0;
     string errorCode = null, operation = "not-started";
+    CapturedTreeFailure firstFailure = null;
     try
     {
       Assert(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 4, "fixture-windows-x86");
@@ -300,7 +366,7 @@ internal static class GuardedRemovalChecks
           Assert(busy != IntPtr.Zero && busy != new IntPtr(-1), "busy-writer-actually-opened");
         }
         tree = new GuardedRemoval.Tree(context);
-        try
+        GuardedRemoval.Failure failure = RunTreeOperation(mode, context, tree, delegate
         {
           tree.Admit(null);
           tree.PrepareStage(Path.GetDirectoryName(typeof(GuardedRemovalChecks).Assembly.Location));
@@ -308,14 +374,16 @@ internal static class GuardedRemovalChecks
           Action commit = mode == "rollback" ? (Action)delegate { throw new GuardedRemoval.Failure("fixture-before-commit", 0); } :
             mode == "parent-dead" ? (Action)delegate { Assert(GuardedRemoval.Native.WaitForSingleObject(context.Parent.Value, 0xffffffff) == 0, "owned-monitored-process-really-exited"); } : null;
           tree.Remove(barrier, commit);
+        }, out firstFailure);
+        if (failure == null)
+        {
           operation = "removed";
           Assert(mode == "success" && !Directory.Exists(root) && !Directory.Exists(context.StagingPath), "complete-owned-removal");
         }
-        catch (GuardedRemoval.Failure failure)
+        else
         {
           rejected = true; errorCode = failure.Code;
           nativeError = failure.NativeError;
-          Assert(mode != "success", "success-case-cannot-use-failure-as-proof");
           if (!tree.MutationStarted && !context.Unknown) tree.CleanPreparation();
           restored = tree.Restored;
           operation = restored ? "restored-after-failure" : "rejected-before-mutation";
@@ -335,8 +403,7 @@ internal static class GuardedRemovalChecks
           Assert(context.Read(file.Pin).Id == file.Original.Id && context.Hash(file.Pin) == file.Hash, "original-file-id-and-hash-retained");
         fileIdsPreserved = tree != null && tree.Files.Count == 2;
       }
-      if (context != null) foreach (GuardedRemoval.Handle handle in context.Handles)
-        if (handle.Role == "prune-named-delete-pin") namedPrunePins++;
+      namedPrunePins = CountNamedPrunePins(context);
       if (mode == "success" || mode == "rollback" || mode == "parent-dead") Assert(namedPrunePins > 0, "actual-named-prune-protocol-used");
       passed = true;
     }
@@ -344,6 +411,13 @@ internal static class GuardedRemovalChecks
       if (error is GuardedRemoval.Failure) nativeError = ((GuardedRemoval.Failure)error).NativeError; }
     finally
     {
+      if (tree != null)
+      {
+        restored = tree.Restored;
+        if (firstFailure != null) operation = context.Unknown || context.PendingIo ? "unknown-after-failure" : restored ? "restored-after-failure" :
+          !tree.MutationStarted ? "rejected-before-mutation" : "failed-after-mutation";
+      }
+      namedPrunePins = CountNamedPrunePins(context);
       if (context != null) context.CloseAll();
       bool busyClosed = busy == IntPtr.Zero || busy == new IntPtr(-1) || GuardedRemoval.Native.CloseHandle(busy);
       rawClosed = busyClosed && (context == null || (!context.Unknown && !context.PendingIo));
@@ -356,6 +430,8 @@ internal static class GuardedRemovalChecks
         ",\"namedPrunePins\":" + namedPrunePins.ToString(CultureInfo.InvariantCulture) +
         ",\"phase\":" + Quote(context == null ? "receive" : context.Phase) +
         ",\"parentCapabilityObservation\":" + ParentObservation +
+        ",\"firstTreeFailure\":" + (firstFailure == null ? "null" : firstFailure.Json()) +
+        ",\"originalFileVerification\":" + Quote(bytesPreserved && fileIdsPreserved ? "passed" : "not_run") +
         ",\"treeMutationStarted\":" + (tree != null && tree.MutationStarted ? "true" : "false") +
         ",\"protectedNamespaceMetadataCase\":" + (mode.StartsWith("data-", StringComparison.Ordinal) ? "true" : "false") +
         ",\"capabilityBoundary\":\"same-process fixture handles; NSIS cross-process handoff tested separately\",\"realAccountsCreated\":0,\"realProfilesCreated\":0,\"productPeExecuted\":false}", new UTF8Encoding(false));
