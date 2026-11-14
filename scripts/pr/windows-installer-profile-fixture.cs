@@ -32,6 +32,7 @@ namespace CcHahaInstallerProfile
     [DataMember] public string status = "failed";
     [DataMember] public List<CheckResult> checks = new List<CheckResult>();
     [DataMember(EmitDefaultValue = false)] public F1SessionObservation f1NativeCanary;
+    [DataMember(EmitDefaultValue = false)] public FunctionalUpgradeFacts functionalFacts;
     [DataMember] public int realAccountsCreated;
     [DataMember] public int realProfilesCreated;
     [DataMember] public bool releasedPeExecuted;
@@ -109,6 +110,7 @@ namespace CcHahaInstallerProfile
     [DataMember] public string desktopName;
     [DataMember] public string subjectSpecPath;
     [DataMember] public F1InputBindings f1;
+    [DataMember(EmitDefaultValue = false)] public FunctionalUpgradeInputs functional;
   }
 
   [DataContract]
@@ -161,6 +163,7 @@ namespace CcHahaInstallerProfile
 
   internal sealed class OwnedProcess
   {
+    public int functionalPulseSequence;
     public IntPtr process;
     public IntPtr thread;
     public IntPtr job;
@@ -200,6 +203,7 @@ namespace CcHahaInstallerProfile
     public bool profileCreationUncertain;
     public bool profileOwnershipProven;
     public bool f1AuditResourceUncertain;
+    public bool functionalResourceUncertain;
     public bool f1AuditArmOutcomeUnknown;
     public List<F1AuditLease> f1AuditLeases = new List<F1AuditLease>();
     // Only this process's successful creation may supply an ownership context.
@@ -274,6 +278,7 @@ namespace CcHahaInstallerProfile
     [DataMember] public string environmentSha256;
     [DataMember] public int exitCode;
     [DataMember] public bool helperAlive;
+    [DataMember(EmitDefaultValue = false)] public bool helperUsable, helperIdentityVerified;
     [DataMember] public bool protectedFinalStateUnchanged;
     [DataMember] public bool payloadRemoved;
     [DataMember] public bool registrationRemoved;
@@ -592,6 +597,334 @@ namespace CcHahaInstallerProfile
     public abstract void BeforeAck();
     public abstract F1AuditEvidence Complete();
     public abstract void Dispose();
+  }
+
+  [DataContract]
+  internal sealed class FunctionalUpgradeInputs
+  {
+    [DataMember] public int version;
+    [DataMember] public string status, activationHead, candidateSourceHead, candidateTree, stageASourceHead, stageAArtifactSha256, sourceSetSha256;
+    [DataMember] public long stageARunId, stageAArtifactId, fixtureBytes, guardedConfigBytes;
+    [DataMember] public string guardedConfigSha256;
+    [DataMember] public F1BlobPin stageAReceipt, oldMemberReceipt, packageReceipt, authorizationReceipt;
+    [DataMember] public F1PackagePin newPackage;
+  }
+  [DataContract]
+  internal sealed class FunctionalProcessFact
+  {
+    [DataMember] public string role, creationTime, exitTime, imageSha256, imageCanonicalSha256, fileId, volumePath;
+    [DataMember] public int pid, parentPid;
+    [DataMember] public uint? exitCode;
+  }
+  [DataContract]
+  internal sealed class FunctionalSetupChain
+  {
+    [DataMember] public string status = "not_run", observation = "readonly-owned-process-lifecycle";
+    [DataMember] public bool oldChildExit22Observed, guardedHelperStarted, guardedHelperExit0Observed;
+    [DataMember] public int unverifiedCount;
+    [DataMember] public List<FunctionalProcessFact> processes = new List<FunctionalProcessFact>();
+  }
+  [DataContract]
+  internal sealed class FunctionalUpgradeFacts
+  {
+    [DataMember] public string scope = "isolated-v078-first-upgrade", status = "not_run", exhaustiveAudit = "not_run", wholeBefore = "not_run";
+    [DataMember] public int? freshInstallExit, oldStandaloneExit, normalRemovalExit, rebuildExit, upgradeExit;
+    [DataMember] public bool oldInstalledUninstallerExact, currentPayloadExact, currentRegistrationExact, shortcutTargetsExact,
+      fakeUserDataUnchanged, legacyOnlyCanaryAbsent, normalRemovalReferencePassed, rebuiltOldEquivalent,
+      helperIdentityVerified, helperAlive, helperUsable, ownedCleanupKnown;
+    [DataMember] public FunctionalSetupChain wholeSetupChain = new FunctionalSetupChain();
+  }
+  [DataContract]
+  internal sealed class FunctionalStageAReceipt
+  {
+    [DataMember] public int version;
+    [DataMember] public string status, sourceHead, artifactSha256, fixtureSha256, sourceSetSha256;
+    [DataMember] public long runId, artifactId, fixtureBytes;
+    [DataMember] public List<SourcePin> sourcePins;
+    [DataMember] public List<F1BlobPin> rawReports;
+  }
+  [DataContract]
+  internal sealed class FunctionalProductSourcePin
+  {
+    [DataMember] public string path, canonicalSha256, receiptSha256;
+    [DataMember] public long receiptBytes;
+  }
+  [DataContract]
+  internal sealed class FunctionalBudget
+  {
+    [DataMember] public int oldSetup, oldStandaloneUninstaller, newFullSetup, foreignHelper, controller, subject, accounts, profiles;
+  }
+  [DataContract]
+  internal sealed class FunctionalAuthorization
+  {
+    [DataMember] public int version, pullRequest, runAttempt, generation;
+    [DataMember] public string kind, status, scope, repository, actor, owner, activationHead, candidateSourceHead, candidateTree,
+      sourceSetSha256, fixtureSha256, oldSetupSha256, oldUninstallerSha256, newPackageSourceHead, newSetupSha256,
+      claimSha256, claimantSourceSha256, planSha256, environmentSha256, rootPacketSha256, runId,
+      preparedPackageReceiptSha256, newMemberProofSha256, newUninstallerSha256, guardedRemovalSha256, guardedConfigSha256,
+      packageTrackedDiffSha256, workflowPath, executionRef, rootGrantReference, rootDecisionUtc;
+    [DataMember] public long fixtureBytes, oldSetupBytes, oldUninstallerBytes, newSetupBytes, workflowId, actionsRunId, actionsRunNumber,
+      preparedPackageReceiptBytes, newMemberProofBytes, newUninstallerBytes, guardedRemovalBytes, guardedConfigBytes;
+    [DataMember] public bool completeFirstInvocation, productSourceInputsMatched, priorBProfileOrF1AuthorityInherited, modeSpecificHumanApproval, packageTrackedDiffVerified;
+    [DataMember] public FunctionalAuthorizationStage stageA;
+    [DataMember] public FunctionalBudget budgets;
+    [DataMember] public List<FunctionalProductSourcePin> productSourcePins14;
+  }
+  [DataContract]
+  internal sealed class FunctionalAuthorizationArtifact
+  { [DataMember] public long id, size; [DataMember] public string name, digest; }
+  [DataContract]
+  internal sealed class FunctionalAuthorizationSource
+  { [DataMember] public string file, sha256, canonicalSha256; [DataMember] public long bytes; }
+  [DataContract]
+  internal sealed class FunctionalAuthorizationStage
+  {
+    [DataMember] public string sourceHead, fixtureSha256, sourceSetSha256;
+    [DataMember] public long runId, fixtureBytes;
+    [DataMember] public FunctionalAuthorizationArtifact artifact;
+    [DataMember] public List<FunctionalAuthorizationSource> sources;
+    [DataMember] public List<F1BlobPin> reports;
+    [DataMember] public F1BlobPin oldMemberProof;
+  }
+  [DataContract]
+  internal sealed class FunctionalHelperMessage
+  {
+    [DataMember] public string kind, nonce, creationTime, binarySha256;
+    [DataMember] public int sequence, pid;
+  }
+  internal static class FunctionalPolicy
+  {
+    internal const string ControllerMode = "functional-upgrade-controller", SubjectMode = "functional-upgrade-subject";
+    internal const string Stage = "functional-upgrade", ResultMode = "functional-upgrade", UpgradePhase = "functional-new-upgrade";
+    internal const string RunId = "a2c7e590-96df-40b1-8943-8e4bcf07a6d2";
+    internal const string PlanHash = "37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53";
+    internal const string EnvironmentHash = "4b2e46bfde62ddb189734e42c4fb258ddab687878b7f9ff8393ddf70d8770252";
+    internal const string ProductHead = "7bc62ecd68b96e900094b924193f06438be6ba2a";
+    internal const string NewSetupHash = "058d55c3d28905eb013ae66879a836245a004022bc4e83edc9198561fed72030";
+    internal const long NewSetupBytes = 218418822;
+    internal static readonly string[] Phases = { "observer-calibration", "powershell-normal-capability-1", "powershell-normal-capability-2",
+      "powershell-unavailable-capability", "fresh-install", "positive-preflight", "old-normal-removal-positive", "rebuild-old-install",
+      "negative-preflight", "old22-negative", "upgrade-negative-preflight", UpgradePhase };
+    internal static bool Is(FixtureSpec spec) { return spec != null && (spec.mode == ControllerMode || spec.mode == SubjectMode); }
+    internal static bool FullSubject(FixtureSpec spec) { return spec != null && (spec.mode == SubjectMode || spec.mode == F1Policy.SubjectMode); }
+    internal static F1PackagePin Package(FixtureSpec spec)
+    {
+      CorePolicy.Require(spec != null && (FullSubject(spec) || spec.mode == ControllerMode || spec.mode == F1Policy.ControllerMode),
+        "full-upgrade-exact-mode");
+      return Is(spec) ? spec.functional.newPackage : spec.f1.newPackage;
+    }
+    internal static void NoF1Promotion(FixtureReport report)
+    {
+      CorePolicy.Require(report.member_proven == "not_run" && report.installed_bytes_equal == "not_run"
+        && report.old22_before_protected_mutation == "not_run" && report.removal_equivalence == "not_run"
+        && report.full_old_to_new == "not_run" && !report.compatibilityEnabled && report.oldExit22Policy == "fatal",
+        "functional-regression-never-promotes-f1");
+    }
+    internal static void RequireRole(FixtureSpec spec, bool subject)
+    {
+      CorePolicy.Require(spec != null && spec.version == 1 && spec.mode == (subject ? SubjectMode : ControllerMode)
+        && spec.executionStage == Stage && spec.realExecutionAdmitted && spec.runId == RunId && spec.generation == 1
+        && spec.owner == "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c" && spec.f1 == null
+        && spec.frozenPlanManifestSha256 == PlanHash && spec.argvEnvPlanSha256 == EnvironmentHash
+        && spec.functional != null && spec.functional.version == 1 && spec.functional.status == "admitted-functional"
+        && F1Policy.Commit(spec.functional.activationHead) && spec.functional.activationHead == spec.functional.candidateSourceHead
+        && F1Policy.Commit(spec.functional.candidateTree), "functional-separate-reviewed-role-before-any-sid");
+    }
+    internal static readonly string[] ProductPaths = {
+      "package.json", "bun.lock", "desktop/package.json", "desktop/bun.lock", "adapters/bun.lock", "mobile/bun.lock",
+      "desktop/scripts/build-windows-x64.ps1", "desktop/scripts/build-sidecars.ts", "desktop/build/installer.nsh",
+      "desktop/build/guarded-removal.cs", "desktop/build/guarded-removal-launch.nsh", "desktop/build/legacy-uninstaller-compat.nsh",
+      "desktop/scripts/nsis-guarded-removal.cjs", "desktop/scripts/nsis-legacy-compat.cjs"
+    };
+    internal static string SubjectCommand(string executable, string file)
+    {
+      CorePolicy.ValidateAbsolutePath(executable); CorePolicy.ValidateAbsolutePath(file);
+      string command = "\"" + executable + "\" --role functional-subject --spec \"" + file + "\"";
+      CorePolicy.Require(command.Length <= 1023, "functional-subject-command-bound"); return command;
+    }
+    internal static string HelperCommand(string executable, FixtureSpec spec, int parentPid, string parentCreation)
+    {
+      CorePolicy.Require(parentPid > 0 && DecimalTime(parentCreation), "functional-helper-parent-identity");
+      CorePolicy.ValidateAbsolutePath(executable); CorePolicy.ValidateAbsolutePath(spec.subjectSpecPath);
+      return "\"" + executable + "\" --functional-helper --spec \"" + spec.subjectSpecPath + "\" --parent-pid "
+        + parentPid.ToString(System.Globalization.CultureInfo.InvariantCulture) + " --parent-creation " + parentCreation;
+    }
+    internal static bool DecimalTime(string value)
+    {
+      ulong parsed;
+      return value != null && value.Length <= 20 && value.Length > 0 && value[0] != '0'
+        && value.All(c => c >= '0' && c <= '9') && UInt64.TryParse(value, out parsed) && parsed != 0;
+    }
+    internal static void ValidatePrepared(FixtureSpec spec, bool subject)
+    {
+      RequireRole(spec, subject);
+      FunctionalUpgradeInputs f = spec.functional;
+      CorePolicy.Require(F1Policy.Commit(f.stageASourceHead) && f.stageARunId > 0 && f.stageAArtifactId > 0
+        && f.fixtureBytes > 0 && f.fixtureBytes <= 1048576 && F1Policy.Hash(f.stageAArtifactSha256)
+        && F1Policy.Hash(f.sourceSetSha256) && F1Policy.Hash(spec.expectedBinarySha256), "functional-actual-new-stage-a");
+      CorePolicy.Require(spec.sourcePins != null && spec.sourcePins.Count == CorePolicy.SourceNames.Length
+        && spec.sourcePins.All(pin => pin != null && CorePolicy.SourceNames.Contains(pin.file) && F1Policy.Hash(pin.sha256))
+        && spec.sourcePins.Select(pin => pin.file).Distinct(StringComparer.Ordinal).Count() == CorePolicy.SourceNames.Length,
+        "functional-exact-three-native-sources");
+      F1PackagePin package = f.newPackage;
+      CorePolicy.Require(package != null, "functional-new-package-required");
+      F1BlobPin[] blobs = { f.stageAReceipt, f.oldMemberReceipt, f.authorizationReceipt, f.packageReceipt,
+        package.setup, package.buildReceipt, package.memberReceipt };
+      foreach (F1BlobPin pin in blobs) F1Policy.Blob(pin);
+      CorePolicy.Require(package.sourceHead == ProductHead && package.displayVersion == "0.7.8"
+        && package.setup.bytes == NewSetupBytes && package.setup.sha256 == NewSetupHash
+        && package.uninstallerBytes == 214502 && package.uninstallerSha256 == "8350a694b0d7f9eb243f6c51a64f145207988e4485febbec5e84a72fa59df418"
+        && package.guardedRemovalBytes == 52224 && package.guardedRemovalSha256 == "fb74dacc504222016497c199489133d3bf48fbfa44b046195e19f81e1cc132fc"
+        && f.guardedConfigBytes == 308 && f.guardedConfigSha256 == "1d788b468c1c6454511f16f2c909bbaf6bee157ad711b7ca7c96f8c8c8f53be3"
+        && package.archiveLiteral == "$R0\\Uninstall Claude Code Haha.exe", "functional-exact-prepared-product-members");
+      CorePolicy.Require(f.packageReceipt.bytes == 40353 && f.packageReceipt.sha256 == "4aa89e11fa991c8e98aa13bea70e1cb2983445cf2902881caf92873067e579ef"
+        && package.buildReceipt.bytes == f.packageReceipt.bytes && package.buildReceipt.sha256 == f.packageReceipt.sha256
+        && package.memberReceipt.bytes == 6800 && package.memberReceipt.sha256 == "f40c46b1a20e895a4972d53d75ce086b3b8b4844f5fb39a85e8fd41721aad870"
+        && blobs.Where(pin => !Object.ReferenceEquals(pin, package.setup)).All(pin => pin.bytes <= 65536), "functional-fixed-bounded-raw-receipts");
+      CorePolicy.Require(package.payloads != null && package.payloads.Count >= 3 && package.payloads.Count <= 20000
+        && package.payloads.All(pin => pin != null && pin.bytes > 0 && F1Policy.Hash(pin.sha256)
+          && !String.IsNullOrEmpty(pin.relativePath) && pin.relativePath.Length < 512
+          && pin.relativePath.IndexOfAny(new char[] { ':', '*', '?', '\r', '\n', '\0' }) < 0
+          && !pin.relativePath.StartsWith("\\", StringComparison.Ordinal) && !pin.relativePath.StartsWith("/", StringComparison.Ordinal)
+          && !pin.relativePath.Split(new char[] { '\\', '/' }).Any(part => part.Length == 0 || part == "." || part == "..")
+          && new string[] { "app-exe", "app-asar", "sidecar", "payload" }.Contains(pin.kind))
+        && package.payloads.Select(pin => pin.relativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count() == package.payloads.Count
+        && package.payloads.Count(pin => pin.kind == "app-exe" && pin.relativePath == "Claude Code Haha.exe") == 1
+        && package.payloads.Count(pin => pin.kind == "app-asar" && pin.relativePath == @"resources\app.asar") == 1
+        && package.payloads.Any(pin => pin.kind == "sidecar"), "functional-prepared-relative-payload-manifest");
+      foreach (string path in new string[] { spec.sourceRoot, spec.gitRoot, spec.controllerRoot, spec.output, spec.setupPath }) CorePolicy.ValidateAbsolutePath(path);
+      CorePolicy.Require(!CorePolicy.IsInside(spec.gitRoot, spec.controllerRoot) && !CorePolicy.SamePath(spec.gitRoot, spec.controllerRoot)
+        && !CorePolicy.IsInside(spec.gitRoot, spec.sourceRoot), "functional-separate-private-roots");
+      string input = subject ? Path.Combine(spec.controllerRoot, "subject-input") : spec.sourceRoot;
+      string[] names = { "functional-stage-a-receipt.json", "functional-old-member-proof.json", "functional-authorization.json",
+        "functional-package-receipt.json", "functional-new-full-setup.exe", "functional-build-receipt.json", "functional-new-member-proof.json" };
+      for (int i = 0; i < blobs.Length; i++) CorePolicy.Require(CorePolicy.SamePath(blobs[i].file, Path.Combine(input, names[i])), "functional-fixed-input-location");
+      CorePolicy.Require(CorePolicy.SamePath(spec.setupPath, Path.Combine(input, "old-setup.exe")), "functional-old-setup-location");
+      if (!subject) CorePolicy.Require(CorePolicy.IsInside(spec.controllerRoot, spec.output) && !CorePolicy.IsInside(spec.controllerRoot, spec.sourceRoot)
+        && !CorePolicy.SamePath(spec.controllerRoot, spec.sourceRoot), "functional-controller-output-boundaries");
+      else
+      {
+        CorePolicy.AssertPaths(spec.knownPaths, spec.profilePath);
+        foreach (string path in new string[] { spec.fixtureRoot, spec.tempRoot, spec.installRoot, spec.uninstallerCopy, spec.subjectSpecPath }) CorePolicy.ValidateAbsolutePath(path);
+        CorePolicy.Require(spec.expectedSid != null && spec.expectedSid.StartsWith("S-1-5-21-", StringComparison.Ordinal)
+          && spec.expectedSid != spec.expectedControllerSid && spec.expectedControllerPid > 0 && DecimalTime(spec.expectedControllerCreationTime)
+          && CorePolicy.IsInside(spec.profilePath, spec.fixtureRoot) && CorePolicy.IsInside(spec.fixtureRoot, spec.tempRoot)
+          && CorePolicy.IsInside(spec.fixtureRoot, spec.output) && CorePolicy.SamePath(spec.uninstallerCopy, Path.Combine(spec.fixtureRoot, "old-uninstaller.exe"))
+          && CorePolicy.SamePath(spec.subjectSpecPath, Path.Combine(input, "subject.json"))
+          && CorePolicy.SamePath(spec.sourceRoot, Path.Combine(input, "sources"))
+          && CorePolicy.SamePath(spec.installRoot, Path.Combine(spec.knownPaths.userPrograms, "Claude Code Haha"))
+          && !CorePolicy.IsInside(spec.gitRoot, spec.profilePath), "functional-fresh-subject-owned-paths");
+        CorePolicy.Require(spec.nonce != null && spec.nonce.Length == 32 && spec.nonce.All(Uri.IsHexDigit)
+          && spec.pipeName == "CcHaha1879-" + spec.nonce && spec.hiveKey == @"Software\CcHaha1879Fixture\" + spec.nonce
+          && spec.hiveNonce != null && spec.hiveNonce.Length == 32 && spec.desktopName != null && spec.desktopName.IndexOf('\\') > 0,
+          "functional-private-channel-and-hive");
+      }
+    }
+    internal static string BindingHash(FixtureSpec spec)
+    {
+      FunctionalUpgradeInputs f = spec.functional; F1PackagePin p = f.newPackage;
+      List<string> rows = new List<string> { f.version.ToString(), f.status, f.activationHead, f.candidateSourceHead, f.candidateTree,
+        f.stageASourceHead, f.stageARunId.ToString(), f.stageAArtifactId.ToString(), f.stageAArtifactSha256, f.sourceSetSha256,
+        f.fixtureBytes.ToString(), spec.expectedBinarySha256, f.guardedConfigBytes.ToString(), f.guardedConfigSha256,
+        spec.frozenPlanManifestSha256, spec.argvEnvPlanSha256, p.sourceHead, p.displayVersion, p.archiveLiteral,
+        p.uninstallerBytes.ToString(), p.uninstallerSha256, p.guardedRemovalBytes.ToString(), p.guardedRemovalSha256 };
+      foreach (F1BlobPin blob in new F1BlobPin[] { f.stageAReceipt, f.oldMemberReceipt, f.authorizationReceipt, f.packageReceipt, p.setup, p.buildReceipt, p.memberReceipt })
+      { rows.Add(blob.bytes.ToString()); rows.Add(blob.sha256); }
+      foreach (SourcePin pin in spec.sourcePins.OrderBy(pin => pin.file, StringComparer.Ordinal)) { rows.Add(pin.file); rows.Add(pin.sha256); }
+      foreach (F1PayloadPin pin in p.payloads.OrderBy(pin => pin.relativePath, StringComparer.Ordinal))
+      { rows.Add(pin.kind); rows.Add(pin.relativePath); rows.Add(pin.bytes.ToString()); rows.Add(pin.sha256); }
+      return CorePolicy.HashText(String.Join("", rows.Select(row => row == null ? "-1:" : row.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + row)));
+    }
+    internal static string HelperDirectory(FixtureSpec spec, int pid, string creation)
+    {
+      CorePolicy.Require(pid > 0 && DecimalTime(creation), "functional-helper-instance-directory");
+      return Path.Combine(spec.fixtureRoot, "foreign", "pulse-" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" + creation);
+    }
+    internal static void PublishHelperMessage(string file, FunctionalHelperMessage message)
+    {
+      // Readers see a complete, flushed CreateNew message only. Neither side
+      // opens a file that the other side is still writing or overwrites a nonce.
+      string pending = file + ".pending";
+      CorePolicy.Require(!File.Exists(file) && !Directory.Exists(file) && !File.Exists(pending) && !Directory.Exists(pending),
+        "functional-new-message-publication-only");
+      CoreJson.Write(pending, message); File.Move(pending, file);
+    }
+    internal static void RequireHelperMessage(FunctionalHelperMessage message, string kind, FixtureSpec spec,
+      int sequence, int pid, string creation, string nonce)
+    {
+      CorePolicy.Require(message != null && message.kind == kind && message.sequence == sequence && sequence > 0 && sequence <= 16
+        && message.pid == pid && message.creationTime == creation && message.binarySha256 == spec.expectedBinarySha256
+        && message.nonce != null && message.nonce.Length == 65 && message.nonce.StartsWith(spec.nonce + "-", StringComparison.Ordinal)
+        && message.nonce.Substring(33).All(Uri.IsHexDigit) && (nonce == null || message.nonce == nonce),
+        "functional-fresh-helper-challenge-response");
+    }
+    internal static void RequireSubjectFacts(FunctionalUpgradeFacts f, IList<PhaseEvidence> phases)
+    {
+      CorePolicy.Require(f != null && f.scope == "isolated-v078-first-upgrade" && f.exhaustiveAudit == "not_run" && f.wholeBefore == "not_run"
+        && f.freshInstallExit == 0 && f.oldStandaloneExit == 22 && f.normalRemovalExit == 0 && f.rebuildExit == 0 && f.upgradeExit == 0
+        && f.oldInstalledUninstallerExact && f.currentPayloadExact && f.currentRegistrationExact && f.shortcutTargetsExact
+        && f.fakeUserDataUnchanged && f.legacyOnlyCanaryAbsent && f.normalRemovalReferencePassed && f.rebuiltOldEquivalent
+        && f.helperIdentityVerified && f.helperAlive && f.helperUsable, "functional-finite-observed-postconditions");
+      CorePolicy.Require(phases != null && phases.Select(item => item.phase).SequenceEqual(Phases), "functional-entire-plan-once-in-order");
+      PhaseEvidence old = phases.Single(item => item.phase == "old22-negative"), upgrade = phases.Single(item => item.phase == UpgradePhase);
+      CorePolicy.Require(old.exitCode == 22 && old.helperAlive && old.helperUsable && old.helperIdentityVerified && old.protectedFinalStateUnchanged
+        && upgrade.exitCode == 0 && upgrade.helperAlive && upgrade.helperUsable && upgrade.helperIdentityVerified
+        && upgrade.newPackageInstalled && upgrade.keptDataUnchanged && upgrade.shortcutTargetsUnchanged && upgrade.legacyOnlyCanaryRemoved
+        && phases.Single(item => item.phase == "rebuild-old-install").oldStateEquivalent, "functional-phase-facts-not-intent");
+    }
+    internal static void RequireAuthorization(FixtureSpec spec, FunctionalAuthorization auth)
+    {
+      FunctionalUpgradeInputs f = spec.functional; F1PackagePin p = f.newPackage;
+      CorePolicy.Require(auth != null && auth.version == 1 && auth.kind == "isolated-functional-upgrade-once"
+        && auth.status == "root_admitted_once" && auth.scope == "isolated-v078-first-upgrade"
+        && auth.repository == "NanmiCoder/cc-haha" && auth.pullRequest == 1883 && auth.actor == "NanmiCoder"
+        && auth.owner == spec.owner && auth.workflowId == 327327938 && auth.workflowPath == ".github/workflows/nightly-quality.yml"
+        && auth.executionRef == "refs/heads/fix/issue-1879-functional-validation"
+        && auth.activationHead == f.activationHead && auth.candidateSourceHead == f.candidateSourceHead && auth.candidateTree == f.candidateTree
+        && auth.runId == RunId && auth.generation == 1 && auth.runAttempt == 1 && auth.actionsRunId > 0 && auth.actionsRunNumber > 0
+        && auth.completeFirstInvocation && F1Policy.Hash(auth.claimSha256) && F1Policy.Hash(auth.claimantSourceSha256)
+        && F1Policy.Hash(auth.rootPacketSha256) && !auth.priorBProfileOrF1AuthorityInherited && !auth.modeSpecificHumanApproval
+        && !String.IsNullOrEmpty(auth.rootGrantReference) && auth.rootGrantReference.StartsWith("R/issue-1879-", StringComparison.Ordinal)
+        && auth.rootGrantReference.EndsWith(".json", StringComparison.Ordinal) && auth.rootGrantReference.Length <= 180
+        && !String.IsNullOrEmpty(auth.rootDecisionUtc), "functional-new-once-runtime-authority");
+      CorePolicy.Require(auth.planSha256 == PlanHash && auth.environmentSha256 == EnvironmentHash
+        && auth.sourceSetSha256 == f.sourceSetSha256 && auth.fixtureSha256 == spec.expectedBinarySha256 && auth.fixtureBytes == f.fixtureBytes
+        && auth.oldSetupBytes == CorePolicy.SetupBytes && auth.oldSetupSha256 == CorePolicy.SetupHash
+        && auth.oldUninstallerBytes == CorePolicy.UninstallerBytes && auth.oldUninstallerSha256 == CorePolicy.UninstallerHash
+        && auth.newPackageSourceHead == ProductHead && auth.newSetupBytes == p.setup.bytes && auth.newSetupSha256 == p.setup.sha256
+        && auth.preparedPackageReceiptBytes == f.packageReceipt.bytes && auth.preparedPackageReceiptSha256 == f.packageReceipt.sha256
+        && auth.newMemberProofBytes == p.memberReceipt.bytes && auth.newMemberProofSha256 == p.memberReceipt.sha256
+        && auth.newUninstallerBytes == p.uninstallerBytes && auth.newUninstallerSha256 == p.uninstallerSha256
+        && auth.guardedRemovalBytes == p.guardedRemovalBytes && auth.guardedRemovalSha256 == p.guardedRemovalSha256
+        && auth.guardedConfigBytes == f.guardedConfigBytes && auth.guardedConfigSha256 == f.guardedConfigSha256,
+        "functional-once-exact-package-and-source-authority");
+      FunctionalBudget b = auth.budgets;
+      CorePolicy.Require(b != null && b.oldSetup == 2 && b.oldStandaloneUninstaller == 2 && b.newFullSetup == 1
+        && b.foreignHelper == 1 && b.controller == 1 && b.subject == 1 && b.accounts == 1 && b.profiles == 1,
+        "functional-finite-once-actions-budget");
+      CorePolicy.Require(auth.productSourceInputsMatched && auth.packageTrackedDiffVerified && F1Policy.Hash(auth.packageTrackedDiffSha256)
+        && auth.productSourcePins14 != null && auth.productSourcePins14.Count == ProductPaths.Length
+        && auth.productSourcePins14.All(pin => pin != null && ProductPaths.Contains(pin.path) && F1Policy.Hash(pin.canonicalSha256)
+          && pin.receiptBytes > 0 && pin.receiptBytes <= 1048576 && F1Policy.Hash(pin.receiptSha256))
+        && auth.productSourcePins14.Select(pin => pin.path).Distinct(StringComparer.Ordinal).Count() == ProductPaths.Length,
+        "functional-exact-fourteen-product-source-paths");
+      FunctionalAuthorizationStage a = auth.stageA;
+      CorePolicy.Require(a != null && a.sourceHead == f.stageASourceHead && a.runId == f.stageARunId && a.fixtureBytes == f.fixtureBytes
+        && a.fixtureSha256 == spec.expectedBinarySha256 && a.sourceSetSha256 == f.sourceSetSha256
+        && a.artifact != null && a.artifact.id == f.stageAArtifactId && a.artifact.name == "windows-installer-evidence"
+        && a.artifact.size > 0 && a.artifact.size <= 16777216 && a.artifact.digest == "sha256:" + f.stageAArtifactSha256
+        && a.sources != null && a.sources.Count == CorePolicy.SourceNames.Length
+        && a.sources.Select(pin => pin.file).Distinct(StringComparer.Ordinal).Count() == CorePolicy.SourceNames.Length
+        && a.sources.All(pin => pin != null && CorePolicy.SourceNames.Contains(pin.file) && pin.bytes > 0 && pin.bytes <= 1048576
+          && F1Policy.Hash(pin.canonicalSha256) && spec.sourcePins.Any(expected => expected.file == pin.file && expected.sha256 == pin.sha256))
+        && a.reports != null && a.reports.Count == 4 && a.reports.All(pin => pin != null && F1Policy.Hash(pin.sha256)
+          && pin.bytes > 0 && pin.bytes <= 1048576)
+        && a.reports.Select(pin => pin.file).Distinct(StringComparer.Ordinal).Count() == 4
+        && a.oldMemberProof != null && a.oldMemberProof.file == "member-proof/historical/member-proof.json"
+        && a.oldMemberProof.bytes == f.oldMemberReceipt.bytes && a.oldMemberProof.sha256 == f.oldMemberReceipt.sha256,
+        "functional-actual-new-stage-a-and-old-member-authority");
+    }
+
   }
 
   internal static class F1Policy
@@ -1133,6 +1466,71 @@ namespace CcHahaInstallerProfile
         && build.payloads != null && CoreJson.Serialize(build.payloads) == CoreJson.Serialize(package.payloads), "f1-current-full-build-receipt-binding");
     }
 
+    public static void ValidateFunctionalBindings(FixtureSpec spec, ProfilePlatform platform)
+    {
+      bool subject = spec.mode == FunctionalPolicy.SubjectMode;
+      FunctionalPolicy.ValidatePrepared(spec, subject); ValidateBindings(spec, platform);
+      FunctionalUpgradeInputs f = spec.functional; F1PackagePin package = f.newPackage;
+      Require(platform.IdentifyPath(BinaryPath, false).bytes == f.fixtureBytes, "functional-actual-stage-a-pe-bytes");
+      foreach (F1BlobPin pin in new F1BlobPin[] { f.stageAReceipt, f.oldMemberReceipt, f.authorizationReceipt, f.packageReceipt,
+        package.setup, package.buildReceipt, package.memberReceipt })
+      {
+        FileIdentity file = platform.IdentifyPath(pin.file, false);
+        Require(!file.reparse && !file.directory && file.bytes == pin.bytes && file.sha256 == pin.sha256, "functional-readonly-exact-input-bytes");
+      }
+      FunctionalAuthorization auth = CoreJson.Read<FunctionalAuthorization>(f.authorizationReceipt.file);
+      FunctionalPolicy.RequireAuthorization(spec, auth);
+      if (!subject)
+      {
+        Require(Environment.GetEnvironmentVariable("GITHUB_RUN_ID") == auth.actionsRunId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+          && Environment.GetEnvironmentVariable("GITHUB_RUN_NUMBER") == auth.actionsRunNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)
+          && Environment.GetEnvironmentVariable("GITHUB_ACTOR") == auth.actor
+          && Environment.GetEnvironmentVariable("GITHUB_REF") == auth.executionRef
+          && Environment.GetEnvironmentVariable("GITHUB_SHA") == auth.activationHead, "functional-current-actions-claim-before-sid");
+        foreach (FunctionalProductSourcePin pin in auth.productSourcePins14)
+        {
+          string file = Path.Combine(spec.gitRoot, pin.path.Replace('/', Path.DirectorySeparatorChar));
+          FileIdentity actual = platform.IdentifyPath(file, false);
+          Require(!actual.reparse && !actual.directory && actual.bytes <= 1048576, "functional-current-product-source-type");
+          string text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(file)).Replace("\r\n", "\n");
+          Require(HashText(text) == pin.canonicalSha256, "functional-current-product-fourteen-canonical-pins");
+        }
+      }
+      FunctionalStageAReceipt a = CoreJson.Read<FunctionalStageAReceipt>(f.stageAReceipt.file);
+      Require(a != null && a.version == 1 && a.status == "verified-stage-a" && a.sourceHead == f.stageASourceHead
+        && a.runId == f.stageARunId && a.artifactId == f.stageAArtifactId && a.artifactSha256 == f.stageAArtifactSha256
+        && a.fixtureBytes == f.fixtureBytes && a.fixtureSha256 == spec.expectedBinarySha256 && a.sourceSetSha256 == f.sourceSetSha256
+        && a.sourcePins != null && a.sourcePins.Count == SourceNames.Length
+        && a.sourcePins.Select(pin => pin.file).Distinct(StringComparer.Ordinal).Count() == SourceNames.Length
+        && a.sourcePins.All(pin => spec.sourcePins.Any(expected => expected.file == pin.file && expected.sha256 == pin.sha256))
+        && a.rawReports != null && a.rawReports.Count == 4
+        && a.rawReports.All(pin => pin != null && F1Policy.Hash(pin.sha256) && auth.stageA.reports.Any(expected => expected.file == pin.file && expected.sha256 == pin.sha256))
+        && a.rawReports.Select(pin => pin.file).Distinct(StringComparer.Ordinal).Count() == 4, "functional-actual-stage-a-receipt-binding");
+      List<string> sourceSet = new List<string>();
+      foreach (string name in SourceNames)
+      {
+        FunctionalAuthorizationSource pin = auth.stageA.sources.Single(value => value.file == name);
+        string file = Path.Combine(spec.sourceRoot, name);
+        FileIdentity actual = platform.IdentifyPath(file, false);
+        Require(!actual.reparse && actual.bytes == pin.bytes && actual.sha256 == pin.sha256 && actual.bytes <= 1048576,
+          "functional-stage-a-raw-source-bytes");
+        string text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(file)).Replace("\r\n", "\n");
+        Require(HashText(text) == pin.canonicalSha256, "functional-stage-a-canonical-source-binding");
+        sourceSet.Add("{\"path\":\"scripts/pr/" + name + "\",\"canonicalSha256\":\"" + pin.canonicalSha256 + "\"}");
+      }
+      Require(HashText("[" + String.Join(",", sourceSet) + "]") == f.sourceSetSha256, "functional-stage-a-exact-source-set");
+      RequireMemberReceipt(CoreJson.Read<F1MemberReceipt>(f.oldMemberReceipt.file), SetupHash, SetupBytes,
+        "$R0\\Uninstall Claude Code Haha.exe", UninstallerHash, UninstallerBytes);
+      RequireMemberReceipt(CoreJson.Read<F1MemberReceipt>(package.memberReceipt.file), package.setup.sha256, package.setup.bytes,
+        package.archiveLiteral, package.uninstallerSha256, package.uninstallerBytes);
+      F1BuildReceipt build = CoreJson.Read<F1BuildReceipt>(package.buildReceipt.file);
+      Require(build != null && build.version == 1 && build.kind == "full-electron-nsis-package" && build.sourceHead == FunctionalPolicy.ProductHead
+        && build.displayVersion == package.displayVersion && build.setupBytes == package.setup.bytes && build.setupSha256 == package.setup.sha256
+        && build.uninstallerBytes == package.uninstallerBytes && build.uninstallerSha256 == package.uninstallerSha256
+        && build.guardedRemovalBytes == package.guardedRemovalBytes && build.guardedRemovalSha256 == package.guardedRemovalSha256
+        && build.payloads != null && CoreJson.Serialize(build.payloads) == CoreJson.Serialize(package.payloads), "functional-bound-prepared-product-receipt");
+    }
+
     private static void RequireMemberReceipt(F1MemberReceipt proof, string setupHash, long setupBytes, string literal, string memberHash, long memberBytes)
     {
       Require(proof != null && proof.version == 1 && proof.status == "member_proven" && proof.forcedType == "Nsis" && !proof.peExecuted
@@ -1222,10 +1620,16 @@ namespace CcHahaInstallerProfile
     {
       if (state.spec.mode == "createprofile-only-controller") return RunProfileOnly(state, api);
       PositiveProcessObserver observer = null;
+      bool functional = state.spec.mode == FunctionalPolicy.ControllerMode;
+      if (functional) { state.report.mode = FunctionalPolicy.ResultMode; state.report.functionalFacts = new FunctionalUpgradeFacts(); }
       Dictionary<string, string> hostBefore = null;
       try
       {
-        if (F1Policy.IsF1(state.spec)) Stage(state, "f1-bindings-before-account", delegate {
+        if (functional) Stage(state, "functional-bindings-before-account", delegate {
+          FunctionalPolicy.ValidatePrepared(state.spec, false); FunctionalPolicy.NoF1Promotion(state.report);
+          if (!api.IsFake) CorePolicy.ValidateFunctionalBindings(state.spec, api);
+        });
+        else if (F1Policy.IsF1(state.spec)) Stage(state, "f1-bindings-before-account", delegate {
           F1Policy.ValidatePrepared(state.spec, false);
           F1Policy.RequireNativeAdmission(state.spec, api.F1AuditAvailable);
           if (!api.IsFake) CorePolicy.ValidateF1Bindings(state.spec, api);
@@ -1270,7 +1674,7 @@ namespace CcHahaInstallerProfile
         Stage(state, "readonly-subject-inputs", delegate {
           api.PrepareSubjectAccess(state);
           FixtureSpec subject = CoreJson.Deserialize<FixtureSpec>(CoreJson.Serialize(state.spec));
-          subject.mode = F1Policy.IsF1(state.spec) ? F1Policy.SubjectMode : "historical-v078-subject"; subject.controllerSpecSha256 = state.report.specSha256;
+          subject.mode = functional ? FunctionalPolicy.SubjectMode : F1Policy.IsF1(state.spec) ? F1Policy.SubjectMode : "historical-v078-subject"; subject.controllerSpecSha256 = state.report.specSha256;
           subject.output = Path.Combine(subject.fixtureRoot, "subject-result.json");
           if (!api.IsFake) PersistReadonlySubjectSpec(state, subject);
         });
@@ -1296,7 +1700,8 @@ namespace CcHahaInstallerProfile
         });
         Stage(state, "bounded-historical-subject", delegate { ReceivePhases(state, api, observer); });
         if (!api.IsFake) CorePolicy.Require(RegistryEvidence.Equal(hostBefore, RegistryEvidence.HostProducts(state.runnerSid)), "host-product-state-unchanged");
-        state.report.Check("historical-profile-subject", true, "Historical facts only; profile compatibility remains disabled.");
+        state.report.Check(functional ? "isolated-functional-upgrade" : "historical-profile-subject", true, functional
+          ? "Finite actual old-to-new regression only; exhaustive audit and F1 remain unproven." : "Historical facts only; profile compatibility remains disabled.");
         state.report.status = "passed";
       }
       catch (Exception error)
@@ -1307,7 +1712,7 @@ namespace CcHahaInstallerProfile
       finally
       {
         try { if (observer != null) observer.Dispose(); }
-        catch (Exception error) { state.report.Check("cleanup-owned-observer", false, NativePlatform.SafeFailure(error)); }
+        catch (Exception error) { if (functional) state.functionalResourceUncertain = true; state.report.Check("cleanup-owned-observer", false, NativePlatform.SafeFailure(error)); }
         if (state.f1AuditResourceUncertain)
         {
           bool uncertain = state.f1AuditArmOutcomeUnknown;
@@ -1336,6 +1741,13 @@ namespace CcHahaInstallerProfile
           if (state.f1AuditResourceUncertain) state.report.Check("f1-audit-resource-closure", false, "Unknown audit resources retained; disable-only cleanup.");
         }
         Cleanup(state, api);
+        if (functional)
+        {
+          state.report.functionalFacts.ownedCleanupKnown = state.report.cleanup == "cleaned";
+          state.report.functionalFacts.status = state.report.status == "passed" && state.report.functionalFacts.ownedCleanupKnown
+            ? (api.IsFake ? "replay_passed" : "passed") : "failed";
+          FunctionalPolicy.NoF1Promotion(state.report);
+        }
         state.report.realAccountsCreated = !api.IsFake && state.accountEverCreated ? 1 : 0;
         state.report.realProfilesCreated = !api.IsFake && state.profileEverCreated ? 1 : 0;
         state.report.finishedAtUtc = DateTime.UtcNow.ToString("o");
@@ -1435,7 +1847,7 @@ namespace CcHahaInstallerProfile
     internal static void SendPhaseAck(FixtureReport report, FixtureChannel channel, string nonce, string phase, bool native)
     {
       if (native && (phase == "fresh-install" || phase == "old22-negative" || phase == "old-normal-removal-positive"
-        || phase == "rebuild-old-install" || phase == "guarded-new-upgrade"))
+        || phase == "rebuild-old-install" || phase == "guarded-new-upgrade" || phase == FunctionalPolicy.UpgradePhase))
       {
         // A complete ACK may reach the subject even when the local async write
         // later fails or times out. Record uncertainty before attempting it.
@@ -1450,19 +1862,23 @@ namespace CcHahaInstallerProfile
     {
       HashSet<string> phases = new HashSet<string>(StringComparer.Ordinal);
       bool f1Mode = state.spec.mode == F1Policy.ControllerMode;
-      string[] sequence = f1Mode ? F1Policy.Phases : new string[] { "observer-calibration", "powershell-normal-capability-1", "powershell-normal-capability-2",
+      bool functional = state.spec.mode == FunctionalPolicy.ControllerMode;
+      string[] sequence = functional ? FunctionalPolicy.Phases : f1Mode ? F1Policy.Phases : new string[] { "observer-calibration", "powershell-normal-capability-1", "powershell-normal-capability-2",
         "powershell-unavailable-capability", "fresh-install", "negative-preflight", "old22-negative",
         "positive-preflight", "old-normal-removal-positive" };
       int phaseIndex = 0;
-      DateTime deadline = DateTime.UtcNow.AddMinutes(f1Mode ? 20 : 10);
+      DateTime deadline = DateTime.UtcNow.AddMinutes(functional ? 15 : f1Mode ? 20 : 10);
       string active = null; F1AuditLease preparedAudit = null;
+      NativePlatform.FunctionalProcessCapture functionalCapture = null;
+      try
+      {
       using (F1PhaseState f1 = f1Mode ? new F1PhaseState(state.spec, state.report.specSha256, !api.IsFake) : null)
       {
       while (true)
       {
         CorePolicy.Require(DateTime.UtcNow < deadline, "subject-overall-deadline");
         int remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
-        int phaseBudget = active == "fresh-install" || active == "rebuild-old-install" || active == "guarded-new-upgrade" ? 305000
+        int phaseBudget = active == "fresh-install" || active == "rebuild-old-install" || active == "guarded-new-upgrade" || active == FunctionalPolicy.UpgradePhase ? 305000
           : active == "old22-negative" || active == "old-normal-removal-positive" ? 185000 : 35000;
         ProtocolMessage message = CoreJson.Deserialize<ProtocolMessage>(state.channel.ReadLine(Math.Min(remaining, active == null ? 30000 : phaseBudget)));
         CorePolicy.Require(message.version == 1 && message.nonce == state.spec.nonce, "phase-nonce");
@@ -1486,6 +1902,14 @@ namespace CcHahaInstallerProfile
             && phaseIndex < sequence.Length && message.phase == sequence[phaseIndex], "one-ordered-owned-phase");
           api.VerifyReportedPhase(state, message);
           if (observer != null) observer.Arm(message.phase, message.pid, message.creationTime);
+          if (functional && message.phase == FunctionalPolicy.UpgradePhase && !api.IsFake)
+          {
+            CorePolicy.Require(observer != null && functionalCapture == null, "functional-whole-chain-observer-once");
+            state.functionalResourceUncertain = true;
+            functionalCapture = new NativePlatform.FunctionalProcessCapture((NativePlatform)api, state);
+            functionalCapture.Arm(message);
+            observer.SetCapture(functionalCapture.Observe);
+          }
           if (f1 != null)
           {
             F1AuditLease audit = null;
@@ -1503,7 +1927,7 @@ namespace CcHahaInstallerProfile
         {
           CorePolicy.Require(active == message.phase && message.evidence != null && message.evidence.phase == active, "phase-completion-binding");
           bool unavailable = active == "old22-negative" || active == "old-normal-removal-positive" || active == "powershell-unavailable-capability"
-            || active == "guarded-new-upgrade";
+            || active == "guarded-new-upgrade" || active == FunctionalPolicy.UpgradePhase;
           Dictionary<string, string> expectedEnvironment = unavailable
             ? CorePolicy.BuildEnvironment(state.targetEnvironment, state.spec, true) : state.targetEnvironment;
           CorePolicy.Require(message.evidence.environmentSha256 == CorePolicy.EnvironmentHash(expectedEnvironment), "phase-environment-binding");
@@ -1518,6 +1942,17 @@ namespace CcHahaInstallerProfile
               && message.evidence.argvSha256 == CorePolicy.HashText(CorePolicy.UninstallerCommand(state.spec.uninstallerCopy, state.spec.installRoot)), "same-old-binary-and-argv");
             if (active == "old22-negative") CorePolicy.Require(message.evidence.helperAlive && message.evidence.protectedFinalStateUnchanged, "negative-native-postconditions");
             else CorePolicy.Require(message.evidence.payloadRemoved && message.evidence.registrationRemoved && message.evidence.keptDataUnchanged, "positive-native-postconditions");
+            if (functional && active == "old22-negative") CorePolicy.Require(message.evidence.helperUsable && message.evidence.helperIdentityVerified, "functional-old22-helper-still-usable");
+          }
+          if (active == FunctionalPolicy.UpgradePhase)
+          {
+            F1PackagePin package = state.spec.functional.newPackage;
+            CorePolicy.Require(functional && message.evidence.applicationSha256 == package.setup.sha256
+              && message.evidence.installedUninstallerSha256 == package.uninstallerSha256
+              && message.evidence.argvSha256 == CorePolicy.HashText(CorePolicy.SetupCommand(package.setup.file, state.spec.installRoot))
+              && message.evidence.helperAlive && message.evidence.helperIdentityVerified && message.evidence.helperUsable
+              && message.evidence.newPackageInstalled && message.evidence.keptDataUnchanged && message.evidence.shortcutTargetsUnchanged
+              && message.evidence.legacyOnlyCanaryRemoved, "functional-current-full-setup-postconditions");
           }
           if (active == "guarded-new-upgrade") CorePolicy.Require(message.evidence.applicationSha256 == state.spec.f1.newPackage.setup.sha256
             && message.evidence.installedUninstallerSha256 == state.spec.f1.newPackage.uninstallerSha256
@@ -1532,9 +1967,16 @@ namespace CcHahaInstallerProfile
             if (active == "observer-calibration" || active == "old22-negative" || active == "old-normal-removal-positive")
               CorePolicy.Require(message.evidence.fallbackObservation == "positive_tasklist_and_findstr_observed", "positive-fallback-observation");
           }
+          if (functional && active == FunctionalPolicy.UpgradePhase && !api.IsFake)
+          {
+            observer.SetCapture(null);
+            state.report.functionalFacts.wholeSetupChain = functionalCapture.Complete();
+            functionalCapture.Dispose(); state.functionalResourceUncertain = false; functionalCapture = null;
+            CorePolicy.Require(state.report.functionalFacts.wholeSetupChain.status == "observed", "functional-whole-setup-required-child-caps");
+          }
           state.report.phases.Add(message.evidence); phases.Add(active); phaseIndex++; active = null;
           if (!api.IsFake && (message.phase == "fresh-install" || message.phase == "old22-negative" || message.phase == "old-normal-removal-positive"
-            || message.phase == "rebuild-old-install" || message.phase == "guarded-new-upgrade"))
+            || message.phase == "rebuild-old-install" || message.phase == "guarded-new-upgrade" || message.phase == FunctionalPolicy.UpgradePhase))
           {
             state.report.releasedPeExecuted = true;
             state.report.releasedPeExecutionStatus = "resume_and_phase_completion_confirmed";
@@ -1560,25 +2002,40 @@ namespace CcHahaInstallerProfile
           Stage(state, "subject-natural-exit", delegate {
             CorePolicy.Require(api.WaitSubjectExit(state, 30000) == 0, "subject-natural-exit-zero");
           });
+          if (functional)
+          {
+            CorePolicy.Require(phaseIndex == sequence.Length, "functional-all-phases-required");
+            FunctionalPolicy.NoF1Promotion(message.report); FunctionalPolicy.NoF1Promotion(state.report);
+            FunctionalPolicy.RequireSubjectFacts(message.report.functionalFacts, state.report.phases);
+            FunctionalSetupChain observed = state.report.functionalFacts.wholeSetupChain;
+            state.report.functionalFacts = message.report.functionalFacts;
+            state.report.functionalFacts.wholeSetupChain = observed;
+            state.report.functionalFacts.status = "not_run";
+          }
           if (!api.IsFake)
           {
             CorePolicy.Require(phases.Contains("observer-calibration") && phases.Contains("fresh-install")
               && phases.Contains("old22-negative") && phases.Contains("old-normal-removal-positive"), "historical-required-phases");
-            state.report.installed_bytes_equal = "native_equal_exact_pin";
-            state.report.old22_before_protected_mutation = "native_exit22_and_final_state_equal_only;transient_operation_order_not_proven";
-            state.report.removal_equivalence = "old_binary_positive_only;trusted_replacement_equivalence_not_run";
-            if (f1 != null)
+            if (!functional)
             {
-              state.report.member_proven = "native_exact_old_and_current_full_setup_static_members_bound";
-              state.report.old22_before_protected_mutation = "native_calibrated_lossless_owned_operation_stream_no_protected_mutation";
-              state.report.removal_equivalence = "native_old_normal_reference_and_ordered_trusted_removal_equal";
-              state.report.full_old_to_new = "native_exact_current_full_package_upgrade_and_kept_state_verified";
+              state.report.installed_bytes_equal = "native_equal_exact_pin";
+              state.report.old22_before_protected_mutation = "native_exit22_and_final_state_equal_only;transient_operation_order_not_proven";
+              state.report.removal_equivalence = "old_binary_positive_only;trusted_replacement_equivalence_not_run";
+              if (f1 != null)
+              {
+                state.report.member_proven = "native_exact_old_and_current_full_setup_static_members_bound";
+                state.report.old22_before_protected_mutation = "native_calibrated_lossless_owned_operation_stream_no_protected_mutation";
+                state.report.removal_equivalence = "native_old_normal_reference_and_ordered_trusted_removal_equal";
+                state.report.full_old_to_new = "native_exact_current_full_package_upgrade_and_kept_state_verified";
+              }
             }
             string evidenceDirectory = Path.Combine(state.spec.controllerRoot, "evidence");
             Directory.CreateDirectory(evidenceDirectory);
+            if (functional) CorePolicy.Require(message.report.evidenceFiles.Count == 7, "functional-exact-seven-snapshots");
             foreach (KeyValuePair<string, string> file in message.report.evidenceFiles)
             {
-              CorePolicy.Require((f1Mode ? new string[] { "negative-before.json", "negative-after.json", "positive-kept-before.json", "positive-kept-after.json", "f1-rebuilt-old.json", "f1-upgrade-kept-before.json", "f1-upgrade-kept-after.json" }
+              CorePolicy.Require((functional ? new string[] { "negative-before.json", "negative-after.json", "positive-kept-before.json", "positive-kept-after.json", "functional-rebuilt-old.json", "functional-upgrade-kept-before.json", "functional-upgrade-kept-after.json" }
+                : f1Mode ? new string[] { "negative-before.json", "negative-after.json", "positive-kept-before.json", "positive-kept-after.json", "f1-rebuilt-old.json", "f1-upgrade-kept-before.json", "f1-upgrade-kept-after.json" }
                 : new string[] { "negative-before.json", "negative-after.json", "positive-kept-before.json", "positive-kept-after.json" }).Contains(file.Key), "bounded-evidence-file");
               string input = Path.Combine(state.spec.fixtureRoot, file.Key);
               FileIdentity identity = api.IdentifyPath(input, false);
@@ -1593,6 +2050,15 @@ namespace CcHahaInstallerProfile
         }
         else throw new FixtureFailure("unknown-phase-message");
       }
+      }
+      }
+      finally
+      {
+        if (observer != null) observer.SetCapture(null);
+        if (functionalCapture != null)
+        {
+          functionalCapture.Dispose(); state.functionalResourceUncertain = false;
+        }
       }
     }
 
@@ -1609,6 +2075,7 @@ namespace CcHahaInstallerProfile
           Stage(state, "cleanup-disable-account", delegate { api.VerifyOwnedAccount(state, state.accountDisabled); api.SetOwnedAccountDisabled(state, true); });
         }
         CorePolicy.Require(!state.f1AuditResourceUncertain, "F1 audit state unknown; unload and destructive cleanup forbidden");
+        CorePolicy.Require(!state.functionalResourceUncertain, "Functional observer state unknown; unload and destructive cleanup forbidden");
         if (state.profileLoaded)
         {
           Stage(state, "cleanup-unload-profile", delegate { api.UnloadProfile(state); });
@@ -1779,7 +2246,7 @@ namespace CcHahaInstallerProfile
       ProtectedSnapshot snapshot = new ProtectedSnapshot();
       if (payload)
       {
-        snapshot.DirectoryEntry("payload", spec.installRoot, api, 0, spec.mode == F1Policy.SubjectMode);
+        snapshot.DirectoryEntry("payload", spec.installRoot, api, 0, FunctionalPolicy.FullSubject(spec));
         foreach (KeyValuePair<string, string> value in RegistryEvidence.OwnedProducts(spec.expectedSid))
           snapshot.values["registry/" + value.Key] = value.Value;
       }
@@ -1796,7 +2263,7 @@ namespace CcHahaInstallerProfile
           if (File.Exists(file))
           {
             snapshot.FileEntry(root.Key + "/" + name, file, api);
-            if (payload && spec.mode == F1Policy.SubjectMode && name == "Claude Code Haha.lnk")
+            if (payload && FunctionalPolicy.FullSubject(spec) && name == "Claude Code Haha.lnk")
             {
               string target = ShortcutTarget.Read(file);
               CorePolicy.Require(CorePolicy.SamePath(target, Path.Combine(spec.installRoot, "Claude Code Haha.exe")), "f1-rebuild-actual-product-shortcut-target");
@@ -1890,6 +2357,8 @@ namespace CcHahaInstallerProfile
     private string phase;
     private ulong phaseCreated;
     private bool failed;
+    private Action<ObservedStart> Capture;
+    internal void SetCapture(Action<ObservedStart> value) { lock (gate) Capture = value; }
 
     public PositiveProcessObserver(string expectedSid)
     {
@@ -1948,6 +2417,7 @@ namespace CcHahaInstallerProfile
           if (!lineage.TryGetValue(item.parentPid, out parentCreated) || created < parentCreated) continue;
           if (lineage.ContainsKey(item.pid) && lineage[item.pid] != created) { failed = true; continue; }
           lineage[item.pid] = created; item.phase = phase; observed.Add(item); pending.RemoveAt(index); changed = true;
+          if (Capture != null) Capture(item);
         }
       } while (changed);
     }
@@ -2002,13 +2472,14 @@ namespace CcHahaInstallerProfile
 
     public static FixtureReport Run(FixtureSpec spec, NativePlatform api)
     {
-      FixtureReport report = new FixtureReport { mode = spec.mode == F1Policy.SubjectMode ? "f1-subject" : "subject", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
+      FixtureReport report = new FixtureReport { mode = spec.mode == FunctionalPolicy.SubjectMode ? FunctionalPolicy.SubjectMode : spec.mode == F1Policy.SubjectMode ? "f1-subject" : "subject", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
         specSha256 = CorePolicy.HashFile(spec.subjectSpecPath) };
       FixtureChannel channel = null;
       Subject subject = null;
       try
       {
-        if (spec.mode == F1Policy.SubjectMode) { F1Policy.ValidatePrepared(spec, true); api.BindF1SubjectContext(spec); }
+        if (spec.mode == FunctionalPolicy.SubjectMode) { FunctionalPolicy.ValidatePrepared(spec, true); api.BindFunctionalContext(spec, true); }
+        else if (spec.mode == F1Policy.SubjectMode) { F1Policy.ValidatePrepared(spec, true); api.BindF1SubjectContext(spec); }
         else { CorePolicy.ValidateSubjectSpec(spec); api.BindSubjectContext(spec); }
         channel = api.ConnectSubjectChannel(spec);
         TokenIdentity actual = api.InspectCurrentToken();
@@ -2027,7 +2498,7 @@ namespace CcHahaInstallerProfile
           && acknowledgement.specSha256 == report.specSha256 && acknowledgement.binarySha256 == report.binarySha256, "subject-authenticated-ack");
         api.AllowSubjectProducts(spec, acknowledgement);
         subject = new Subject(spec, api, channel, report);
-        subject.HistoricalProfile();
+        if (spec.mode == FunctionalPolicy.SubjectMode) subject.FunctionalProfile(); else subject.HistoricalProfile();
       }
       catch (Exception error)
       {
@@ -2117,7 +2588,7 @@ namespace CcHahaInstallerProfile
         ReadAck("phase-ack", command.phase);
         api.ResumeChild(child);
         if (command.phase == "fresh-install" || command.phase == "old22-negative" || command.phase == "old-normal-removal-positive"
-          || command.phase == "rebuild-old-install" || command.phase == "guarded-new-upgrade")
+          || command.phase == "rebuild-old-install" || command.phase == "guarded-new-upgrade" || command.phase == FunctionalPolicy.UpgradePhase)
         {
           report.releasedPeExecuted = true; report.releasedPeMayHaveExecuted = true;
           report.releasedPeExecutionStatus = "resume_returned_success";
@@ -2276,6 +2747,7 @@ namespace CcHahaInstallerProfile
       {
         CorePolicy.Require(File.Exists(shortcut), "actual-kept-shortcut");
         CorePolicy.Require(CorePolicy.SamePath(ShortcutTarget.Read(shortcut), Path.Combine(spec.installRoot, "Claude Code Haha.exe")), "actual-shortcut-target");
+        if (spec.mode == FunctionalPolicy.SubjectMode) CorePolicy.Require(ShortcutTarget.ReadArguments(shortcut) == "", "functional-actual-shortcut-empty-arguments");
       }
     }
 
@@ -2322,13 +2794,14 @@ namespace CcHahaInstallerProfile
     {
       string expected = Path.Combine(spec.installRoot, "Claude Code Haha.exe");
       foreach (string file in new string[] { Path.Combine(spec.knownPaths.desktop, "Claude Code Haha.lnk"), Path.Combine(spec.knownPaths.programs, "Claude Code Haha.lnk") })
-        if (!File.Exists(file) || api.IdentifyPath(file, false).reparse || !CorePolicy.SamePath(ShortcutTarget.Read(file), expected)) return false;
+        if (!File.Exists(file) || api.IdentifyPath(file, false).reparse || !CorePolicy.SamePath(ShortcutTarget.Read(file), expected)
+          || (spec.mode == FunctionalPolicy.SubjectMode && ShortcutTarget.ReadArguments(file) != "")) return false;
       return true;
     }
 
     private void VerifyCurrentPackageInstalled()
     {
-      F1PackagePin package = spec.f1.newPackage;
+      F1PackagePin package = FunctionalPolicy.Package(spec);
       foreach (F1PayloadPin pin in package.payloads)
       {
         string file = Path.Combine(spec.installRoot, pin.relativePath);
@@ -2384,6 +2857,121 @@ namespace CcHahaInstallerProfile
       // Controller, not the subject, must independently require a lossless
       // calibrated audit proving old payload AND registration removal before
       // new creation. These final snapshots alone never set F1 evidence fields.
+    }
+
+    private void PulseFunctionalHelper(OwnedProcess helper)
+    {
+      CorePolicy.Require(api.ChildIsAlive(helper) && helper.image.sha256 == spec.expectedBinarySha256
+        && CorePolicy.SamePath(helper.image.canonicalPath, Path.Combine(spec.fixtureRoot, @"foreign\OpenConsole.exe")), "functional-same-helper-held-identity");
+      int sequence = checked(++helper.functionalPulseSequence);
+      CorePolicy.Require(sequence <= 16, "functional-helper-pulse-budget");
+      string directory = FunctionalPolicy.HelperDirectory(spec, helper.pid, helper.creationTime);
+      Stopwatch deadline = Stopwatch.StartNew();
+      while (!Directory.Exists(directory) && deadline.ElapsedMilliseconds < 5000)
+      { CorePolicy.Require(api.ChildIsAlive(helper), "functional-helper-early-exit"); System.Threading.Thread.Sleep(20); }
+      CorePolicy.Require(Directory.Exists(directory) && !api.IdentifyPath(directory, true).reparse, "functional-helper-response-root");
+      string nonce = spec.nonce + "-" + Guid.NewGuid().ToString("N");
+      string suffix = sequence.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json";
+      string request = Path.Combine(directory, "request-" + suffix), response = Path.Combine(directory, "response-" + suffix);
+      CorePolicy.Require(!File.Exists(request) && !File.Exists(response), "functional-helper-fresh-sequence");
+      FunctionalPolicy.PublishHelperMessage(request, new FunctionalHelperMessage { kind = "request", nonce = nonce, sequence = sequence,
+        pid = helper.pid, creationTime = helper.creationTime, binarySha256 = spec.expectedBinarySha256 });
+      while (!File.Exists(response) && deadline.ElapsedMilliseconds < 5000)
+      { CorePolicy.Require(api.ChildIsAlive(helper), "functional-helper-response-early-exit"); System.Threading.Thread.Sleep(20); }
+      CorePolicy.Require(File.Exists(response) && api.ChildIsAlive(helper), "functional-helper-live-response-deadline");
+      FileIdentity file = api.IdentifyPath(response, false);
+      CorePolicy.Require(!file.reparse && file.bytes <= 4096, "functional-helper-bounded-response");
+      FunctionalPolicy.RequireHelperMessage(CoreJson.Read<FunctionalHelperMessage>(response), "response", spec, sequence, helper.pid, helper.creationTime, nonce);
+    }
+
+    private void FunctionalProfile()
+    {
+      FunctionalPolicy.NoF1Promotion(report);
+      FunctionalUpgradeFacts facts = report.functionalFacts = new FunctionalUpgradeFacts();
+      PrepareDirectories(); LegacyPreflight("observer-calibration", null); CalibratePowerShell();
+      FileIdentity setup = api.IdentifyPath(spec.setupPath, false);
+      CorePolicy.Require(!setup.reparse && setup.bytes == CorePolicy.SetupBytes && setup.sha256 == CorePolicy.SetupHash, "functional-old-setup-before-launch");
+      facts.freshInstallExit = Phase(Command("fresh-install", spec.setupPath, CorePolicy.SetupCommand(spec.setupPath, spec.installRoot), 0, 300000), normal,
+        delegate(PhaseEvidence evidence) { VerifyInstalled(); evidence.installedUninstallerSha256 = CorePolicy.UninstallerHash; }).exitCode;
+      facts.oldInstalledUninstallerExact = true;
+      SeedCanaries(); SeedLegacyOnlyCanary();
+      string settings = Path.Combine(spec.profilePath, ".claude", "settings.json");
+      CorePolicy.Require(!File.Exists(settings), "functional-new-fake-settings-only");
+      using (FileStream output = new FileStream(settings, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+      {
+        byte[] bytes = Encoding.UTF8.GetBytes("{\"fixtureOnly\":true,\"unknownUserField\":{\"keep\":\"" + spec.nonce + "\"}}\n");
+        output.Write(bytes, 0, bytes.Length); output.Flush(true);
+      }
+      string installed = Path.Combine(spec.installRoot, "Uninstall Claude Code Haha.exe"); File.Copy(installed, spec.uninstallerCopy, false);
+      FileIdentity old = api.IdentifyPath(spec.uninstallerCopy, false);
+      CorePolicy.Require(!old.reparse && old.bytes == CorePolicy.UninstallerBytes && old.sha256 == CorePolicy.UninstallerHash, "functional-copied-real-old-member");
+      ProtectedSnapshot original = ProtectedSnapshot.Capture(spec, api, true);
+      ProtectedSnapshot kept = ProtectedSnapshot.Capture(spec, api, false); SnapshotFile("positive-kept-before.json", kept);
+      LegacyPreflight("positive-preflight", null);
+      string argv = CorePolicy.UninstallerCommand(spec.uninstallerCopy, spec.installRoot);
+      facts.normalRemovalExit = Phase(Command("old-normal-removal-positive", spec.uninstallerCopy, argv, 0, 180000), unavailable,
+        delegate(PhaseEvidence evidence) {
+          evidence.payloadRemoved = !Directory.Exists(spec.installRoot) && !File.Exists(spec.installRoot);
+          evidence.registrationRemoved = RegistryEvidence.OwnedProducts(spec.expectedSid).Count == 0;
+          ProtectedSnapshot after = ProtectedSnapshot.Capture(spec, api, false); SnapshotFile("positive-kept-after.json", after);
+          evidence.keptDataUnchanged = kept.Same(after);
+          CorePolicy.Require(evidence.payloadRemoved && evidence.registrationRemoved && evidence.keptDataUnchanged,
+            "functional-real-old-normal-reference-before-cleanup");
+        }).exitCode;
+      facts.normalRemovalReferencePassed = true;
+      facts.rebuildExit = Phase(Command("rebuild-old-install", spec.setupPath, CorePolicy.SetupCommand(spec.setupPath, spec.installRoot), 0, 300000), normal,
+        delegate(PhaseEvidence evidence) {
+          VerifyInstalled(); SeedLegacyOnlyCanary();
+          ProtectedSnapshot rebuilt = ProtectedSnapshot.Capture(spec, api, true); SnapshotFile("functional-rebuilt-old.json", rebuilt);
+          evidence.oldStateEquivalent = original.SameRebuiltInstallation(rebuilt, Path.Combine(spec.installRoot, "Claude Code Haha.exe"));
+          evidence.installedUninstallerSha256 = CorePolicy.UninstallerHash;
+          CorePolicy.Require(evidence.oldStateEquivalent, "functional-rebuilt-complete-original-old-state");
+        }).exitCode;
+      facts.rebuiltOldEquivalent = true;
+      string foreign = Path.Combine(spec.fixtureRoot, "foreign"); Directory.CreateDirectory(foreign);
+      string helperPath = Path.Combine(foreign, "OpenConsole.exe"); File.Copy(CorePolicy.BinaryPath, helperPath, false);
+      FileIdentity helperImage = api.IdentifyPath(helperPath, false);
+      CorePolicy.Require(!helperImage.reparse && helperImage.sha256 == spec.expectedBinarySha256
+        && helperImage.bytes == spec.functional.fixtureBytes, "functional-exact-fixture-foreign-helper-copy");
+      OwnedProcess helper = new OwnedProcess(); owned.Add(helper);
+      try
+      {
+        string helperArgv = FunctionalPolicy.HelperCommand(helperPath, spec, Process.GetCurrentProcess().Id, api.CurrentCreationTime());
+        api.StartChild(helper, Command("foreign-helper", helperPath, helperArgv, 0, 0), normal, spec.fixtureRoot, spec.desktopName);
+        api.VerifyChild(helper, spec.expectedSid, helperPath, spec.expectedBinarySha256); api.ResumeChild(helper);
+        PulseFunctionalHelper(helper); facts.helperIdentityVerified = true;
+        LegacyPreflight("negative-preflight", helper);
+        ProtectedSnapshot before = ProtectedSnapshot.Capture(spec, api, true); SnapshotFile("negative-before.json", before);
+        facts.oldStandaloneExit = Phase(Command("old22-negative", spec.uninstallerCopy, argv, 22, 180000), unavailable,
+          delegate(PhaseEvidence evidence) {
+            PulseFunctionalHelper(helper); evidence.helperAlive = true; evidence.helperUsable = true; evidence.helperIdentityVerified = true;
+            ProtectedSnapshot after = ProtectedSnapshot.Capture(spec, api, true); SnapshotFile("negative-after.json", after);
+            evidence.protectedFinalStateUnchanged = before.Same(after);
+            CorePolicy.Require(evidence.protectedFinalStateUnchanged, "functional-old22-complete-old-state-retained"); VerifyInstalled();
+          }).exitCode;
+        PulseFunctionalHelper(helper); LegacyPreflight("upgrade-negative-preflight", helper);
+        ProtectedSnapshot upgradeKept = ProtectedSnapshot.Capture(spec, api, false); SnapshotFile("functional-upgrade-kept-before.json", upgradeKept);
+        F1PackagePin package = spec.functional.newPackage;
+        facts.upgradeExit = Phase(Command(FunctionalPolicy.UpgradePhase, package.setup.file, CorePolicy.SetupCommand(package.setup.file, spec.installRoot), 0, 300000), unavailable,
+          delegate(PhaseEvidence evidence) {
+            PulseFunctionalHelper(helper); evidence.helperAlive = true; evidence.helperUsable = true; evidence.helperIdentityVerified = true;
+            VerifyCurrentPackageInstalled(); evidence.newPackageInstalled = true; evidence.installedUninstallerSha256 = package.uninstallerSha256;
+            ProtectedSnapshot after = ProtectedSnapshot.Capture(spec, api, false); SnapshotFile("functional-upgrade-kept-after.json", after);
+            evidence.keptDataUnchanged = upgradeKept.SameDataAndCanaries(after); evidence.shortcutTargetsUnchanged = ShortcutTargetsMatch();
+            evidence.legacyOnlyCanaryRemoved = !File.Exists(LegacyOnlyCanaryPath()) && !Directory.Exists(LegacyOnlyCanaryPath());
+            CorePolicy.Require(evidence.keptDataUnchanged && evidence.shortcutTargetsUnchanged && evidence.legacyOnlyCanaryRemoved,
+              "functional-real-full-upgrade-retained-data-shortcuts-and-old-only-removal");
+          }).exitCode;
+        facts.currentPayloadExact = true; facts.currentRegistrationExact = true; facts.shortcutTargetsExact = true;
+        facts.fakeUserDataUnchanged = true; facts.legacyOnlyCanaryAbsent = true; facts.helperAlive = true; facts.helperUsable = true;
+      }
+      finally
+      {
+        // Only the retained, assigned, verified own helper Job is stopped.
+        api.StopChild(helper); api.CloseChild(helper); owned.Remove(helper);
+      }
+      FunctionalPolicy.RequireSubjectFacts(facts, report.phases);
+      FunctionalPolicy.NoF1Promotion(report); facts.status = "passed"; report.status = "passed";
     }
 
     private void HistoricalProfile()
@@ -2464,6 +3052,26 @@ namespace CcHahaInstallerProfile
     private interface IReadShellLink
     {
       [PreserveSig] int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int length, IntPtr findData, uint flags);
+      [PreserveSig] int GetIDList(out IntPtr item);
+      [PreserveSig] int SetIDList(IntPtr item);
+      [PreserveSig] int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int length);
+      [PreserveSig] int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string value);
+      [PreserveSig] int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int length);
+      [PreserveSig] int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string value);
+      [PreserveSig] int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int length);
+    }
+
+    public static string ReadArguments(string file)
+    {
+      object link = new ShellLink();
+      try
+      {
+        ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(file, 0);
+        StringBuilder value = new StringBuilder(1024);
+        CorePolicy.Require(((IReadShellLink)link).GetArguments(value, value.Capacity) == 0 && value.Length < value.Capacity - 1,
+          "read-existing-shortcut-arguments"); return value.ToString();
+      }
+      finally { Marshal.FinalReleaseComObject(link); }
     }
 
     public static string Read(string file)
@@ -2510,6 +3118,13 @@ namespace CcHahaInstallerProfile
       try
       {
         CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8, "windows-x64-only");
+        if (arguments.Length == 7 && arguments[0] == "--functional-helper" && arguments[1] == "--spec"
+          && arguments[3] == "--parent-pid" && arguments[5] == "--parent-creation")
+        {
+          int parentPid;
+          CorePolicy.Require(Int32.TryParse(arguments[4], out parentPid) && parentPid > 0, "functional-helper-parent-pid");
+          return NativePlatform.RunFunctionalHelper(Path.GetFullPath(arguments[2]), parentPid, arguments[6]);
+        }
         if (arguments.Length == 3 && arguments[0] == "--f1-audit-child" && arguments[1] == "--spec")
           return NativePlatform.RunF1AuditChild(Path.GetFullPath(arguments[2]));
         if (arguments.Length == 3 && arguments[0] == "--f1-audit-canary" && arguments[1] == "--output")
@@ -2552,13 +3167,15 @@ namespace CcHahaInstallerProfile
         }
         CorePolicy.Require(arguments.Length == 4 && arguments[0] == "--role" && arguments[2] == "--spec"
           && (arguments[1] == "controller" || arguments[1] == "subject" || arguments[1] == "profile-only"
-            || arguments[1] == "f1-controller" || arguments[1] == "f1-subject"), "explicit-role-required-no-default-execution");
+            || arguments[1] == "f1-controller" || arguments[1] == "f1-subject"
+            || arguments[1] == "functional-controller" || arguments[1] == "functional-subject"), "explicit-role-required-no-default-execution");
         string specFile = Path.GetFullPath(arguments[3]);
         FixtureSpec spec = CoreJson.Read<FixtureSpec>(specFile);
         NativePlatform native = new NativePlatform();
-        if (arguments[1] == "subject" || arguments[1] == "f1-subject")
+        if (arguments[1] == "subject" || arguments[1] == "f1-subject" || arguments[1] == "functional-subject")
         {
           CorePolicy.Require((arguments[1] == "f1-subject") == (spec.mode == F1Policy.SubjectMode), "f1-subject-role-cannot-reuse-legacy-spec");
+          CorePolicy.Require((arguments[1] == "functional-subject") == (spec.mode == FunctionalPolicy.SubjectMode), "functional-subject-cannot-reuse-old-grant");
           CorePolicy.Require(CorePolicy.SamePath(spec.subjectSpecPath, specFile), "subject-spec-file-binding");
           FixtureReport result = Subject.Run(spec, native);
           return result.status == "passed" ? 0 : 1;
@@ -2566,9 +3183,10 @@ namespace CcHahaInstallerProfile
         bool profileOnly = arguments[1] == "profile-only";
         CorePolicy.Require(Environment.GetEnvironmentVariable("CI") == "true", "controller-disposable-ci-only");
         if (profileOnly) { CorePolicy.ValidateProfileOnlySpec(spec); native.BindProfileOnlyContext(spec); }
+        else if (arguments[1] == "functional-controller") { FunctionalPolicy.ValidatePrepared(spec, false); native.BindFunctionalContext(spec, false); }
         else if (arguments[1] == "f1-controller") { F1Policy.ValidatePrepared(spec, false); native.BindF1ControllerContext(spec); }
         else { CorePolicy.ValidateControllerSpec(spec); native.BindControllerContext(spec); }
-        report = new FixtureReport { mode = profileOnly ? "profile-only" : arguments[1] == "f1-controller" ? "f1-controller" : "controller", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
+        report = new FixtureReport { mode = arguments[1] == "functional-controller" ? FunctionalPolicy.ResultMode : profileOnly ? "profile-only" : arguments[1] == "f1-controller" ? "f1-controller" : "controller", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
           specSha256 = CorePolicy.HashFile(specFile) };
         FixtureState state = Controller.NewState(spec, report);
         Controller.Run(state, native);

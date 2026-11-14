@@ -44,6 +44,7 @@ namespace CcHahaInstallerProfile
     private FixtureSpec controllerContext;
     private FixtureSpec subjectContext;
     private string f1BoundInputsSha256;
+    private string functionalBoundInputsSha256;
     private FixtureState abiEnvironmentContext;
     private bool subjectPeerAuthenticated;
     private bool subjectProductsAllowed;
@@ -343,6 +344,7 @@ namespace CcHahaInstallerProfile
     {
       CorePolicy.Require(state != null && Object.ReferenceEquals(state.spec, controllerContext), "Native Controller adapter is not bound");
       if (state.spec.mode == "createprofile-only-controller") CorePolicy.ValidateProfileOnlySpec(state.spec);
+      else if (state.spec.mode == FunctionalPolicy.ControllerMode) FunctionalIdentity(state.spec, false);
       else if (state.spec.mode == F1Policy.ControllerMode) F1Identity(state.spec, false);
       else StageBIdentity(state.spec, "historical-v078-controller");
     }
@@ -350,14 +352,16 @@ namespace CcHahaInstallerProfile
     private void HistoricalController(FixtureState state)
     {
       Real(state);
-      if (state.spec.mode == F1Policy.ControllerMode) F1Identity(state.spec, false);
+      if (state.spec.mode == FunctionalPolicy.ControllerMode) FunctionalIdentity(state.spec, false);
+      else if (state.spec.mode == F1Policy.ControllerMode) F1Identity(state.spec, false);
       else StageBIdentity(state.spec, "historical-v078-controller");
     }
 
     private void Subject(FixtureSpec spec, bool products)
     {
       CorePolicy.Require(Object.ReferenceEquals(spec, subjectContext) && subjectPeerAuthenticated, "Native subject adapter is not authenticated");
-      if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
+      if (spec.mode == FunctionalPolicy.SubjectMode) FunctionalIdentity(spec, true);
+      else if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
       else StageBIdentity(spec, "historical-v078-subject");
       CorePolicy.Require(!products || subjectProductsAllowed, "Product launch has not received authenticated ACK");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
@@ -388,6 +392,24 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8, "f1-subject-windows-x64-only");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
       CorePolicy.ValidateF1Bindings(spec, this); f1BoundInputsSha256 = F1Policy.BindingHash(spec); subjectContext = spec;
+    }
+
+    private void FunctionalIdentity(FixtureSpec spec, bool subject)
+    {
+      FunctionalPolicy.RequireRole(spec, subject);
+      CorePolicy.Require(functionalBoundInputsSha256 != null && FunctionalPolicy.BindingHash(spec) == functionalBoundInputsSha256,
+        "functional-bound-input-metadata-changed");
+    }
+    internal void BindFunctionalContext(FixtureSpec spec, bool subject)
+    {
+      CorePolicy.Require(controllerContext == null && subjectContext == null, "functional-adapter-not-already-bound");
+      FunctionalPolicy.ValidatePrepared(spec, subject);
+      CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8
+        && (subject || Environment.GetEnvironmentVariable("CI") == "true"), "functional-windows-x64-owned-ci-only");
+      if (subject) CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
+      CorePolicy.ValidateFunctionalBindings(spec, this);
+      functionalBoundInputsSha256 = FunctionalPolicy.BindingHash(spec);
+      if (subject) subjectContext = spec; else controllerContext = spec;
     }
 
     internal void BindControllerContext(FixtureSpec spec)
@@ -1721,6 +1743,17 @@ namespace CcHahaInstallerProfile
         CopyF1Input(input, "f1-new-member-proof.json", state.spec.f1.newPackage.memberReceipt);
         CopyF1Input(input, "f1-new-full-setup.exe", state.spec.f1.newPackage.setup);
       }
+      if (state.spec.mode == FunctionalPolicy.ControllerMode)
+      {
+        FunctionalUpgradeInputs f = state.spec.functional;
+        CopyF1Input(input, "functional-stage-a-receipt.json", f.stageAReceipt);
+        CopyF1Input(input, "functional-old-member-proof.json", f.oldMemberReceipt);
+        CopyF1Input(input, "functional-authorization.json", f.authorizationReceipt);
+        CopyF1Input(input, "functional-package-receipt.json", f.packageReceipt);
+        CopyF1Input(input, "functional-build-receipt.json", f.newPackage.buildReceipt);
+        CopyF1Input(input, "functional-new-member-proof.json", f.newPackage.memberReceipt);
+        CopyF1Input(input, "functional-new-full-setup.exe", f.newPackage.setup);
+      }
       state.spec.sourceRoot = sources;
       state.spec.setupPath = setupCopy;
       state.spec.subjectSpecPath = Path.Combine(input, "subject.json");
@@ -1889,7 +1922,7 @@ namespace CcHahaInstallerProfile
       FileIdentity image = IdentifyPath(state.subjectBinaryPath, false);
       CorePolicy.Require(!image.reparse && image.sha256 == state.spec.expectedBinarySha256 &&
         CorePolicy.HashFile(state.spec.subjectSpecPath) == state.spec.subjectSpecSha256, "Trusted subject input binding changed");
-      string command = (state.spec.mode == F1Policy.ControllerMode ? CorePolicy.F1SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath) : CorePolicy.SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath));
+      string command = (state.spec.mode == FunctionalPolicy.ControllerMode ? FunctionalPolicy.SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath) : state.spec.mode == F1Policy.ControllerMode ? CorePolicy.F1SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath) : CorePolicy.SubjectCommand(state.subjectBinaryPath, state.spec.subjectSpecPath));
       CorePolicy.Require(command.Length <= 1023, "WithToken command exceeds its Unicode limit");
       StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
       ProcessInformation created;
@@ -2032,8 +2065,8 @@ namespace CcHahaInstallerProfile
       string[] powershellPhases = { "powershell-normal-capability-1", "powershell-normal-capability-2", "powershell-unavailable-capability" };
       if (csvPhases.Contains(command.phase)) expected = Path.Combine(windows, @"SysWOW64\cmd.exe");
       else if (powershellPhases.Contains(command.phase)) expected = Path.Combine(windows, @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
-      else if (subjectContext.mode == F1Policy.SubjectMode && command.phase == "upgrade-negative-preflight") expected = Path.Combine(windows, @"SysWOW64\cmd.exe");
-      else if (command.phase == "fresh-install" || (subjectContext.mode == F1Policy.SubjectMode && command.phase == "rebuild-old-install"))
+      else if (FunctionalPolicy.FullSubject(subjectContext) && command.phase == "upgrade-negative-preflight") expected = Path.Combine(windows, @"SysWOW64\cmd.exe");
+      else if (command.phase == "fresh-install" || (FunctionalPolicy.FullSubject(subjectContext) && command.phase == "rebuild-old-install"))
       {
         expected = subjectContext.setupPath;
         CorePolicy.Require(command.expectedSha256 == CorePolicy.SetupHash &&
@@ -2053,6 +2086,22 @@ namespace CcHahaInstallerProfile
         FileIdentity identity = IdentifyPath(expected, false);
         CorePolicy.Require(!identity.reparse && identity.bytes == setup.bytes && identity.sha256 == setup.sha256
           && command.expectedSha256 == setup.sha256 && command.commandLine == CorePolicy.SetupCommand(expected, subjectContext.installRoot), "f1-exact-full-current-setup-command");
+      }
+      else if (subjectContext.mode == FunctionalPolicy.SubjectMode && command.phase == FunctionalPolicy.UpgradePhase)
+      {
+        F1BlobPin setup = subjectContext.functional.newPackage.setup; expected = setup.file;
+        FileIdentity identity = IdentifyPath(expected, false);
+        CorePolicy.Require(!identity.reparse && identity.bytes == setup.bytes && identity.sha256 == setup.sha256
+          && command.expectedSha256 == setup.sha256 && command.commandLine == CorePolicy.SetupCommand(expected, subjectContext.installRoot),
+          "functional-exact-full-current-setup-command");
+      }
+      else if (subjectContext.mode == FunctionalPolicy.SubjectMode && command.phase == "foreign-helper")
+      {
+        expected = Path.Combine(subjectContext.fixtureRoot, @"foreign\OpenConsole.exe");
+        CorePolicy.Require(command.expectedSha256 == subjectContext.expectedBinarySha256
+          && command.commandLine == FunctionalPolicy.HelperCommand(expected, subjectContext, Process.GetCurrentProcess().Id, CurrentCreationTime())
+          && IdentifyPath(expected, false).bytes == subjectContext.functional.fixtureBytes,
+          "functional-exact-fixture-helper-command");
       }
       else if (command.phase == "foreign-helper")
       {
@@ -2167,6 +2216,219 @@ namespace CcHahaInstallerProfile
     }
 
     internal string CurrentCreationTime() { return ProcessCreation(GetCurrentProcess()); }
+
+    // This finite regression observes retained readonly process capabilities.
+    // It is neither a first-I/O barrier nor exhaustive mutation/F1 evidence.
+    internal sealed class FunctionalProcessCapture : IDisposable
+    {
+      private sealed class Cap
+      { internal IntPtr handle; internal int pid; internal string creation; internal FunctionalProcessFact fact; internal bool root, closeAttempted; }
+      private readonly NativePlatform api;
+      private readonly FixtureState state;
+      private readonly object gate = new object();
+      private readonly Dictionary<int, Cap> caps = new Dictionary<int, Cap>();
+      private readonly FunctionalSetupChain result = new FunctionalSetupChain { status = "unknown" };
+      private bool finished, closureUnknown;
+      private readonly List<IntPtr> rejectedHandles = new List<IntPtr>();
+      internal FunctionalProcessCapture(NativePlatform owner, FixtureState context)
+      { api = owner; state = context; }
+      internal void Arm(ProtocolMessage root)
+      {
+        CorePolicy.Require(root.phase == FunctionalPolicy.UpgradePhase, "functional-observer-exact-upgrade-phase");
+        Capture(root.pid, 0, null, root.creationTime, true);
+      }
+      internal void Observe(ObservedStart item)
+      {
+        if (item.phase != FunctionalPolicy.UpgradePhase) return;
+        lock (gate)
+        {
+          if (finished) { result.unverifiedCount++; result.status = "unknown"; return; }
+          try { Capture(item.pid, item.parentPid, item.eventFileTime, null, false); }
+          catch { result.unverifiedCount++; }
+        }
+      }
+      private void Capture(int pid, int parent, string eventTime, string expectedCreation, bool root)
+      {
+        CorePolicy.Require(pid > 0 && !caps.ContainsKey(pid) && caps.Count < 128 && (root || caps.ContainsKey(parent)),
+          "functional-bounded-held-lineage");
+        IntPtr process = OpenProcess(ProcessQueryLimited | 0x00100000, false, checked((uint)pid));
+        Win(process != IntPtr.Zero, "functional-open-readonly-process");
+        bool retained = false;
+        try
+        {
+          bool member;
+          Win(IsProcessInJob(process, state.job, out member), "functional-process-owned-job");
+          TokenIdentity token = api.ProcessToken(process); CorePolicy.AssertStandard(token, state.account.sid);
+          string creation = ProcessCreation(process);
+          CorePolicy.Require(member && GetProcessId(process) == (uint)pid && FunctionalPolicy.DecimalTime(creation)
+            && (expectedCreation == null || creation == expectedCreation), "functional-real-process-cap-identity");
+          if (!root)
+          {
+            ulong started, observed, parentCreated;
+            CorePolicy.Require(UInt64.TryParse(creation, out started) && UInt64.TryParse(eventTime, out observed)
+              && UInt64.TryParse(caps[parent].creation, out parentCreated) && started >= parentCreated && observed >= started,
+              "functional-event-and-held-parent-instance");
+          }
+          FileIdentity image = api.ProcessImage(process);
+          CorePolicy.Require(!image.reparse && !image.directory && !String.IsNullOrEmpty(image.fileId)
+            && !String.IsNullOrEmpty(image.volumePath) && F1Policy.Hash(image.sha256), "functional-process-image-object");
+          string role = FunctionalRole(image.sha256, state.spec.functional.newPackage);
+          FunctionalProcessFact fact = null;
+          if (root)
+            CorePolicy.Require(image.sha256 == state.spec.functional.newPackage.setup.sha256
+              && CorePolicy.SamePath(image.canonicalPath, state.spec.functional.newPackage.setup.file), "functional-whole-setup-root-image");
+          else if (role != null)
+          {
+            CorePolicy.Require(CorePolicy.IsInside(state.profilePath, image.canonicalPath), "functional-owned-product-child-image-root");
+            fact = new FunctionalProcessFact { role = role, pid = pid, parentPid = parent, creationTime = creation,
+              imageSha256 = image.sha256, imageCanonicalSha256 = CorePolicy.HashText(image.canonicalPath),
+              fileId = image.fileId, volumePath = image.volumePath };
+            result.processes.Add(fact);
+          }
+          else
+          {
+            // Fixed system tools used by the actual installer. Name alone is
+            // insufficient: canonical object, volume, file ID and bytes match.
+            string windows = ActualWindowsDirectory();
+            string[] tools = { @"System32\cmd.exe", @"SysWOW64\cmd.exe", @"System32\tasklist.exe", @"SysWOW64\tasklist.exe",
+              @"System32\findstr.exe", @"SysWOW64\findstr.exe", @"System32\WindowsPowerShell\v1.0\powershell.exe",
+              @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe" };
+            bool known = false;
+            foreach (string tool in tools)
+            {
+              string path = Path.Combine(windows, tool);
+              if (!CorePolicy.SamePath(image.canonicalPath, path)) continue;
+              FileIdentity trusted = api.IdentifyPath(path, false);
+              known = !trusted.reparse && trusted.fileId == image.fileId && trusted.volumePath == image.volumePath
+                && trusted.bytes == image.bytes && trusted.sha256 == image.sha256; break;
+            }
+            CorePolicy.Require(known, "functional-unrecognized-descendant-image");
+          }
+          caps.Add(pid, new Cap { handle = process, pid = pid, creation = creation, fact = fact, root = root }); retained = true;
+        }
+        finally
+        {
+          if (!retained && !CloseHandle(process))
+          { rejectedHandles.Add(process); closureUnknown = true; throw new FixtureFailure("functional-rejected-readonly-cap-close-unknown"); }
+        }
+      }
+      internal FunctionalSetupChain Complete()
+      {
+        lock (gate)
+        {
+          CorePolicy.Require(!finished, "functional-observer-completes-once"); finished = true;
+          foreach (Cap cap in caps.Values)
+          {
+            try
+            {
+              uint exit; FileTime created, exited, kernel, user;
+              CorePolicy.Require(WaitForSingleObject(cap.handle, 0) == 0 && GetProcessId(cap.handle) == (uint)cap.pid
+                && ProcessCreation(cap.handle) == cap.creation, "functional-held-natural-termination");
+              Win(GetExitCodeProcess(cap.handle, out exit), "functional-natural-exit-code");
+              Win(GetProcessTimes(cap.handle, out created, out exited, out kernel, out user), "functional-natural-exit-time");
+              string exitTime = FileTimeValue(exited);
+              CorePolicy.Require(FunctionalPolicy.DecimalTime(exitTime) && UInt64.Parse(exitTime, CultureInfo.InvariantCulture) >= UInt64.Parse(cap.creation, CultureInfo.InvariantCulture),
+                "functional-natural-exit-time-known");
+              if (cap.root) CorePolicy.Require(exit == 0, "functional-whole-setup-natural-exit-zero");
+              if (cap.fact == null) continue;
+              cap.fact.exitTime = exitTime; cap.fact.exitCode = exit;
+            }
+            catch { result.unverifiedCount++; }
+          }
+          result.oldChildExit22Observed = result.processes.Any(row => row.role == "old-uninstaller" && row.exitCode == 22 && row.exitTime != null);
+          result.guardedHelperStarted = result.processes.Any(row => row.role == "guarded-helper");
+          result.guardedHelperExit0Observed = result.processes.Any(row => row.role == "guarded-helper" && row.exitCode == 0 && row.exitTime != null);
+          result.status = result.unverifiedCount == 0 && result.oldChildExit22Observed && result.guardedHelperStarted && result.guardedHelperExit0Observed
+            && result.processes.Any(row => row.role == "current-uninstaller" && row.exitCode == 0 && row.exitTime != null)
+            && result.processes.Where(row => row.role != "old-uninstaller").All(row => row.exitCode == 0 && row.exitTime != null)
+            ? "observed" : "unknown";
+          return result;
+        }
+      }
+      public void Dispose()
+      {
+        lock (gate)
+        {
+          foreach (Cap cap in caps.Values)
+          {
+            if (cap.handle == IntPtr.Zero || cap.closeAttempted) continue;
+            cap.closeAttempted = true;
+            if (!CloseHandle(cap.handle)) { closureUnknown = true; result.unverifiedCount++; result.status = "unknown"; }
+            else cap.handle = IntPtr.Zero;
+          }
+          // Rejected readonly caps are owned but identity-unknown. Never use
+          // them for termination; a failed close permanently latches unknown.
+          if (rejectedHandles.Count != 0) closureUnknown = true;
+          CorePolicy.Require(!closureUnknown && caps.Values.All(cap => cap.handle == IntPtr.Zero), "functional-readonly-observer-close-unknown");
+        }
+      }
+    }
+    internal static string FunctionalRole(string hash, F1PackagePin package)
+    {
+      if (hash == CorePolicy.UninstallerHash) return "old-uninstaller";
+      if (hash == package.uninstallerSha256) return "current-uninstaller";
+      if (hash == package.guardedRemovalSha256) return "guarded-helper";
+      return null;
+    }
+    private static string FileTimeValue(FileTime value)
+    { return (((ulong)value.High << 32) | value.Low).ToString(CultureInfo.InvariantCulture); }
+
+    internal static int RunFunctionalHelper(string specPath, int parentPid, string parentCreation)
+    {
+      FixtureSpec spec = CoreJson.Read<FixtureSpec>(specPath);
+      FunctionalPolicy.ValidatePrepared(spec, true);
+      CorePolicy.Require(CorePolicy.SamePath(spec.subjectSpecPath, specPath) && parentPid > 0 && FunctionalPolicy.DecimalTime(parentCreation),
+        "functional-helper-fixed-inputs");
+      NativePlatform api = new NativePlatform(); CorePolicy.ValidateFunctionalBindings(spec, api);
+      TokenIdentity self = api.InspectCurrentToken(); CorePolicy.AssertStandard(self, spec.expectedSid);
+      CorePolicy.Require(CorePolicy.SamePaths(api.QueryKnownPaths(IntPtr.Zero), spec.knownPaths), "functional-helper-actual-known-folders");
+      FileIdentity image = api.ProcessImage(GetCurrentProcess());
+      CorePolicy.Require(CorePolicy.SamePath(image.canonicalPath, Path.Combine(spec.fixtureRoot, @"foreign\OpenConsole.exe"))
+        && image.sha256 == spec.expectedBinarySha256 && image.bytes == spec.functional.fixtureBytes, "functional-helper-owned-fixture-image");
+      IntPtr parent = OpenProcess(ProcessQueryLimited | 0x00100000, false, checked((uint)parentPid));
+      Win(parent != IntPtr.Zero, "functional-helper-parent-cap");
+      try
+      {
+        TokenIdentity actualParent = api.ProcessToken(parent); CorePolicy.AssertStandard(actualParent, spec.expectedSid);
+        FileIdentity parentImage = api.ProcessImage(parent);
+        CorePolicy.Require(GetProcessId(parent) == (uint)parentPid && ProcessCreation(parent) == parentCreation
+          && ProcessAlive(parent) && actualParent.authenticationId == self.authenticationId
+          && parentImage.sha256 == spec.expectedBinarySha256
+          && CorePolicy.SamePath(parentImage.canonicalPath, Path.Combine(spec.controllerRoot, @"subject-input\profile-fixture.exe")),
+          "functional-helper-held-subject-parent-identity");
+        using (System.Management.ManagementObjectSearcher query = new System.Management.ManagementObjectSearcher(
+          "SELECT ParentProcessId FROM Win32_Process WHERE ProcessId=" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture)))
+        using (System.Management.ManagementObjectCollection rows = query.Get())
+        {
+          CorePolicy.Require(rows.Count == 1, "functional-helper-own-parent-query");
+          foreach (System.Management.ManagementObject row in rows)
+            CorePolicy.Require(Convert.ToInt32(row["ParentProcessId"], CultureInfo.InvariantCulture) == parentPid, "functional-helper-real-parent-pid");
+        }
+        string creation = api.CurrentCreationTime();
+        string directory = FunctionalPolicy.HelperDirectory(spec, Process.GetCurrentProcess().Id, creation);
+        CorePolicy.Require(!Directory.Exists(directory) && !File.Exists(directory), "functional-helper-new-response-directory");
+        Directory.CreateDirectory(directory);
+        CorePolicy.Require(!api.IdentifyPath(directory, true).reparse, "functional-helper-response-directory-object");
+        Stopwatch deadline = Stopwatch.StartNew(); int sequence = 1;
+        while (deadline.ElapsedMilliseconds < 900000 && WaitForSingleObject(parent, 0) == 258)
+        {
+          CorePolicy.Require(ProcessCreation(parent) == parentCreation, "functional-helper-parent-instance-retained");
+          if (sequence > 16) throw new FixtureFailure("functional-helper-response-budget");
+          string input = Path.Combine(directory, "request-" + sequence.ToString(CultureInfo.InvariantCulture) + ".json");
+          if (!File.Exists(input)) { Thread.Sleep(20); continue; }
+          FileIdentity requestFile = api.IdentifyPath(input, false);
+          CorePolicy.Require(!requestFile.reparse && requestFile.bytes <= 4096, "functional-helper-bounded-request");
+          FunctionalHelperMessage request = CoreJson.Read<FunctionalHelperMessage>(input);
+          FunctionalPolicy.RequireHelperMessage(request, "request", spec, sequence, Process.GetCurrentProcess().Id, creation, null);
+          string output = Path.Combine(directory, "response-" + sequence.ToString(CultureInfo.InvariantCulture) + ".json");
+          FunctionalPolicy.PublishHelperMessage(output, new FunctionalHelperMessage { kind = "response", nonce = request.nonce, sequence = sequence,
+            pid = Process.GetCurrentProcess().Id, creationTime = creation, binarySha256 = image.sha256 });
+          sequence++;
+        }
+        return 0;
+      }
+      finally { Win(CloseHandle(parent), "functional-helper-close-parent"); }
+    }
 
     private void CopyF1Input(string directory, string name, F1BlobPin pin)
     {
@@ -2348,7 +2610,8 @@ namespace CcHahaInstallerProfile
     public override FixtureChannel ConnectSubjectChannel(FixtureSpec spec)
     {
       CorePolicy.Require(Object.ReferenceEquals(spec, subjectContext), "Native subject context is not bound");
-      if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
+      if (spec.mode == FunctionalPolicy.SubjectMode) FunctionalIdentity(spec, true);
+      else if (spec.mode == F1Policy.SubjectMode) F1Identity(spec, true);
       else StageBIdentity(spec, "historical-v078-subject");
       CorePolicy.AssertStandard(InspectCurrentToken(), spec.expectedSid);
       NativePipeChannel pipe = NativePipeChannel.Client(spec.pipeName);

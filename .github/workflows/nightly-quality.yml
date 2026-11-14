@@ -1,4 +1,5 @@
 name: Full Quality
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.functional_upgrade && format('functional1879-u:{0}', inputs.functional_head) || 'Full Quality' }}
 
 # The PR gate is intentionally scoped: it runs only the surfaces a diff can reach.
 # That leaves two blind spots no per-PR run can close — regressions that only appear
@@ -21,17 +22,34 @@ on:
         description: 'Skip the coverage ratchet (faster smoke of the rest)'
         type: boolean
         default: false
+      functional_upgrade:
+        description: 'Run only the separately reviewed Issue 1879 isolated functional regression'
+        type: boolean
+        default: false
+      functional_head:
+        description: 'Exact reviewed Issue 1879 commit (functional mode only)'
+        type: string
+        default: ''
+      functional_packet_base64:
+        description: 'Reviewed canonical once packet, Base64 data only (functional mode only)'
+        type: string
+        default: ''
+      functional_packet_sha256:
+        description: 'SHA256 of the exact decoded once packet (functional mode only)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: nightly-quality
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.functional_upgrade && format('functional1879-u-{0}', inputs.functional_head) || 'nightly-quality' }}
   cancel-in-progress: false
 
 jobs:
   full-deterministic:
     name: full-deterministic
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.functional_upgrade) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -120,6 +138,7 @@ jobs:
 
   selection-drift:
     name: selection-drift
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.functional_upgrade) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -139,3 +158,91 @@ jobs:
         run: bun test ./scripts/pr/module-graph.test.ts
       - name: Impact report on the full tree
         run: bun run check:impact --files "$(git ls-files 'src/*' 'desktop/*' 'adapters/*' 'mobile/*' | head -400 | tr '\n' ',')"
+
+  # A separate manual functional result. It neither renames nor replaces any
+  # ordinary PR/Full Quality check, and cannot inherit an old B/Profile grant.
+  p1879u-functional-upgrade:
+    name: p1879u-isolated-functional-upgrade
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.functional_upgrade &&
+      github.repository == 'NanmiCoder/cc-haha' && github.actor == 'NanmiCoder' &&
+      github.ref == 'refs/heads/fix/issue-1879-functional-validation' &&
+      github.sha == inputs.functional_head && github.run_attempt == 1
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    env:
+      FUNCTIONAL_PACKET_BASE64: ${{ inputs.functional_packet_base64 }}
+      FUNCTIONAL_PACKET_SHA256: ${{ inputs.functional_packet_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.functional_head }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Claim the first separately admitted exact-head functional invocation
+        id: functional-claim
+        env:
+          PROFILE_REVIEW_TOKEN: ${{ github.token }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --functional-upgrade-claim
+      - name: Download the reviewed new native Stage A artifact without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.functional-claim.outputs.stage_a_artifact }}
+          run-id: ${{ steps.functional-claim.outputs.stage_a_run }}
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: D:\a\_temp\cc-haha-1879-functional-download\A
+      - name: Download only the fixed historical full Setup
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14109065646'
+          run-id: '43581658402'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: D:\a\_temp\cc-haha-1879-functional-download\old
+      - name: Download the statically proven prepared package from its actual source run
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14109460170'
+          run-id: '43581658402'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: D:\a\_temp\cc-haha-1879-functional-download\new
+      - name: Verify every input and atomically prepare the new protected functional packet
+        id: functional-prepare
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --functional-upgrade-prepare
+      - name: Execute the once admitted isolated old to new functional regression
+        id: functional-native
+        shell: powershell
+        env:
+          FUNCTIONAL_PACKAGE: ${{ steps.functional-prepare.outputs.package_dir }}
+          FUNCTIONAL_CLAIM: ${{ steps.functional-prepare.outputs.claim_file }}
+          FUNCTIONAL_PINS_SHA: ${{ steps.functional-prepare.outputs.pins_sha256 }}
+          FUNCTIONAL_SPEC_SHA: ${{ steps.functional-prepare.outputs.spec_sha256 }}
+          FUNCTIONAL_AUTHORIZATION_SHA: ${{ steps.functional-prepare.outputs.authorization_sha256 }}
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
+        run: |
+          & (Join-Path $env:FUNCTIONAL_PACKAGE 'launch.ps1') -ExecuteFunctionalUpgrade -ApprovedPinsSha256 $env:FUNCTIONAL_PINS_SHA -ApprovedSpecSha256 $env:FUNCTIONAL_SPEC_SHA -ApprovedAuthorizationSha256 $env:FUNCTIONAL_AUTHORIZATION_SHA -ClaimFile $env:FUNCTIONAL_CLAIM
+      - name: Collect finite native functional evidence and preserve unknown cleanup
+        if: ${{ always() && steps.functional-prepare.outcome == 'success' }}
+        env:
+          FUNCTIONAL_LAUNCHER_OUTCOME: ${{ steps.functional-native.outcome }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --functional-upgrade-collect
+      - name: Preserve the distinct functional result and original uncertainty
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-functional-upgrade-${{ inputs.functional_head }}-${{ github.run_id }}
+          path: artifacts/windows-installer-functional-upgrade/
+          if-no-files-found: warn
+          retention-days: 7

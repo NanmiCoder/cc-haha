@@ -1,11 +1,242 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import { parse } from 'yaml'
+import { spawnSync } from 'node:child_process'
+import { createSandboxedTestEnvironment } from './test-environment'
 import { f1Preparation, inspectF1ProposedSpec, profileOnlyBootstrapEnvironment, profileOnlyPowerShell51, claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
+import { claimFunctionalUpgrade, decodeFunctionalOncePacket, functionalPackageTrackedDiffSha256, functionalUpgrade, prepareFunctionalUpgradePacket, validateFunctionalInvocation, validateFunctionalOncePacket, validateFunctionalStageAQualification, validateFunctionalTerminal, type FunctionalOncePacket } from './windows-installer-profile-review'
 
 const head = profileReview.admittedHead
+
+function functionalFixture(workspace: string) {
+  const directory = 'scripts/pr/windows-installer-functional-upgrade'
+  const read = (path: string) => readFileSync(resolve(import.meta.dir, '../..', path))
+  const manifest = JSON.parse(read(`${directory}/prepared-package.json`).toString('utf8'))
+  const copy = (path: string) => { mkdirSync(join(workspace, path, '..'), { recursive: true }); writeFileSync(join(workspace, path), read(path)) }
+  for (const name of ['plan.json', 'argv-env-plan.json', 'authorization.proposed.json', 'prepared-package.json', 'launch.ps1', 'bootstrap.ps1']) copy(`${directory}/${name}`)
+  for (const pin of manifest.productSourcePins14) copy(pin.path)
+  for (const path of ['scripts/pr/windows-installer-profile-review.ts', 'scripts/pr/windows-installer-profile-only/fixtures/launch-profile-only.proposed.ps1', ...profileReview.sources.map(source => `scripts/pr/${source.file}`)]) copy(path)
+  const sources = profileReview.sources.map(source => {
+    const bytes = readFileSync(join(workspace, `scripts/pr/${source.file}`))
+    return { file: source.file, bytes: bytes.length, sha256: reviewHash(bytes), canonicalSha256: reviewHash(canonicalReviewBytes(bytes)) }
+  })
+  const sourceSetSha256 = reviewHash(JSON.stringify(sources.map(source => ({ path: `scripts/pr/${source.file}`, canonicalSha256: source.canonicalSha256 }))))
+  const once = JSON.parse(read(`${directory}/authorization.proposed.json`).toString('utf8')) as FunctionalOncePacket
+  Object.assign(once, { status: 'root_admitted_once', activationHead: 'c'.repeat(40), candidateSourceHead: 'c'.repeat(40), candidateTree: 'd'.repeat(40), mainHead: 'e'.repeat(40), sourceSetSha256, fixtureSha256: 'f'.repeat(64), fixtureBytes: 4096, rootGrantReference: 'R/issue-1879-functional-unit-grant.json', rootDecisionUtc: '2026-11-14T00:00:00Z', productSourcePins14: manifest.productSourcePins14, productSourceInputsMatched: true, packageTrackedDiffVerified: true, packageTrackedDiffSha256: functionalPackageTrackedDiffSha256(['scripts/pr/windows-installer-profile-fixture.cs']),
+    stageA: { sourceHead: 'a'.repeat(40), runId: 991, jobId: 993, artifact: { id: 992, name: 'windows-installer-evidence', size: 2000, digest: 'sha256:' + 'a'.repeat(64) }, fixtureSha256: 'f'.repeat(64), fixtureBytes: 4096, sourceSetSha256, sources,
+      reports: ['checks.json', 'self-test.raw.json', 'abi-harness.raw.json', 'profile-only-preflight.raw.json'].map(file => ({ file, bytes: 1, sha256: 'b'.repeat(64) })), oldMemberProof: { file: 'member-proof/historical/member-proof.json', bytes: 1, sha256: 'b'.repeat(64) } } })
+  const invocation = { head: once.activationHead, runId: 600, runNumber: 42 }
+  const claim = { version: 1 as const, status: 'first_matching_run_claimed' as const, repository: profileReview.repository, ...invocation, runAttempt: 1 as const, workflowId: functionalUpgrade.workflowId, displayTitle: functionalUpgrade.runNamePrefix + invocation.head, minimumMatchingRunNumber: invocation.runNumber, minimumMatchingRunId: invocation.runId, completePagination: true as const, claimantSourceSha256: reviewHash(canonicalReviewBytes(readFileSync(join(workspace, 'scripts/pr/windows-installer-profile-review.ts')))), rootPacketSha256: reviewHash(`${JSON.stringify(once, null, 2)}\n`) }
+  return { once, invocation, claim, manifest }
+}
+
+function functionalContext(once: FunctionalOncePacket) {
+  return { event: { ref: 'fix/issue-1879-functional-validation', sender: { login: profileReview.actor }, repository: { full_name: profileReview.repository }, inputs: { functional_upgrade: 'true', functional_head: once.activationHead } },
+    env: { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: profileReview.repository, GITHUB_ACTOR: profileReview.actor, GITHUB_REF: functionalUpgrade.executionRef, GITHUB_SHA: once.activationHead, GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: '600', GITHUB_RUN_NUMBER: '42' } }
+}
+
+describe('isolated functional upgrade admission and finite evidence', () => {
+  test.skipIf(process.platform !== 'win32' && !Bun.which('pwsh'))('invokes the actual AST-imported Lock body on owned bytes', () => temporary(workspace => {
+    const shell = process.platform === 'win32' ? profileOnlyPowerShell51 : Bun.which('pwsh')!
+    const env = createSandboxedTestEnvironment(workspace, { POWERSHELL_TELEMETRY_OPTOUT: '1' })
+    const result = spawnSync(shell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', resolve(import.meta.dir, 'windows-installer-functional-upgrade/launch.test.ps1')], { env: process.platform === 'win32' ? profileOnlyBootstrapEnvironment(env) : env, timeout: 15000, maxBuffer: 1048576 })
+    expect(result.error).toBeUndefined()
+    const report = JSON.parse(result.stdout.toString('utf8'))
+    expect(report).toEqual({ version: 1, status: 'passed', actualSelectedDeclarations: true, correctHashRetained: true, wrongHashRejected: true, streamsClosed: true, missingDependency: null, realAccountsCreated: 0, realProfilesCreated: 0, nativeExecution: 'not_run' })
+    expect(result.status).toBe(0)
+  }))
+
+  test('hashes functional sources across the old cap and rejects bytes above its declared 1MiB bound', () => temporary(workspace => {
+    const { once } = functionalFixture(workspace)
+    const file = 'windows-installer-profile-native.cs'
+    const replace = (bytes: Buffer) => {
+      writeFileSync(join(workspace, 'scripts/pr', file), bytes)
+      Object.assign(once.stageA.sources.find(pin => pin.file === file)!, { bytes: bytes.length, sha256: reviewHash(bytes), canonicalSha256: reviewHash(canonicalReviewBytes(bytes)) })
+      once.stageA.sourceSetSha256 = reviewHash(JSON.stringify(once.stageA.sources.map(pin => ({ path: `scripts/pr/${pin.file}`, canonicalSha256: pin.canonicalSha256 }))))
+      once.sourceSetSha256 = once.stageA.sourceSetSha256
+    }
+    const original = readFileSync(join(workspace, 'scripts/pr', file))
+    replace(Buffer.concat([original, Buffer.alloc(Math.max(0, 262145 - original.length), 32)]))
+    expect(() => validateFunctionalOncePacket(once, workspace)).not.toThrow()
+    replace(Buffer.alloc(1048576, 32))
+    expect(() => validateFunctionalOncePacket(once, workspace)).not.toThrow()
+    replace(Buffer.alloc(1048577, 32))
+    expect(() => validateFunctionalOncePacket(once, workspace)).toThrow('Exact raw Stage A')
+  }))
+
+  test('keeps default/proposed data unadmitted and distinguishes canonical packet bytes', () => temporary(workspace => {
+    const { once } = functionalFixture(workspace)
+    const bytes = Buffer.from(`${JSON.stringify(once, null, 2)}\n`)
+    expect(decodeFunctionalOncePacket(bytes.toString('base64'), reviewHash(bytes))).toEqual(once)
+    for (const text of ['{"version":1,"version":2}\n', '{"status":"root_admitted_once"}', JSON.stringify(once)]) {
+      const raw = Buffer.from(text)
+      expect(() => decodeFunctionalOncePacket(raw.toString('base64'), reviewHash(raw))).toThrow('Canonical')
+    }
+    expect(() => decodeFunctionalOncePacket(bytes.toString('base64') + '\n', reviewHash(bytes))).toThrow()
+    expect(() => decodeFunctionalOncePacket(bytes.toString('base64'), '0'.repeat(64))).toThrow('bytes changed')
+    expect(() => decodeFunctionalOncePacket('A'.repeat(60004), '0'.repeat(64))).toThrow()
+    expect(() => validateFunctionalOncePacket(JSON.parse(readFileSync(join(workspace, 'scripts/pr/windows-installer-functional-upgrade/authorization.proposed.json'), 'utf8')), workspace)).toThrow('New functional once')
+  }))
+
+  test('binds the prepared package to current product bytes and new native source separately', () => temporary(workspace => {
+    const { once, invocation, claim, manifest } = functionalFixture(workspace)
+    expect(validateFunctionalOncePacket(once, workspace)).toBe(once)
+    const packet = prepareFunctionalUpgradePacket(workspace, invocation, once, claim)
+    expect(packet.spec.f1).toBeNull()
+    expect(packet.spec.functional.candidateSourceHead).toBe(invocation.head)
+    expect(packet.spec.functional.newPackage.sourceHead).toBe('7bc62ecd68b96e900094b924193f06438be6ba2a')
+    expect(packet.spec.functional.stageASourceHead).toBe('a'.repeat(40))
+    expect(packet.spec.functional.authorizationReceipt.sha256).toBe(reviewHash(packet.files.find(file => file.name === 'functional-authorization.json')!.bytes))
+    expect(packet.authorization.claimSha256).toBe(reviewHash(`${JSON.stringify(claim, null, 2)}\n`))
+    expect(packet.authorization.modeSpecificHumanApproval).toBe(false)
+    expect(packet.pins.inputs.filter(pin => pin.name.endsWith('.exe'))).toHaveLength(3)
+    expect(packet.pins.inputs.find(pin => pin.name === 'functional-new-member-proof.json')!.sha256).toBe(manifest.memberProof.sha256)
+    writeFileSync(join(workspace, 'desktop/build/guarded-removal.cs'), '// changed product code\n')
+    expect(() => validateFunctionalOncePacket(once, workspace)).toThrow('source input differs')
+  }))
+
+  test.each(['old-authority', 'future-claim', 'mode-human-approval', 'budget', 'native-source', 'source-set', 'duplicate-report', 'package-source', 'config-authority', 'member-authority', 'whole-diff', 'grant', 'missing-a'])(
+    'refuses changed authority/input before bootstrap: %s', fault => temporary(workspace => {
+      const { once } = functionalFixture(workspace)
+      if (fault === 'old-authority') once.priorBProfileOrF1AuthorityInherited = true
+      if (fault === 'future-claim') once.actionsRunId = 600
+      if (fault === 'mode-human-approval') once.modeSpecificHumanApproval = true
+      if (fault === 'budget') once.budgets.accounts = 2
+      if (fault === 'native-source') once.stageA.sources[0].canonicalSha256 = '0'.repeat(64)
+      if (fault === 'source-set') once.sourceSetSha256 = '0'.repeat(64)
+      if (fault === 'duplicate-report') once.stageA.reports[1] = once.stageA.reports[0]
+      if (fault === 'package-source') once.newPackageSourceHead = once.activationHead
+      if (fault === 'config-authority') once.guardedConfigSha256 = '0'.repeat(64)
+      if (fault === 'member-authority') once.newMemberProofBytes++
+      if (fault === 'whole-diff') once.packageTrackedDiffVerified = false
+      if (fault === 'grant') once.rootGrantReference = '/real/private/arbitrary.json'
+      if (fault === 'missing-a') once.stageA = null as any
+      expect(() => validateFunctionalOncePacket(once, workspace)).toThrow()
+    }),
+  )
+
+  test('refuses product-only tracked changes even when the fourteen build inputs are equal', () => {
+    const names = ['scripts/pr/windows-installer-profile-native.cs', '.github/workflows/nightly-quality.yml', 'scripts/pr/windows-installer-functional-upgrade/plan.json']
+    expect(functionalPackageTrackedDiffSha256(names)).toBe(functionalPackageTrackedDiffSha256(names.toReversed()))
+    for (const path of ['src/main.ts', 'desktop/src/App.tsx', 'adapters/a.ts', 'scripts/pr/change-policy.ts', '.github/workflows/pr-quality.yml', 'scripts/pr/windows-installer-functional-upgrade/nested/evil.ts', 'scripts/pr/windows-installer-functional-upgrade/../escape.ts']) expect(() => functionalPackageTrackedDiffSha256([...names, path])).toThrow('fixed regression-entry whitelist')
+  })
+
+  test.each(['valid-with-advisory-unknown', 'compile', 'self-test', 'abi-cleanup', 'bootstrap-cleanup'])(
+    'qualifies only real compile/self/ABI/bootstrap resources: %s', fault => temporary(workspace => {
+      const { once } = functionalFixture(workspace), a = once.stageA
+      const checks = { version: 1, stage: 'A', status: 'passed', platform: 'win32', sourceSetSha256: a.sourceSetSha256, executableSha256: a.fixtureSha256, realAccountsCreated: 0, realProfilesCreated: 0, releasedPeExecuted: false, releasedPeMayHaveExecuted: false, exitCode: 0, sources: a.sources.map(pin => ({ path: `scripts/pr/${pin.file}`, bytes: pin.bytes, sha256: pin.sha256, canonicalSha256: pin.canonicalSha256 })), commands: ['compile', 'self-test', 'abi-harness'].map(name => ({ name, exitCode: 0, timedOut: false })), privateRootRemoved: false, privateRootRetained: 'native-canary-closure-or-evidence-unknown', f1NativeCanary: { status: 'failed', capability: 'not_proven', cleanup: 'unknown', privateRootRetained: true } }
+      const native = { version: 1, mode: 'self-test', status: 'passed', binarySha256: a.fixtureSha256, realAccountsCreated: 0, realProfilesCreated: 0, releasedPeExecuted: false, releasedPeMayHaveExecuted: false, compatibilityEnabled: false, oldExit22Policy: 'fatal', checks: [{ status: 'passed' }], cleanup: 'not_run', ...Object.fromEntries(['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new'].map(key => [key, 'not_run'])) }
+      const reports = { 'self-test.raw.json': native, 'abi-harness.raw.json': { ...native, mode: 'abi-harness', cleanup: 'passed' }, 'profile-only-preflight.raw.json': { ...native, mode: 'profile-only-preflight', cleanup: 'passed' } }
+      if (fault === 'compile') checks.commands[0].exitCode = 1
+      if (fault === 'self-test') native.status = 'failed'
+      if (fault === 'abi-cleanup') reports['abi-harness.raw.json'].cleanup = 'unknown'
+      if (fault === 'bootstrap-cleanup') reports['profile-only-preflight.raw.json'].cleanup = 'unknown'
+      if (fault === 'valid-with-advisory-unknown') {
+        const result = validateFunctionalStageAQualification(a, checks, reports)
+        expect(result.status).toBe('passed')
+        expect(result.generalStageARootCleanupReported).toBe('retained_or_unknown')
+        expect(result.legacyF1Advisory).toBe('not_used_for_functional_qualification')
+        expect(checks.f1NativeCanary.cleanup).toBe('unknown')
+      } else expect(() => validateFunctionalStageAQualification(a, checks, reports)).toThrow()
+    }),
+  )
+
+  test.each(['valid', 'actor', 'ref', 'head', 'event', 'attempt', 'switch', 'sender'])(
+    'accepts only the structured root manual context: %s', fault => temporary(workspace => {
+      const { once, invocation } = functionalFixture(workspace)
+      const { event, env } = functionalContext(once)
+      if (fault === 'actor') env.GITHUB_ACTOR = 'other'
+      if (fault === 'ref') env.GITHUB_REF = 'refs/heads/main'
+      if (fault === 'head') env.GITHUB_SHA = 'a'.repeat(40)
+      if (fault === 'event') env.GITHUB_EVENT_NAME = 'pull_request'
+      if (fault === 'attempt') env.GITHUB_RUN_ATTEMPT = '2'
+      if (fault === 'switch') event.inputs.functional_upgrade = 'false'
+      if (fault === 'sender') event.sender.login = 'other'
+      if (fault === 'valid') expect(validateFunctionalInvocation(event, env, once)).toEqual(invocation)
+      else expect(() => validateFunctionalInvocation(event, env, once)).toThrow()
+    }),
+  )
+
+  test.each(['valid', 'prior-failed', 'missing-page', 'duplicate', 'changed-total', 'wrong-pr', 'wrong-main', 'advanced-main', 'a-not-complete', 'a-job-failed', 'a-job-duplicate', 'a-job-page-missing', 'a-artifact', 'old-artifact', 'package-artifact'])(
+    'claims complete first invocation and actual immutable inputs: %s', async fault => {
+      const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'functional-claim-')))
+      try {
+        const { once, invocation, claim, manifest } = functionalFixture(workspace)
+        const current = { id: invocation.runId, workflow_id: functionalUpgrade.workflowId, run_number: invocation.runNumber, run_attempt: 1, head_sha: invocation.head, event: 'workflow_dispatch', display_title: functionalUpgrade.runNamePrefix + invocation.head, actor: { login: profileReview.actor } }
+        const others = Array.from({ length: 100 }, (_, i) => ({ ...current, id: 1000 + i, run_number: 100 + i, display_title: 'Full Quality' }))
+        const rows = [current, ...others]
+        const windows = { id: once.stageA.jobId, run_id: once.stageA.runId, run_attempt: 1, head_sha: once.stageA.sourceHead, name: 'windows-installer-checks', status: fault === 'a-not-complete' ? 'in_progress' : 'completed', conclusion: fault === 'a-job-failed' ? 'failure' : 'success' }
+        const aJobs = [windows, ...Array.from({ length: 100 }, (_, i) => ({ ...windows, id: 9000 + i, name: `fixture-${i}`, status: 'in_progress', conclusion: null }))]
+        if (fault === 'a-job-duplicate') aJobs[1] = { ...windows, id: 9998 }
+        if (fault === 'prior-failed') rows[1] = { ...current, id: 599, run_number: 41 }
+        if (fault === 'duplicate') rows[1] = current
+        const get = async (path: string) => {
+          if (path === `/actions/workflows/${functionalUpgrade.workflowId}`) return { id: functionalUpgrade.workflowId, path: functionalUpgrade.workflowPath, state: 'active' }
+          if (path === '/pulls/1883') return { number: 1883, state: 'open', head: { sha: fault === 'wrong-pr' ? 'a'.repeat(40) : invocation.head, ref: profileReview.branch, repo: { full_name: profileReview.headRepository } }, base: { ref: 'main', sha: fault === 'wrong-main' ? 'a'.repeat(40) : once.mainHead, repo: { full_name: profileReview.repository } } }
+          if (path === '/git/ref/heads/main') return { ref: 'refs/heads/main', object: { type: 'commit', sha: fault === 'advanced-main' ? 'a'.repeat(40) : once.mainHead } }
+          if (path === `/actions/runs/${invocation.runId}`) return current
+          if (path.includes('/runs?')) {
+            const page = Number(new URL('https://fixture' + path).searchParams.get('page'))
+            return { total_count: fault === 'changed-total' && page === 2 ? 100 : rows.length, workflow_runs: fault === 'missing-page' && page === 2 ? [] : rows.slice((page - 1) * 100, page * 100) }
+          }
+          if (path === `/actions/runs/${once.stageA.runId}`) return { id: once.stageA.runId, workflow_id: profileOnlyReview.workflowId, head_sha: once.stageA.sourceHead, event: 'pull_request', run_attempt: 1, status: 'in_progress', conclusion: null }
+          if (path.startsWith(`/actions/runs/${once.stageA.runId}/jobs?`)) {
+            const page = Number(new URL('https://fixture' + path).searchParams.get('page'))
+            return { total_count: aJobs.length, jobs: fault === 'a-job-page-missing' && page === 2 ? [] : aJobs.slice((page - 1) * 100, page * 100) }
+          }
+          for (const [pin, runId, head, name] of [[once.stageA.artifact, once.stageA.runId, once.stageA.sourceHead, 'a-artifact'], [functionalUpgrade.oldFixtureArtifact, functionalUpgrade.oldFixtureRun, manifest.packageSourceHead, 'old-artifact'], [manifest.packageArtifact, manifest.packageRunId, manifest.packageSourceHead, 'package-artifact']] as const) if (path === `/actions/artifacts/${pin.id}`) return { id: pin.id, name: pin.name, size_in_bytes: pin.size, digest: fault === name ? 'sha256:' + '0'.repeat(64) : pin.digest, expired: false, workflow_run: { id: runId, head_sha: head } }
+          throw new Error('Unexpected fixture read')
+        }
+        const result = claimFunctionalUpgrade(invocation, once, claim.rootPacketSha256, claim.claimantSourceSha256, get)
+        if (fault === 'valid') expect(await result).toEqual(claim)
+        else await expect(result).rejects.toThrow()
+      } finally { rmSync(workspace, { recursive: true, force: true }) }
+    },
+  )
+
+  test('manual functional workflow keeps normal jobs and all ordinary PR source unchanged', () => {
+    const raw = readFileSync('.github/workflows/nightly-quality.yml', 'utf8'), workflow = parse(raw)
+    expect(workflow.on.schedule).toEqual([{ cron: '0 19 * * *' }])
+    expect(workflow.on.workflow_dispatch.inputs.functional_upgrade.default).toBe(false)
+    for (const name of ['full-deterministic', 'selection-drift']) expect(workflow.jobs[name].if).toBe("${{ !(github.event_name == 'workflow_dispatch' && inputs.functional_upgrade) }}")
+    const functional = workflow.jobs['p1879u-functional-upgrade']
+    expect(functional.if).toContain('github.run_attempt == 1')
+    expect(functional.permissions).toEqual({ contents: 'read', 'pull-requests': 'read', actions: 'read' })
+    expect(workflow.concurrency['cancel-in-progress']).toBe(false)
+    const runs = functional.steps.map((step: any) => step.run ?? '').join('\n')
+    expect(runs).not.toContain('${{')
+    expect(runs).not.toContain('p1879b')
+    expect(runs).not.toContain('p1879p')
+    expect(runs).toContain('--functional-upgrade-claim')
+    expect(runs).toContain('-ExecuteFunctionalUpgrade')
+    expect(functional.env.FUNCTIONAL_PACKET_BASE64).toBe('${{ inputs.functional_packet_base64 }}')
+  })
+
+  test.each(['valid', 'standalone-only', 'missing-helper-exit', 'replay', 'unknown-cleanup', 'F1-promotion', 'wrong-image', 'overflow-time', 'duplicate-process'])(
+    'does not turn finite/replayed/uncertain evidence into a functional pass: %s', fault => temporary(workspace => {
+      const { once, invocation, claim } = functionalFixture(workspace)
+      const packet = prepareFunctionalUpgradePacket(workspace, invocation, once, claim)
+      const launch = { runId: functionalUpgrade.runId, owner: functionalUpgrade.owner, generation: 1, specSha256: packet.hashes.spec, activationHead: invocation.head, actionsRunId: invocation.runId, pinsSha256: packet.hashes.pins, authorizationSha256: packet.hashes.authorization, claimSha256: packet.pins.claimSha256, status: 'functional_passed_and_cleaned_no_exhaustive_F1', controllerStartAttempted: true, controllerStarted: true, controllerIdentityVerified: true, controllerPid: 89, controllerBirthFileTime: '133000000000000000', controllerImage: win32.join(packet.paths.inputDirectory, 'profile-fixture.exe'), stageBase: packet.paths.stageBase, binaryBytes: packet.pins.binaryBytes, nativeExitCode: 0, nativeCleanup: 'cleaned', stdoutComplete: true, stderrComplete: true, rawLogOverflow: false, binarySha256: packet.pins.binarySha256, runnerSid: 'S-1-5-21-1-1-1-1001', ...Object.fromEntries(['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new'].map(key => [key, 'not_run'])) }
+      const row = { pid: 80, parentPid: 79, creationTime: '133000000000000000', exitTime: '133000000000000010', exitCode: 22, role: 'old-uninstaller', fileId: '00000001:0000000000000002', volumePath: '\\\\?\\Volume{00000000-0000-0000-0000-000000000001}\\', imageSha256: once.oldUninstallerSha256, imageCanonicalSha256: 'f'.repeat(64) }
+      const facts = { scope: 'isolated-v078-first-upgrade', status: 'passed', exhaustiveAudit: 'not_run', wholeBefore: 'not_run', freshInstallExit: 0, oldStandaloneExit: 22, normalRemovalExit: 0, rebuildExit: 0, upgradeExit: 0, ...Object.fromEntries(['oldInstalledUninstallerExact', 'currentPayloadExact', 'currentRegistrationExact', 'shortcutTargetsExact', 'fakeUserDataUnchanged', 'legacyOnlyCanaryAbsent', 'normalRemovalReferencePassed', 'rebuiltOldEquivalent', 'helperIdentityVerified', 'helperAlive', 'helperUsable', 'ownedCleanupKnown'].map(key => [key, true])), wholeSetupChain: { status: 'observed', observation: 'readonly-owned-process-lifecycle', oldChildExit22Observed: true, guardedHelperStarted: true, guardedHelperExit0Observed: true, unverifiedCount: 0, processes: [row, { ...row, pid: 81, role: 'guarded-helper', exitCode: 0, imageSha256: packet.spec.functional.newPackage.guardedRemovalSha256 }, { ...row, pid: 82, role: 'current-uninstaller', exitCode: 0, imageSha256: packet.spec.functional.newPackage.uninstallerSha256 }] } }
+      const native = { version: 1, mode: 'functional-upgrade', status: 'passed', cleanup: 'cleaned', specSha256: packet.hashes.spec, binarySha256: packet.pins.binarySha256, realAccountsCreated: 1, realProfilesCreated: 1, releasedPeExecuted: true, releasedPeMayHaveExecuted: true, compatibilityEnabled: false, oldExit22Policy: 'fatal', checks: [{ status: 'passed' }], functionalFacts: facts, ...Object.fromEntries(['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new'].map(key => [key, 'not_run'])) }
+      const nonce = 'a'.repeat(32), marker = `CcHaha1879:${functionalUpgrade.runId}:${nonce}`
+      const ledger = { runId: functionalUpgrade.runId, owner: functionalUpgrade.owner, generation: 1, specSha256: packet.hashes.spec, version: 1, accountBound: true, accountCreated: true, marker, intentSam: `c1879_${nonce.slice(0, 12)}`, account: { sid: 'S-1-5-21-1-1-1-2001', marker, sam: `c1879_${nonce.slice(0, 12)}` } }
+      if (fault === 'standalone-only') facts.wholeSetupChain.status = 'unknown'
+      if (fault === 'missing-helper-exit') facts.wholeSetupChain.processes.splice(1, 1)
+      if (fault === 'replay') facts.status = 'replay_passed'
+      if (fault === 'unknown-cleanup') native.cleanup = 'unknown'
+      if (fault === 'F1-promotion') (native as any).full_old_to_new = 'passed'
+      if (fault === 'wrong-image') row.imageSha256 = '0'.repeat(64)
+      if (fault === 'overflow-time') row.creationTime = '18446744073709551616'
+      if (fault === 'duplicate-process') facts.wholeSetupChain.processes.push(row)
+      if (fault === 'valid') expect(validateFunctionalTerminal(packet, launch, native, ledger)).toBe(facts)
+      else expect(() => validateFunctionalTerminal(packet, launch, native, ledger)).toThrow()
+    }),
+  )
+})
 function context() {
   return {
     event: { action: 'labeled', number: 1883, label: { name: profileReview.labelPrefix + head }, sender: { login: 'NanmiCoder' }, repository: { full_name: profileReview.repository }, pull_request: { number: 1883, base: { ref: 'main' }, head: { sha: head, ref: profileReview.branch, repo: { full_name: profileReview.headRepository } } } },
