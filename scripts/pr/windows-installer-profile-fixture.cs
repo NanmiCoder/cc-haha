@@ -1700,7 +1700,7 @@ namespace CcHahaInstallerProfile
           state.spec.pipeName = "CcHaha1879-" + state.spec.nonce;
           state.spec.hiveKey = @"Software\CcHaha1879Fixture\" + state.spec.nonce;
           state.spec.hiveNonce = Guid.NewGuid().ToString("N");
-          state.spec.fixtureRoot = Path.Combine(state.paths.local, "CcHaha1879Fixture", state.spec.nonce);
+          state.spec.fixtureRoot = Path.Combine(state.paths.local, state.spec.mode == FunctionalPolicy.ControllerMode ? "c" : "CcHaha1879Fixture", state.spec.nonce);
           state.spec.tempRoot = Path.Combine(state.spec.fixtureRoot, "temp");
           state.spec.installRoot = Path.Combine(state.paths.userPrograms, "Claude Code Haha");
           state.spec.uninstallerCopy = Path.Combine(state.spec.fixtureRoot, "old-uninstaller.exe");

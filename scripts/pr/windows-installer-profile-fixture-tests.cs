@@ -771,6 +771,22 @@ namespace CcHahaInstallerProfile
         Assert(state.report.phases.Single(p=>p.phase=="old22-negative").exitCode==22 && state.report.phases.Single(p=>p.phase==FunctionalPolicy.UpgradePhase).exitCode==0,"negative22 and real upgrade0 expectations remain exact");
         FunctionalPolicy.NoF1Promotion(state.report);
       });
+      Case(report,"functional-temp-fits-real-v078-atomic-move-paths",delegate {
+        FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
+        Assert(state.report.status=="passed" && state.report.phases.Count==12,"all original finite phases are still required");
+        string relative=@"resources\app.asar.unpacked\dist\m\assets\node_modules\expo-router\assets\react-navigation\elements\back-icon-mask.0a328cd9c1afd0afe8e3b1ec5165b1b4.png";
+        Assert(relative.Length==151,"actual fixed old payload longest relative path");
+        string staging=Path.Combine(state.spec.tempRoot,"nsa0000.tmp","old-install",relative);
+        Assert(staging.Length<260,"actual Controller TEMP must leave room for the old non-long-path-aware MoveFile target");
+        string run46Profile=state.profilePath+new String('x',27-state.profilePath.Length);
+        string run46Temp=run46Profile+state.spec.tempRoot.Substring(state.profilePath.Length);
+        Assert(Path.Combine(run46Temp,"nsa0000.tmp","old-install",relative).Length==257,"actual run46 profile width now gives257 instead of273");
+        Assert(state.spec.nonce.Length==32 && CorePolicy.SamePath(state.spec.tempRoot,Path.Combine(state.spec.fixtureRoot,"temp"))
+          && CorePolicy.IsInside(state.profilePath,state.spec.fixtureRoot) && CorePolicy.IsInside(state.spec.fixtureRoot,state.spec.tempRoot),"full nonce and owned profile/TEMP nesting remain intact");
+        Assert(state.targetEnvironment["TEMP"]==state.spec.tempRoot && state.targetEnvironment["TMP"]==state.spec.tempRoot
+          && state.targetEnvironment["TMPDIR"]==state.spec.tempRoot,"every child gets the same bound private TEMP");
+        FunctionalPolicy.NoF1Promotion(state.report);
+      });
       Case(report,"functional-controller-entire-plan-once-and-cleanup-never-promotes-f1",delegate {
         FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
         Assert(state.report.status=="passed" && state.report.functionalFacts.status=="replay_passed" && state.report.functionalFacts.ownedCleanupKnown,"actual controller replay finished and cleaned");
