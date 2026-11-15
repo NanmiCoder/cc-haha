@@ -25,6 +25,7 @@ import { clearPluginCache, loadAllPlugins, loadAllPluginsCacheOnly } from '../..
 import { getSkillDirCommands } from '../../skills/loadSkillsDir.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
+import { getPluginCommands } from '../../utils/plugins/loadPluginCommands.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { readMarketMeta } from '../services/market/marketService.js'
 
@@ -327,6 +328,22 @@ async function collectLegacySlashCommands(cwd: string, lean = false): Promise<Sk
     }))
 }
 
+async function collectPluginSlashCommands(): Promise<SkillSlashCommand[]> {
+  try {
+    return (await getPluginCommands())
+      .filter(command => command.userInvocable !== false && !command.isHidden)
+      .map(command => ({
+        name: command.name,
+        description: command.description || '',
+        ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+        kind: command.loadedFrom === 'plugin' ? 'skill' as const : 'command' as const,
+        source: 'plugin' as const,
+      }))
+  } catch {
+    return []
+  }
+}
+
 function buildPluginSkillName(pluginName: string, skillDir: string): string {
   return `${pluginName}:${path.basename(skillDir)}`
 }
@@ -498,8 +515,9 @@ export async function listSkillSlashCommands(
   } = {},
 ): Promise<SkillSlashCommand[]> {
   const requestedCwd = cwd || getCwd()
-  const [skills, legacyCommands, compiledInCommands] = await Promise.all([
+  const [skills, pluginCommands, legacyCommands, compiledInCommands] = await Promise.all([
     collectAllSkills(requestedCwd),
+    collectPluginSlashCommands(),
     collectLegacySlashCommands(requestedCwd, options.agentProfile === 'lean'),
     options.includeCompiledIn === false
       ? Promise.resolve([])
@@ -512,6 +530,12 @@ export async function listSkillSlashCommands(
     string,
     { command: SkillSlashCommand; flavor: SkillRootFlavor | undefined; leanCompatible?: boolean }
   >()
+
+  for (const command of pluginCommands) {
+    if (!byName.has(command.name)) {
+      byName.set(command.name, { command, flavor: undefined })
+    }
+  }
 
   for (const skill of skills) {
     if (!skill.userInvocable) continue
