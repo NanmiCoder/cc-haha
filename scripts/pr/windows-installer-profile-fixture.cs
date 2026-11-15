@@ -734,7 +734,7 @@ namespace CcHahaInstallerProfile
     internal const string ControllerMode = "functional-upgrade-controller", SubjectMode = "functional-upgrade-subject";
     internal const string Stage = "functional-upgrade", ResultMode = "functional-upgrade", UpgradePhase = "functional-new-upgrade";
     internal const string RunId = "a2c7e590-96df-40b1-8943-8e4bcf07a6d2";
-    internal const string PlanHash = "37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53";
+    internal const string PlanHash = "d455d453085da9c1ac571cab105218c430417020612143699513929e76b63783";
     internal const string EnvironmentHash = "816cf9809336f7a4428b579f2e13b1a505466cdf438e739d746a8822767dc601";
     internal const string ProductHead = "8be14e806bd91cefef94c49362b810ccc01d8543";
     internal const string NewSetupHash = "9fdfb4461e2cc78ccd82411699e4fbcfea8735a502a7d89da4ea7581312d1992";
@@ -2044,7 +2044,7 @@ namespace CcHahaInstallerProfile
         else if (message.kind == "phase-end")
         {
           CorePolicy.Require(active == message.phase && message.evidence != null && message.evidence.phase == active, "phase-completion-binding");
-          bool unavailable = active == "old22-negative" || active == "old-normal-removal-positive" || active == "powershell-unavailable-capability"
+          bool unavailable = active == "old22-negative" || (active == "old-normal-removal-positive" && !functional) || active == "powershell-unavailable-capability"
             || active == "guarded-new-upgrade" || active == FunctionalPolicy.UpgradePhase;
           Dictionary<string, string> expectedEnvironment = unavailable
             ? CorePolicy.BuildEnvironment(state.targetEnvironment, state.spec, true) : state.targetEnvironment;
@@ -2785,7 +2785,7 @@ namespace CcHahaInstallerProfile
         if (spec.mode == FunctionalPolicy.SubjectMode)
         {
           RememberFailure(report, diagnosticStage ?? "subject-products", error);
-          if (exitKnown && (initial || command.phase == "old-normal-removal-positive")) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
+          if (exitKnown) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
           if (IsPowerShellCalibration(command.phase)) RecordPowerShellWaitFailure(report, child, command, evidence, environment);
         }
         throw;
@@ -3259,7 +3259,7 @@ namespace CcHahaInstallerProfile
       ProtectedSnapshot kept = ProtectedSnapshot.Capture(spec, api, false); SnapshotFile("positive-kept-before.json", kept);
       LegacyPreflight("positive-preflight", null);
       string argv = CorePolicy.UninstallerCommand(spec.uninstallerCopy, spec.installRoot);
-      facts.normalRemovalExit = Phase(Command("old-normal-removal-positive", spec.uninstallerCopy, argv, 0, 180000), unavailable,
+      facts.normalRemovalExit = Phase(Command("old-normal-removal-positive", spec.uninstallerCopy, argv, 0, 180000), normal,
         delegate(PhaseEvidence evidence) {
           evidence.payloadRemoved = !Directory.Exists(spec.installRoot) && !File.Exists(spec.installRoot);
           evidence.registrationRemoved = RegistryEvidence.OwnedProducts(spec.expectedSid).Count == 0;

@@ -32,7 +32,7 @@
   "requiredBehavior": [
     "admit every exact input and the new root authorization before creating any SID",
     "install the exact old full Setup and bind the actual 174881-byte old uninstaller",
-    "run a normal old-removal reference and rebuild the exact old state without retrying a failed phase",
+    "run a healthy-environment normal old-removal reference and rebuild the exact old state without retrying a failed phase",
     "use the actual fixed PowerShell probes and child-only invalid CLR fault",
     "hold a fresh task-owned foreign OpenConsole.exe identity and require nonce/sequence responses before and after upgrade",
     "observe the standalone old uninstaller natural exit22 under the same fault, preserving finite negative snapshots",
@@ -62,7 +62,7 @@
     "subject": 1,
     "accounts": 1,
     "profiles": 1,
-    "oldStandaloneUninstallerScope": "one normal reference and one fault negative; excludes descendants naturally created by the single full Setup"
+    "oldStandaloneUninstallerScope": "one healthy-environment normal reference and one bad-CLR fault negative; excludes descendants naturally created by the single full Setup"
   },
   "evidencePolicy": {
     "naturalExitRequired": true,

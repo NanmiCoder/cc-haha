@@ -665,7 +665,7 @@ export const functionalUpgrade = {
   runNamePrefix: 'functional1879-u:',
   runId: 'a2c7e590-96df-40b1-8943-8e4bcf07a6d2',
   owner: profileReview.owner,
-  planSha256: '37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53',
+  planSha256: 'd455d453085da9c1ac571cab105218c430417020612143699513929e76b63783',
   environmentSha256: '816cf9809336f7a4428b579f2e13b1a505466cdf438e739d746a8822767dc601',
   oldFixtureSourceHead: '7bc62ecd68b96e900094b924193f06438be6ba2a',
   oldFixtureRun: 43581658402,

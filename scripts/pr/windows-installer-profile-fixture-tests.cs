@@ -673,7 +673,7 @@ namespace CcHahaInstallerProfile
     }
     private static PhaseEvidence FunctionalEvidence(FixtureState state, string phase)
     {
-      FixtureSpec s=state.spec; bool bad=phase=="old22-negative" || phase=="old-normal-removal-positive" || phase=="powershell-unavailable-capability" || phase==FunctionalPolicy.UpgradePhase;
+      FixtureSpec s=state.spec; bool bad=phase=="old22-negative" || phase=="powershell-unavailable-capability" || phase==FunctionalPolicy.UpgradePhase;
       PhaseEvidence e=new PhaseEvidence { phase=phase,exitCode=phase=="observer-calibration" || phase=="positive-preflight" || phase=="powershell-unavailable-capability" ? 1 : phase=="old22-negative" ? 22 : 0,
         environmentSha256=CorePolicy.EnvironmentHash(bad ? CorePolicy.BuildEnvironment(state.targetEnvironment,s,true) : state.targetEnvironment),
         payloadRemoved=true,registrationRemoved=true,keptDataUnchanged=true,oldStateEquivalent=true,helperAlive=true,helperUsable=true,helperIdentityVerified=true,
@@ -759,6 +759,17 @@ namespace CcHahaInstallerProfile
           Reject(()=>FunctionalPolicy.PublishHelperMessage(file,message),"existing sequence cannot be overwritten");
           Assert(CoreJson.Read<FunctionalHelperMessage>(file).nonce=="owned-fixture","old request preserved on replay");
         } finally {Directory.Delete(root,true);}
+      });
+      Case(report,"functional-normal-reference-is-healthy-and-fault-stages-remain-unavailable",delegate {
+        FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
+        Assert(state.report.status=="passed" && state.report.phases.Count==12,"healthy reference still requires the entire finite plan");
+        string healthy=CorePolicy.EnvironmentHash(state.targetEnvironment);
+        string fault=CorePolicy.EnvironmentHash(CorePolicy.BuildEnvironment(state.targetEnvironment,state.spec,true));
+        Assert(healthy!=fault && state.report.phases.Single(p=>p.phase=="old-normal-removal-positive").environmentSha256==healthy,"normal reference uses the healthy environment");
+        foreach(string phase in new string[]{"powershell-unavailable-capability","old22-negative",FunctionalPolicy.UpgradePhase})
+          Assert(state.report.phases.Single(p=>p.phase==phase).environmentSha256==fault,"actual fault remains required for "+phase);
+        Assert(state.report.phases.Single(p=>p.phase=="old22-negative").exitCode==22 && state.report.phases.Single(p=>p.phase==FunctionalPolicy.UpgradePhase).exitCode==0,"negative22 and real upgrade0 expectations remain exact");
+        FunctionalPolicy.NoF1Promotion(state.report);
       });
       Case(report,"functional-controller-entire-plan-once-and-cleanup-never-promotes-f1",delegate {
         FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
