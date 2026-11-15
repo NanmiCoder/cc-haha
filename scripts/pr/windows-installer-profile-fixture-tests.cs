@@ -1256,7 +1256,7 @@ namespace CcHahaInstallerProfile
         foreach(bool control in new[]{false,true})
         {
           Func<CommandPlan> plan=()=>new CommandPlan {phase=control?"abi-powershell-startup-control":"abi-powershell-capability",application=ps,expectedSha256=hash,expectedExitCode=0,timeoutMilliseconds=control?10000:30000,
-            commandLine=control?Subject.PowerShellStartupCommand(ps):Subject.PowerShellCapabilityCommand(ps,false)};
+            commandLine=control?Subject.PowerShellStartupCommand(ps):NativePlatform.AbiDirectCimCommand(ps)};
           NativePlatform.RequireAbiPowerShellCommand(plan(),windows,hash);
           foreach(string fault in new[]{"argv","NoProfile","app","phase","hash","exit","budget","policy"})
           {
@@ -1346,11 +1346,33 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    internal static void RunDirectCimVariantTests(FixtureReport report)
+    {
+      Case(report, "powershell-direct-cim-variant-only-inserts-fixed-system-manifest-import", delegate {
+        string ps=Path.Combine(@"C:\Windows",@"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
+        string header="\""+ps+"\" -C \"",prefix="Import-Module ($PSHOME + '\\Modules\\CimCmdlets\\CimCmdlets.psd1') -ErrorAction Stop; ";
+        string original=Subject.PowerShellCapabilityCommand(ps,false),variant=NativePlatform.AbiDirectCimCommand(ps);
+        Assert(variant==header+prefix+original.Substring(header.Length),"one fixed import precedes the complete unchanged Get-Command body and original flags");
+        Assert(!variant.Contains("Join-Path")&&!variant.Contains("-NoProfile")&&!variant.Contains("PSModulePath")&&variant.EndsWith(original.Substring(header.Length),StringComparison.Ordinal),"no helper-module discovery or environment/flags substitute");
+        string hash=new String('a',64);CommandPlan command=new CommandPlan {phase="abi-powershell-capability",application=ps,expectedSha256=hash,expectedExitCode=0,timeoutMilliseconds=30000,commandLine=variant};
+        NativePlatform.RequireAbiPowerShellCommand(command,@"C:\Windows",hash);
+        foreach(string forbidden in new[]{original,variant.Replace("CimCmdlets.psd1","other.psd1"),variant.Replace("$PSHOME",@"C:\external"),variant.Replace(" -ErrorAction Stop;",";"),variant+"; arbitrary"})
+        {command.commandLine=forbidden;Reject(()=>NativePlatform.RequireAbiPowerShellCommand(command,@"C:\Windows",hash),"the existing launcher cannot choose any other script/manifest or fall back to discovery");}
+      });
+      Case(report, "powershell-direct-cim-variant-success-never-claims-original-subject-qualification", delegate {
+        FixtureReport result=new FixtureReport();
+        NativePlatform.RunPowerShellProbeChecks(result,new[]{"a","b","c","d"},delegate {throw new FileNotFoundException();},delegate {return true;});
+        string detail=result.checks.Single(check=>check.name=="owned-powershell-capability").detail;
+        Assert(detail.Contains("ABI direct-system-Cim variant only")&&detail.Contains("original Subject command/fresh SID unqualified")&&result.full_old_to_new=="not_run", "result is only the ABI variant, never original-normal/Subject/upgrade proof");
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
       RunLegacyExitProbeTests(report);
       RunPowerShellWaitProbeTests(report);
       RunPowerShellWorkingDirectoryTests(report);
+      RunDirectCimVariantTests(report);
       RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);

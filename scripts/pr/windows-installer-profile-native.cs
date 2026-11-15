@@ -3418,11 +3418,19 @@ namespace CcHahaInstallerProfile
     {
       if (!PowerShellProfilesAbsent(report, profiles, attributes, false)) return;
       bool exact = execute(false);
-      report.Check("owned-powershell-capability", exact, "Exact Subject normal command; expected natural0 within30000ms; same caller/private desktop/own Job only");
+      report.Check("owned-powershell-capability", exact, "ABI direct-system-Cim variant only; expected0/30000ms; original Subject command/fresh SID unqualified");
       // This is a separate diagnostic, never a retry or fallback result. Any
       // exact-command failure remains recorded, even when the control exits0.
       if (!exact && PowerShellProfilesAbsent(report, profiles, attributes, true))
         report.Check("owned-powershell-startup-control", execute(true), "Diagnostic-only fixed exit0 within10000ms; cannot qualify a failed capability command");
+    }
+
+    internal static string AbiDirectCimCommand(string powershell)
+    {
+      string original = CcHahaInstallerProfile.Subject.PowerShellCapabilityCommand(powershell, false);
+      string header = "\"" + powershell + "\" -C \"";
+      CorePolicy.Require(original.StartsWith(header, StringComparison.Ordinal), "ABI direct-Cim requires the unchanged bare-C capability command");
+      return header + "Import-Module ($PSHOME + '\\Modules\\CimCmdlets\\CimCmdlets.psd1') -ErrorAction Stop; " + original.Substring(header.Length);
     }
 
     internal static void RequireAbiPowerShellCommand(CommandPlan command, string windows, string powershellHash)
@@ -3432,7 +3440,7 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(command != null && (control || command.phase == "abi-powershell-capability")
         && command.expectedExitCode == 0 && (control ? command.timeoutMilliseconds > 0 && command.timeoutMilliseconds <= 10000 : command.timeoutMilliseconds == 30000)
         && F1Policy.Hash(powershellHash) && command.expectedSha256 == powershellHash && CorePolicy.SamePath(command.application, expected)
-        && command.commandLine == (control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(expected) : CcHahaInstallerProfile.Subject.PowerShellCapabilityCommand(expected, false)),
+        && command.commandLine == (control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(expected) : AbiDirectCimCommand(expected)),
         "ABI PowerShell probe accepts only its fixed normal or startup-control command");
     }
 
@@ -3511,7 +3519,7 @@ namespace CcHahaInstallerProfile
       platform.CloseChild(state.subject); state.subject = new OwnedProcess();
       CommandPlan command = new CommandPlan { phase = control ? "abi-powershell-startup-control" : "abi-powershell-capability",
         application = powershell, expectedSha256 = image.sha256, expectedExitCode = 0, timeoutMilliseconds = AbiPowerShellBudget(control, lane.ElapsedMilliseconds),
-        commandLine = control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(powershell) : CcHahaInstallerProfile.Subject.PowerShellCapabilityCommand(powershell, false) };
+        commandLine = control ? CcHahaInstallerProfile.Subject.PowerShellStartupCommand(powershell) : AbiDirectCimCommand(powershell) };
       string label = control ? "startup-control" : "capability";
       try
       {
