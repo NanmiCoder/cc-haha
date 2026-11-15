@@ -1319,10 +1319,38 @@ namespace CcHahaInstallerProfile
       return new OwnedProcess {process=new IntPtr(201),pid=50,creationTime="134391494714882963",assigned=true,resumed=true,image=new FileIdentity {sha256=new String('c',64)},identity=Standard()};
     }
 
+    internal static void RunPowerShellWorkingDirectoryTests(FixtureReport report)
+    {
+      Case(report, "powershell-runtime-working-directory-is-private-localappdata-not-protocol-root", delegate {
+        string binary = @"C:\Private Compiler", expected = Path.Combine(binary,"home",".local");
+        Dictionary<string,string> environment = new Dictionary<string,string> {{"LOCALAPPDATA",expected}};
+        FileIdentity compiler = new FileIdentity {directory=true,canonicalPath=binary,volumePath="owned-volume"};
+        FileIdentity local = new FileIdentity {directory=true,canonicalPath=expected,volumePath="owned-volume"};
+        string before = CorePolicy.EnvironmentHash(environment);
+        string cwd = NativePlatform.AbiPowerShellWorkingDirectory(binary,environment,compiler,local);
+        Assert(cwd==expected && cwd!=Path.Combine(binary,"home","tmp","cc-haha-native-abi-owned"),"relative runtime Microsoft output stays outside the flat protocol root");
+        Assert(CorePolicy.EnvironmentHash(environment)==before,"no argv or environment adjustment is used to suppress runtime output");
+      });
+      Case(report, "powershell-runtime-working-directory-refuses-unknown-outside-volume-or-reparse", delegate {
+        string binary=@"C:\Private Compiler",expected=Path.Combine(binary,"home",".local");
+        foreach(string fault in new[]{"missing","outside","other-runtime","sibling","local-reparse","compiler-reparse","local-file","compiler-file","volume","empty-volume","canonical-local","canonical-compiler"})
+        {
+          Dictionary<string,string> environment=new Dictionary<string,string>{{"LOCALAPPDATA",expected}};
+          FileIdentity compiler=new FileIdentity{directory=true,canonicalPath=binary,volumePath="owned-volume"},local=new FileIdentity{directory=true,canonicalPath=expected,volumePath="owned-volume"};
+          if(fault=="missing")environment.Clear();if(fault=="outside")environment["LOCALAPPDATA"]=@"C:\User Data";if(fault=="other-runtime")environment["LOCALAPPDATA"]=Path.Combine(binary,"home","tmp");
+          if(fault=="sibling")environment["LOCALAPPDATA"]=Path.Combine(binary+" Tools","home",".local");if(fault=="local-reparse")local.reparse=true;if(fault=="compiler-reparse")compiler.reparse=true;
+          if(fault=="local-file")local.directory=false;if(fault=="compiler-file")compiler.directory=false;if(fault=="volume")local.volumePath="foreign-volume";if(fault=="empty-volume"){local.volumePath=null;compiler.volumePath=null;}
+          if(fault=="canonical-local")local.canonicalPath=@"C:\External";if(fault=="canonical-compiler")compiler.canonicalPath=binary+" Tools";
+          Reject(()=>NativePlatform.AbiPowerShellWorkingDirectory(binary,environment,compiler,local),"unknown working directory cannot fall back to protocol root: "+fault);
+        }
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
       RunLegacyExitProbeTests(report);
       RunPowerShellWaitProbeTests(report);
+      RunPowerShellWorkingDirectoryTests(report);
       RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);

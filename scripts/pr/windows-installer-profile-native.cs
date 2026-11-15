@@ -3449,6 +3449,18 @@ namespace CcHahaInstallerProfile
       return CorePolicy.BuildEnvironment(target, local, false);
     }
 
+    internal static string AbiPowerShellWorkingDirectory(string binaryDirectory, Dictionary<string, string> environment, FileIdentity compilerRoot, FileIdentity local)
+    {
+      string expected = Path.Combine(binaryDirectory, "home", ".local"), actual;
+      CorePolicy.Require(environment != null && environment.TryGetValue("LOCALAPPDATA", out actual)
+        && CorePolicy.SamePath(actual, expected), "ABI PowerShell working directory must be its bound private LOCALAPPDATA");
+      CorePolicy.Require(compilerRoot != null && local != null && compilerRoot.directory && local.directory && !compilerRoot.reparse && !local.reparse
+        && !String.IsNullOrEmpty(compilerRoot.volumePath) && local.volumePath == compilerRoot.volumePath
+        && CorePolicy.SamePath(compilerRoot.canonicalPath, binaryDirectory) && CorePolicy.SamePath(local.canonicalPath, expected)
+        && CorePolicy.IsInside(compilerRoot.canonicalPath, local.canonicalPath), "ABI PowerShell working directory identity escaped the compiler sandbox");
+      return expected;
+    }
+
     private void StartAbiPowerShellChild(FixtureState state, CommandPlan command, Dictionary<string, string> environment, string root)
     {
       AbiOperatingSystem();
@@ -3465,13 +3477,18 @@ namespace CcHahaInstallerProfile
       FileIdentity image = IdentifyPath(Path.Combine(windows, @"SysWOW64\WindowsPowerShell\v1.0\powershell.exe"), false);
       CorePolicy.Require(!image.reparse && !image.directory, "ABI PowerShell image must be regular");
       RequireAbiPowerShellCommand(command, windows, image.sha256);
+      // Runtime-relative cache output belongs in the already-bound private
+      // runtime area, never in the flat eight-file ABI protocol directory.
+      string binaryDirectory = Path.GetDirectoryName(CorePolicy.BinaryPath);
+      string working = AbiPowerShellWorkingDirectory(binaryDirectory, environment,
+        IdentifyPath(binaryDirectory, true), IdentifyPath(Path.Combine(binaryDirectory, "home", ".local"), true));
       state.subject.job = NewJob(); IntPtr block = EnvironmentBytes(environment);
       try
       {
         StartupInfo startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = state.desktopName };
         ProcessInformation created;
         Win(CreateProcessW(command.application, new StringBuilder(command.commandLine), IntPtr.Zero, IntPtr.Zero, false,
-          0x08000404, block, root, ref startup, out created), "CreateProcessW own fixed ABI PowerShell");
+          0x08000404, block, working, ref startup, out created), "CreateProcessW own fixed ABI PowerShell");
         state.subject.process = created.process; state.subject.thread = created.thread; state.subject.pid = checked((int)created.pid); state.subject.image = image;
         state.subject.creationTime = ProcessCreation(state.subject.process);
         Win(AssignProcessToJobObject(state.subject.job, state.subject.process), "Assign fixed ABI PowerShell Job");
