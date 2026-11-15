@@ -2785,7 +2785,7 @@ namespace CcHahaInstallerProfile
         if (spec.mode == FunctionalPolicy.SubjectMode)
         {
           RememberFailure(report, diagnosticStage ?? "subject-products", error);
-          if (initial && exitKnown) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
+          if (exitKnown && (initial || command.phase == "old-normal-removal-positive")) RecordLegacyExit(report, child, evidence.exitCode, command.expectedExitCode, evidence);
           if (IsPowerShellCalibration(command.phase)) RecordPowerShellWaitFailure(report, child, command, evidence, environment);
         }
         throw;
