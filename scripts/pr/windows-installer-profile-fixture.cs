@@ -1975,6 +1975,12 @@ namespace CcHahaInstallerProfile
       channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "phase-ack", nonce = nonce, phase = phase }));
     }
 
+    internal static void RequireFallbackObservation(string phase, bool unavailable, string observation)
+    {
+      if (phase == "observer-calibration" || phase == "old22-negative" || (phase == "old-normal-removal-positive" && unavailable))
+        CorePolicy.Require(observation == "positive_tasklist_and_findstr_observed", "positive-fallback-observation");
+    }
+
     private static void ReceivePhases(FixtureState state, ProfilePlatform api, PositiveProcessObserver observer)
     {
       HashSet<string> phases = new HashSet<string>(StringComparer.Ordinal);
@@ -2082,8 +2088,7 @@ namespace CcHahaInstallerProfile
             state.report.observations.AddRange(observer.Observed());
             CorePolicy.Require(!observer.Observed().Any(item => String.Equals(item.imageName, "Claude Code Haha.exe", StringComparison.OrdinalIgnoreCase)
               || item.imageName.StartsWith("claude-sidecar", StringComparison.OrdinalIgnoreCase)), "no-product-app-session");
-            if (active == "observer-calibration" || active == "old22-negative" || active == "old-normal-removal-positive")
-              CorePolicy.Require(message.evidence.fallbackObservation == "positive_tasklist_and_findstr_observed", "positive-fallback-observation");
+            RequireFallbackObservation(active, unavailable, message.evidence.fallbackObservation);
           }
           if (functional && active == FunctionalPolicy.UpgradePhase && !api.IsFake)
           {

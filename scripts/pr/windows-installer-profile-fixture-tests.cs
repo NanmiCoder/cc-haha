@@ -787,6 +787,20 @@ namespace CcHahaInstallerProfile
           && state.targetEnvironment["TMPDIR"]==state.spec.tempRoot,"every child gets the same bound private TEMP");
         FunctionalPolicy.NoF1Promotion(state.report);
       });
+      Case(report,"functional-healthy-normal-does-not-require-fault-fallback-marker",delegate {
+        Controller.RequireFallbackObservation("old-normal-removal-positive",false,"not_proven");
+      });
+      Case(report,"fallback-marker-remains-required-for-calibration-fault-and-legacy-normal",delegate {
+        foreach(string phase in new string[]{"observer-calibration","old22-negative","old-normal-removal-positive"})
+        {
+          bool unavailable=phase!="observer-calibration";
+          bool rejected=false;
+          try {Controller.RequireFallbackObservation(phase,unavailable,"not_proven");}
+          catch(FixtureFailure error) {rejected=error.Message=="positive-fallback-observation";}
+          Assert(rejected,"missing tasklist/findstr marker must still fail "+phase);
+          Controller.RequireFallbackObservation(phase,unavailable,"positive_tasklist_and_findstr_observed");
+        }
+      });
       Case(report,"functional-controller-entire-plan-once-and-cleanup-never-promotes-f1",delegate {
         FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
         Assert(state.report.status=="passed" && state.report.functionalFacts.status=="replay_passed" && state.report.functionalFacts.ownedCleanupKnown,"actual controller replay finished and cleaned");
