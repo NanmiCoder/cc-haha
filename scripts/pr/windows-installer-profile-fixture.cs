@@ -735,7 +735,7 @@ namespace CcHahaInstallerProfile
     internal const string Stage = "functional-upgrade", ResultMode = "functional-upgrade", UpgradePhase = "functional-new-upgrade";
     internal const string RunId = "a2c7e590-96df-40b1-8943-8e4bcf07a6d2";
     internal const string PlanHash = "37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53";
-    internal const string EnvironmentHash = "4b2e46bfde62ddb189734e42c4fb258ddab687878b7f9ff8393ddf70d8770252";
+    internal const string EnvironmentHash = "816cf9809336f7a4428b579f2e13b1a505466cdf438e739d746a8822767dc601";
     internal const string ProductHead = "8be14e806bd91cefef94c49362b810ccc01d8543";
     internal const string NewSetupHash = "9fdfb4461e2cc78ccd82411699e4fbcfea8735a502a7d89da4ea7581312d1992";
     internal const long NewSetupBytes = 218417877;
@@ -1995,7 +1995,8 @@ namespace CcHahaInstallerProfile
       {
         CorePolicy.Require(DateTime.UtcNow < deadline, "subject-overall-deadline");
         int remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
-        int phaseBudget = active == "fresh-install" || active == "rebuild-old-install" || active == "guarded-new-upgrade" || active == FunctionalPolicy.UpgradePhase ? 305000
+        int phaseBudget = functional && (active == "powershell-normal-capability-1" || active == "powershell-normal-capability-2") ? 125000
+          : active == "fresh-install" || active == "rebuild-old-install" || active == "guarded-new-upgrade" || active == FunctionalPolicy.UpgradePhase ? 305000
           : active == "old22-negative" || active == "old-normal-removal-positive" ? 185000 : 35000;
         ProtocolMessage message = CoreJson.Deserialize<ProtocolMessage>(state.channel.ReadLine(Math.Min(remaining, active == null ? 30000 : phaseBudget)));
         CorePolicy.Require(message.version == 1 && message.nonce == state.spec.nonce, "phase-nonce");
@@ -3025,12 +3026,6 @@ namespace CcHahaInstallerProfile
         : "\" -C \"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }\"");
     }
 
-    internal static string PowerShellStartupCommand(string powershell)
-    {
-      CorePolicy.ValidateAbsolutePath(powershell);
-      return "\"" + powershell + "\" -C \"exit 0\"";
-    }
-
     internal static void RecordPowerShellWaitFailure(FixtureReport report, OwnedProcess child, CommandPlan command, PhaseEvidence evidence, Dictionary<string, string> environment)
     {
       try
@@ -3056,8 +3051,11 @@ namespace CcHahaInstallerProfile
       CorePolicy.ValidateAbsolutePath(powershell);
       string first = PowerShellCapabilityCommand(powershell, false);
       string second = PowerShellCapabilityCommand(powershell, true);
-      Phase(Command("powershell-normal-capability-1", powershell, first, 0, 30000), normal, null);
-      Phase(Command("powershell-normal-capability-2", powershell, second, 0, 30000), normal, null);
+      // The pinned vendor uses unbounded nsExec for these cold module loads.
+      // Keep a finite functional budget, separate from product/negative30s.
+      int normalBudget = spec.mode == FunctionalPolicy.SubjectMode ? 120000 : 30000;
+      Phase(Command("powershell-normal-capability-1", powershell, first, 0, normalBudget), normal, null);
+      Phase(Command("powershell-normal-capability-2", powershell, second, 0, normalBudget), normal, null);
       // A nonzero unavailable result must be observed, not assumed from env.
       OwnedProcess child = new OwnedProcess(); owned.Add(child);
       CommandPlan command = Command("powershell-unavailable-capability", powershell, first, 0, 30000);

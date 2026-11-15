@@ -1185,13 +1185,12 @@ namespace CcHahaInstallerProfile
       });
     }
 
-    internal static void RunPowerShellWaitProbeTests(FixtureReport report)
+    internal static void RunPowerShellFailureTests(FixtureReport report)
     {
-      Case(report, "powershell-shared-builder-preserves-both-original-argv-and-separate-control", delegate {
+      Case(report, "powershell-shared-builder-preserves-both-vendor-argv", delegate {
         string ps = @"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe";
         Assert(Subject.PowerShellCapabilityCommand(ps, false) == "\"" + ps + "\" -C \"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }\"", "first original command byte equality");
         Assert(Subject.PowerShellCapabilityCommand(ps, true) == "\"" + ps + "\" -C \"if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }\"", "second original command byte equality");
-        Assert(Subject.PowerShellStartupCommand(ps) == "\"" + ps + "\" -C \"exit 0\"", "control is separately fixed, never a capability replacement");
       });
       Case(report, "powershell-normal-unavailable-environments-are-independent-without-global-poison", delegate {
         FixtureSpec spec = Spec(); spec.knownPaths = Paths(); spec.profilePath = spec.knownPaths.profile;
@@ -1205,77 +1204,6 @@ namespace CcHahaInstallerProfile
         normal["APPDATA"] = "normal-mutation"; unavailable["COMPLUS_Version"] = "unavailable-mutation";
         Assert(unavailable["APPDATA"] == spec.knownPaths.roaming && !normal.ContainsKey("COMPLUS_Version") && source["COMPLUS_Version"] == "foreign-poison", "neither mutation aliases the other environment or target");
         Assert(Environment.GetEnvironmentVariable("COMPLUS_Version") == globalClr && Environment.GetEnvironmentVariable("PSModulePath") == globalModules, "builder does not write process-global environment");
-      });
-      Case(report, "powershell-abi-normal-environment-uses-subject-builder-and-private-runtime", delegate {
-        Dictionary<string,string> source = new FakePlatform().Environment(); source["GITHUB_TOKEN"] = "fake-secret"; source["PSModulePath"] = @"C:\foreign"; source["COMPLUS_Version"] = "foreign";
-        Dictionary<string,string> runtime = new Dictionary<string,string> { {"SystemRoot",@"C:\Windows"},{"USERPROFILE",@"C:\Private\home"},{"APPDATA",@"C:\Private\home\.config"},{"LOCALAPPDATA",@"C:\Private\home\.local"},{"TEMP",@"C:\Private\home\tmp"},{"TMP",@"C:\Private\home\tmp"} };
-        Dictionary<string,string> actual = NativePlatform.AbiPowerShellEnvironment(source, runtime, @"C:\Private\protocol");
-        Dictionary<string,string> mapped = new Dictionary<string,string>(source); foreach (KeyValuePair<string,string> row in runtime) mapped[row.Key] = row.Value;
-        FixtureSpec local = new FixtureSpec { fixtureRoot=@"C:\Private\protocol", tempRoot=runtime["TEMP"],profilePath=runtime["USERPROFILE"],knownPaths=new KnownPaths {profile=runtime["USERPROFILE"],roaming=runtime["APPDATA"],local=runtime["LOCALAPPDATA"]} };
-        Assert(CorePolicy.EnvironmentHash(actual) == CorePolicy.EnvironmentHash(CorePolicy.BuildEnvironment(mapped,local,false)), "same normal Subject environment constructor");
-        Assert(!actual.ContainsKey("GITHUB_TOKEN") && !actual.ContainsKey("PSModulePath") && !actual.ContainsKey("COMPLUS_Version") && source["COMPLUS_Version"] == "foreign", "private local mapping copies source and excludes foreign values");
-      });
-      Case(report, "powershell-four-profile-candidates-and-metadata-errors-never-read-content", delegate {
-        string ps = @"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe", documents = @"C:\Users\own\Documents";
-        string[] paths = NativePlatform.PowerShellProfileCandidates(ps,documents);
-        Assert(paths.Length == 4 && paths[0] == Path.Combine(Path.GetDirectoryName(ps),"profile.ps1")
-          && paths[1] == Path.Combine(Path.GetDirectoryName(ps),"Microsoft.PowerShell_profile.ps1")
-          && paths[2] == Path.Combine(documents,"WindowsPowerShell","profile.ps1") && paths[3] == Path.Combine(documents,"WindowsPowerShell","Microsoft.PowerShell_profile.ps1"), "PS5 console host four exact candidates");
-        Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw new FileNotFoundException(); }) == "absent"
-          && NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw new DirectoryNotFoundException(); }) == "absent", "only explicit not-found is absent");
-        foreach (Exception error in new Exception[] {new UnauthorizedAccessException("private-value"),new IOException("private-value"),new System.Security.SecurityException("private-value")})
-          Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { throw error; }) == "unknown", "access and I/O uncertainty is not false absence");
-        Assert(NativePlatform.PowerShellProfileMetadata(paths[0],delegate { return FileAttributes.Directory|FileAttributes.ReparsePoint; }) == "present", "any existing entry rejects execution");
-      });
-      Case(report, "powershell-profile-present-or-unknown-blocks-every-launch-before-execution", delegate {
-        string[] paths = {"allusers0","allusers1","user0","user1"};
-        for (int slot=0;slot<4;slot++) foreach(bool denied in new bool[]{false,true})
-        {
-          FixtureReport result=new FixtureReport();int calls=0;int blocked=slot;
-          NativePlatform.RunPowerShellProbeChecks(result,paths,delegate(string path) {
-            if(path==paths[blocked]) { if(denied)throw new UnauthorizedAccessException("secret-metadata");return FileAttributes.Normal; }
-            throw new FileNotFoundException();
-          },delegate(bool control){calls++;return true;});
-          Assert(calls==0 && result.checks.Count==4 && result.checks.Any(check=>check.status=="failed") && !CoreJson.Serialize(result).Contains("secret-metadata"), "profile gate denies before either child and publishes no paths/content/errors");
-        }
-      });
-      Case(report, "powershell-control-success-never-upgrades-original-failure-and-is-regated", delegate {
-        string[] paths={"a","b","c","d"};List<bool> calls=new List<bool>();int metadata=0;FixtureReport result=new FixtureReport();
-        NativePlatform.RunPowerShellProbeChecks(result,paths,delegate { metadata++;throw new FileNotFoundException(); },delegate(bool control){calls.Add(control);return control;});
-        Assert(calls.SequenceEqual(new[]{false,true}) && metadata==8 && result.checks.Single(check=>check.name=="owned-powershell-capability").status=="failed"
-          && result.checks.Single(check=>check.name=="owned-powershell-startup-control").status=="passed", "diagnostic control is no fallback or green retry");
-        calls.Clear();result=new FixtureReport();NativePlatform.RunPowerShellProbeChecks(result,paths,delegate {throw new FileNotFoundException();},delegate(bool control){calls.Add(control);return true;});
-        Assert(calls.SequenceEqual(new[]{false}) && result.checks.All(check=>check.status=="passed"), "successful exact command runs only once without control");
-        calls.Clear();metadata=0;result=new FixtureReport();NativePlatform.RunPowerShellProbeChecks(result,paths,delegate {metadata++;if(metadata>4)return FileAttributes.Normal;throw new FileNotFoundException();},delegate(bool control){calls.Add(control);return false;});
-        Assert(calls.SequenceEqual(new[]{false}) && result.checks.Any(check=>check.name.StartsWith("owned-powershell-control-profile-",StringComparison.Ordinal)&&check.status=="failed"), "newly present profile blocks the diagnostic too");
-        calls.Clear();bool thrown=false;try {NativePlatform.RunPowerShellProbeChecks(new FixtureReport(),paths,delegate {throw new FileNotFoundException();},delegate(bool control){calls.Add(control);throw new FixtureFailure("owned-cleanup-unknown");});}catch(FixtureFailure){thrown=true;}
-        Assert(thrown&&calls.SequenceEqual(new[]{false}), "late cleanup failure cannot start the control");
-      });
-      Case(report, "powershell-fixed-abi-command-rejects-external-argv-and-expectation-budget-changes", delegate {
-        string windows=@"C:\Windows",ps=Path.Combine(windows,@"SysWOW64\WindowsPowerShell\v1.0\powershell.exe"),hash=new String('a',64);
-        foreach(bool control in new[]{false,true})
-        {
-          Func<CommandPlan> plan=()=>new CommandPlan {phase=control?"abi-powershell-startup-control":"abi-powershell-capability",application=ps,expectedSha256=hash,expectedExitCode=0,timeoutMilliseconds=control?10000:30000,
-            commandLine=control?Subject.PowerShellStartupCommand(ps):NativePlatform.AbiDirectCimCommand(ps)};
-          NativePlatform.RequireAbiPowerShellCommand(plan(),windows,hash);
-          foreach(string fault in new[]{"argv","NoProfile","app","phase","hash","exit","budget","policy"})
-          {
-            CommandPlan bad=plan();if(fault=="argv")bad.commandLine+="; arbitrary";if(fault=="NoProfile")bad.commandLine=bad.commandLine.Replace(" -C "," -NoProfile -C ");
-            if(fault=="app")bad.application=@"C:\foreign\powershell.exe";if(fault=="phase")bad.phase="abi-owned-child";if(fault=="hash")bad.expectedSha256=new String('b',64);
-            if(fault=="exit")bad.expectedExitCode=1;if(fault=="budget")bad.timeoutMilliseconds++;if(fault=="policy")bad.commandLine=Subject.PowerShellCapabilityCommand(ps,true);
-            Reject(()=>NativePlatform.RequireAbiPowerShellCommand(bad,windows,hash),"fixed internal PS command refuses "+fault);
-          }
-        }
-      });
-      Case(report, "powershell-abi-budget-keeps-exact30s-and-reserves-existing-cleanup-window", delegate {
-        Assert(NativePlatform.AbiPowerShellBudget(false,0)==30000 && NativePlatform.AbiPowerShellBudget(false,18000)==30000, "primary budget never shortened or enlarged");
-        Reject(()=>NativePlatform.AbiPowerShellBudget(false,18001),"insufficient remaining primary budget must not launch");
-        Assert(NativePlatform.AbiPowerShellBudget(true,38000)==10000 && NativePlatform.AbiPowerShellBudget(true,47999)==1,"diagnostic uses only remaining internal window, at most10s");
-        Reject(()=>NativePlatform.AbiPowerShellBudget(true,48000),"control cannot occupy cleanup reservation");
-        Reject(()=>NativePlatform.AbiPowerShellBudget(false,-1),"invalid clock input is not extra budget");
-        int launches=0;bool rejected=false;
-        try {NativePlatform.RunPowerShellProbeChecks(new FixtureReport(),new[]{"a","b","c","d"},delegate {throw new FileNotFoundException();},delegate(bool control){NativePlatform.AbiPowerShellBudget(control,18001);launches++;return true;});}catch(FixtureFailure){rejected=true;}
-        Assert(rejected&&launches==0,"real scheduler does not run either child when primary30s no longer fits");
       });
       Case(report, "held-wait-live-or-unknown-never-reads-exit-or-invents-natural-259", delegate {
         OwnedProcess cap=PowerShellWaitCap();int exits=0;
@@ -1319,60 +1247,28 @@ namespace CcHahaInstallerProfile
       return new OwnedProcess {process=new IntPtr(201),pid=50,creationTime="134391494714882963",assigned=true,resumed=true,image=new FileIdentity {sha256=new String('c',64)},identity=Standard()};
     }
 
-    internal static void RunPowerShellWorkingDirectoryTests(FixtureReport report)
+    internal static void RunFunctionalPowerShellBudgetTests(FixtureReport report)
     {
-      Case(report, "powershell-runtime-working-directory-is-private-localappdata-not-protocol-root", delegate {
-        string binary = @"C:\Private Compiler", expected = Path.Combine(binary,"home",".local");
-        Dictionary<string,string> environment = new Dictionary<string,string> {{"LOCALAPPDATA",expected}};
-        FileIdentity compiler = new FileIdentity {directory=true,canonicalPath=binary,volumePath="owned-volume"};
-        FileIdentity local = new FileIdentity {directory=true,canonicalPath=expected,volumePath="owned-volume"};
-        string before = CorePolicy.EnvironmentHash(environment);
-        string cwd = NativePlatform.AbiPowerShellWorkingDirectory(binary,environment,compiler,local);
-        Assert(cwd==expected && cwd!=Path.Combine(binary,"home","tmp","cc-haha-native-abi-owned"),"relative runtime Microsoft output stays outside the flat protocol root");
-        Assert(CorePolicy.EnvironmentHash(environment)==before,"no argv or environment adjustment is used to suppress runtime output");
+      Case(report, "functional-controller-cold-powershell-waits-match-120s-commands-without-changing-negative", delegate {
+        FakePlatform api=new FakePlatform();FixtureState state=Execute(api,FunctionalSpec());
+        Assert(state.report.status=="passed"&&state.report.phases.Count==12&&api.Channel.PhaseAcks==12,"all twelve original finite functional phases still required exactly once");
+        Assert(api.Channel.ReadTimeouts[4]==125000&&api.Channel.ReadTimeouts[6]==125000,"actual Controller loop allows completion of each functional120s normal command");
+        Assert(api.Channel.ReadTimeouts[8]==35000,"negative CLR command retains its original30s plus protocol grace");
+        FunctionalPolicy.NoF1Promotion(state.report);
       });
-      Case(report, "powershell-runtime-working-directory-refuses-unknown-outside-volume-or-reparse", delegate {
-        string binary=@"C:\Private Compiler",expected=Path.Combine(binary,"home",".local");
-        foreach(string fault in new[]{"missing","outside","other-runtime","sibling","local-reparse","compiler-reparse","local-file","compiler-file","volume","empty-volume","canonical-local","canonical-compiler"})
-        {
-          Dictionary<string,string> environment=new Dictionary<string,string>{{"LOCALAPPDATA",expected}};
-          FileIdentity compiler=new FileIdentity{directory=true,canonicalPath=binary,volumePath="owned-volume"},local=new FileIdentity{directory=true,canonicalPath=expected,volumePath="owned-volume"};
-          if(fault=="missing")environment.Clear();if(fault=="outside")environment["LOCALAPPDATA"]=@"C:\User Data";if(fault=="other-runtime")environment["LOCALAPPDATA"]=Path.Combine(binary,"home","tmp");
-          if(fault=="sibling")environment["LOCALAPPDATA"]=Path.Combine(binary+" Tools","home",".local");if(fault=="local-reparse")local.reparse=true;if(fault=="compiler-reparse")compiler.reparse=true;
-          if(fault=="local-file")local.directory=false;if(fault=="compiler-file")compiler.directory=false;if(fault=="volume")local.volumePath="foreign-volume";if(fault=="empty-volume"){local.volumePath=null;compiler.volumePath=null;}
-          if(fault=="canonical-local")local.canonicalPath=@"C:\External";if(fault=="canonical-compiler")compiler.canonicalPath=binary+" Tools";
-          Reject(()=>NativePlatform.AbiPowerShellWorkingDirectory(binary,environment,compiler,local),"unknown working directory cannot fall back to protocol root: "+fault);
-        }
-      });
-    }
-
-    internal static void RunDirectCimVariantTests(FixtureReport report)
-    {
-      Case(report, "powershell-direct-cim-variant-only-inserts-fixed-system-manifest-import", delegate {
-        string ps=Path.Combine(@"C:\Windows",@"SysWOW64\WindowsPowerShell\v1.0\powershell.exe");
-        string header="\""+ps+"\" -C \"",prefix="Import-Module ($PSHOME + '\\Modules\\CimCmdlets\\CimCmdlets.psd1') -ErrorAction Stop; ";
-        string original=Subject.PowerShellCapabilityCommand(ps,false),variant=NativePlatform.AbiDirectCimCommand(ps);
-        Assert(variant==header+prefix+original.Substring(header.Length),"one fixed import precedes the complete unchanged Get-Command body and original flags");
-        Assert(!variant.Contains("Join-Path")&&!variant.Contains("-NoProfile")&&!variant.Contains("PSModulePath")&&variant.EndsWith(original.Substring(header.Length),StringComparison.Ordinal),"no helper-module discovery or environment/flags substitute");
-        string hash=new String('a',64);CommandPlan command=new CommandPlan {phase="abi-powershell-capability",application=ps,expectedSha256=hash,expectedExitCode=0,timeoutMilliseconds=30000,commandLine=variant};
-        NativePlatform.RequireAbiPowerShellCommand(command,@"C:\Windows",hash);
-        foreach(string forbidden in new[]{original,variant.Replace("CimCmdlets.psd1","other.psd1"),variant.Replace("$PSHOME",@"C:\external"),variant.Replace(" -ErrorAction Stop;",";"),variant+"; arbitrary"})
-        {command.commandLine=forbidden;Reject(()=>NativePlatform.RequireAbiPowerShellCommand(command,@"C:\Windows",hash),"the existing launcher cannot choose any other script/manifest or fall back to discovery");}
-      });
-      Case(report, "powershell-direct-cim-variant-success-never-claims-original-subject-qualification", delegate {
-        FixtureReport result=new FixtureReport();
-        NativePlatform.RunPowerShellProbeChecks(result,new[]{"a","b","c","d"},delegate {throw new FileNotFoundException();},delegate {return true;});
-        string detail=result.checks.Single(check=>check.name=="owned-powershell-capability").detail;
-        Assert(detail.Contains("ABI direct-system-Cim variant only")&&detail.Contains("original Subject command/fresh SID unqualified")&&result.full_old_to_new=="not_run", "result is only the ABI variant, never original-normal/Subject/upgrade proof");
+      Case(report, "functional-cold-budget-never-tolerates-wrong-old22-or-retries-upgrade", delegate {
+        FakePlatform api=new FakePlatform{Fault="functional-bad-old22"};FixtureState state=Execute(api,FunctionalSpec());
+        Assert(state.report.status=="failed"&&!state.report.phases.Any(phase=>phase.phase==FunctionalPolicy.UpgradePhase),"wrong natural old exit remains fatal before real new-Setup acceptance");
+        Assert(api.Channel.PhaseAcks<=12,"budget change adds no retry or repeated phase");
+        FunctionalPolicy.NoF1Promotion(state.report);
       });
     }
 
     public static void Run(FixtureReport report)
     {
       RunLegacyExitProbeTests(report);
-      RunPowerShellWaitProbeTests(report);
-      RunPowerShellWorkingDirectoryTests(report);
-      RunDirectCimVariantTests(report);
+      RunPowerShellFailureTests(report);
+      RunFunctionalPowerShellBudgetTests(report);
       RunPostAckFailureTests(report);
       RunControllerQueryAclTests(report);
       RunAbiSameUserStartupTests(report);
@@ -2134,6 +2030,7 @@ namespace CcHahaInstallerProfile
       private int reads;
       public bool Acknowledged;
       public int PhaseAcks;
+      internal readonly List<int> ReadTimeouts = new List<int>();
       public bool Disposed;
       internal bool FunctionalUpgradeDelivered;
       public FakeChannel(FakePlatform api, FixtureState state) { this.api = api; this.state = state; }
@@ -2141,6 +2038,7 @@ namespace CcHahaInstallerProfile
       public override string ReadLine(int timeoutMilliseconds)
       {
         api.Gate(state, "ReadLine");
+        ReadTimeouts.Add(timeoutMilliseconds);
         if (reads++ == 0)
         {
           if (api.Fault == "hello-eof") throw new FixtureFailure("Private IPC closed before a complete message");

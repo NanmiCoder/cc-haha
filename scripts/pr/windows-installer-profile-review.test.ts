@@ -38,6 +38,19 @@ function functionalContext(once: FunctionalOncePacket) {
 }
 
 describe('isolated functional upgrade admission and finite evidence', () => {
+  test('binds finite vendor cold-start budgets while keeping the original commands and global limits', () => {
+    const path = 'scripts/pr/windows-installer-functional-upgrade/'
+    const bytes = canonicalReviewBytes(readFileSync(path + 'argv-env-plan.json'))
+    const plan = JSON.parse(bytes.toString('utf8'))
+    const authorization = JSON.parse(readFileSync(path + 'authorization.proposed.json', 'utf8'))
+    expect(reviewHash(bytes)).toBe(functionalUpgrade.environmentSha256)
+    expect(authorization.environmentSha256).toBe(functionalUpgrade.environmentSha256)
+    expect(plan.powerShell.normalCimArgv).toEqual(['-C', 'if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }'])
+    expect(plan.powerShell.normalPolicyArgv).toEqual(['-C', "if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }"])
+    expect([plan.powerShell.normalCimTimeoutMilliseconds, plan.powerShell.normalPolicyTimeoutMilliseconds, plan.powerShell.unavailableTimeoutMilliseconds]).toEqual([120000, 120000, 30000])
+    expect([plan.controllerBudgetMilliseconds, plan.launcherWaitMilliseconds]).toEqual([900000, 1200000])
+  })
+
   test.skipIf(process.platform !== 'win32' && !Bun.which('pwsh'))('invokes the actual AST-imported Lock body on owned bytes', () => temporary(workspace => {
     const shell = process.platform === 'win32' ? profileOnlyPowerShell51 : Bun.which('pwsh')!
     const env = createSandboxedTestEnvironment(workspace, { POWERSHELL_TELEMETRY_OPTOUT: '1' })

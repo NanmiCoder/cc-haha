@@ -666,7 +666,7 @@ export const functionalUpgrade = {
   runId: 'a2c7e590-96df-40b1-8943-8e4bcf07a6d2',
   owner: profileReview.owner,
   planSha256: '37d4f8d484a7797e9eaa6d89c05d4f53716cf6ec350936126f5bb6e665f6ef53',
-  environmentSha256: '4b2e46bfde62ddb189734e42c4fb258ddab687878b7f9ff8393ddf70d8770252',
+  environmentSha256: '816cf9809336f7a4428b579f2e13b1a505466cdf438e739d746a8822767dc601',
   oldFixtureSourceHead: '7bc62ecd68b96e900094b924193f06438be6ba2a',
   oldFixtureRun: 43581658402,
   oldFixtureArtifact: { id: 14109065646, name: 'windows-installer-v078-fixture', size: 230729090, digest: 'sha256:f4865a57fb8b0437dc2ba9a1dc23bdda089f99b7fb699643fc14448800daaf85' },
