@@ -1065,6 +1065,7 @@ export function Sidebar({
   return (
     <aside
       className="sidebar-panel relative h-full flex flex-col bg-[var(--color-surface-sidebar)] border-r border-[var(--color-border)] select-none"
+      data-wallpaper-surface="sidebar"
       data-state={expanded ? 'open' : 'closed'}
       aria-label={t('sidebar.regionLabel')}
     >

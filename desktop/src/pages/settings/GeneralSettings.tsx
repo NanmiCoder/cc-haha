@@ -45,6 +45,7 @@ import { isTouchH5Document } from '../../lib/touchH5'
 import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS } from '../../../../src/shared/autoQuestionSettings'
 import { ChatAppearanceSettings } from './ChatAppearanceSettings'
+import { WallpaperSettings } from './WallpaperSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
@@ -1003,6 +1004,7 @@ export function GeneralSettings() {
       </SettingsSection>
 
       <ChatAppearanceSettings />
+      <WallpaperSettings />
 
       {uiZoomSection}
 

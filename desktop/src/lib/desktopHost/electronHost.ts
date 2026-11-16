@@ -75,6 +75,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       appMode: true,
       clipboard: true,
       dialogs: true,
+      dynamicWallpaper: true,
       notifications: true,
       previewWebview: true,
       workspaceBrowser: true,
@@ -244,6 +245,14 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
         cancel: id => invoke(ELECTRON_IPC_CHANNELS.migrationCancel, { id }),
         onProgress: handler => subscribe(ELECTRON_EVENT_CHANNELS.migrationProgress, handler),
       },
+    },
+    dynamicWallpaper: {
+      get: () => invoke(ELECTRON_IPC_CHANNELS.wallpaperGet),
+      update: patch => invoke(ELECTRON_IPC_CHANNELS.wallpaperUpdate, patch),
+      pickVideo: options => invoke(ELECTRON_IPC_CHANNELS.wallpaperPickVideo, options),
+      pickWeb: options => invoke(ELECTRON_IPC_CHANNELS.wallpaperPickWeb, options),
+      clear: () => invoke(ELECTRON_IPC_CHANNELS.wallpaperClear),
+      reload: () => invoke(ELECTRON_IPC_CHANNELS.wallpaperReload),
     },
     adapters: {
       restartSidecar: (target) => invoke(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, target ? { target } : undefined),

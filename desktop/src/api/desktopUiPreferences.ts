@@ -32,11 +32,27 @@ export type DesktopPetPreferences = {
   lastSessionId: string | null
 }
 
+export type DesktopWallpaperPreferences = {
+  enabled: boolean
+  /** Horizontal focal point, 0 (left) to 100 (right). */
+  focusX: number
+  /** Vertical focal point, 0 (top) to 100 (bottom). */
+  focusY: number
+  /** Magnification on top of the cover fit, 100 (native) to 300 (3×). */
+  zoom: number
+  blur: number
+  panelOpacity: number
+  file: string | null
+  updatedAt: string | null
+}
+
 export type DesktopUiPreferences = {
   schemaVersion: number
   sidebar: SidebarProjectPreferences
   profile: DesktopProfilePreferences
   pet: DesktopPetPreferences
+  /** Absent when talking to a server older than the wallpaper feature. */
+  wallpaper?: DesktopWallpaperPreferences
   /** Absent when talking to a server older than the voice input feature. */
   voiceInput?: VoicePreferences
   projectDisplayNames: Record<string, string>
@@ -127,6 +143,44 @@ export const desktopUiPreferencesApi = {
       '/api/desktop-ui/preferences/profile/avatar',
     )
   },
+
+  getWallpaperPreferences() {
+    return api.get<{ exists: boolean; wallpaper: DesktopWallpaperPreferences }>(
+      '/api/desktop-ui/preferences/wallpaper',
+    )
+  },
+
+  updateWallpaperPreferences(wallpaper: Partial<Pick<DesktopWallpaperPreferences, 'enabled' | 'focusX' | 'focusY' | 'zoom' | 'blur' | 'panelOpacity'>>) {
+    return api.put<{ ok: true; preferences: DesktopUiPreferences; wallpaper: DesktopWallpaperPreferences }>(
+      '/api/desktop-ui/preferences/wallpaper',
+      wallpaper,
+    )
+  },
+
+  async uploadWallpaper(file: File) {
+    return uploadWallpaper(file)
+  },
+
+  async getWallpaperImage() {
+    const headers: Record<string, string> = {}
+    const token = getAuthToken()
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+
+    const res = await fetch(getApiUrl('/api/desktop-ui/preferences/wallpaper/image'), { headers })
+    if (!res.ok) {
+      const body = await res.json().catch(() => res.text())
+      throw new ApiError(res.status, body)
+    }
+    return res.blob()
+  },
+
+  deleteWallpaperImage() {
+    return api.delete<{ ok: true; preferences: DesktopUiPreferences }>(
+      '/api/desktop-ui/preferences/wallpaper/image',
+    )
+  },
 }
 
 export function getProfileAvatarUrl(updatedAt: string | null | undefined) {
@@ -144,6 +198,29 @@ async function uploadProfileAvatar(file: File): Promise<{ ok: true; preferences:
   }
 
   const res = await fetch(getApiUrl('/api/desktop-ui/preferences/profile/avatar'), {
+    method: 'PUT',
+    headers,
+    body: file,
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => res.text())
+    throw new ApiError(res.status, body)
+  }
+
+  return res.json() as Promise<{ ok: true; preferences: DesktopUiPreferences }>
+}
+
+async function uploadWallpaper(file: File): Promise<{ ok: true; preferences: DesktopUiPreferences }> {
+  const headers: Record<string, string> = {
+    'Content-Type': file.type || 'application/octet-stream',
+  }
+  const token = getAuthToken()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const res = await fetch(getApiUrl('/api/desktop-ui/preferences/wallpaper/image'), {
     method: 'PUT',
     headers,
     body: file,

@@ -31,6 +31,8 @@ function startupFixture(
   }
   const context = {
     app: { whenReady: () => Promise.resolve(), on: vi.fn() },
+    protocol: { handle: vi.fn() },
+    WALLPAPER_SCHEME: 'cc-wallpaper',
     process: { env, platform: 'win32' },
     applyWindowsAppUserModelId: () => {}, clearAppManagedPortableEnv: () => step('clearEnv'),
     applyStartupPortableMode: () => step('applyRoot'), getDataMigration: () => migration,

@@ -26,6 +26,70 @@ describe('Electron IPC capabilities', () => {
     }
     expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
   })
+  it('accepts only typed dynamic wallpaper patches and localized pick labels', () => {
+    const update = ELECTRON_IPC_CHANNELS.wallpaperUpdate
+    expect(validateElectronIpcPayload(update, {})).toBe(true)
+    expect(validateElectronIpcPayload(update, {
+      kind: 'video',
+      enabled: true,
+      focusX: 0,
+      focusY: 100,
+      zoom: 300,
+      blur: 40,
+      panelOpacity: 60,
+    })).toBe(true)
+    for (const payload of [
+      undefined,
+      null,
+      { kind: 'remote' },
+      { enabled: 'true' },
+      { focusX: -1 },
+      { focusY: 101 },
+      { focusX: 50.5 },
+      { zoom: 99 },
+      { zoom: Number.NaN },
+      { blur: 41 },
+      { panelOpacity: 59 },
+      { videoPath: 'D:\\clips\\loop.mp4' },
+      { kind: 'video', extra: true },
+    ]) {
+      expect(validateElectronIpcPayload(update, payload), JSON.stringify(payload)).toBe(false)
+    }
+
+    for (const channel of [
+      ELECTRON_IPC_CHANNELS.wallpaperPickVideo,
+      ELECTRON_IPC_CHANNELS.wallpaperPickWeb,
+    ]) {
+      expect(validateElectronIpcPayload(channel, undefined)).toBe(true)
+      expect(validateElectronIpcPayload(channel, {
+        dialogTitle: '选择壁纸',
+        dialogFilterName: '视频',
+      })).toBe(true)
+      for (const payload of [
+        null,
+        { dialogTitle: '' },
+        { dialogTitle: 'Bad\nTitle' },
+        { dialogFilterName: '   ' },
+        { dialogTitle: 'x'.repeat(201) },
+        { dialogTitle: 'Choose', path: 'D:\\clips' },
+        { dialogTitle: 'Choose', filters: ['mp4'] },
+      ]) {
+        expect(validateElectronIpcPayload(channel, payload), JSON.stringify(payload)).toBe(false)
+      }
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+
+    for (const channel of [
+      ELECTRON_IPC_CHANNELS.wallpaperGet,
+      ELECTRON_IPC_CHANNELS.wallpaperClear,
+      ELECTRON_IPC_CHANNELS.wallpaperReload,
+    ]) {
+      expect(validateElectronIpcPayload(channel, undefined)).toBe(true)
+      expect(validateElectronIpcPayload(channel, {})).toBe(false)
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+  })
+
   it('validates migration paths and identities and keeps migration IPC unavailable to pet windows', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationPrepare, { targetDir: 'D:\\cc-haha-data' })).toBe(true)
     for (const payload of [undefined, {}, { targetDir: '' }, { targetDir: '   ' }, { targetDir: 2 }, { targetDir: 'bad\u0000path' }, { targetDir: 'D:\\data', sourceDir: 'C:\\data' }]) {

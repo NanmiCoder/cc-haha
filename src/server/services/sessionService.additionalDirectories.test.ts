@@ -80,7 +80,7 @@ test('legacy project and session fixtures default to no auxiliary access and pre
   const service = new DesktopUiPreferencesService()
   expect((await service.readPreferences()).preferences.projectAdditionalDirectories).toEqual({})
   await service.updateSidebarPreferences({ pinnedProjects: [main] })
-  expect(JSON.parse(await readFile(prefsPath, 'utf8'))).toMatchObject({ schemaVersion: 7, future: { keep: true }, projectAdditionalDirectories: {} })
+  expect(JSON.parse(await readFile(prefsPath, 'utf8'))).toMatchObject({ schemaVersion: 11, future: { keep: true }, projectAdditionalDirectories: {} })
   const sessionId = '6789beef-1234-4567-89ab-000000000001'
   const projectDir = join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(main))
   await mkdir(projectDir, { recursive: true })

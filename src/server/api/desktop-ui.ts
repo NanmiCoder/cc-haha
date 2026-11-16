@@ -8,6 +8,11 @@
  * PUT  /api/desktop-ui/preferences/profile  — persist local profile preferences
  * GET  /api/desktop-ui/preferences/pet      — read only desktop pet preferences
  * PUT  /api/desktop-ui/preferences/pet      — patch desktop pet preferences
+ * GET  /api/desktop-ui/preferences/wallpaper — read desktop wallpaper preferences
+ * PUT  /api/desktop-ui/preferences/wallpaper — patch desktop wallpaper preferences
+ * GET  /api/desktop-ui/preferences/wallpaper/image — read desktop wallpaper image
+ * PUT  /api/desktop-ui/preferences/wallpaper/image — persist desktop wallpaper image
+ * DELETE /api/desktop-ui/preferences/wallpaper/image — clear desktop wallpaper
  * GET  /api/desktop-ui/preferences/profile/avatar — read local profile avatar
  * PUT  /api/desktop-ui/preferences/profile/avatar — persist local profile avatar
  * DELETE /api/desktop-ui/preferences/profile/avatar — reset local profile avatar
@@ -79,6 +84,65 @@ export async function handleDesktopUiApi(
         ok: true,
         preferences,
       })
+    }
+
+    if (detail === 'wallpaper') {
+      const action = segments[4]
+
+      if (action === undefined) {
+        if (req.method === 'GET') {
+          const result = await desktopUiPreferencesService.readPreferences()
+          return Response.json({
+            exists: result.exists,
+            wallpaper: result.preferences.wallpaper,
+          })
+        }
+        if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+        const body = await parseJsonBody(req)
+        const preferences = await desktopUiPreferencesService.updateWallpaperPreferences(body)
+        return Response.json({
+          ok: true,
+          preferences,
+          wallpaper: preferences.wallpaper,
+        })
+      }
+
+      if (action === 'image') {
+        if (req.method === 'GET') {
+          const image = await desktopUiPreferencesService.readWallpaperImage()
+          if (!image) {
+            throw ApiError.notFound('Wallpaper image is not configured')
+          }
+          return new Response(image.bytes, {
+            headers: {
+              'Content-Type': image.contentType,
+              'Cache-Control': 'no-store',
+            },
+          })
+        }
+
+        if (req.method === 'PUT') {
+          const bytes = new Uint8Array(await req.arrayBuffer())
+          return Response.json({
+            ok: true,
+            preferences: await desktopUiPreferencesService.updateWallpaperImage(
+              bytes,
+              req.headers.get('Content-Type'),
+            ),
+          })
+        }
+
+        if (req.method === 'DELETE') {
+          return Response.json({
+            ok: true,
+            preferences: await desktopUiPreferencesService.clearWallpaper(),
+          })
+        }
+
+        throw methodNotAllowed(req.method)
+      }
+
+      throw ApiError.notFound(`Unknown desktop UI wallpaper endpoint: ${action}`)
     }
 
     if (detail === 'profile') {

@@ -241,4 +241,87 @@ describe('desktopUiPreferencesApi', () => {
     )
     expect(getProfileAvatarUrl(null)).toBe('http://127.0.0.1:49237/api/desktop-ui/preferences/profile/avatar')
   })
+
+  it('patches and deletes wallpaper settings through the wallpaper endpoints', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    const wallpaper = { enabled: true, focusX: 30, focusY: 70, zoom: 140, blur: 10, panelOpacity: 90, file: 'wallpaper.jpg', updatedAt: '2026-11-11T00:00:00.000Z' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, preferences, wallpaper }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, preferences }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(
+      desktopUiPreferencesApi.updateWallpaperPreferences({ focusX: 30, zoom: 140, blur: 10 }),
+    ).resolves.toEqual({
+      ok: true,
+      preferences,
+      wallpaper,
+    })
+    await expect(desktopUiPreferencesApi.deleteWallpaperImage()).resolves.toEqual({ ok: true, preferences })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:49237/api/desktop-ui/preferences/wallpaper',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ focusX: 30, zoom: 140, blur: 10 }),
+      }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:49237/api/desktop-ui/preferences/wallpaper/image',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('uploads wallpaper bytes with auth and reads the image back as a blob', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    setAuthToken('h5_wallpaper_token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, preferences }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      }))
+
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'wallpaper.png', { type: 'image/png' })
+    await expect(desktopUiPreferencesApi.uploadWallpaper(file)).resolves.toEqual({ ok: true, preferences })
+    const blob = await desktopUiPreferencesApi.getWallpaperImage()
+    expect(blob.type).toBe('image/png')
+    expect(blob.size).toBe(4)
+
+    const [uploadUrl, uploadInit] = fetchMock.mock.calls[0]!
+    expect(uploadUrl).toBe('http://127.0.0.1:49237/api/desktop-ui/preferences/wallpaper/image')
+    expect(uploadInit).toMatchObject({
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'image/png',
+        Authorization: 'Bearer h5_wallpaper_token',
+      },
+      body: file,
+    })
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({
+      headers: { Authorization: 'Bearer h5_wallpaper_token' },
+    })
+  })
+
+  it('surfaces wallpaper image read errors', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Wallpaper image is not configured' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(desktopUiPreferencesApi.getWallpaperImage()).rejects.toThrow('Wallpaper image is not configured')
+  })
 })

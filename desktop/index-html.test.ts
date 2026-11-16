@@ -28,7 +28,10 @@ describe('desktop index startup diagnostics', () => {
     }))
 
     // Without media-src, <audio src="blob:..."> falls back to default-src 'self' and is blocked.
-    expect(directives.get('media-src')).toEqual(["'self'", 'blob:'])
+    // Video wallpapers stream through the local cc-wallpaper: protocol.
+    expect(directives.get('media-src')).toEqual(["'self'", 'blob:', 'cc-wallpaper:'])
+    // Web-pack wallpapers render in a sandboxed cc-wallpaper: frame.
+    expect(directives.get('frame-src')).toEqual(['cc-wallpaper:'])
     // Only media playback was opened up: the restrictive directives stay as they were.
     expect(directives.get('default-src')).toEqual(["'self'"])
     expect(directives.get('object-src')).toEqual(["'none'"])
