@@ -337,8 +337,9 @@ function isH5ProtectedCapabilityPath(pathname: string): boolean {
 }
 
 export function isH5AccessControlPath(pathname: string): boolean {
-  return pathname.startsWith('/api/h5-access') &&
-    pathname !== '/api/h5-access/verify'
+  const normalizedPath = normalizeApiPath(pathname)
+  return normalizedPath.startsWith('/api/h5-access') &&
+    normalizedPath !== '/api/h5-access/verify'
 }
 
 /**

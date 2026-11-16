@@ -130,6 +130,13 @@ export class SettingsService {
     return (await this.getUserSettings()).nextPromptSuggestionsEnabled === true
   }
 
+  /** Max output tokens escalation mode; missing means 'auto' (follow GrowthBook). */
+  async getMaxOutputTokensEscalationMode(): Promise<'auto' | 'enabled' | 'disabled'> {
+    const user = await this.getUserSettings()
+    const value = user.maxOutputTokensEscalationMode
+    return value === 'enabled' || value === 'disabled' ? value : 'auto'
+  }
+
   /** Read-time upgrade for older settings that only stored the team env flag.
    * Keep the original file intact until the user explicitly saves a choice.
    */
@@ -228,6 +235,12 @@ export class SettingsService {
       const value = settings.maxConcurrentSubagents
       if (value !== null && !(typeof value === 'number' && Number.isSafeInteger(value) && value > 0)) {
         throw ApiError.badRequest('maxConcurrentSubagents must be null or a positive safe integer')
+      }
+    }
+    if (Object.hasOwn(settings, 'maxOutputTokensEscalationMode')) {
+      const value = settings.maxOutputTokensEscalationMode
+      if (value !== 'auto' && value !== 'enabled' && value !== 'disabled') {
+        throw ApiError.badRequest('maxOutputTokensEscalationMode must be auto, enabled, or disabled')
       }
     }
     const filePath = this.getUserSettingsPath()

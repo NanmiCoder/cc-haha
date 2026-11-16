@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { ToolUseContext } from '../../Tool.js'
+import { getDefaultAppState } from '../../state/AppStateStore.js'
 import { getSessionCreatedTeams } from '../../bootstrap/state.js'
 import { readTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
 import { approveTeamPlan, mutateTeamPlan, readTeamPlan } from '../../utils/swarm/teamPlanStore.js'
 import { clearLeaderTeamName, createTask, getCanonicalTeamTaskListId } from '../../utils/tasks.js'
 import { GENERAL_PURPOSE_AGENT } from '../AgentTool/built-in/generalPurposeAgent.js'
+import { AgentTool } from '../AgentTool/AgentTool.js'
 import { EXPLORE_AGENT } from '../AgentTool/built-in/exploreAgent.js'
 import { TeamCreateTool } from '../TeamCreateTool/TeamCreateTool.js'
 import { TaskUpdateTool } from '../TaskUpdateTool/TaskUpdateTool.js'
@@ -25,6 +27,7 @@ const keys = [
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_AZURE_OPENAI',
+  'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'CC_HAHA_AGENT_TEAMS_ENABLED',
 ]
 
 beforeEach(async () => {
@@ -33,9 +36,11 @@ beforeEach(async () => {
   process.env.HOME = directory
   process.env.CLAUDE_CONFIG_DIR = directory
   process.env.CC_HAHA_TEAM_REVIEW_REQUIRED = '1'
+  process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'
+  process.env.CC_HAHA_AGENT_TEAMS_ENABLED = '1'
   process.env.CC_HAHA_TEAM_LEADER_RUNTIME = JSON.stringify({ providerId: 'fake-provider', modelId: 'fake-model' })
   delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
-  let state = { mainLoopModel: 'fake-model', inbox: { messages: [] } } as ReturnType<ToolUseContext['getAppState']>
+  let state = { ...getDefaultAppState(), mainLoopModel: 'fake-model', inbox: { messages: [] } } as ReturnType<ToolUseContext['getAppState']>
   context = {
     getAppState: () => state,
     setAppState: update => { state = typeof update === 'function' ? update(state) : update },
@@ -58,6 +63,72 @@ afterEach(async () => {
 })
 
 describe('whole-team planning tools', () => {
+  const stageThroughAgent = (name: string) => AgentTool.call({
+    name, team_name: 'review-team', subagent_type: 'general-purpose',
+    description: 'Propose a team member', prompt: `Work after human approval: ${name}`,
+  }, context)
+  const mappedResult = (data: Awaited<ReturnType<typeof AgentTool.call>>['data']) =>
+    JSON.stringify(AgentTool.mapToolResultToToolResultBlockParam(data, 'staged-member'))
+  const submitCurrentRoster = async () => {
+    const plan = (await readTeamPlan('review-team'))!
+    return TeamPlanTool.call({
+      team_name: plan.teamName, operation: 'submit', expected_revision: plan.revision,
+      plan: {
+        members: plan.members.map(({ id, name, agentType, prompt, runtime }) => ({ id, name, agentType, prompt, runtime })),
+        tasks: plan.members.map(member => ({ id: `task-${member.id}`, subject: `Work by ${member.name}`, ownerId: member.id, dependencies: [] })),
+      },
+    }, context)
+  }
+
+  test('real Agent results let both initial and running-team drafts reach review without starting members (#1856)', async () => {
+    await TeamCreateTool.call({ team_name: 'review-team' }, context)
+    const first = await stageThroughAgent('reviewer')
+    const draft = (await readTeamPlan('review-team'))!
+    expect(first.data).toMatchObject({ status: 'teammate_staged', staged: true, plan_id: draft.planId, revision: draft.revision })
+    expect(mappedResult(first.data)).toContain(draft.planId)
+    expect(mappedResult(first.data)).toContain(`revision: ${draft.revision} (use it as TeamPlan expected_revision)`)
+    expect((await readTeamFileAsync('review-team'))?.members).toHaveLength(1)
+    await submitCurrentRoster()
+    const pending = (await readTeamPlan('review-team'))!
+    expect(pending.state).toBe('review_pending')
+    expect((await readTeamFileAsync('review-team'))?.members).toHaveLength(1)
+    const approved = await approveTeamPlan('review-team', { ...pending, expectedRevision: pending.revision }, 'human-initial', pending)
+    const running = await mutateTeamPlan('review-team', { ...approved.plan, expectedRevision: approved.plan.revision }, value => ({ ...value, state: 'running' }))
+    const added = await stageThroughAgent('fix-touch')
+    const addition = (await readTeamPlan('review-team'))!
+    expect(addition).toMatchObject({ state: 'draft', parentPlanId: running.planId })
+    expect(addition.planId).not.toBe(running.planId)
+    expect(addition.members.map(member => member.name)).toEqual(['fix-touch'])
+    expect(added.data).toMatchObject({ plan_id: addition.planId, revision: addition.revision })
+    expect(mappedResult(added.data)).toContain(addition.planId)
+    await submitCurrentRoster()
+    expect((await readTeamPlan('review-team'))?.state).toBe('review_pending')
+  })
+
+  test('Agent retries and multiple members require the latest revision and renewed human review', async () => {
+    await TeamCreateTool.call({ team_name: 'review-team' }, context)
+    const first = await stageThroughAgent('reviewer')
+    const firstDraft = (await readTeamPlan('review-team'))!
+    const repeated = await stageThroughAgent('reviewer')
+    const second = await stageThroughAgent('fix-touch')
+    const plan = (await readTeamPlan('review-team'))!
+    expect(plan.members.map(member => member.name)).toEqual(['reviewer', 'fix-touch'])
+    expect(plan.revision).toBe(firstDraft.revision + 2)
+    for (const result of [first, repeated, second]) expect(mappedResult(result.data)).toContain('NOT started')
+    expect(mappedResult(second.data)).toContain(`revision: ${plan.revision}`)
+    await expect(TeamPlanTool.call({ team_name: plan.teamName, operation: 'submit', expected_revision: firstDraft.revision }, context)).rejects.toThrow('changed')
+    expect((await readTeamPlan(plan.teamName))?.state).toBe('draft')
+    const latest = await TeamPlanTool.call({ team_name: plan.teamName, operation: 'get' }, context)
+    expect(latest.data.revision).toBe(plan.revision)
+    await submitCurrentRoster()
+    const pending = (await readTeamPlan(plan.teamName))!
+    expect(pending.state).toBe('review_pending')
+    const again = await stageThroughAgent('fix-touch')
+    expect((await readTeamPlan(plan.teamName))?.state).toBe('draft')
+    expect(mappedResult(again.data)).toContain('TeamPlan expected_revision')
+    await expect(approveTeamPlan(plan.teamName, { ...pending, expectedRevision: pending.revision }, 'stale-human', pending)).rejects.toThrow('changed')
+  })
+
   describe('generated model suggestions for a non-Claude leader', () => {
     beforeEach(() => {
       Object.assign(process.env, {

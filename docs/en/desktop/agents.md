@@ -21,6 +21,16 @@ Delegation also costs startup time, context transfer, and integration. The main 
 
 Delegated agents appear under **SubAgents** in the Activity panel with their tool activity streaming live. Open one to read its full transcript and final result. Background agents work the same way — you don't have to wait for them to finish to see what they're doing.
 
+## Pause a team and change member models
+
+For desktop Agent Teams started through human approval, the team workbench can pause work and change member runtimes while keeping the original team, member conversations, tasks and message history.
+
+1. Click **Pause team and main task** and wait for **Team paused**. If stopping partially fails, follow the displayed error and pause again to confirm every member has stopped.
+2. Click **Edit member models** to choose each member's provider, model and reasoning effort, or select several members to edit together. Saving keeps the team paused and starts no CLI or model request. Change the main conversation's model separately.
+3. Click **Resume team** to resume the displayed number of members with unfinished, dependency-ready tasks. Members waiting on dependencies continue when those tasks become ready. Completed members and members with no remaining work are not rerun. A count of zero still lets the main conversation resume collecting reports. Partial failures show their causes and can be retried.
+
+After an application restart, the original team stays paused until a new action. New messages to the main conversation or a member retain their existing coordination behavior. Use **Resume team** when you want all eligible members to resume reliably.
+
 ## Built-in agents
 
 Available without any setup:

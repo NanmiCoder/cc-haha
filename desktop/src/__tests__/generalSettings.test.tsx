@@ -113,7 +113,9 @@ vi.mock('qrcode', () => ({
 }))
 
 vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
-  ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
+  ClaudeOfficialLogin: ({ usageOnly }: { usageOnly?: boolean }) => (
+    <div data-testid={usageOnly ? 'claude-official-usage' : 'claude-official-login'} />
+  ),
 }))
 
 vi.mock('../components/settings/ChatGPTOfficialLogin', () => ({
@@ -260,6 +262,7 @@ describe('Settings > General tab', () => {
       thinkingEnabled: true,
       workflowKeywordTriggerEnabled: true,
       agentTeamsEnabled: true,
+      maxOutputTokensEscalationMode: 'auto',
       autoDreamEnabled: false,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
@@ -453,13 +456,13 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Skip WebFetch domain preflight')).toBeInTheDocument()
   })
 
-  it('offers all six palettes, paper grounds before ink ones', () => {
+  it('offers all seven palettes, light grounds before dark ones', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
     // The picker order is load-bearing: the four paper grounds come first, then
-    // the two ink ones, so the list reads light-to-dark rather than shuffled.
-    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']
+    // the three dark ones, so the list reads light-to-dark rather than shuffled.
+    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']
       .map((name) => screen.getByRole('button', { name }))
 
     for (const [index, chip] of order.slice(0, -1).entries()) {
@@ -475,6 +478,18 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Ink Blue' }))
     expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('ink-blue')
+  })
+
+  it('offers a neutral dark palette and marks it selected after choosing it', () => {
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+
+    const neutralDark = screen.getByRole('button', { name: 'Neutral Dark' })
+    fireEvent.click(neutralDark)
+
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('neutral-dark')
+    expect(neutralDark).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('gives the settings rail the handoff width and a rounded selected item', () => {
@@ -540,7 +555,7 @@ describe('Settings > General tab', () => {
 
     expect(screen.getByText('Use in light mode')).toBeInTheDocument()
     expect(screen.getByText('Use in dark mode')).toBeInTheDocument()
-    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']) {
+    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']) {
       expect(screen.getByRole('button', { name: label }), label).toBeInTheDocument()
     }
   })
@@ -557,6 +572,16 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('selects neutral dark as the dark preference while following a light system', () => {
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'neutral-dark', theme: 'white' })
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+
+    expect(screen.getByRole('button', { name: 'Neutral Dark' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('keeps the theme swatches at preview size on a wide settings frame', () => {
@@ -1417,6 +1442,78 @@ describe('Settings > General tab', () => {
         type: 'error',
         message: 'Failed to save Agent Teams settings. Please try again.',
       })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('renders and saves the max output tokens escalation mode tri-state', async () => {
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      // Default is Auto
+      expect(screen.getByTestId('max-output-tokens-escalation-setting')).toBeVisible()
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+
+      // Each saved choice becomes available for the next change.
+      await act(async () => { fireEvent.click(enabledBtn) })
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'enabled' })
+
+      await act(async () => { fireEvent.click(disabledBtn) })
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
+
+      await act(async () => { fireEvent.click(autoBtn) })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'auto' })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('blocks overlapping output escalation saves and restores the choice after a save failure', async () => {
+    let rejectSave!: (error: Error) => void
+    const updateUser = vi.spyOn(settingsApi, 'updateUser')
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+      .mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+
+      await act(async () => { fireEvent.click(enabledBtn) })
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeDisabled()
+      }
+      fireEvent.click(disabledBtn)
+      expect(updateUser).toHaveBeenCalledTimes(1)
+
+      await act(async () => { rejectSave(new Error('disk full')) })
+
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(useSettingsStore.getState().maxOutputTokensEscalationMode).toBe('auto')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeEnabled()
+      }
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: 'Could not save the output token escalation setting. Please try again.',
+      })
+
+      await act(async () => { fireEvent.click(disabledBtn) })
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
     } finally {
       updateUser.mockRestore()
     }
@@ -2469,6 +2566,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
 
     expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
+    expect(screen.queryByTestId('claude-official-usage')).not.toBeInTheDocument()
   })
 
   it('shows ChatGPT Official as the active built-in provider', () => {
@@ -2483,6 +2581,7 @@ describe('Settings > Providers tab', () => {
     expect(within(openAIProvider).getByText('Default')).toBeInTheDocument()
     expect(screen.getByTestId('chatgpt-official-login')).toBeInTheDocument()
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('claude-official-provider')).getByTestId('claude-official-usage')).toBeInTheDocument()
   })
 
   it('shows Grok Official as the active built-in provider', () => {

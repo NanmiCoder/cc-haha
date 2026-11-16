@@ -32,6 +32,7 @@ import {
   SystemProxyBridge,
   type SystemProxyBridgeLike,
 } from './systemProxyBridge'
+import { createPublicAccessDiagnosticWriter, type PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 
 type ServerRuntimeOptions = {
   onServerUnavailable?: () => void
@@ -56,7 +57,7 @@ type ServerRuntimeDeps = {
   spawnSidecar: typeof spawnSidecar
   waitForServer: typeof waitForServer
   writeLastServerPort: typeof writeLastServerPort
-  createSystemProxyBridge: (resolveSystemProxy: (url: string) => Promise<string>) => SystemProxyBridgeLike
+  createSystemProxyBridge: (resolveSystemProxy: (url: string) => Promise<string>, onDiagnostic?: PublicAccessDiagnosticWriter) => SystemProxyBridgeLike
 }
 
 const DEFAULT_SERVER_RUNTIME_DEPS: ServerRuntimeDeps = {
@@ -70,7 +71,7 @@ const DEFAULT_SERVER_RUNTIME_DEPS: ServerRuntimeDeps = {
   spawnSidecar,
   waitForServer,
   writeLastServerPort,
-  createSystemProxyBridge: resolveSystemProxy => new SystemProxyBridge(resolveSystemProxy),
+  createSystemProxyBridge: (resolveSystemProxy, onDiagnostic) => new SystemProxyBridge(resolveSystemProxy, onDiagnostic),
 }
 
 const AUTOMATIC_RESTART_LIMIT = 3
@@ -778,7 +779,8 @@ export class ElectronServerRuntime {
     const baseEnv = clearProxyEnv(this.baseEnv)
     if (!this.resolveSystemProxy) return this.applyPowerShellOverride(baseEnv)
 
-    const bridge = this.deps.createSystemProxyBridge(this.resolveSystemProxy)
+    const bridge = this.deps.createSystemProxyBridge(this.resolveSystemProxy,
+      this.diagnosticsFile ? createPublicAccessDiagnosticWriter(this.diagnosticsFile, this.deps.appendHostDiagnostic) : undefined)
     this.systemProxyBridge = bridge
     try {
       const bridgeUrl = await bridge.start()

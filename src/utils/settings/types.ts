@@ -492,6 +492,15 @@ export const SettingsSchema = lazySchema(() =>
           'Desktop: show a predicted next prompt in the empty composer after each reply ' +
             '(one extra model request per turn). Default: false.',
         ),
+      maxOutputTokensEscalationMode: z
+        .enum(['auto', 'enabled', 'disabled'])
+        .optional()
+        .describe(
+          'Controls the native output budget cap (up to 8k) and model-bounded retry (up to 64k). ' +
+            'auto = follow GrowthBook remote flag (tengu_otk_slot_v1). ' +
+            'enabled = opt in on supported routes, preserving explicit budgets. ' +
+            'disabled = use model defaults. Continuation recovery remains available in all modes.',
+        ),
       workflowSizeGuideline: z
         .enum(['unrestricted', 'small', 'medium', 'large'])
         .optional()

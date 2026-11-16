@@ -10,8 +10,8 @@ import { getCommandName } from '../commands.js'
 import { getSystemContext } from '../context.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
-  AUTOCOMPACT_BUFFER_TOKENS,
-  getEffectiveContextWindowSize,
+  getAutoCompactTokenCount,
+  getAutoCompactThreshold,
   isAutoCompactEnabled,
   MANUAL_COMPACT_BUFFER_TOKENS,
 } from '../services/compact/autoCompact.js'
@@ -50,11 +50,7 @@ import type {
 } from '../types/message.js'
 import { toolToAPISchema } from './api.js'
 import { filterInjectedMemoryFiles, getMemoryFiles } from './claudemd.js'
-import {
-  calculateCurrentContextTokenTotal,
-  getEffectiveModelContextWindow,
-} from './context.js'
-import { getProviderUsageTrust, hasMediaInput } from './contextBudget.js'
+import { getEffectiveModelContextWindow } from './context.js'
 import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
@@ -65,12 +61,11 @@ import {
   normalizeMessagesForAPI,
 } from './messages.js'
 import { getRuntimeMainLoopModel } from './model/model.js'
-import { isFirstPartyAnthropicBaseUrl } from './model/providers.js'
 import type { SettingSource } from './settings/constants.js'
 import { jsonStringify } from './slowOperations.js'
 import { buildEffectiveSystemPrompt } from './systemPrompt.js'
 import type { Theme } from './theme.js'
-import { getCurrentUsage, tokenCountWithEstimation } from './tokens.js'
+import { getCurrentUsage } from './tokens.js'
 
 const RESERVED_CATEGORY_NAME = 'Autocompact buffer'
 const MANUAL_COMPACT_BUFFER_NAME = 'Compact buffer'
@@ -968,10 +963,12 @@ export async function analyzeContextUsage(
   analysisOptions?: {
     estimateOnly?: boolean
     messagesAlreadyMicrocompacted?: boolean
+    runtimeModel?: string
+    canonicalTokenCount?: number
   },
 ): Promise<ContextData> {
   const estimateOnly = analysisOptions?.estimateOnly ?? false
-  const runtimeModel = getRuntimeMainLoopModel({
+  const runtimeModel = analysisOptions?.runtimeModel ?? getRuntimeMainLoopModel({
     permissionMode: (await getToolPermissionContext()).mode,
     mainLoopModel: model,
   })
@@ -1057,7 +1054,7 @@ export async function analyzeContextUsage(
   // Check if autocompact is enabled and calculate threshold
   const isAutoCompact = isAutoCompactEnabled()
   const autoCompactThreshold = isAutoCompact
-    ? getEffectiveContextWindowSize(model) - AUTOCOMPACT_BUFFER_TOKENS
+    ? getAutoCompactThreshold(runtimeModel)
     : undefined
 
   // Create categories
@@ -1151,9 +1148,11 @@ export async function analyzeContextUsage(
     })
   }
 
-  // Structural category estimates provide the detailed breakdown, while the
-  // canonical counter anchors the total to the latest provider usage and only
-  // estimates messages added after that response.
+  // Structural estimates provide the breakdown and the fallback when usage is
+  // unavailable. Once usage is usable, match the compaction counter: the latest
+  // provider total plus only the messages added since it. Taking the maximum
+  // with a full-history estimate can show 99% while compaction sees only 82%,
+  // especially after switching tokenizers/providers in a long conversation.
   const estimatedUsage = cats.reduce(
     (sum, cat) => sum + (cat.isDeferred ? 0 : cat.tokens),
     0,
@@ -1161,29 +1160,35 @@ export async function analyzeContextUsage(
 
   const usageMessages = originalMessages ?? messages
   const apiUsage = getCurrentUsage(usageMessages)
-  const finalTotalTokens = calculateCurrentContextTokenTotal(
-    estimatedUsage,
-    apiUsage,
+  const finalTotalTokens = Math.min(
+    analysisOptions?.canonicalTokenCount ?? (
+      apiUsage ? getAutoCompactTokenCount(usageMessages) : estimatedUsage
+    ),
     contextWindow,
-    {
-      hasMediaInput: hasMediaInput(usageMessages),
-      usageTrust: getProviderUsageTrust({
-        isFirstPartyAnthropic: isFirstPartyAnthropicBaseUrl(),
-      }),
-      canonicalTokens: apiUsage
-        ? tokenCountWithEstimation(usageMessages)
-        : undefined,
-    },
   )
 
   // Provider usage covers system prompt, tools, skills, and messages as one
   // number. Reconcile the Messages category to the canonical total so the
   // breakdown, free space, and grid cannot disagree with the headline meter.
-  const fixedUsage = cats.reduce(
+  let fixedUsage = cats.reduce(
     (sum, cat) =>
       sum + (cat.isDeferred || cat.name === 'Messages' ? 0 : cat.tokens),
     0,
   )
+  if (fixedUsage > finalTotalTokens) {
+    // Category sizes are estimates too; they cannot make the breakdown larger
+    // than the authoritative total. Cumulative rounding preserves the sum.
+    let estimatedFixedTokens = 0
+    let allocatedTokens = 0
+    for (const category of cats) {
+      if (category.isDeferred || category.name === 'Messages') continue
+      estimatedFixedTokens += category.tokens
+      const nextAllocation = Math.floor(estimatedFixedTokens * finalTotalTokens / fixedUsage)
+      category.tokens = nextAllocation - allocatedTokens
+      allocatedTokens = nextAllocation
+    }
+    fixedUsage = finalTotalTokens
+  }
   const reconciledMessageTokens = Math.max(0, finalTotalTokens - fixedUsage)
   const messagesCategory = cats.find(cat => cat.name === 'Messages')
   if (messagesCategory) {

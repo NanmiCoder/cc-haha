@@ -3,6 +3,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { App, BrowserWindow } from 'electron'
+import legacyAppearance from '../../src/test/fixtures/appearance-state-v1.json'
 
 import {
   DEFAULT_DARK_THEME,
@@ -32,6 +33,7 @@ function appearance(overrides: Partial<AppliedAppearance> = {}): AppliedAppearan
     isDark: false,
     background: '#FFFFFF',
     lightBackground: '#FFFFFF',
+    darkBackground: DARK_WINDOW_BACKGROUND,
     followSystem: false,
     ...overrides,
   }
@@ -118,11 +120,40 @@ describe('appearance state persistence', () => {
 
     expect(readAppearanceState(app, env)).toBeNull()
   })
+
+  it.each([true, false])('migrates the old appearance JSON forward without dropping fields (isDark=%s)', (isDark) => {
+    const { app, env } = makeApp()
+    const statePath = appearanceStatePath(app, env)
+    writeAppearanceState(app, appearance(), env)
+    const oldState = { ...legacyAppearance, isDark, background: isDark ? legacyAppearance.background : WARM_LIGHT }
+    writeFileSync(statePath, JSON.stringify(oldState))
+
+    const migrated = readAppearanceState(app, env)
+    const darkBackground = isDark ? legacyAppearance.background : DARK_WINDOW_BACKGROUND
+    expect(migrated).toEqual({ ...oldState, darkBackground })
+    expect(startupWindowBackground(migrated, true)).toBe(darkBackground)
+    expect(startupWindowBackground(migrated, false)).toBe(WARM_LIGHT)
+    writeAppearanceState(app, migrated!, env)
+    const once = readFileSync(statePath, 'utf8')
+    writeAppearanceState(app, readAppearanceState(app, env)!, env)
+    expect(readFileSync(statePath, 'utf8')).toBe(once)
+    expect(JSON.parse(once)).toEqual({ ...oldState, darkBackground })
+  })
+
+  it('round-trips the dark preference while the applied theme is light', () => {
+    const { app, env } = makeApp()
+    writeAppearanceState(app, appearance({ background: WARM_LIGHT, lightBackground: WARM_LIGHT, darkBackground: '#202020', followSystem: true }), env)
+    const restarted = readAppearanceState(app, env)
+    expect(startupWindowBackground(restarted, true)).toBe('#202020')
+    expect(startupWindowBackground(restarted, false)).toBe(WARM_LIGHT)
+  })
 })
 
 describe('isAppliedAppearance', () => {
   it('accepts a well formed payload', () => {
     expect(isAppliedAppearance(appearance({ isDark: true, background: '#201d17' }))).toBe(true)
+    expect(isAppliedAppearance(legacyAppearance)).toBe(true)
+    expect(isAppliedAppearance(appearance({ darkBackground: '#202020' }))).toBe(true)
   })
 
   it.each([
@@ -132,6 +163,9 @@ describe('isAppliedAppearance', () => {
     ['a missing light background', { isDark: false, background: '#FFFFFF', followSystem: true }],
     ['a shorthand hex', appearance({ background: '#FFF' })],
     ['a named color', appearance({ background: 'white' })],
+    ['a translucent dark background', appearance({ darkBackground: '#80202020' })],
+    ['a named dark background', appearance({ darkBackground: 'black' })],
+    ['a null dark background', { ...appearance(), darkBackground: null }],
     ['a CSS function', appearance({ background: 'rgb(0,0,0)' })],
     ['a bad light background', appearance({ lightBackground: 'white' })],
   ])('rejects %s', (_label, payload) => {
@@ -171,6 +205,17 @@ describe('startupWindowBackground', () => {
       followSystem: true,
     })
 
+    expect(startupWindowBackground(cached, false)).toBe(WARM_LIGHT)
+  })
+
+  it.each(['neutral-dark', 'ink-blue'] as const)('keeps the selected %s ground on startup and native appearance updates', (theme) => {
+    const background = THEME_BACKGROUNDS[theme]
+    const cached = appearance({ background: WARM_LIGHT, lightBackground: WARM_LIGHT, darkBackground: background, followSystem: true })
+
+    // The app last reported a light theme; its independent dark preference
+    // must survive a restart or any native "updated" event while dark.
+    expect(startupWindowBackground(cached, true)).toBe(background)
+    expect(startupWindowBackground(cached, true)).toBe(background)
     expect(startupWindowBackground(cached, false)).toBe(WARM_LIGHT)
   })
 })

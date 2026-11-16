@@ -214,4 +214,14 @@ describe('stored appearance preferences', () => {
     expect(readStoredDarkTheme(storage)).toBe('dark')
     expect(readStoredFollowSystemTheme(storage)).toBe(true)
   })
+
+  it('accepts neutral dark as a manual choice and a dark preference only', () => {
+    window.localStorage.setItem('cc-haha-theme', 'neutral-dark')
+    window.localStorage.setItem('cc-haha-light-theme', 'neutral-dark')
+    window.localStorage.setItem('cc-haha-dark-theme', 'neutral-dark')
+    expect(readStoredTheme(window.localStorage)).toBe('neutral-dark')
+    expect(readStoredLightTheme(window.localStorage)).toBe('white')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
+    expect(readStoredFollowSystemTheme(window.localStorage)).toBe(false)
+  })
 })

@@ -48,20 +48,37 @@ export class TeamPlanService {
   hasActiveOperations(): boolean { return this.approving.size > 0 || this.launches.size > 0 }
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
+    if (!plan) return null
+    const markLostOwner = async (state: 'launch_failed' | 'interrupted', reason: string) => {
+      try {
+        return await mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({
+          ...current, state, launch: { ...current.launch, status: 'failed', error: reason },
+        }))
+      } catch (error) {
+        if (!(error instanceof TeamPlanError) || error.status !== 409 || error.message !== 'Plan changed; refresh before continuing') throw error
+        // A launch can finish while this GET is awaiting its lookup/recovery.
+        // Return the validated newer snapshot; never replay the recovery write
+        // against its new revision or weaken CAS for a human action.
+        const current = await findTeamPlanForSession(sessionId)
+        if (current && current.sessionId === plan.sessionId && current.teamName === plan.teamName && current.planId === plan.planId &&
+            current.incarnationId === plan.incarnationId && current.revision > plan.revision) return current
+        throw error
+      }
+    }
     // A server restart lost ownership of an unfinished launch. Never silently replay it.
     if (plan?.state === 'launching' && !this.launches.has(plan.planId) && !this.approving.has(plan.planId)) {
       // One that had started no member failed like any launch: the user can
       // approve it again. Otherwise work may have started.
       if (await this.runtime.reclaimUnstarted?.(plan).catch(() => false)) {
-        return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'launch_failed', launch: { ...current.launch, status: 'failed', error: 'Team startup stopped before any member started, because the app or its server stopped. Review the plan to start it again.' } }))
+        return markLostOwner('launch_failed', 'Team startup stopped before any member started, because the app or its server stopped. Review the plan to start it again.')
       }
-      return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'Launch ownership was lost. Work may have started and will not be replayed.' } }))
+      return markLostOwner('interrupted', 'Launch ownership was lost. Work may have started and will not be replayed.')
     }
     if (plan?.state === 'running' && this.runtime.isRunning && !await this.runtime.isRunning(plan.planId)) {
       // A server or app restart lost the in-memory owner, not the team: members
       // keep their transcripts and resume when messaged.
       if (this.runtime.rehydrate && await this.runtime.rehydrate(plan).catch(() => false) && await this.runtime.isRunning(plan.planId)) return plan
-      return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'The worker runtime was interrupted. Started work will not be replayed.' } }))
+      return markLostOwner('interrupted', 'The worker runtime was interrupted. Started work will not be replayed.')
     }
     return plan
   }

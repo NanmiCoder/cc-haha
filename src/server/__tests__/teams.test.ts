@@ -5032,8 +5032,10 @@ describe('Teams API', () => {
     expect(inbox.at(-1)?.text).toBe('Please continue with the failing test')
   })
 
-  it('PATCH /api/teams/:name/members/:id/runtime checks the requested model before touching the team', async () => {
+  it('PATCH /api/teams/:name/members/:id/runtime validates model fields and requires current member identities', async () => {
     await writeTeamConfig('runtime-team', makeTeamConfig({ name: 'runtime-team' }))
+    const configPath = path.join(tmpDir, 'teams', 'runtime-team', 'config.json')
+    const originalConfig = await fs.readFile(configPath, 'utf-8')
     const patch = (body: string) => fetch(
       `${baseUrl}/api/teams/runtime-team/members/${encodeURIComponent('agent-worker@runtime-team')}/runtime`,
       { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body },
@@ -5050,10 +5052,11 @@ describe('Teams API', () => {
       expect(res.status, body).toBe(400)
     }
 
-    // A team written without an approved plan has no running members to switch.
+    // A model-only request cannot bypass the paused member identity/revision contract.
     const res = await patch(JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 'high' }))
-    expect(res.status).toBe(404)
-    expect(((await res.json()) as { message?: string }).message).toContain('is not a member of a running team')
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { message?: string }).message).toContain('identities and revision are required')
+    expect(await fs.readFile(configPath, 'utf-8')).toBe(originalConfig)
   })
 
   it('DELETE /api/teams/:name should delete team', async () => {

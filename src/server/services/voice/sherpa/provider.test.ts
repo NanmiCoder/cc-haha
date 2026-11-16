@@ -379,14 +379,56 @@ describe('prepare', () => {
   })
 
   it('retries interruptions on its own within one prepare', async () => {
+    const chunkBytes = 15_000
+    const ranges: Array<string | null> = []
+    const partials: Buffer[] = []
     const provider = await setup(
-      { 'model.int8.onnx': { breakAfter: 30_000, breakRequests: 2, chunkDelayMs: 2 } },
-      { download: { maxRetries: 3, progressIntervalMs: 0, probeTimeoutMs: 100 } },
+      {},
+      {
+        download: { maxRetries: 3, progressIntervalMs: 0, probeTimeoutMs: 100 },
+        fetch: async (input, init) => {
+          const model = assets!.byTarget['model.int8.onnx']!
+          if (input !== model.item.asset.urls[0]) return fetch(input, init as RequestInit)
+          const range = new Headers(init?.headers).get('range')
+          const offset = Number(range?.match(/^bytes=(\d+)-$/)?.[1] ?? 0)
+          ranges.push(range)
+          if (offset > 0) {
+            partials.push(await readFile(partPathFor(join(modelLayout(dataRoot, 'sensevoice').models, 'model.int8.onnx'))))
+          }
+          let chunks = 0
+          // HTTP writes can coalesce into one reader chunk, which the downloader
+          // discards on interruption. Demand-driven chunks ensure the first is
+          // written before the second arrives and the connection then fails.
+          const body = ranges.length <= 2
+            ? new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  if (chunks === 2) {
+                    controller.error(new TypeError('fixture connection interrupted'))
+                    return
+                  }
+                  const start = offset + chunks++ * chunkBytes
+                  controller.enqueue(model.content.subarray(start, start + chunkBytes))
+                },
+              }, { highWaterMark: 0 })
+            : model.content.subarray(offset)
+          return new Response(body, {
+            status: offset > 0 ? 206 : 200,
+            headers: {
+              'content-length': String(model.content.length - offset),
+              ...(offset > 0 ? { 'content-range': `bytes ${offset}-${model.content.length - 1}/${model.content.length}` } : {}),
+            },
+          })
+        },
+      },
     )
     const { states, error } = await prepareCollecting(provider)
     expect(error).toBeUndefined()
     expect(states.at(-1)).toEqual({ phase: 'ready' })
     expect(states.some(state => (state.resumedFromBytes ?? 0) > 0)).toBe(true)
+    expect(ranges).toEqual([null, `bytes=${chunkBytes}-`, `bytes=${chunkBytes * 2}-`])
+    const model = assets!.byTarget['model.int8.onnx']!
+    expect(partials).toEqual([model.content.subarray(0, chunkBytes), model.content.subarray(0, chunkBytes * 2)])
+    expect(await readFile(join(modelLayout(dataRoot, 'sensevoice').models, 'model.int8.onnx'))).toEqual(model.content)
   })
 
   it('cancels, keeps the partial download, and continues it next time', async () => {

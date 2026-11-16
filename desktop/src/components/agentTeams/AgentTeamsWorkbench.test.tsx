@@ -11,9 +11,10 @@ import type { TeamWorkbenchSnapshot, TeamWorkbenchTask } from '@/types/team'
 import { AgentTeamsWorkbench } from './AgentTeamsWorkbench'
 import { REVEAL_PAGE_SIZE } from './useProgressiveReveal'
 
-const { getWorkbenchForSessionMock, getWorkbenchMock } = vi.hoisted(() => ({
+const { getWorkbenchForSessionMock, getWorkbenchMock, getRuntimeControlMock } = vi.hoisted(() => ({
   getWorkbenchForSessionMock: vi.fn(),
   getWorkbenchMock: vi.fn(),
+  getRuntimeControlMock: vi.fn(),
 }))
 
 vi.mock('@/api/teams', () => ({
@@ -22,6 +23,9 @@ vi.mock('@/api/teams', () => ({
     get: vi.fn(),
     getWorkbenchForSession: getWorkbenchForSessionMock,
     getWorkbench: getWorkbenchMock,
+    getRuntimeControl: getRuntimeControlMock,
+    resumeRuntime: vi.fn(),
+    updateMemberRuntime: vi.fn(),
     getMemberTranscript: vi.fn(),
     sendMemberMessage: vi.fn(),
     delete: vi.fn(),
@@ -99,9 +103,39 @@ describe('AgentTeamsWorkbench', () => {
   beforeEach(() => {
     getWorkbenchMock.mockReset()
     getWorkbenchForSessionMock.mockReset()
+    getRuntimeControlMock.mockReset()
+    getRuntimeControlMock.mockResolvedValue({ control: null })
     useTeamStore.getState().clearTeam()
     useTabStore.setState({ tabs: [], activeTabId: null })
     useSettingsStore.setState({ locale: 'en' })
+  })
+
+  it('offers runtime controls on the current incarnation and removes them during replay', async () => {
+    const snapshot = workbench('v1', ['in_progress', 'pending', 'pending'])
+    snapshot.team.incarnationId = 'live-incarnation'
+    snapshot.team.members = snapshot.team.members.map(member => ({ ...member, sessionId: `${member.name}-cli`, model: 'mock-model' }))
+    getWorkbenchMock.mockResolvedValue(snapshot)
+    getRuntimeControlMock.mockResolvedValue({ control: {
+      schemaVersion: 1, teamName: 'visual-team', leadSessionId: 'lead-session', incarnationId: 'live-incarnation',
+      revision: 5, epoch: 2, status: 'paused', updatedAt: 1, resumeEligibleCount: 1,
+      members: [{ agentId: 'builder@visual-team', sessionId: 'builder-cli', planId: 'plan', memberId: 'builder', name: 'builder', status: 'paused' }],
+    } })
+    await act(async () => { await useTeamStore.getState().fetchWorkbench('visual-team') })
+    render(<AgentTeamsWorkbench sessionId="lead-session" />)
+    expect(await screen.findByRole('button', { name: 'Resume team (1)' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review history' }))
+    expect(screen.queryByTestId('agent-teams-runtime-controls')).toBeNull()
+  })
+
+  it('does not expose active runtime controls for an archived team', () => {
+    const snapshot = workbench('v1', ['completed', 'completed', 'completed'])
+    snapshot.team.incarnationId = 'archive-incarnation'
+    useTeamStore.setState({ workbenchesBySession: { 'lead-session': {
+      teamName: 'visual-team', source: 'archive', snapshots: [snapshot], loading: false, error: null,
+    } } })
+    render(<AgentTeamsWorkbench sessionId="lead-session" />)
+    expect(screen.queryByTestId('agent-teams-runtime-controls')).toBeNull()
+    expect(getRuntimeControlMock).not.toHaveBeenCalled()
   })
 
   it('keeps live controls simple, then supports seeking, speed, playback, and returning live', async () => {

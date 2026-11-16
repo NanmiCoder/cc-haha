@@ -22,6 +22,11 @@ const checks: Check[] = [
     cwd: 'desktop',
   },
   {
+    title: 'Desktop native appearance caches preserve old fixtures and both ground preferences',
+    command: ['bun', 'run', 'test', '--', '--run', 'electron/services/nativeAppearance.test.ts'],
+    cwd: 'desktop',
+  },
+  {
     title: 'Session archive metadata migration and transcript-preserving restart recovery',
     command: ['bun', 'test', './src/server/__tests__/session-archive.test.ts', './src/utils/cleanup.sessionArchive.test.ts'],
   },
@@ -59,6 +64,10 @@ const checks: Check[] = [
   {
     title: 'Agent Teams plan sidecar compatibility and approval recovery',
     command: ['bun', 'test', './src/utils/swarm/teamPlanStore.test.ts', './src/server/services/teamPlanService.test.ts'],
+  },
+  {
+    title: 'Agent Teams incarnation runtime gate migration, original backups and forward fields',
+    command: ['bun', 'test', './src/utils/swarm/teamRuntimeControlStore.test.ts'],
   },
   {
     title: 'Agent Teams legacy mailbox migration to unread inbox plus history',

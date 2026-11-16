@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveHostTriple } from './sidecarManager'
 import { startCloudflareProxyTransport } from './cloudflareProxy'
+import { recordPublicAccessDiagnostic, sanitizePublicAccessDiagnosticText, type PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 
 export type CloudflareTunnelPhase = 'starting' | 'registering' | 'ready'
 export type CloudflareTunnelErrorCode = 'runtime' | 'network' | 'configuration' | 'proxy' | 'token' | 'route'
@@ -15,8 +16,9 @@ export class CloudflareTunnelError extends Error {
     message: string,
     /** Main-process-only recovery handle; never expose it through an IPC status object. */
     public readonly retryStop?: () => Promise<void>,
+    cause?: unknown,
   ) {
-    super(message)
+    super(message, cause === undefined ? undefined : { cause })
     this.name = 'CloudflareTunnelError'
   }
 }
@@ -28,6 +30,7 @@ export type CloudflareTunnelOptions = {
   proxyUrl?: string
   signal?: AbortSignal
   onPhase?: (phase: CloudflareTunnelPhase) => void
+  onDiagnostic?: PublicAccessDiagnosticWriter
 }
 
 export type CloudflareTunnelExit = { code: number | null, signal: NodeJS.Signals | null }
@@ -194,17 +197,31 @@ export async function startCloudflareTunnel(
   options: CloudflareTunnelOptions,
   dependencies: CloudflareTunnelDependencies = {},
 ): Promise<CloudflareTunnel> {
-  validateOptions(options)
+  const startedAt = Date.now()
+  const secrets = [options.token ?? '', options.proxyUrl ?? '']
+  const diagnostic: PublicAccessDiagnosticWriter = event => recordPublicAccessDiagnostic(options.onDiagnostic, event, secrets)
+  try { validateOptions(options) }
+  catch (error) {
+    diagnostic({ stage: 'configuration', outcome: 'failed', reason: 'invalid_configuration', error })
+    throw error
+  }
   if (options.signal?.aborted) throw aborted()
   const binary = dependencies.binaryPath ?? resolveBundledCloudflared(dependencies.desktopRoot ?? process.cwd())
   try {
     await access(binary, constants.X_OK)
-  } catch {
-    throw new CloudflareTunnelError('runtime', 'The bundled Cloudflare connector is unavailable')
+    diagnostic({ stage: 'binary', outcome: 'succeeded', durationMs: Date.now() - startedAt })
+  } catch (error) {
+    diagnostic({ stage: 'binary', outcome: 'failed', reason: 'binary_unavailable', error, durationMs: Date.now() - startedAt })
+    throw new CloudflareTunnelError('runtime', 'The bundled Cloudflare connector is unavailable', undefined, error)
   }
   if (options.signal?.aborted) throw aborted()
 
-  const directory = await mkdtemp(path.join(dependencies.temporaryDirectory ?? os.tmpdir(), 'cc-haha-cloudflared-'))
+  let directory: string
+  try { directory = await mkdtemp(path.join(dependencies.temporaryDirectory ?? os.tmpdir(), 'cc-haha-cloudflared-')) }
+  catch (error) {
+    diagnostic({ stage: 'connector_spawn', outcome: 'failed', reason: 'temporary_directory_failed', error, durationMs: Date.now() - startedAt })
+    throw error
+  }
   let transport: Awaited<ReturnType<typeof startCloudflareProxyTransport>> | undefined
   let child: ChildProcess | undefined
   let cleanupPromise: Promise<void> | undefined
@@ -215,6 +232,58 @@ export async function startCloudflareTunnel(
   let exitInfo: CloudflareTunnelExit | undefined
   let startupSettled = false
   let startupTimer: ReturnType<typeof setTimeout> | undefined
+  let registrationStartedAt: number | undefined
+  const diagnosticTail: Array<{ sequence: number, line: string }> = []
+  let outputSequence = 0
+  const outputBuffers = { stdout: '', stderr: '' }
+  const outputSequences = { stdout: 0, stderr: 0 }
+  const discardingOutput = { stdout: false, stderr: false }
+  const safeOutputLine = (value: string) => {
+    // A process can exit halfway through an unlabelled credential. Never export
+    // the matching prefix of the known tunnel token from that final fragment.
+    const token = options.token
+    if (token && token.length >= 8) {
+      const start = value.lastIndexOf(token.slice(0, 8))
+      if (start >= 0 && token.startsWith(value.slice(start))) value = `${value.slice(0, start)}[REDACTED]`
+    }
+    try { return sanitizePublicAccessDiagnosticText(value, secrets).slice(0, 512) }
+    catch { return '' /* Optional log collection must never interrupt the connector's pipes. */ }
+  }
+  const diagnosticLogTail = () => {
+    const pending = (['stdout', 'stderr'] as const).flatMap(stream => {
+      if (discardingOutput[stream] || !outputBuffers[stream]) return []
+      const line = safeOutputLine(outputBuffers[stream])
+      return line ? [{ sequence: outputSequences[stream], line: `${stream}: ${line}` }] : []
+    })
+    // Snapshot pending fragments without consuming them: timeout and exit may
+    // both need the same evidence, but each tail contains a line only once.
+    return [...diagnosticTail, ...pending].sort((left, right) => left.sequence - right.sequence)
+      .slice(-4).map(entry => entry.line).join('\n')
+  }
+  const captureOutput = (stream: keyof typeof outputBuffers, chunk: Buffer | string) => {
+    if (!options.onDiagnostic) return
+    // Assemble complete lines before redacting so a credential split between chunks
+    // cannot escape exact-secret replacement. Oversized lines are discarded whole.
+    for (const part of String(chunk).split(/(?<=\n)/)) {
+      if (discardingOutput[stream]) {
+        if (part.endsWith('\n')) discardingOutput[stream] = false
+        continue
+      }
+      if (outputBuffers[stream].length + part.length > MAX_LOG_LINE_BYTES) {
+        outputBuffers[stream] = ''
+        discardingOutput[stream] = !part.endsWith('\n')
+        continue
+      }
+      outputBuffers[stream] += part
+      outputSequences[stream] = ++outputSequence
+      if (!part.endsWith('\n')) continue
+      const line = safeOutputLine(outputBuffers[stream])
+      outputBuffers[stream] = ''
+      if (!line) continue
+      diagnosticTail.push({ sequence: outputSequences[stream], line: `${stream}: ${line}` })
+      if (diagnosticTail.length > 4) diagnosticTail.shift()
+    }
+  }
   let resolveStartup!: (url: string | null) => void
   let rejectStartup!: (error: Error) => void
   let resolveExit!: () => void
@@ -224,10 +293,13 @@ export async function startCloudflareTunnel(
   // A spawn or proxy setup failure can happen before startup is awaited.
   void startup.catch(() => {})
 
-  const reject = (error: Error) => {
+  const reject = (error: Error, reason = error.name === 'AbortError' ? 'request_cancelled' : 'startup_failed') => {
     if (startupSettled) return
     startupSettled = true
     clearTimeout(startupTimer)
+    if (registrationStartedAt !== undefined) diagnostic({ stage: 'tunnel_registration', outcome: error.name === 'AbortError' ? 'cancelled' : 'failed',
+      reason, error, durationMs: Date.now() - registrationStartedAt,
+      details: { timeoutMs: dependencies.timeoutMs ?? DEFAULT_START_TIMEOUT_MS, logTail: diagnosticLogTail() } })
     rejectStartup(error)
   }
 
@@ -288,13 +360,17 @@ export async function startCloudflareTunnel(
     const configPath = path.join(directory, 'config.yml')
     await writeFile(configPath, '{}\n', { mode: 0o600 })
     if (options.proxyUrl) {
+      const proxyStartedAt = Date.now()
       try {
-        transport = await (dependencies.startProxyTransport ?? startCloudflareProxyTransport)(options.proxyUrl, { signal: options.signal })
+        transport = await (dependencies.startProxyTransport ?? startCloudflareProxyTransport)(options.proxyUrl, { signal: options.signal,
+          ...(options.onDiagnostic ? { onDiagnostic: diagnostic } : {}) })
         if (!transport.edgeAddresses.length || transport.edgeAddresses.some(address => !isLoopbackAddress(address)) || !isLoopbackService(transport.quickServiceUrl)) {
           throw new Error('Invalid private proxy transport')
         }
-      } catch {
-        throw options.signal?.aborted ? aborted() : new CloudflareTunnelError('proxy', 'Cloudflare could not use the configured network proxy')
+        diagnostic({ stage: 'proxy_transport', outcome: 'succeeded', durationMs: Date.now() - proxyStartedAt })
+      } catch (error) {
+        diagnostic({ stage: 'proxy_transport', outcome: options.signal?.aborted ? 'cancelled' : 'failed', reason: 'transport_setup_failed', error, durationMs: Date.now() - proxyStartedAt })
+        throw options.signal?.aborted ? aborted() : new CloudflareTunnelError('proxy', 'Cloudflare could not use the configured network proxy', undefined, error)
       }
     }
     if (options.signal?.aborted) throw aborted()
@@ -315,6 +391,7 @@ export async function startCloudflareTunnel(
 
     phase(options, 'starting')
     if (options.signal?.aborted) throw aborted()
+    const spawnStartedAt = Date.now()
     try {
       child = (dependencies.spawn ?? spawn)(binary, args, {
         cwd: directory,
@@ -322,9 +399,12 @@ export async function startCloudflareTunnel(
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-    } catch {
-      throw new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started')
+      diagnostic({ stage: 'connector_spawn', outcome: 'succeeded', durationMs: Date.now() - spawnStartedAt })
+    } catch (error) {
+      diagnostic({ stage: 'connector_spawn', outcome: 'failed', reason: 'spawn_failed', error, durationMs: Date.now() - spawnStartedAt })
+      throw new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started', undefined, error)
     }
+    registrationStartedAt = Date.now()
 
     let logWindow = ''
     let quickUrl: string | undefined
@@ -355,12 +435,14 @@ export async function startCloudflareTunnel(
       if (/provided.*token.*not valid|invalid tunnel token|failed to parse tunnel token/i.test(logWindow)) startupErrorCode = 'token'
       if (/incorrect usage|flag provided but not defined|unknown flag|unknown command/i.test(logWindow)) startupErrorCode = 'runtime'
       if (!registered && refusals >= TOKEN_REFUSALS) {
-        reject(new CloudflareTunnelError('token', 'Cloudflare refused this tunnel token'))
+        reject(new CloudflareTunnelError('token', 'Cloudflare refused this tunnel token'), 'token_refused')
         return
       }
       if (registered && (options.mode === 'named' || quickUrl)) {
         startupSettled = true
         clearTimeout(startupTimer)
+        diagnostic({ stage: 'tunnel_registration', outcome: 'succeeded', reason: 'edge_registered', durationMs: Date.now() - registrationStartedAt!,
+          details: { mode: options.mode, hasPublicUrl: !!quickUrl } })
         phase(options, 'ready')
         resolveStartup(options.mode === 'quick' ? quickUrl! : null)
       }
@@ -372,7 +454,9 @@ export async function startCloudflareTunnel(
       exitInfo = { code, signal }
       resolveExit()
       releaseRouteWaiters()
-      reject(new CloudflareTunnelError(startupErrorCode ?? (options.proxyUrl ? 'proxy' : 'network'), 'Cloudflare disconnected before the connection was ready'))
+      diagnostic({ stage: 'connector_exit', outcome: stopping ? 'cancelled' : 'failed', reason: stopping ? 'connector_stopped' : 'connector_exited',
+        durationMs: Date.now() - startedAt, details: { exitCode: code, exitSignal: signal, logTail: diagnosticLogTail() } })
+      reject(new CloudflareTunnelError(startupErrorCode ?? (options.proxyUrl ? 'proxy' : 'network'), 'Cloudflare disconnected before the connection was ready'), 'exited_before_ready')
       if (!stopping) for (const callback of exitCallbacks) {
         try { callback(exitInfo) } catch { /* Keep other lifecycle observers informed. */ }
       }
@@ -380,17 +464,18 @@ export async function startCloudflareTunnel(
     }
 
     child.once('exit', onExit)
-    child.once('error', () => {
-      reject(new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started'))
+    child.once('error', error => {
+      diagnostic({ stage: 'connector_spawn', outcome: 'failed', reason: 'spawn_failed', error, durationMs: Date.now() - spawnStartedAt })
+      reject(new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started', undefined, error), 'spawn_failed')
       // A failed spawn has no process to terminate and does not necessarily emit `exit`.
       if (!child?.pid) onExit(null)
       else void stop().catch(() => {})
     })
     // Continue consuming both pipes after readiness; unconsumed logs can block the child.
-    child.stdout?.on('data', onData)
-    child.stderr?.on('data', onData)
+    child.stdout?.on('data', (data: Buffer | string) => { captureOutput('stdout', data); onData(data) })
+    child.stderr?.on('data', (data: Buffer | string) => { captureOutput('stderr', data); onData(data) })
     options.signal?.addEventListener('abort', onAbort, { once: true })
-    startupTimer = setTimeout(() => reject(new CloudflareTunnelError(options.proxyUrl ? 'proxy' : 'network', 'Cloudflare connection timed out')), dependencies.timeoutMs ?? DEFAULT_START_TIMEOUT_MS)
+    startupTimer = setTimeout(() => reject(new CloudflareTunnelError(options.proxyUrl ? 'proxy' : 'network', 'Cloudflare connection timed out'), 'startup_timeout'), dependencies.timeoutMs ?? DEFAULT_START_TIMEOUT_MS)
     phase(options, 'registering')
     if (options.signal?.aborted) onAbort()
 
@@ -429,6 +514,7 @@ export async function startCloudflareTunnel(
   } catch (error) {
     await stop()
     if (error instanceof CloudflareTunnelError || (error instanceof Error && error.name === 'AbortError')) throw error
-    throw new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started')
+    diagnostic({ stage: 'connector_spawn', outcome: 'failed', reason: 'connector_setup_failed', error, durationMs: Date.now() - startedAt })
+    throw new CloudflareTunnelError('runtime', 'The Cloudflare connector could not be started', undefined, error)
   }
 }

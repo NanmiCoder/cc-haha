@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { PublicAccessManager, PUBLIC_ACCESS_CONSENT_VERSION, classifyPublicAccessError, migratePublicAccessSettings, readPublicAccessControlResponse } from './publicAccess'
 import { CloudflareTunnelError, type CloudflareTunnelExit, type CloudflareTunnelOptions, type CloudflareTunnelRoute, type CloudflareTunnelRouteWait } from './cloudflareTunnel'
+import type { PublicAccessDiagnostic, PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 
 const directories: string[] = []
 const managers: PublicAccessManager[] = []
@@ -34,7 +35,7 @@ async function exhaustVerification() {
 }
 const quickUrl = 'https://fixture-phone.trycloudflare.com'
 
-function fixture(saved?: unknown) {
+function fixture(saved?: unknown, onDiagnostic?: PublicAccessDiagnosticWriter) {
   const directory = mkdtempSync(path.join(tmpdir(), 'cloudflare-host-test-'))
   directories.push(directory)
   const file = path.join(directory, 'public-access-private.json')
@@ -77,7 +78,7 @@ function fixture(saved?: unknown) {
     start: vi.fn((_type: 'prevent-app-suspension' | 'prevent-display-sleep') => { const id = ++nextBlockerId; held.add(id); return id }),
     stop: vi.fn((id: number) => held.delete(id)),
   }
-  const manager = new PublicAccessManager({ directory, backend: { request: request as never }, startTunnel, powerSaveBlocker: blocker })
+  const manager = new PublicAccessManager({ directory, backend: { request: request as never }, startTunnel, powerSaveBlocker: blocker, onDiagnostic })
   managers.push(manager)
   return { directory, file, request, manager, startTunnel, stop, publishedRoutes, blocker, held,
     verifies() { return request.mock.calls.filter(([route]) => route === '/verify').length },
@@ -719,7 +720,7 @@ describe('Keeping the public address', () => {
     expect(f.request.mock.calls).toEqual([
       ['/enable', 'POST', { port: 17463 }],
       ['/origin', 'PUT', { publicUrl }],
-      ['/verify', 'POST'],
+      ['/verify', 'POST', undefined, { attemptId: expect.stringMatching(/^[0-9a-f-]{36}$/) }],
     ])
     expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl, phase: null, error: null })
     expect(f.startTunnel).toHaveBeenCalledOnce()
@@ -905,4 +906,48 @@ it('preserves the controlled proxy error across the loopback host boundary witho
   expect(classifyPublicAccessError(error)).toBe('proxy')
   expect(String(error)).not.toContain('fake-secret')
   expect(await readPublicAccessControlResponse(Response.json({ ok: true }))).toEqual({ ok: true })
+})
+
+describe('connection attempt diagnostics', () => {
+  it('identifies the failed stage and correlates it with the server without leaking configuration', async () => {
+    const events: PublicAccessDiagnostic[] = []
+    const f = fixture(named, event => events.push(event))
+    f.proxy('http://fixture-user:fixture-password@127.0.0.1:7890')
+    f.startTunnel.mockImplementationOnce(async () => {
+      throw Object.assign(new CloudflareTunnelError('proxy', 'Tunnel initialization failed'), {
+        cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', syscall: 'connect' }),
+      })
+    })
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'proxy' })
+    const failed = events.find(event => event.stage === 'tunnel_start' && event.outcome === 'failed')
+    expect(failed).toMatchObject({ reason: 'proxy', durationMs: expect.any(Number), error: { cause: { code: 'ECONNREFUSED' } } })
+    expect(failed?.attemptId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(f.request).toHaveBeenCalledWith('/network', 'GET', undefined, { attemptId: failed?.attemptId })
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'gateway_enable', outcome: 'succeeded' }))
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'proxy_resolution', outcome: 'succeeded', details: { proxyUsed: true } }))
+    expect(JSON.stringify(events)).not.toMatch(/fixture-user|fixture-password|ZmFrZS1maXh0dXJl/)
+  })
+
+  it('keeps individual public verification attempts and distinguishes exhausted checks from startup failure', async () => {
+    vi.useFakeTimers()
+    const events: PublicAccessDiagnostic[] = []
+    const f = fixture(undefined, event => events.push(event))
+    f.reachable(false)
+    const pending = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await exhaustVerification()
+    await pending
+    const checks = events.filter(event => event.stage === 'gateway_verification' && event.reason === 'unreachable')
+    expect(checks).toHaveLength(5)
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'public_verification', outcome: 'failed', reason: 'network' }))
+    expect(new Set(events.map(event => event.attemptId)).size).toBe(1)
+    expect(f.request.mock.calls.filter(([route]) => route === '/verify').every(call => (call as unknown[])[3] !== undefined)).toBe(true)
+  })
+
+  it('does not fail a successful connection when diagnostic persistence throws', async () => {
+    const f = fixture(undefined, () => { throw new Error('diagnostic disk unavailable') })
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus().state).toBe('online')
+  })
 })

@@ -6069,6 +6069,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
       case 'system_notification':
+        if (msg.subtype === 'init') {
+          const cwd = (msg.data as { cwd?: unknown } | undefined)?.cwd
+          if (typeof cwd === 'string' && cwd.trim()) {
+            useSessionStore.getState().updateSessionWorkDir(sessionId, cwd)
+          }
+        }
         if (msg.subtype === 'scheduled_tasks_changed') {
           void useTaskStore.getState().fetchTasks()
           break

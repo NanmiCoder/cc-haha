@@ -1,4 +1,11 @@
 import { feature } from 'bun:bundle'
+import { getSdkBetas } from '../../bootstrap/state.js'
+import {
+  estimateFallbackFixedContextTokens,
+  getAutoCompactThreshold,
+  getAutoCompactTokenCount,
+  isAutoCompactEnabled,
+} from '../../services/compact/autoCompact.js'
 import { microcompactMessages } from '../../services/compact/microCompact.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import type { Tools, ToolUseContext } from '../../Tool.js'
@@ -9,9 +16,77 @@ import {
   type ContextData,
 } from '../../utils/analyzeContext.js'
 import { formatTokens } from '../../utils/format.js'
+import { getEffectiveModelContextWindow } from '../../utils/context.js'
+import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { getMessagesAfterCompactBoundary } from '../../utils/messages.js'
 import { getSourceDisplayName } from '../../utils/settings/constants.js'
 import { plural } from '../../utils/stringUtils.js'
+import { getCurrentUsage } from '../../utils/tokens.js'
+
+function contextApiView(messages: Message[]): Message[] {
+  let apiView = getMessagesAfterCompactBoundary(messages)
+  if (feature('CONTEXT_COLLAPSE')) {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { projectView } =
+      require('../../services/contextCollapse/operations.js') as typeof import('../../services/contextCollapse/operations.js')
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    apiView = projectView(apiView)
+  }
+  return apiView
+}
+
+/** Read-only meter data; never renders tools, scans skills or runs microcompact. */
+export function collectContextSummary({
+  messages,
+  mainLoopModel,
+  cacheSafeParams,
+}: {
+  messages: Message[]
+  mainLoopModel: string
+  cacheSafeParams?: CacheSafeParams | null
+}): (ContextData & { summaryOnly: true }) | null {
+  const apiView = contextApiView(messages)
+  const apiUsage = getCurrentUsage(apiView)
+  const matchingPrefix = cacheSafeParams &&
+    !cacheSafeParams.toolUseContext.agentId &&
+    cacheSafeParams.toolUseContext.options.mainLoopModel === mainLoopModel
+    ? cacheSafeParams
+    : null
+  if (!apiUsage && !matchingPrefix) return null
+
+  const fallbackFixedTokens = apiUsage ? 0 : estimateFallbackFixedContextTokens(matchingPrefix!)
+  const rawMaxTokens = getEffectiveModelContextWindow(mainLoopModel, getSdkBetas())
+  const totalTokens = Math.max(0, Math.min(
+    getAutoCompactTokenCount(apiView, 0, fallbackFixedTokens),
+    rawMaxTokens,
+  ))
+  const autoCompactEnabled = isAutoCompactEnabled()
+  const autoCompactThreshold = autoCompactEnabled ? getAutoCompactThreshold(mainLoopModel) : undefined
+  const reserved = autoCompactThreshold === undefined ? 0 : Math.min(
+    rawMaxTokens - autoCompactThreshold,
+    rawMaxTokens - totalTokens,
+  )
+  return {
+    summaryOnly: true,
+    totalTokens,
+    maxTokens: rawMaxTokens,
+    rawMaxTokens,
+    percentage: Math.round(totalTokens / rawMaxTokens * 100),
+    model: mainLoopModel,
+    autoCompactThreshold,
+    isAutoCompactEnabled: autoCompactEnabled,
+    apiUsage,
+    categories: [
+      { name: 'Messages', tokens: totalTokens, color: 'purple_FOR_SUBAGENTS_ONLY' },
+      { name: 'Autocompact buffer', tokens: reserved, color: 'inactive' },
+      { name: 'Free space', tokens: rawMaxTokens - totalTokens - reserved, color: 'promptBorder' },
+    ],
+    gridRows: [],
+    memoryFiles: [],
+    mcpTools: [],
+    agents: [],
+  }
+}
 
 /**
  * Shared data-collection path for `/context` (slash command) and the SDK
@@ -29,6 +104,7 @@ type CollectContextDataInput = {
     customSystemPrompt?: string
     appendSystemPrompt?: string
     estimateOnly?: boolean
+    cacheSafeParams?: CacheSafeParams | null
   }
 }
 
@@ -45,17 +121,12 @@ export async function collectContextData(
       customSystemPrompt,
       appendSystemPrompt,
       estimateOnly,
+      cacheSafeParams,
     },
   } = context
 
-  let apiView = getMessagesAfterCompactBoundary(messages)
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const { projectView } =
-      require('../../services/contextCollapse/operations.js') as typeof import('../../services/contextCollapse/operations.js')
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    apiView = projectView(apiView)
-  }
+  const apiView = contextApiView(messages)
+  const summary = collectContextSummary({ messages, mainLoopModel, cacheSafeParams })
 
   const { messages: compactedMessages } = await microcompactMessages(apiView)
   const appState = getAppState()
@@ -75,7 +146,11 @@ export async function collectContextData(
     >,
     undefined, // mainThreadAgentDefinition
     apiView, // original messages for API usage extraction
-    { estimateOnly, messagesAlreadyMicrocompacted: true },
+    {
+      estimateOnly,
+      messagesAlreadyMicrocompacted: true,
+      ...(summary ? { runtimeModel: summary.model, canonicalTokenCount: summary.totalTokens } : {}),
+    },
   )
 }
 

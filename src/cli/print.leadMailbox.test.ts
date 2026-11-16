@@ -5,6 +5,8 @@ import { join } from 'path'
 import * as mailbox from '../utils/teammateMailbox.js'
 import {
   createLeadMailboxPollState,
+  resumeLeadMailboxPoll,
+  pauseLeadMailboxPoll,
   type LeadMailboxPollStep,
   MAX_LEAD_MAILBOX_ACK_FAILURES,
   takeLeadMailboxBatch,
@@ -43,6 +45,57 @@ function texts(step: LeadMailboxPollStep): string[] | undefined {
 }
 
 describe('print-mode team lead mailbox poll', () => {
+  for (const hasReport of [true, false]) test(`a Stop during inbox read keeps the poll held (${hasReport ? 'report' : 'empty'})`, async () => {
+    if (hasReport) await send('worker', 'report arriving at Stop', 1)
+    const state = createLeadMailboxPollState()
+    const original = mailbox.readUnreadMessages
+    const read = spyOn(mailbox, 'readUnreadMessages').mockImplementation(async (agent, team) => {
+      const messages = await original(agent, team)
+      state.held = true
+      return messages
+    })
+    try {
+      expect(await takeLeadMailboxBatch(state, { teamName: TEAM, hasActiveTeammates: false })).toEqual({ kind: 'held' })
+      expect(state.held).toBe(true)
+    } finally { read.mockRestore() }
+    expect(await unreadTexts()).toEqual(hasReport ? ['report arriving at Stop'] : [])
+  })
+
+  test('a Stop after claim returns reports unread and a new resume invalidates the old poll', async () => {
+    await send('worker', 'claimed report', 1)
+    const state = createLeadMailboxPollState()
+    const original = mailbox.claimMailboxMessages
+    const claim = spyOn(mailbox, 'claimMailboxMessages').mockImplementation(async (...args) => {
+      const batch = await original(...args)
+      pauseLeadMailboxPoll(state)
+      resumeLeadMailboxPoll(state, async () => {})
+      return batch
+    })
+    try {
+      expect(await takeLeadMailboxBatch(state, { teamName: TEAM, hasActiveTeammates: true })).toEqual({ kind: 'held' })
+    } finally { claim.mockRestore() }
+    expect(state.held).toBe(false)
+    expect(await unreadTexts()).toEqual(['claimed report'])
+    expect(texts(await takeLeadMailboxBatch(state, { teamName: TEAM, hasActiveTeammates: true }))).toEqual(['claimed report'])
+  })
+  test('explicit resume restarts an ended poll and drains reports held by Stop', async () => {
+    const state = createLeadMailboxPollState()
+    state.held = true
+    state.finalDrainDone = true
+    await send('worker', 'report kept while paused', 1)
+    expect(await takeLeadMailboxBatch(state, { teamName: TEAM, hasActiveTeammates: false })).toEqual({ kind: 'held' })
+    let delivered: string[] | undefined
+    let finished!: () => void
+    const completion = new Promise<void>(resolve => { finished = resolve })
+    resumeLeadMailboxPoll(state, async () => {
+      delivered = texts(await takeLeadMailboxBatch(state, { teamName: TEAM, hasActiveTeammates: false }))
+      finished()
+    })
+    await completion
+    expect(delivered).toEqual(['report kept while paused'])
+    expect(await unreadTexts()).toEqual([])
+  })
+
   test('acknowledges only the batch it read', async () => {
     await send('alice', 'report', 1)
     const readUnread = mailbox.readUnreadMessages

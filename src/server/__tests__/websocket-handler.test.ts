@@ -30,6 +30,7 @@ import { computerUseApprovalService } from '../services/computerUseApprovalServi
 import { sessionService } from '../services/sessionService.js'
 import { observeSessionTurns, type SessionTurnEvent } from '../services/sessionTurnEvents.js'
 import * as titleService from '../services/titleService.js'
+import * as teamRuntime from '../services/teamPlanRuntime.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import * as sideChatRegistry from '../services/sideChatRegistry.js'
@@ -74,6 +75,77 @@ function makeSdkSocket(sessionId: string, sdkToken: string) {
     close: mock(() => {}),
   } as unknown as ServerWebSocket<WebSocketData>
 }
+
+describe('Agent Teams Stop ownership without a leader process', () => {
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    resetSettingsCache()
+    mock.restore()
+  })
+
+  for (const stopWhileRestoring of [false, true]) {
+    it(`waits for the acknowledged team roster before a user frame (${stopWhileRestoring ? 'Stop wins' : 'deliver'})`, async () => {
+      const sessionId = `team-first-frame-${crypto.randomUUID()}`
+      const ws = makeClientSocket(sessionId)
+      let release!: () => void
+      const restored = new Promise<void>(resolve => { release = resolve })
+      const readiness = spyOn(teamRuntime, 'waitForTeamRuntimeLeadReady').mockImplementation(() => restored)
+      spyOn(teamRuntime, 'noteLeadUserMessage').mockResolvedValue()
+      spyOn(conversationService, 'hasSession').mockReturnValue(true)
+      spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+      spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+      spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+      spyOn(conversationService, 'sendInterrupt').mockReturnValue(false)
+      spyOn(conversationService, 'requestControl').mockResolvedValue({})
+      spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+      const committed: string[] = []
+      spyOn(conversationService, 'sendMessage').mockImplementation(async (_id, content, _attachments, options) => {
+        if (options?.canSend && !options.canSend()) return false
+        committed.push(String(content))
+        options?.onCommitted?.()
+        return true
+      })
+      try {
+        handleWebSocket.open(ws)
+        handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Continue the original team' }))
+        await flushMicrotasks(60)
+        expect(readiness).toHaveBeenCalledWith(sessionId)
+        expect(committed).toEqual([])
+        if (stopWhileRestoring) handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
+        release()
+        await flushMicrotasks(120)
+        expect(committed).toEqual(stopWhileRestoring ? [] : ['Continue the original team'])
+      } finally {
+        release()
+        await flushMicrotasks(30)
+      }
+    })
+  }
+
+  for (const starting of [false, true]) {
+    it(`interrupts the team when its leader ${starting ? 'is still starting' : 'has exited'}`, async () => {
+      const sessionId = `team-stop-without-lead-${crypto.randomUUID()}`
+      const ws = makeClientSocket(sessionId)
+      spyOn(conversationService, 'hasSession').mockReturnValue(false)
+      const interrupt = spyOn(conversationService, 'sendInterrupt').mockReturnValue(false)
+      let release: (() => void) | undefined
+      if (starting) {
+        const startup = new Promise<void>(resolve => { release = resolve })
+        __registerPendingSessionStartupForTests(sessionId, startup)
+      }
+      try {
+        handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
+        await flushMicrotasks()
+        // The runtime owns independent workers even when no lead SDK channel
+        // exists. Stop must reach that owner before displaying an idle turn.
+        expect(interrupt).toHaveBeenCalledWith(sessionId)
+      } finally {
+        release?.()
+        await flushMicrotasks()
+      }
+    })
+  }
+})
 
 function mockSavedDeepSeekProvider(): void {
   spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({

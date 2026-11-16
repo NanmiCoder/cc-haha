@@ -329,6 +329,7 @@ describe('Electron IPC capabilities', () => {
       followSystem: false,
     }
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appearanceSetApplied, valid)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appearanceSetApplied, { ...valid, darkBackground: '#202020' })).toBe(true)
 
     for (const invalid of [
       undefined,
@@ -342,6 +343,10 @@ describe('Electron IPC capabilities', () => {
       { ...valid, background: '#800E0E0E' },
       { ...valid, lightBackground: '#80FFFFFF' },
       { ...valid, lightBackground: 'white' },
+      { ...valid, darkBackground: '#80202020' },
+      { ...valid, darkBackground: '#222' },
+      { ...valid, darkBackground: 'black' },
+      { ...valid, darkBackground: null },
       { ...valid, extra: 1 },
     ]) {
       expect(

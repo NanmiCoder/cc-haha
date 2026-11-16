@@ -349,6 +349,8 @@ describe('remote H5 auth and CORS integration', () => {
       ['/api/h5-access', 'GET'],
       ['/api/h5-access', 'PUT'],
       ['/api/h5-access/enable', 'POST'],
+      ['/api//h5-access', 'PUT'],
+      ['/api//h5-access/regenerate/', 'POST'],
     ]) {
       const response = await fetch(`${baseUrl}${endpoint}`, {
         method: 'OPTIONS',
@@ -530,6 +532,101 @@ describe('remote H5 auth and CORS integration', () => {
       method: 'POST',
       headers: { Authorization: 'Bearer desktop-local-secret' },
     })
+    expect(desktopEnable.status).toBe(200)
+    await expect(desktopEnable.json()).resolves.toHaveProperty('token')
+  })
+
+  test.each([
+    ['POST', '/regenerate'],
+    ['GET', ''],
+    ['PUT', ''],
+    ['POST', '/enable'],
+    ['POST', '/disable'],
+  ])('blocks H5 bearer %s on control-plane slash variants %s without changing settings', async (method, endpoint) => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
+    await restartRemoteServer()
+    const token = await enableH5Access({ allowedOrigins: [PHONE_ORIGIN] })
+    const service = new H5AccessService()
+    const settingsBefore = await service.getSettings()
+
+    for (const pathname of [
+      `/api/h5-access${endpoint}`,
+      `/api//h5-access${endpoint}`,
+      `/api///h5-access/${endpoint}//`,
+    ]) {
+      const response = await fetch(`${baseUrl}${pathname}`, {
+        method,
+        headers: {
+          Origin: PHONE_ORIGIN,
+          'X-Forwarded-For': '203.0.113.9',
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        ...(method === 'PUT' ? { body: JSON.stringify({ disconnectGraceSeconds: 123 }) } : {}),
+      })
+      expect(response.status).toBe(403)
+      await expect(response.json()).resolves.toMatchObject({ error: 'Forbidden' })
+      expect(await service.getSettings()).toEqual(settingsBefore)
+      expect(await service.validateToken(token)).toBe(true)
+    }
+  })
+
+  test('keeps slash-variant control planes local-only on tokenless servers and when H5 is disabled', async () => {
+    const token = await enableH5Access({ allowedOrigins: [PHONE_ORIGIN] })
+    const headers = { Origin: PHONE_ORIGIN, Authorization: `Bearer ${token}` }
+    const remoteRead = await fetch(`${baseUrl}/api//h5-access`, { headers })
+    expect(remoteRead.status).toBe(403)
+    await remoteRead.text()
+
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
+    await new H5AccessService().disable()
+    await restartRemoteServer()
+    const localEnable = await fetch(`${baseUrl}/api//h5-access/enable`, { method: 'POST' })
+    expect(localEnable.status).toBe(403)
+    await localEnable.text()
+    expect((await new H5AccessService().getSettings()).enabled).toBe(false)
+  })
+
+  test('preserves phone verification and desktop token lifecycle across slash variants', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
+    await restartRemoteServer()
+    const token = await enableH5Access({ allowedOrigins: [PHONE_ORIGIN] })
+    const phoneHeaders = { Origin: PHONE_ORIGIN, Authorization: `Bearer ${token}` }
+    for (const pathname of ['/api/h5-access/verify', '/api/h5-access/verify/', '/api//h5-access//verify//']) {
+      const response = await fetch(`${baseUrl}${pathname}`, { method: 'POST', headers: phoneHeaders })
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ ok: true })
+    }
+    const invalidToken = await fetch(`${baseUrl}/api//h5-access/verify`, {
+      method: 'POST',
+      headers: { Origin: PHONE_ORIGIN, Authorization: 'Bearer invalid-h5-token' },
+    })
+    expect(invalidToken.status).toBe(401)
+    await invalidToken.text()
+    const phoneStatus = await fetch(`${baseUrl}/api/status`, { headers: phoneHeaders })
+    expect(phoneStatus.status).toBe(200)
+    await phoneStatus.text()
+
+    const desktopHeaders = { Authorization: 'Bearer desktop-local-secret', 'Content-Type': 'application/json' }
+    const desktopRead = await fetch(`${baseUrl}/api//h5-access/`, { headers: desktopHeaders })
+    expect(desktopRead.status).toBe(200)
+    await expect(desktopRead.json()).resolves.toHaveProperty('settings.token', token)
+    const desktopUpdate = await fetch(`${baseUrl}/api//h5-access/`, {
+      method: 'PUT', headers: desktopHeaders, body: JSON.stringify({ disconnectGraceSeconds: 123 }),
+    })
+    expect(desktopUpdate.status).toBe(200)
+    await expect(desktopUpdate.json()).resolves.toHaveProperty('settings.disconnectGraceSeconds', 123)
+    const desktopRotate = await fetch(`${baseUrl}/api//h5-access/regenerate`, { method: 'POST', headers: desktopHeaders })
+    expect(desktopRotate.status).toBe(200)
+    const { token: rotatedToken } = await desktopRotate.json() as { token: string }
+    expect(rotatedToken).not.toBe(token)
+    const service = new H5AccessService()
+    expect(await service.validateToken(token)).toBe(false)
+    expect(await service.validateToken(rotatedToken)).toBe(true)
+    const desktopDisable = await fetch(`${baseUrl}/api/h5-access/disable`, { method: 'POST', headers: desktopHeaders })
+    expect(desktopDisable.status).toBe(200)
+    await desktopDisable.text()
+    const desktopEnable = await fetch(`${baseUrl}/api/h5-access/enable`, { method: 'POST', headers: desktopHeaders })
     expect(desktopEnable.status).toBe(200)
     await expect(desktopEnable.json()).resolves.toHaveProperty('token')
   })

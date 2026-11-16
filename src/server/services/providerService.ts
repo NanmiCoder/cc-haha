@@ -87,6 +87,7 @@ import type {
   ProviderProxyConfig,
   ProvidersIndex,
   CreateProviderInput,
+  ImportProviderInput,
   UpdateProviderInput,
   TestProviderInput,
   ProviderTestResult,
@@ -159,7 +160,7 @@ function mergeSavedOrderIntoDisplayOrder(providerOrder: string[], savedOrder: st
   })
 }
 
-function buildSavedProvider(input: CreateProviderInput): SavedProvider {
+function buildSavedProvider(input: ImportProviderInput): SavedProvider {
   const imageGeneration = normalizeImageGeneration(input.imageGeneration)
   return {
     id: crypto.randomUUID(),
@@ -182,6 +183,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.proxy !== undefined && { proxy: input.proxy }),
     ...(input.notes !== undefined && { notes: input.notes }),
+    ...(input.usageScript !== undefined && { usageScript: input.usageScript }),
   }
 }
 
@@ -233,7 +235,10 @@ export class ProviderService {
   }
 
   private async readIndex(): Promise<ProvidersIndex> {
-    await ensurePersistentStorageUpgraded()
+    const migration = await ensurePersistentStorageUpgraded()
+    if (migration.failures.some(failure => failure.startsWith('cc-haha/settings.json:'))) {
+      throw ApiError.internal('Provider settings upgrade failed. Retry after the settings file is writable.')
+    }
     return readRecoverableJsonFile({
       filePath: this.getIndexPath(),
       label: 'providers index',
@@ -276,7 +281,8 @@ export class ProviderService {
         }
       }
       return {
-        settings: Object.assign({}, current, settings),
+        settings: Object.assign({}, current, settings,
+          expectedActiveProviderId !== undefined ? { providerEnvOwner: expectedActiveProviderId } : {}),
         result: undefined,
       }
     })
@@ -446,10 +452,11 @@ export class ProviderService {
    * Append several providers in one pass.
    *
    * Bulk imports (cc-switch) read the index once and write it once so a partial
-   * failure cannot leave half the batch behind. The persisted shape is identical
-   * to addProvider, so no storage migration is involved.
+   * failure cannot leave half the batch behind. The index upgrade declares the
+   * optional import-only `usageScript`; old providers keep it absent, and index
+   * readers preserve its template fields through later edits.
    */
-  async importProviders(inputs: CreateProviderInput[]): Promise<SavedProvider[]> {
+  async importProviders(inputs: ImportProviderInput[]): Promise<SavedProvider[]> {
     if (inputs.length === 0) return []
 
     const index = await this.readIndex()
@@ -611,7 +618,7 @@ export class ProviderService {
       await this.syncToSettings(provider)
       await this.updateManagedSettings({ model: provider.models.main, modelContext: undefined })
     } else if (provider.presetId === 'official') {
-      await this.clearProviderFromSettings()
+      await this.clearProviderFromSettings(provider.id)
     } else {
       await this.syncToSettings(provider)
     }
@@ -691,13 +698,25 @@ export class ProviderService {
 
   async getProviderRuntimeEnv(id: string): Promise<Record<string, string>> {
     const provider = await this.getProvider(id)
-    return this.buildManagedEnv(provider, {
+    const env = this.buildManagedEnv(provider, {
       proxyPath: `/proxy/providers/${provider.id}`,
     })
+    // The JSON editor belongs to the active provider. Pass its subagent choice
+    // in the host's launch snapshot; the CLI must still filter settings-sourced
+    // model vars so another provider (and approved team workers) stays isolated.
+    if ((await this.readIndex()).activeId === id) {
+      const settings = await this.readSettings()
+      const subagentModel = (settings.env as Record<string, unknown> | undefined)?.CLAUDE_CODE_SUBAGENT_MODEL
+      if (settings.providerEnvOwner === id && typeof subagentModel === 'string') {
+        env.CLAUDE_CODE_SUBAGENT_MODEL = subagentModel
+      }
+    }
+    return env
   }
 
   private async syncToSettings(provider: SavedProvider): Promise<void> {
-    await this.managedSettingsService.updateSettings((settings) => {
+    await this.managedSettingsService.updateSettings(async (settings) => {
+      if ((await this.readIndex()).activeId !== provider.id) return { settings, result: undefined }
       const existingEnv = (settings.env as Record<string, string>) || {}
       const cleanedEnv = { ...existingEnv }
 
@@ -705,6 +724,10 @@ export class ProviderService {
         delete cleanedEnv[key]
       }
       const providerEnv = this.buildManagedEnv(provider)
+      if (settings.providerEnvOwner === provider.id &&
+        typeof existingEnv.CLAUDE_CODE_SUBAGENT_MODEL === 'string') {
+        providerEnv.CLAUDE_CODE_SUBAGENT_MODEL = existingEnv.CLAUDE_CODE_SUBAGENT_MODEL
+      }
       // Discovered capabilities belong to this server's launch snapshot, not
       // persisted settings that outlive the authenticated catalog cache.
       delete providerEnv[GROK_MODEL_CATALOG_ENV_KEY]
@@ -712,6 +735,7 @@ export class ProviderService {
       return {
         settings: {
           ...settings,
+          providerEnvOwner: provider.id,
           env: {
             ...cleanedEnv,
             ...providerEnv,
@@ -722,8 +746,9 @@ export class ProviderService {
     })
   }
 
-  private async clearProviderFromSettings(): Promise<void> {
-    await this.managedSettingsService.updateSettings((settings) => {
+  private async clearProviderFromSettings(expectedActiveId: string | null = null): Promise<void> {
+    await this.managedSettingsService.updateSettings(async (settings) => {
+      if ((await this.readIndex()).activeId !== expectedActiveId) return { settings, result: undefined }
       const env = { ...((settings.env as Record<string, string>) || {}) }
 
       for (const key of getManagedEnvKeys()) {
@@ -733,6 +758,7 @@ export class ProviderService {
       const nextSettings: Record<string, unknown> = {
         ...settings,
       }
+      delete nextSettings.providerEnvOwner
 
       if (Object.keys(env).length === 0) {
         delete nextSettings.env

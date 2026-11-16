@@ -23,6 +23,7 @@ vi.mock('../api/sessions', () => ({
     rename: vi.fn(),
     setArchived: archiveMock,
     getSummary: summaryMock,
+    invalidateGitInfo: vi.fn(),
   },
 }))
 
@@ -310,6 +311,29 @@ describe('sessionStore', () => {
     await delay(0)
 
     expect(useSessionStore.getState().sessions[0]?.title).toBe('开始优化UI')
+  })
+
+  it.each(['off', 'building'] as const)('keeps an init directory through stale %s list refreshes until persistence catches up', async indexMode => {
+    const row = makeSession(`workspace-refresh-${indexMode}`, '2026-11-11T00:00:00Z')
+    const other = makeSession('workspace-other', '2026-11-11T00:00:00Z')
+    useSessionStore.setState({ sessions: [row, other] })
+    const pending = createDeferred<{ sessions: typeof row[]; total: number }>()
+    listMock.mockReturnValueOnce(pending.promise)
+    const refresh = useSessionStore.getState().fetchSessions()
+    const workDir = '/workspace/project/.claude/worktrees/entered'
+    useSessionStore.getState().updateSessionWorkDir(row.id, workDir)
+    const stale = { sessions: [row, other], total: 2, index: makeIndexStatus(indexMode) }
+    pending.resolve(stale)
+    await refresh
+    expect(useSessionStore.getState().sessions.find(item => item.id === row.id)?.workDir).toBe(workDir)
+    expect(useSessionStore.getState().sessions.find(item => item.id === other.id)?.workDir).toBe(other.workDir)
+    listMock.mockResolvedValueOnce(stale)
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions.find(item => item.id === row.id)?.workDir).toBe(workDir)
+    listMock.mockResolvedValueOnce({ sessions: [{ ...row, workDir }, other], total: 2 })
+    await useSessionStore.getState().fetchSessions()
+    useSessionStore.getState().updateSessionWorkDir(row.id, row.workDir)
+    expect(useSessionStore.getState().sessions.find(item => item.id === row.id)?.workDir).toBe(row.workDir)
   })
 
   it('applies a collaboration title that arrives before the indexed session row', async () => {

@@ -98,10 +98,65 @@ describe('authoritative power activity snapshot', () => {
     __settleActiveTurnForTests('stopped', { type: 'result', is_error: false })
     __markActiveTurnForTests('failed')
     __settleActiveTurnForTests('failed', { type: 'result', is_error: true })
+    await conversationService.waitForTeamWorkersStopped('stopped')
     const final = await snapshot()
     expect(final.busy).toBe(false)
     expect(final.revision).toBeGreaterThan(initial.revision)
     expect(final.completionSequence).toBe(initial.completionSequence)
+  })
+
+  it('keeps pending Stop confirmation busy until the team lookup finishes without recording a completion', async () => {
+    const sessionId = 'stopped-with-pending-team-lookup'
+    const initial = await snapshot()
+    expect(initial.busy).toBe(false)
+    expect(conversationService.hasSession(sessionId)).toBe(false)
+    const findTeamPlanForSession = teamPlans.findTeamPlanForSession
+    let releaseLookup!: () => void
+    const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve })
+    let enterLookup!: () => void
+    const lookupEntered = new Promise<void>(resolve => { enterLookup = resolve })
+    let heldLookup = false
+    spyOn(teamPlans, 'findTeamPlanForSession').mockImplementation(async id => {
+      if (id === sessionId && !heldLookup) {
+        heldLookup = true
+        enterLookup()
+        await lookupGate
+      }
+      return findTeamPlanForSession(id)
+    })
+
+    __markActiveTurnForTests(sessionId)
+    stopSessionTurn(sessionId)
+    const stopped = conversationService.waitForTeamWorkersStopped(sessionId)
+    try {
+      expect(conversationService.hasPendingTeamStops()).toBe(true)
+      expect(await Promise.race([
+        lookupEntered.then(() => 'lookup'),
+        stopped.then(() => 'stopped'),
+      ])).toBe('lookup')
+      __settleActiveTurnForTests(sessionId, { type: 'result', is_error: false })
+      __markActiveTurnForTests('failed-during-stop-confirmation')
+      __settleActiveTurnForTests('failed-during-stop-confirmation', { type: 'result', is_error: true })
+      expect(getSessionChatActivityState(sessionId)).toBe('idle')
+      const pending = await snapshot()
+      expect(pending.busy).toBe(true)
+      expect(pending.revision).toBeGreaterThan(initial.revision)
+      expect(pending.completionSequence).toBe(initial.completionSequence)
+      expect(pending.scheduledCompletionSequence).toBe(initial.scheduledCompletionSequence)
+      expect(conversationService.hasPendingTeamStops()).toBe(true)
+
+      releaseLookup()
+      await stopped
+      expect(conversationService.hasPendingTeamStops()).toBe(false)
+      const final = await snapshot()
+      expect(final.busy).toBe(false)
+      expect(final.revision).toBeGreaterThan(initial.revision)
+      expect(final.completionSequence).toBe(initial.completionSequence)
+      expect(final.scheduledCompletionSequence).toBe(initial.scheduledCompletionSequence)
+    } finally {
+      releaseLookup()
+      await stopped
+    }
   })
 
   it.each(['Bash', 'AskUserQuestion'])('counts pending %s even when Stop makes the visual session idle', async toolName => {
@@ -110,9 +165,13 @@ describe('authoritative power activity snapshot', () => {
     spyOn(conversationService, 'getActiveSessions').mockReturnValue(['waiting'])
     spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([{ requestId: 'decision', toolName, input: {} }])
     stopSessionTurn('waiting')
-    __settleActiveTurnForTests('waiting', { type: 'result', is_error: true })
-    expect(getSessionChatActivityState('waiting')).toBe('idle')
-    expect((await snapshot()).busy).toBe(true)
+    try {
+      __settleActiveTurnForTests('waiting', { type: 'result', is_error: true })
+      expect(getSessionChatActivityState('waiting')).toBe('idle')
+      expect((await snapshot()).busy).toBe(true)
+    } finally {
+      await conversationService.waitForTeamWorkersStopped('waiting')
+    }
   })
 
   it('retains standalone background Bash and subagent work without a live root process', async () => {

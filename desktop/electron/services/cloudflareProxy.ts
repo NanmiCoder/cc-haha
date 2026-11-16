@@ -3,6 +3,7 @@ import http from 'node:http'
 import net from 'node:net'
 import tls from 'node:tls'
 import type { Duplex } from 'node:stream'
+import { recordPublicAccessDiagnostic, type PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 
 const LOOPBACK_HOST = '127.0.0.1'
 const EDGE_HOSTS = ['region1.v2.argotunnel.com', 'region2.v2.argotunnel.com'] as const
@@ -25,6 +26,7 @@ export type CloudflareProxyOptions = {
   requestTimeoutMs?: number
   /** Additional trust for deterministic local TLS fixtures or enterprise CAs. */
   ca?: tls.ConnectionOptions['ca']
+  onDiagnostic?: PublicAccessDiagnosticWriter
 }
 
 /**
@@ -38,7 +40,14 @@ export async function startCloudflareProxyTransport(
   proxyUrl: string,
   options: CloudflareProxyOptions = {},
 ): Promise<CloudflareProxyTransport> {
-  const proxy = parseProxyUrl(proxyUrl)
+  const startedAt = Date.now()
+  const diagnostic: PublicAccessDiagnosticWriter = event => recordPublicAccessDiagnostic(options.onDiagnostic, event, [proxyUrl])
+  let proxy: URL
+  try { proxy = parseProxyUrl(proxyUrl) }
+  catch (error) {
+    diagnostic({ stage: 'proxy_transport', outcome: 'failed', reason: 'invalid_proxy_url', error, durationMs: Date.now() - startedAt })
+    throw error
+  }
   const controller = new AbortController()
   const servers: Array<net.Server | http.Server> = []
   const sockets = new Set<Duplex>()
@@ -77,6 +86,7 @@ export async function startCloudflareProxyTransport(
     options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
     track,
     options.ca,
+    diagnostic,
   )
 
   try {
@@ -134,8 +144,10 @@ export async function startCloudflareProxyTransport(
         return
       }
       const attempt = new AbortController()
+      const requestStartedAt = Date.now()
+      let timedOut = false
       const cancel = () => attempt.abort()
-      const timeout = setTimeout(cancel, options.requestTimeoutMs ?? QUICK_REQUEST_TIMEOUT_MS)
+      const timeout = setTimeout(() => { timedOut = true; cancel() }, options.requestTimeoutMs ?? QUICK_REQUEST_TIMEOUT_MS)
       const signal = AbortSignal.any([controller.signal, attempt.signal])
       request.once('aborted', cancel)
       response.once('close', () => {
@@ -143,10 +155,13 @@ export async function startCloudflareProxyTransport(
       })
       let secureSocket: tls.TLSSocket | undefined
       let agent: http.Agent | undefined
+      let step = 'read_request'
       try {
         const body = await readLimitedBody(request, MAX_QUICK_REQUEST_BYTES, signal)
+        step = 'proxy_connect'
         const socket = await connect(QUICK_SERVICE_HOST, 443, signal)
         throwIfAborted(signal)
+        step = 'quick_tls'
         secureSocket = track(tls.connect({
           socket,
           // Runtimes without socket-upgrade support must fail on loopback,
@@ -157,8 +172,12 @@ export async function startCloudflareProxyTransport(
           rejectUnauthorized: true,
           ...(options.ca ? { ca: options.ca } : {}),
         }))
+        secureSocket.once('secureConnect', () => { step = 'quick_request' })
         agent = new ConnectedHttpAgent(secureSocket)
         const result = await requestQuickService(agent, body, request.headers['user-agent'], signal)
+        diagnostic({ stage: 'quick_provisioning', outcome: result.status >= 200 && result.status < 300 ? 'succeeded' : 'failed',
+          reason: result.status >= 200 && result.status < 300 ? 'http_success' : 'http_status', durationMs: Date.now() - requestStartedAt,
+          details: { status: result.status, targetHost: QUICK_SERVICE_HOST, targetPort: 443 } })
         if (response.destroyed) return
         response.writeHead(result.status, {
           'Content-Type': 'application/json',
@@ -166,7 +185,11 @@ export async function startCloudflareProxyTransport(
           Connection: 'close',
         })
         response.end(result.body)
-      } catch {
+      } catch (error) {
+        diagnostic({ stage: 'quick_provisioning', outcome: signal.aborted && !timedOut ? 'cancelled' : 'failed',
+          reason: timedOut ? 'request_timeout' : signal.aborted ? 'request_cancelled' : 'request_failed', error,
+          durationMs: Date.now() - requestStartedAt,
+          details: { step, timeoutMs: options.requestTimeoutMs ?? QUICK_REQUEST_TIMEOUT_MS, targetHost: QUICK_SERVICE_HOST, targetPort: 443 } })
         // Do not echo proxy URLs, credentials, provider responses or TLS errors.
         if (!response.destroyed) {
           response.writeHead(signal.aborted ? 504 : 502, {
@@ -187,6 +210,7 @@ export async function startCloudflareProxyTransport(
     starting = false
     return { edgeAddresses, quickServiceUrl: `http://${quickAddress}${quickPath}`, stop }
   } catch (error) {
+    diagnostic({ stage: 'proxy_transport', outcome: controller.signal.aborted ? 'cancelled' : 'failed', reason: 'listener_setup_failed', error, durationMs: Date.now() - startedAt })
     starting = false
     await stop()
     throw error
@@ -213,9 +237,13 @@ function connectProxy(
   timeoutMs: number,
   track: <T extends Duplex>(socket: T) => T,
   ca: tls.ConnectionOptions['ca'],
+  diagnostic: PublicAccessDiagnosticWriter,
 ): Promise<net.Socket> {
+  const startedAt = Date.now()
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
+      diagnostic({ stage: 'proxy_connect', outcome: 'cancelled', reason: 'request_cancelled', durationMs: Date.now() - startedAt,
+        details: { targetHost, targetPort } })
       reject(new Error('Cloudflare proxy connection cancelled'))
       return
     }
@@ -228,6 +256,8 @@ function connectProxy(
     const host = proxy.hostname.replace(/^\[|\]$/g, '')
     const port = Number(proxy.port || (proxy.protocol === 'https:' ? 443 : 80))
     const secure = proxy.protocol === 'https:'
+    let step = secure ? 'proxy_tls' : 'proxy_tcp'
+    let settled = false
     // Bun's node:http compatibility does not implement outgoing CONNECT. Use
     // the same bounded socket handshake as the existing system proxy bridge.
     const socket = track(secure
@@ -238,35 +268,50 @@ function connectProxy(
       clearTimeout(timeout)
       signal.removeEventListener('abort', cancel)
       socket.off('data', onData)
-      socket.off('error', fail)
-      socket.off('end', fail)
-      socket.off('close', fail)
+      socket.off('error', socketError)
+      socket.off('end', socketClosed)
+      socket.off('close', socketClosed)
     }
-    const fail = () => {
+    const fail = (reason: string, error?: unknown, status?: number) => {
+      if (settled) return
+      settled = true
       cleanup()
       socket.destroy()
-      reject(new Error('Cloudflare proxy connection failed'))
+      diagnostic({ stage: 'proxy_connect', outcome: signal.aborted ? 'cancelled' : 'failed', reason, error,
+        durationMs: Date.now() - startedAt,
+        details: { step, targetHost, targetPort, proxyHost: host, proxyPort: port, proxyProtocol: proxy.protocol,
+          timeoutMs, ...(status !== undefined ? { status } : {}) } })
+      reject(new Error('Cloudflare proxy connection failed', error === undefined ? undefined : { cause: error }))
     }
-    const cancel = () => fail()
-    const timeout = setTimeout(fail, timeoutMs)
+    const socketError = (error: Error) => fail('proxy_socket_error', error)
+    const socketClosed = () => fail('proxy_closed')
+    const cancel = () => fail('request_cancelled')
+    const timeout = setTimeout(() => fail('connect_timeout'), timeoutMs)
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk])
       const marker = buffered.indexOf('\r\n\r\n')
       if (marker < 0) {
-        if (buffered.length > MAX_CONNECT_HEADER_BYTES) fail()
+        if (buffered.length > MAX_CONNECT_HEADER_BYTES) fail('connect_headers_too_large')
         return
       }
       if (marker + 4 > MAX_CONNECT_HEADER_BYTES) {
-        fail()
+        fail('connect_headers_too_large')
         return
       }
       const statusLine = buffered.toString('latin1', 0, marker).split('\r\n', 1)[0] ?? ''
       const status = Number(statusLine.match(/^HTTP\/1\.[01][ \t]+(\d{3})(?:[ \t]|$)/)?.[1])
-      if (!Number.isFinite(status) || status < 200 || status >= 300 || signal.aborted) {
-        fail()
+      if (!Number.isFinite(status)) {
+        fail('invalid_connect_response')
+        return
+      }
+      if (status < 200 || status >= 300 || signal.aborted) {
+        fail(signal.aborted ? 'request_cancelled' : 'http_connect_rejected', undefined, status)
         return
       }
       cleanup()
+      settled = true
+      diagnostic({ stage: 'proxy_connect', outcome: 'succeeded', reason: 'connect_established', durationMs: Date.now() - startedAt,
+        details: { targetHost, targetPort, status } })
       socket.pause()
       const rest = buffered.subarray(marker + 4)
       if (rest.length) socket.unshift(rest)
@@ -274,10 +319,11 @@ function connectProxy(
     }
     signal.addEventListener('abort', cancel, { once: true })
     socket.on('data', onData)
-    socket.once('error', fail)
-    socket.once('end', fail)
-    socket.once('close', fail)
+    socket.once('error', socketError)
+    socket.once('end', socketClosed)
+    socket.once('close', socketClosed)
     socket.once(secure ? 'secureConnect' : 'connect', () => {
+      step = 'http_connect'
       if (!signal.aborted && !socket.destroyed) socket.write(`${headers.join('\r\n')}\r\n\r\n`)
     })
   })

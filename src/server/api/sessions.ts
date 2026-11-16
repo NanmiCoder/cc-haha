@@ -1343,6 +1343,7 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   const statusOnly = url.searchParams.get('statusOnly') === '1'
   const includeContext = !statusOnly && url.searchParams.get('includeContext') !== '0'
   const contextOnly = includeContext && url.searchParams.get('contextOnly') === '1'
+  const summaryOnly = contextOnly && url.searchParams.get('summaryOnly') === '1'
   // Lightweight polling mode for the context panel: one `get_session_usage` control and
   // nothing else. The full inspection also scans the skills directory and re-reads the whole
   // transcript to cross-check usage, which is far too much work to repeat every few seconds.
@@ -1378,6 +1379,34 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
+  // The composer meter needs the runtime's compaction counter, not a full
+  // inspection. Keep this ahead of skill discovery and transcript metadata;
+  // if the CLI is busy, the client retains its previous confirmed reading.
+  if (active && summaryOnly) {
+    const errors: Record<string, string> = {}
+    const response: Record<string, unknown> = {
+      active,
+      status: {
+        sessionId,
+        workDir,
+        permissionMode: conversationService.getSessionPermissionMode(sessionId),
+      },
+      errors,
+    }
+    try {
+      response.context = await conversationService.requestControl(
+        sessionId,
+        { subtype: 'get_context_usage', estimateOnly: true, summaryOnly: true },
+        5_000,
+        req.signal,
+      )
+    } catch (error) {
+      throwIfRequestAborted(req)
+      errors.context = error instanceof Error ? error.message : String(error)
+    }
+    return Response.json(response)
+  }
+
   const permissionMode = active
     ? conversationService.getSessionPermissionMode(sessionId)
     : launchInfo?.permissionMode ?? 'default'
@@ -1404,7 +1433,7 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   const hasCliSlashCommands = cachedSlashCommands.length > 0
   // `listSkillSlashCommands` walks every skill directory on disk with no cache. The usage
   // poll does not need a command count, so it must not pay for one.
-  const fallbackSlashCommands = usageOnly
+  const fallbackSlashCommands = usageOnly || contextOnly
     ? []
     : hasCliSlashCommands
       ? mergeSessionSlashCommands(

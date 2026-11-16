@@ -17,6 +17,7 @@ const originalEnv = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+  CLAUDE_CODE_SUBAGENT_MODEL: process.env.CLAUDE_CODE_SUBAGENT_MODEL,
   CC_HAHA_IMAGE_PROVIDER_KIND: process.env.CC_HAHA_IMAGE_PROVIDER_KIND,
   CC_HAHA_IMAGE_PROVIDER_ID: process.env.CC_HAHA_IMAGE_PROVIDER_ID,
   CC_HAHA_IMAGE_MODEL: process.env.CC_HAHA_IMAGE_MODEL,
@@ -51,6 +52,7 @@ describe('managedEnv', () => {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_MODEL
+    delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
     delete process.env.CC_HAHA_IMAGE_PROVIDER_KIND
     delete process.env.CC_HAHA_IMAGE_PROVIDER_ID
     delete process.env.CC_HAHA_IMAGE_MODEL
@@ -73,6 +75,7 @@ describe('managedEnv', () => {
     restoreEnv('ANTHROPIC_API_KEY')
     restoreEnv('ANTHROPIC_AUTH_TOKEN')
     restoreEnv('ANTHROPIC_MODEL')
+    restoreEnv('CLAUDE_CODE_SUBAGENT_MODEL')
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_KIND')
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_ID')
     restoreEnv('CC_HAHA_IMAGE_MODEL')
@@ -164,5 +167,22 @@ describe('managedEnv', () => {
     expect(process.env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS).toBe('96000')
     applyConfigEnvironmentVariables()
     expect(process.env.CC_HAHA_IMAGE_PROTOCOL).toBe('xai_images')
+  })
+
+  test.each(['active', 'previous'])('loads the subagent override only from its matching settings owner %s', async (owner) => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      schemaVersion: 10, activeId: 'active', providers: [{
+        id: 'active', presetId: 'custom', name: 'Fixture', apiKey: 'fake-key', baseUrl: 'https://fixture.invalid',
+        models: { main: 'fixture-main', haiku: 'fixture-small', sonnet: 'fixture-medium', opus: 'fixture-large' },
+      }],
+    })
+    await writeJson(path.join(tmpDir, 'cc-haha', 'settings.json'), {
+      providerEnvOwner: owner, env: { CLAUDE_CODE_SUBAGENT_MODEL: 'selected-subagent' },
+    })
+    const expected = owner === 'active' ? 'selected-subagent' : undefined
+    applySafeConfigEnvironmentVariables()
+    expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(expected)
+    applyConfigEnvironmentVariables()
+    expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(expected)
   })
 })

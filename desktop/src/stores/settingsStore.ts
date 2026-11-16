@@ -69,6 +69,7 @@ type SettingsStore = {
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
   nextPromptSuggestionsEnabled: boolean
+  maxOutputTokensEscalationMode: 'auto' | 'enabled' | 'disabled'
   leanModeEnabled: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
@@ -119,6 +120,7 @@ type SettingsStore = {
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
+  setMaxOutputTokensEscalationMode: (mode: 'auto' | 'enabled' | 'disabled') => Promise<void>
   setLeanModeEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
@@ -218,6 +220,10 @@ applyDocumentLocale(initialLocale)
 let leanModeSaveVersion = 0
 let leanModePendingSaves = 0
 let leanModeSaveQueue: Promise<void> = Promise.resolve()
+let outputEscalationSaveVersion = 0
+let outputEscalationPendingSaves = 0
+let outputEscalationSaveQueue: Promise<void> = Promise.resolve()
+let lastPersistedOutputEscalationMode: SettingsStore['maxOutputTokensEscalationMode'] = 'auto'
 let autoQuestionUpdateQueue: Promise<unknown> = Promise.resolve()
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -227,6 +233,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
   nextPromptSuggestionsEnabled: false,
+  maxOutputTokensEscalationMode: 'auto',
   leanModeEnabled: false,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
@@ -277,6 +284,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   fetchAll: async () => {
     const leanModeVersionAtStart = leanModeSaveVersion
     const leanModePendingAtStart = leanModePendingSaves > 0
+    const outputEscalationVersionAtStart = outputEscalationSaveVersion
+    const outputEscalationPendingAtStart = outputEscalationPendingSaves > 0
     const autoUpdateVersionAtStart = autoUpdateSaveVersion
     const autoUpdateSavePendingAtStart = autoUpdatePendingSaves > 0
     set({ isLoading: true, error: null })
@@ -306,6 +315,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const hydrateAutoUpdate = !autoUpdateSavePendingAtStart && autoUpdatePendingSaves === 0 &&
         autoUpdateVersionAtStart === autoUpdateSaveVersion
       if (hydrateAutoUpdate) lastPersistedAutoUpdateEnabled = userSettings.autoUpdateEnabled !== false
+      const hydrateOutputEscalation = !outputEscalationPendingAtStart && outputEscalationPendingSaves === 0 &&
+        outputEscalationVersionAtStart === outputEscalationSaveVersion
+      if (hydrateOutputEscalation) {
+        lastPersistedOutputEscalationMode =
+          userSettings.maxOutputTokensEscalationMode === 'enabled' || userSettings.maxOutputTokensEscalationMode === 'disabled'
+            ? userSettings.maxOutputTokensEscalationMode
+            : 'auto'
+      }
       // Nothing to do for the theme here: uiStore already applied it at
       // startup, and re-applying would re-persist and re-report it on every
       // provider switch.
@@ -320,6 +337,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         // Opt-in: every suggestion is an extra model request.
         nextPromptSuggestionsEnabled: userSettings.nextPromptSuggestionsEnabled === true,
+        maxOutputTokensEscalationMode: hydrateOutputEscalation
+          ? lastPersistedOutputEscalationMode
+          : get().maxOutputTokensEscalationMode,
         // Forward read migration: older settings leave the experiment disabled.
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
@@ -422,6 +442,31 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     } catch (error) {
       set({ nextPromptSuggestionsEnabled: prev })
       throw error
+    }
+  },
+
+  setMaxOutputTokensEscalationMode: async (mode) => {
+    const saveVersion = ++outputEscalationSaveVersion
+    outputEscalationPendingSaves += 1
+    set({ maxOutputTokensEscalationMode: mode })
+    const save = outputEscalationSaveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await settingsApi.updateUser({ maxOutputTokensEscalationMode: mode })
+          lastPersistedOutputEscalationMode = mode
+        } catch (error) {
+          if (saveVersion === outputEscalationSaveVersion) {
+            set({ maxOutputTokensEscalationMode: lastPersistedOutputEscalationMode })
+          }
+          throw error
+        }
+      })
+    outputEscalationSaveQueue = save
+    try {
+      await save
+    } finally {
+      outputEscalationPendingSaves -= 1
     }
   },
 

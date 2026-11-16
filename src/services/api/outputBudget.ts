@@ -6,10 +6,26 @@ export type OutputBudgetSource = 'default' | 'explicit'
 // Request-local metadata must never leak into the provider's JSON body or
 // persisted conversation. Weak keys also release logging/retry probe requests.
 const sources = new WeakMap<object, OutputBudgetSource>()
+const outputLimitRetryBudgets = new WeakMap<object, number>()
 
 export function markOutputBudgetSource<T extends object>(params: T, source: OutputBudgetSource): T {
   sources.set(params, source)
   return params
+}
+
+export function getOutputBudgetSource(params: object): OutputBudgetSource | undefined {
+  return sources.get(params)
+}
+
+// Recovery evidence belongs to this exact request/response, not the settings
+// observed after streaming. Keep it out of transcripts and resumed sessions.
+export function markOutputLimitRetryBudget<T extends object>(message: T, budget: number): T {
+  outputLimitRetryBudgets.set(message, budget)
+  return message
+}
+
+export function getOutputLimitRetryBudget(message: object): number | undefined {
+  return outputLimitRetryBudgets.get(message)
 }
 
 export function isLocalProtocolProxy(baseUrl: string | undefined): boolean {

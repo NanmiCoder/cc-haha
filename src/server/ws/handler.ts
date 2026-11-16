@@ -37,7 +37,7 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
-import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage, waitForTeamRuntimeLeadReady } from '../services/teamPlanRuntime.js'
 import { powerActivityClock } from '../services/powerActivityClock.js'
 import { releasePowerActivityLease } from '../services/powerActivityLease.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
@@ -899,6 +899,10 @@ export const handleWebSocket = {
 
     const msg: ServerMessage = { type: 'connected', sessionId }
     sendMessage(ws, msg)
+    const liveWorkDir = conversationService.getSessionWorkDir(sessionId)
+    if (liveWorkDir) {
+      sendMessage(ws, { type: 'system_notification', subtype: 'init', data: { cwd: liveWorkDir } })
+    }
     // The persisted transcript is authoritative for a custom title, while the
     // SQLite session-list projection can still be catching up after startup.
     // Replay the title to the connected renderer so the page header, tab, and
@@ -1347,6 +1351,7 @@ async function handleUserMessage(
     // permission request that arrives after the disconnect.
     refreshDisconnectedTurnCleanupWatcher(sessionId)
 
+    await waitForTeamRuntimeLeadReady(sessionId)
     activeTurn.sendStarted = true
     const sent = delivery
       ? await (async () => {
@@ -2862,9 +2867,12 @@ function handleStopGeneration(
         removePendingInterruptedTurnResult(sessionId)
       }
     }
-  } else if (!stoppedTurn && conversationService.hasSession(sessionId)) {
-    // The leader can already be idle while approved process teammates still
-    // run or await readiness. Both UI and programmatic Stop revoke those workers.
+  } else if (stoppedTurn?.interruptBoundaryPending && conversationService.hasSession(sessionId)) {
+    conversationService.pauseTeamWorkers(sessionId)
+  } else {
+    // Team ownership outlives its lead process. Stop must reach the runtime
+    // while that process is absent or starting too; an idle UI is not proof
+    // that the independent member processes have stopped.
     conversationService.sendInterrupt(sessionId)
   }
 
@@ -4691,7 +4699,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         cacheSessionInitMetadata(sessionId, cliMsg)
         const messages: ServerMessage[] = [
           // Send model info as a system notification, not a status change
-          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model } },
+          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model, cwd: cliMsg.cwd } },
         ]
         // Send slash commands to frontend
         const cmds = sessionSlashCommands.get(sessionId)
@@ -5544,6 +5552,12 @@ function bindClientSessionOutput(
       // generation. Once that boundary settles, only its terminal result may
       // pass to every renderer. Task lifecycle must pass so Stop can close
       // Agents, and permission resolutions must pass so open prompts can close.
+      if (cliMsg?.type === 'system' && cliMsg.subtype === 'init') {
+        // A tool may finish changing cwd after Stop. Keep workspace metadata
+        // authoritative while the stopped generation's chat output stays fenced.
+        cacheSessionInitMetadata(sessionId, cliMsg)
+        sendMessage(ws, { type: 'system_notification', subtype: 'init', data: { cwd: cliMsg.cwd } })
+      }
       return
     }
     if (options?.shouldForward && !options.shouldForward(cliMsg)) {

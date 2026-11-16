@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { buildRemotePlugin, createRemoteConnectorBridge, saveRemoteApiKey, type RemoteConnectorDependencies, type RemoteConnectorRecipe } from './remoteConnector.js'
 import { resolvePluginMcpEnvironment, addPluginScopeToServers } from '../../utils/plugins/mcpPluginIntegration.js'
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
+import { McpConnectionError, type McpConnectionErrorKind } from '../mcp/connectionErrors.js'
 
 const recipe = (auth: RemoteConnectorRecipe['auth']): RemoteConnectorRecipe => ({ id: 'maps-fixture', pluginId: 'office-maps-fixture@haha-connectors', version: '1.0.0', endpoint: 'https://official.example/mcp?format=0', transport: 'http', auth })
 function fixture() {
@@ -64,7 +66,7 @@ describe('remote connector plugin integration', () => {
     f.dependencies.probe = async () => ({ status: 'needs-auth', toolCount: 0 })
     expect((await bridge.check(signal())).authenticated).toBe(false)
     f.dependencies.probe = async () => ({ status: 'connected', toolCount: 0 })
-    await expect(bridge.check(signal())).rejects.toThrow('Unable to connect')
+    await expect(bridge.check(signal())).rejects.toThrow(new McpConnectionError('discovery').message)
     f.dependencies.probe = async () => { throw new Error('https://host/?key=do-not-expose') }
     try { await bridge.check(signal()) } catch (error) { expect(String(error)).not.toContain('do-not-expose') }
     const controller = new AbortController()
@@ -76,6 +78,77 @@ describe('remote connector plugin integration', () => {
     expect(() => buildRemotePlugin({ ...recipe({ type: 'none' }), endpoint: 'http://example.com/mcp' })).toThrow('HTTPS')
     expect(() => buildRemotePlugin(recipe({ type: 'api-key', in: 'header', name: 'X-Key\r\nInjected' }))).toThrow()
   })
+})
+
+test.each([
+  [Object.assign(new Error('https://host/?key=fake-private-key'), { code: 'ENOTFOUND' }), 'network'],
+  [new McpConnectionError('proxy'), 'proxy'],
+  [new DOMException('fake-private-key', 'TimeoutError'), 'timeout'],
+  [Object.assign(new Error('Authorization: Bearer fake-private-key'), { code: 403 }), 'permission'],
+  [new Error('tool discovery body: fake-private-key'), 'discovery'],
+] satisfies Array<[Error, McpConnectionErrorKind]>)('remote check failure %# retains its safe category without exposing upstream data', async (upstream, kind) => {
+  const f = fixture()
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'none' }), f.dependencies)
+  f.dependencies.probe = async () => { throw upstream }
+  await expect(bridge.check(signal())).rejects.toMatchObject({ kind, message: new McpConnectionError(kind).message })
+  expect(f.calls.map(call => call.kind)).toEqual(['disconnect'])
+})
+
+test.each([new UnauthorizedError('fake-private-key'), Object.assign(new Error('fake-private-key'), { status: 401 })])('authentication rejection %# retains the needs-auth result', async upstream => {
+  const f = fixture()
+  f.dependencies.probe = async () => { throw upstream }
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'none' }), f.dependencies)
+  expect(await bridge.check(signal())).toEqual({ authenticated: false, verification: 'remote', toolCount: 0 })
+})
+
+test('an in-flight user cancellation preserves its signal reason instead of becoming a network failure', async () => {
+  const f = fixture()
+  let started: () => void = () => {}
+  const probing = new Promise<void>(resolve => { started = resolve })
+  f.dependencies.probe = async (_name, _config, abortSignal) => new Promise<never>((_resolve, reject) => {
+    abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true })
+    started()
+  })
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'none' }), f.dependencies)
+  const controller = new AbortController()
+  const checking = bridge.check(controller.signal)
+  await probing
+  const reason = new Error('Fixture user cancellation')
+  controller.abort(reason)
+  await expect(checking).rejects.toBe(reason)
+})
+
+test('a probe completing after user cancellation cannot report authenticated', async () => {
+  const f = fixture()
+  const controller = new AbortController()
+  f.dependencies.probe = async () => {
+    controller.abort()
+    return { status: 'connected', toolCount: 2 }
+  }
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'none' }), f.dependencies)
+  await expect(bridge.check(controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+})
+
+test.each([
+  [new Error('OAuth response fake-private-key'), 'authentication'],
+  [Object.assign(new Error('OAuth response fake-private-key'), { status: 403 }), 'permission'],
+  [new DOMException('OAuth response fake-private-key', 'TimeoutError'), 'timeout'],
+] satisfies Array<[Error, McpConnectionErrorKind]>)('authorization failure %# retains a safe reason', async (upstream, kind) => {
+  const f = fixture()
+  f.dependencies.oauth = async () => { throw upstream }
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'oauth' }), f.dependencies)
+  await expect(bridge.authenticate(signal(), () => {})).rejects.toMatchObject({ kind, message: new McpConnectionError(kind).message })
+})
+
+test('authorization cancellation retains its abort reason', async () => {
+  const f = fixture()
+  const controller = new AbortController()
+  f.dependencies.oauth = async () => {
+    controller.abort()
+    throw new Error('OAuth response fake-private-key')
+  }
+  const bridge = createRemoteConnectorBridge(recipe({ type: 'oauth' }), f.dependencies)
+  await expect(bridge.authenticate(controller.signal, () => {})).rejects.toBe(controller.signal.reason)
 })
 
 test('each explicit remote check clears only its own cached connection before fresh discovery', async () => {
