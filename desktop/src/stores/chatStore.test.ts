@@ -5859,6 +5859,75 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('keeps existing slash commands when the initial catalog request fails', async () => {
+    const existingCommand = { name: 'plugin:existing', description: 'Already loaded' }
+    vi.mocked(sessionsApi.getSlashCommands).mockRejectedValueOnce(new Error('offline'))
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          connectionState: 'disconnected',
+          slashCommands: [existingCommand],
+        }),
+      },
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: {
+          ...useChatStore.getState().sessions[TEST_SESSION_ID]!,
+          slashCommands: [existingCommand],
+        },
+      },
+    })
+    await Promise.resolve()
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.slashCommands).toEqual([
+      existingCommand,
+    ])
+  })
+
+  it('keeps event-refreshed slash commands when the initial catalog request fails late', async () => {
+    const eventCommand = { name: 'plugin:event', description: 'Loaded from CLI event' }
+    const refreshedCommand = { name: 'plugin:catalog', description: 'Loaded from API' }
+    let rejectInitialRequest!: (error: Error) => void
+    vi.mocked(sessionsApi.getSlashCommands)
+      .mockImplementationOnce(() => new Promise((_, reject) => {
+        rejectInitialRequest = reject
+      }))
+      .mockResolvedValueOnce({ commands: [refreshedCommand] })
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({ connectionState: 'disconnected' }),
+      },
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, {
+      prewarm: false,
+      applyRuntimeSelection: false,
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'slash_commands',
+      data: [eventCommand],
+    })
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.slashCommands).toEqual([
+        refreshedCommand,
+      ])
+    })
+    rejectInitialRequest(new Error('late initial failure'))
+    await Promise.resolve()
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.slashCommands).toEqual([
+      refreshedCommand,
+    ])
+  })
+
   it('keeps skill source metadata while a live CLI slash update is being reconciled', async () => {
     const projectSkill = {
       name: 'project-audit',

@@ -5704,11 +5704,12 @@ describe('Sessions API', () => {
     )
   })
 
-  it('GET /api/sessions/:id/slash-commands should include enabled plugin skills before CLI init', async () => {
+  it('GET /api/sessions/:id/slash-commands should include enabled plugin skills and commands before CLI init', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-ffffffffffff'
     const workDir = path.join(tmpDir, 'workspace', 'app')
     const marketplaceRoot = path.join(tmpDir, 'marketplace-root')
     const pluginRoot = path.join(marketplaceRoot, 'plugins', 'superpowers')
+    const pluginCommandsDir = path.join(pluginRoot, 'commands')
     const pluginsDir = path.join(tmpDir, 'plugins')
     const marketplaceFile = path.join(
       marketplaceRoot,
@@ -5725,12 +5726,18 @@ describe('Sessions API', () => {
       'brainstorming',
       'Superpowers brainstorming skill',
     )
+    await writeLegacySlashCommand(
+      pluginCommandsDir,
+      'plugin-probe',
+      'Superpowers plugin command',
+    )
     await fs.writeFile(
       path.join(pluginRoot, '.claude-plugin', 'plugin.json'),
       JSON.stringify({
         name: 'superpowers',
         version: '5.0.7',
         description: 'Core skills library',
+        commands: './commands',
       }),
       'utf-8',
     )
@@ -5790,6 +5797,15 @@ describe('Sessions API', () => {
         name: 'superpowers:brainstorming',
         description: 'Superpowers brainstorming skill',
         kind: 'skill',
+        source: 'plugin',
+      }),
+    )
+    expect(body.commands).toContainEqual(
+      expect.objectContaining({
+        name: 'superpowers:plugin-probe',
+        description: 'Superpowers plugin command',
+        argumentHint: '<topic>',
+        kind: 'command',
         source: 'plugin',
       }),
     )

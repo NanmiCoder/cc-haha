@@ -3500,9 +3500,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
         })
         .catch(() => {
-          if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: [] })) }))
-          }
+          // A failed initial fetch must not erase commands already supplied by
+          // the CLI or a previous successful refresh.
         })
     }
   },
