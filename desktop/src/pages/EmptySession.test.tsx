@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getMessages: vi.fn(),
   getSlashCommands: vi.fn(),
   listSkills: vi.fn(),
+  listSkillCommands: vi.fn(),
   listAgents: vi.fn(),
   listReferences: vi.fn(),
   search: vi.fn(),
@@ -78,6 +79,7 @@ vi.mock('@/features/voiceInput/recorder', async (importOriginal) => ({
 vi.mock('../api/skills', () => ({
   skillsApi: {
     list: mocks.listSkills,
+    commands: mocks.listSkillCommands,
   },
 }))
 
@@ -338,6 +340,22 @@ describe('EmptySession', () => {
     mocks.getMessages.mockResolvedValue({ messages: [] })
     mocks.getSlashCommands.mockResolvedValue({ commands: [] })
     mocks.listSkills.mockResolvedValue({ skills: [] })
+    mocks.listSkillCommands.mockImplementation(async (cwd?: string) => {
+      const { skills } = await mocks.listSkills(cwd)
+      return {
+        commands: (skills ?? [])
+          .filter((skill: { userInvocable?: boolean }) => skill.userInvocable !== false)
+          .map((skill: { name: string; description: string; source?: string; leanCompatible?: boolean }) => ({
+            name: skill.name,
+            description: skill.description,
+            kind: 'skill' as const,
+            ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
+              ? { source: skill.source }
+              : {}),
+            ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
+          })),
+      }
+    })
     mocks.listAgents.mockResolvedValue({ activeAgents: [], allAgents: [] })
     mocks.listReferences.mockResolvedValue({ plugins: [], skills: [] })
     mocks.search.mockResolvedValue({
@@ -753,6 +771,127 @@ describe('EmptySession', () => {
     fireEvent.click(agentOption)
 
     expect(getComposerText()).toBe('/agent debugger ')
+  })
+
+  it('lists plugin manifest slash commands on /nk before the first message and inserts /plugin:cmd instead of @ mention', async () => {
+    mocks.listSkillCommands.mockResolvedValueOnce({
+      commands: [
+        {
+          name: 'nexuskit:nk-build',
+          description: 'Build NexusKit target',
+          argumentHint: '<target>',
+          kind: 'command',
+          source: 'plugin',
+        },
+        {
+          name: 'idea-refine',
+          description: 'Refine ideas with nk workflow notes',
+          kind: 'skill',
+          source: 'user',
+        },
+      ],
+    })
+    mocks.listReferences.mockResolvedValue({
+      plugins: [
+        {
+          kind: 'plugin',
+          id: 'nexuskit@nexuskit-skills',
+          name: 'nexuskit',
+          displayName: 'nexuskit',
+          description: 'NexusKit plugin',
+          source: 'nexuskit@nexuskit-skills',
+          modelText: 'Use nexuskit plugin.',
+        },
+      ],
+      skills: [
+        {
+          kind: 'skill',
+          id: 'idea-refine',
+          name: 'idea-refine',
+          displayName: 'idea-refine',
+          description: 'Refine ideas with nk workflow notes',
+          source: 'user',
+          modelText: 'Use idea-refine.',
+        },
+      ],
+    })
+
+    render(<EmptySession />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith(undefined)
+    })
+
+    setComposerText('/nk', 3)
+
+    const buildOption = await screen.findByRole('option', { name: '/nexuskit:nk-build' })
+    expect(buildOption).toBeInTheDocument()
+    // Name-part match on nk-build outranks unrelated description-only skill matches.
+    expect(screen.queryByRole('option', { name: 'idea-refine' })).not.toBeInTheDocument()
+
+    fireEvent.click(buildOption)
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('/nexuskit:nk-build ')
+    })
+    expect(document.querySelector('.composer-mention')).not.toBeInTheDocument()
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+  })
+
+  it('does not crash when skillsApi.commands returns non-string argumentHint payloads', async () => {
+    mocks.listSkillCommands.mockResolvedValueOnce({
+      commands: [
+        {
+          name: 'nexuskit:nk-port',
+          description: 'Configure port',
+          argumentHint: 8080 as unknown as string,
+          kind: 'command',
+          source: 'plugin',
+        },
+        {
+          name: 'nexuskit:nk-flag',
+          description: 'Toggle flag',
+          argumentHint: ['--force'] as unknown as string,
+          kind: 'command',
+          source: 'plugin',
+        },
+      ],
+    })
+
+    render(<EmptySession />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith(undefined)
+    })
+
+    setComposerText('/nk', 3)
+
+    expect(await screen.findByRole('option', { name: '/nexuskit:nk-port' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '/nexuskit:nk-flag' })).toBeInTheDocument()
+  })
+
+  it('falls back to skillsApi.list when draft command discovery returns 400 for a missing workDir', async () => {
+    mocks.listSkillCommands.mockRejectedValueOnce(new ApiError(400, 'cwd must be an existing directory'))
+    mocks.listSkills.mockResolvedValueOnce({
+      skills: [
+        {
+          name: 'fallback-user-skill',
+          description: 'Available even when draft cwd is missing',
+          source: 'user',
+          userInvocable: true,
+        },
+      ],
+    })
+
+    render(<EmptySession initialWorkDir="/missing/project" />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith('/missing/project')
+    })
+
+    setComposerText('/fallback', 9)
+    expect(await screen.findByText('fallback-user-skill')).toBeInTheDocument()
   })
 
   it('opens the draft model selector for /model without creating or sending a session', async () => {
