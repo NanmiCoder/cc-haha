@@ -287,7 +287,18 @@ function startRemoteServer(options: Options, remoteBin: string, appRoot: string)
   const accessToken = randomBytes(32).toString('base64url')
   const trustedOrigin = `CC_HAHA_TRUSTED_RENDERER_ORIGIN=http://localhost:1420`
   const tokenEnv = `CC_HAHA_LOCAL_ACCESS_TOKEN=${accessToken}`
-  const serverCmd = `env ${tokenEnv} ${trustedOrigin} ${remoteBin} server --app-root ${appRoot} --host 127.0.0.1 --port ${options.remotePort}`
+  // -u strips inherited proxy vars no matter who set them: the remote often
+  // runs inside tmux, whose long-lived server froze a Clash port in its
+  // environment days ago. That stale HTTPS_PROXY made every CLI provider call
+  // fail with ECONNREFUSED while the provider itself was perfectly reachable
+  // when called directly. The server keeps no proxy at all.
+  const unsetProxy = [
+    'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY',
+    'https_proxy', 'http_proxy', 'all_proxy',
+  ].map((name) => `-u ${name}`).join(' ')
+  const noProxy = 'localhost,127.0.0.1,::1'
+  const proxyEnv = `NO_PROXY=${noProxy} no_proxy=${noProxy}`
+  const serverCmd = `env ${unsetProxy} ${tokenEnv} ${trustedOrigin} ${proxyEnv} ${remoteBin} server --app-root ${appRoot} --host 127.0.0.1 --port ${options.remotePort}`
   const hasTmux = sshBatch(options.host, 'command -v tmux').status === 0
   const logFile = `${workDir}/server.log`
 
