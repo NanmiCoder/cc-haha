@@ -54,7 +54,9 @@ import {
 } from '../services/providerRuntimeEnv.js'
 import {
   getModelReasoningCapabilityOverride,
+  isSchemaEffortLevel,
   MODEL_REASONING_EFFORTS,
+  resolveConfiguredEffortSetting,
   resolveModelReasoningProfile,
   type ModelReasoningApiFormat,
   type ModelReasoningProviderKind,
@@ -546,7 +548,11 @@ async function handleCurrentModel(req: Request): Promise<Response> {
 async function handleEffort(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const settings = await settingsService.getUserSettings()
-    const level = normalizeEffortLevel(settings.effort)
+    const level = normalizeEffortLevel(
+      resolveConfiguredEffortSetting(settings, {
+        allowAntMaxEffortLevel: process.env.USER_TYPE === 'ant',
+      }),
+    )
     return Response.json({ level, available: EFFORT_LEVELS })
   }
 
@@ -561,7 +567,10 @@ async function handleEffort(req: Request): Promise<Response> {
         `Invalid effort level: "${level}". Valid levels: ${EFFORT_LEVELS.join(', ')}`,
       )
     }
-    await settingsService.updateUserSettings({ effort: level })
+    await settingsService.updateUserSettings({
+      effort: level,
+      effortLevel: isSchemaEffortLevel(level) ? level : undefined,
+    })
     return Response.json({ ok: true, level })
   }
 

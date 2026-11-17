@@ -11,6 +11,7 @@ import { conversationService } from '../services/conversationService.js'
 import { handleSettingsApi } from '../api/settings.js'
 import { handleModelsApi } from '../api/models.js'
 import { handleStatusApi, resetUsage, addUsage } from '../api/status.js'
+import { getRuntimeSettings } from '../ws/handler.js'
 import { ProviderService } from '../services/providerService.js'
 import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
@@ -1793,7 +1794,13 @@ describe('Models API', () => {
     expect(body.available).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
-  it('PUT /api/effort should set effort level', async () => {
+  it('PUT /api/effort should set effort level with schema-valid settings.json fields', async () => {
+    const putHigh = makeRequest('PUT', '/api/effort', { level: 'high' })
+    expect((await handleModelsApi(putHigh.req, putHigh.url, putHigh.segments)).status).toBe(200)
+    const rawAfterHigh = JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'))
+    expect(rawAfterHigh.effort).toBe('high')
+    expect(rawAfterHigh.effortLevel).toBe('high')
+
     const { req, url, segments } = makeRequest('PUT', '/api/effort', { level: 'xhigh' })
     const res = await handleModelsApi(req, url, segments)
 
@@ -1801,6 +1808,152 @@ describe('Models API', () => {
     const body = await res.json()
     expect(body.ok).toBe(true)
     expect(body.level).toBe('xhigh')
+
+    const userRaw = JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'))
+    expect(userRaw.effort).toBe('xhigh')
+    expect(userRaw).not.toHaveProperty('effortLevel')
+
+    const managedRaw = JSON.parse(await fs.readFile(path.join(tmpDir, 'cc-haha', 'settings.json'), 'utf-8'))
+    expect(managedRaw.defaultEffort).toBe('xhigh')
+  })
+
+  it('GET /api/effort and session runtime should resolve effort and effortLevel with deterministic precedence', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ effortLevel: 'high' }, null, 2),
+      'utf-8',
+    )
+
+    const { req, url, segments } = makeRequest('GET', '/api/effort')
+    const res = await handleModelsApi(req, url, segments)
+    expect(res.status).toBe(200)
+    expect((await res.json()).level).toBe('high')
+
+    const runtime = await getRuntimeSettings(`official-effort-level-${crypto.randomUUID()}`)
+    expect(runtime.effort).toBe('high')
+
+    // Official CLI effortLevel ('low'|'medium'|'high') wins over stale standard `effort` on disk.
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ effort: 'high', effortLevel: 'low' }, null, 2),
+      'utf-8',
+    )
+    const lowReq = makeRequest('GET', '/api/effort')
+    expect((await (await handleModelsApi(lowReq.req, lowReq.url, lowReq.segments)).json()).level).toBe('low')
+    expect((await getRuntimeSettings(`conflict-low-${crypto.randomUUID()}`)).effort).toBe('low')
+
+    // Desktop `xhigh`/`max` in `effort` wins over a stale schema-limited `effortLevel: 'low'`.
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ effortLevel: 'low', effort: 'xhigh' }, null, 2),
+      'utf-8',
+    )
+    const xhighReq = makeRequest('GET', '/api/effort')
+    expect((await (await handleModelsApi(xhighReq.req, xhighReq.url, xhighReq.segments)).json()).level).toBe('xhigh')
+    expect((await getRuntimeSettings(`conflict-xhigh-${crypto.randomUUID()}`)).effort).toBe('xhigh')
+  })
+
+  it('preserves default effort and response language across external PROXY_MANAGED settings.json overwrite and supports explicit language reset', async () => {
+    const putEffort = makeRequest('PUT', '/api/effort', { level: 'xhigh' })
+    expect((await handleModelsApi(putEffort.req, putEffort.url, putEffort.segments)).status).toBe(200)
+
+    const putLang = makeRequest('PUT', '/api/settings/user', { language: 'chinese' })
+    expect((await handleSettingsApi(putLang.req, putLang.url, putLang.segments)).status).toBe(200)
+
+    // When both values already live on disk, ccHahaFallbackKeys must not be emitted.
+    const getUserBeforeOverwrite = makeRequest('GET', '/api/settings/user')
+    const beforeOverwriteBody = await (
+      await handleSettingsApi(getUserBeforeOverwrite.req, getUserBeforeOverwrite.url, getUserBeforeOverwrite.segments)
+    ).json()
+    expect(beforeOverwriteBody.ccHahaFallbackKeys).toBeUndefined()
+
+    // Simulate external CC Switch overwriting ~/.claude/settings.json on reboot (#1916).
+    const ccSwitchSnapshot = {
+      $schema: 'https://json.schemastore.org/claude-code-settings.json',
+      cleanupPeriodDays: 36500,
+      env: {
+        ANTHROPIC_API_KEY: 'PROXY_MANAGED',
+        ANTHROPIC_BASE_URL: 'http://127.0.0.1:15721',
+      },
+      hooks: {},
+      includeCoAuthoredBy: false,
+      outputStyle: 'engineer-professional',
+      permissions: { allow: ['Bash', 'Read'], deny: [] },
+      statusLine: { command: '~/.claude/ccline/ccline', padding: 0, type: 'command' },
+    }
+    const overwrittenJson = JSON.stringify(ccSwitchSnapshot, null, 2)
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), overwrittenJson, 'utf-8')
+    resetSettingsCache()
+
+    const getEffortAfterReboot = makeRequest('GET', '/api/effort')
+    const effortRes = await handleModelsApi(
+      getEffortAfterReboot.req,
+      getEffortAfterReboot.url,
+      getEffortAfterReboot.segments,
+    )
+    expect((await effortRes.json()).level).toBe('xhigh')
+
+    const getUserAfterReboot = makeRequest('GET', '/api/settings/user')
+    const userRes = await handleSettingsApi(
+      getUserAfterReboot.req,
+      getUserAfterReboot.url,
+      getUserAfterReboot.segments,
+    )
+    const userBody = await userRes.json()
+    expect(userBody.language).toBe('chinese')
+    expect(userBody.effort).toBe('xhigh')
+    expect(userBody.ccHahaFallbackKeys).toEqual(['language', 'effort'])
+
+    // Read-time fallback must not rewrite user-owned ~/.claude/settings.json.
+    expect(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8')).toBe(overwrittenJson)
+
+    // New session runtime must also launch with the preserved xhigh effort.
+    const runtime = await getRuntimeSettings(`reboot-session-${crypto.randomUUID()}`)
+    expect(runtime.effort).toBe('xhigh')
+
+    // Explicit reset to Default (English, '') must delete language from BOTH settings.json and cc-haha/settings.json,
+    // and never persist ccHahaFallbackKeys if round-tripped.
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ ...ccSwitchSnapshot, language: 'chinese' }, null, 2),
+      'utf-8',
+    )
+    const resetLang = makeRequest('PUT', '/api/settings/user', {
+      language: '',
+      ccHahaFallbackKeys: ['language', 'effort'],
+    })
+    expect((await handleSettingsApi(resetLang.req, resetLang.url, resetLang.segments)).status).toBe(200)
+
+    const userDiskAfterLangReset = JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'))
+    expect(userDiskAfterLangReset).not.toHaveProperty('language')
+    expect(userDiskAfterLangReset).not.toHaveProperty('ccHahaFallbackKeys')
+
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), overwrittenJson, 'utf-8')
+    resetSettingsCache()
+
+    const getUserAfterReset = makeRequest('GET', '/api/settings/user')
+    const resetBody = await (
+      await handleSettingsApi(getUserAfterReset.req, getUserAfterReset.url, getUserAfterReset.segments)
+    ).json()
+    expect(resetBody.language).toBeUndefined()
+    expect(resetBody.ccHahaFallbackKeys).toEqual(['effort'])
+
+    // Direct SettingsService updates via effortLevel or null/undefined delete keys instead of writing literal null.
+    const settingsSvc = new SettingsService()
+    await settingsSvc.updateUserSettings({ effortLevel: 'high', language: 'japanese' })
+    await settingsSvc.updateUserSettings({ effortLevel: null, language: undefined })
+    const userAfterNullClear = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'),
+    )
+    expect(userAfterNullClear).not.toHaveProperty('effort')
+    expect(userAfterNullClear).not.toHaveProperty('effortLevel')
+    expect(userAfterNullClear).not.toHaveProperty('language')
+
+    const managedAfterClear = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'cc-haha', 'settings.json'), 'utf-8'),
+    )
+    expect(managedAfterClear.defaultEffort).toBeUndefined()
+    expect(managedAfterClear.language).toBeUndefined()
   })
 
   it('PUT /api/effort should reject invalid level', async () => {

@@ -35,7 +35,7 @@ import { useTabHeaderFocus } from '../design-system/Tabs.js';
 import { useIsInsideModal } from '../../context/modalContext.js';
 import { SearchBox } from '../SearchBox.js';
 import { isSupportedTerminal, hasAccessToIDEExtensionDiffFeature } from '../../utils/ide.js';
-import { getInitialSettings, getSettingsForSource, updateSettingsForSource } from '../../utils/settings/settings.js';
+import { getInitialSettings, getSettingsForSource, getUserLanguageSettingWithFallback, updateSettingsForSource } from '../../utils/settings/settings.js';
 import { getWorkflowSizeGuidelineFromSettings, WORKFLOW_SIZE_GUIDELINES } from '../../utils/workflows/enabled.js';
 import { getUserMsgOptIn, setUserMsgOptIn } from '../../bootstrap/state.js';
 import { DEFAULT_OUTPUT_STYLE_NAME } from 'src/constants/outputStyles.js';
@@ -148,6 +148,8 @@ export function Config({
   // eagerly even though only the first result is kept.
   const [initialLocalSettings] = useState(() => getSettingsForSource('localSettings'));
   const [initialUserSettings] = useState(() => getSettingsForSource('userSettings'));
+  const [initialUserLanguage] = useState(() => getUserLanguageSettingWithFallback(initialUserSettings));
+  const languageModified = React.useRef(false);
   const initialThemeSetting = React.useRef(themeSetting);
   // AppState fields Config may modify — snapshot once at mount.
   const store = useAppStateStore();
@@ -1277,7 +1279,9 @@ export function Config({
       promptSuggestionEnabled: iu?.promptSuggestionEnabled,
       autoUpdatesChannel: iu?.autoUpdatesChannel,
       minimumVersion: iu?.minimumVersion,
-      language: iu?.language,
+      ...(languageModified.current ? {
+        language: initialUserLanguage
+      } : {}),
       ...(feature('TRANSCRIPT_CLASSIFIER') ? {
         useAutoModeDuringPlan: (iu as {
           useAutoModeDuringPlan?: boolean;
@@ -1321,7 +1325,7 @@ export function Config({
     if (getUserMsgOptIn() !== initialUserMsgOptIn) {
       setUserMsgOptIn(initialUserMsgOptIn);
     }
-  }, [themeSetting, setTheme, initialLocalSettings, initialUserSettings, initialAppState, initialUserMsgOptIn, setAppState]);
+  }, [themeSetting, setTheme, initialLocalSettings, initialUserSettings, initialUserLanguage, initialAppState, initialUserMsgOptIn, setAppState]);
 
   // Escape: revert all changes (if any) and close.
   const handleEscape = useCallback(() => {
@@ -1632,6 +1636,7 @@ export function Config({
         </> : showSubmenu === 'Language' ? <>
           <LanguagePicker initialLanguage={currentLanguage} onComplete={language => {
         isDirty.current = true;
+        languageModified.current = true;
         setCurrentLanguage(language);
         setShowSubmenu(null);
         setTabsHidden(false);

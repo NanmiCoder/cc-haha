@@ -70,6 +70,7 @@ import {
   isModelReasoningEffort,
   MODEL_REASONING_EFFORTS,
   normalizeModelReasoningEffort,
+  resolveConfiguredEffortSetting,
   resolveModelReasoningProfile,
 } from '../../shared/modelReasoning.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
@@ -5919,10 +5920,13 @@ async function getDefaultRuntimeSettings(): Promise<RuntimeSettings> {
     typeof modelSettings.modelContext === 'string' && modelSettings.modelContext.trim()
       ? modelSettings.modelContext
       : undefined
-  let effort =
-    typeof userSettings.effort === 'string' && userSettings.effort.trim()
+  let effort: string | undefined =
+    resolveConfiguredEffortSetting(userSettings, {
+      allowAntMaxEffortLevel: process.env.USER_TYPE === 'ant',
+    }) ??
+    (typeof userSettings.effort === 'string' && userSettings.effort.trim()
       ? userSettings.effort
-      : undefined
+      : undefined)
   const thinking = resolveDesktopThinkingMode(userSettings, resolvedActiveId)
 
   let model: string | undefined
