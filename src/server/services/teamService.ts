@@ -151,6 +151,7 @@ export type TranscriptMessage = {
    * tool call to its stringified body.
    */
   toolUseResult?: unknown
+  durationMs?: number
 }
 
 export type TeamTranscriptPage = {
@@ -3010,6 +3011,25 @@ export class TeamService {
       : typeof message?.model === 'string'
         ? message.model
         : undefined
+    const hasToolResult =
+      entryType === 'tool_result' ||
+      (entryType === 'user' &&
+        Array.isArray(content) &&
+        content.some(
+          block =>
+            Boolean(
+              block &&
+              typeof block === 'object' &&
+              (block as { type?: unknown }).type === 'tool_result',
+            ),
+        ))
+    const durationMs =
+      hasToolResult &&
+      typeof entry.durationMs === 'number' &&
+      Number.isFinite(entry.durationMs) &&
+      entry.durationMs >= 0
+        ? entry.durationMs
+        : undefined
     const transcriptMessage: TranscriptMessage = {
       id: (entry.uuid as string) || crypto.randomUUID(),
       type: entryType as TranscriptMessage['type'],
@@ -3020,6 +3040,7 @@ export class TeamService {
         : {}),
       ...(model ? { model } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
     }
     if (!ownerAgentId) return transcriptMessage
     return {

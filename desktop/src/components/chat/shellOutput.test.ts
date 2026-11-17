@@ -262,4 +262,29 @@ describe('toolCallDurationMs', () => {
     // Replayed / reordered transcripts can land a result before its call.
     expect(toolCallDurationMs({ timestamp: 2000 }, { timestamp: 1000 })).toBeUndefined()
   })
+
+  it('prefers reported execution durationMs over batched streaming and serial queue timestamps (#1915)', () => {
+    // 5 serial Edit calls emitted in one assistant turn: content_block_start was stamped at t=1000..1150,
+    // StreamAssistantCommitBuffer held all blocks for ~1.6s, and results arrived 450ms apart,
+    // while each Edit actually executed in ~220ms.
+    const batchedEdits = [
+      { callTs: 1000, resultTs: 2920, durationMs: 220 },
+      { callTs: 1030, resultTs: 3370, durationMs: 215 },
+      { callTs: 1060, resultTs: 3820, durationMs: 230 },
+      { callTs: 1090, resultTs: 4270, durationMs: 205 },
+      { callTs: 1120, resultTs: 4720, durationMs: 225 },
+    ]
+    expect(
+      batchedEdits.map((item) =>
+        toolCallDurationMs({ timestamp: item.callTs }, { timestamp: item.resultTs, durationMs: item.durationMs }),
+      ),
+    ).toEqual([220, 215, 230, 205, 225])
+
+    // 0ms (e.g. fast validation or denied before execution) must not fall through to a multi-second dialog wait.
+    expect(toolCallDurationMs({ timestamp: 1000 }, { timestamp: 15_000, durationMs: 0 })).toBe(0)
+
+    // Invalid reported values fall back to legacy timestamp delta.
+    expect(toolCallDurationMs({ timestamp: 1000 }, { timestamp: 1524, durationMs: Number.NaN })).toBe(524)
+    expect(toolCallDurationMs({ timestamp: 1000 }, { timestamp: 1524, durationMs: -1 })).toBe(524)
+  })
 })

@@ -87,6 +87,8 @@ export type TrajectoryRow = {
   inputSummary?: string
   resultPreview?: string
   resultTs?: string
+  /** Actual tool execution duration in ms (excludes streaming buffer and serial queue wait). */
+  durationMs?: number
   /**
    * The tool_result record exists but exceeded the reader's record budget
    * (typically a screenshot), so its content was not loaded. Byte size of

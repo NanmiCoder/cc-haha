@@ -54,6 +54,8 @@ export type TrajectoryRow = {
   inputSummary?: string
   resultPreview?: string
   resultTs?: string
+  /** Actual tool execution duration in ms (excludes streaming buffer and serial queue wait). */
+  durationMs?: number
   /** The result record exists but was too large to load (bytes). */
   resultOmittedBytes?: number
   agentId?: string
