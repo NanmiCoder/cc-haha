@@ -3568,7 +3568,7 @@ export const jp: Record<TranslationKey, string> = {
   'permission.planKeepPlanning': '計画を続ける',
   'permission.planFeedbackPlaceholder': 'Claude に変更内容を伝える',
   'permission.planExecutionModel': '実行モデル',
-  'permission.planExecutionModelPending': '承認後に有効',
+  'permission.planExecutionModelPending': '送信後に有効',
   'permission.planEmpty': '計画内容はありません。',
   'permission.planApproved': '計画が承認されました',
   'permission.planRejected': '計画が拒否されました',

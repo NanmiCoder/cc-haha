@@ -28,10 +28,15 @@ import { ALL_MODEL_CONFIGS } from './configs.js'
 import {
   firstPartyNameToCanonical,
   getDefaultHaikuModel,
+  getDefaultOpusModel,
+  getDefaultSonnetModel,
+  getMainLoopModel,
   getMarketingNameForModel,
   getPublicModelDisplayName,
+  getRuntimeMainLoopModel,
   parseUserSpecifiedModel,
 } from './model.js'
+import { getMainLoopModelOverride, setMainLoopModelOverride } from '../../bootstrap/state.js'
 import { get3PModelCapabilityOverride } from './modelSupportOverrides.js'
 
 const envKeys = [
@@ -41,6 +46,8 @@ const envKeys = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_CODE_USE_FOUNDRY',
@@ -171,5 +178,50 @@ describe('Haiku alias resolution', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://provider.example.invalid'
     process.env.ANTHROPIC_API_KEY = 'fixture-key'
     expect(getDefaultHaikuModel()).toBe('claude-haiku-4-5-20251001')
+  })
+
+  test('honors an explicit haiku selection in plan mode instead of overriding to sonnet', () => {
+    const previousOverride = getMainLoopModelOverride()
+    try {
+      setMainLoopModelOverride('haiku')
+      const mainLoopModel = getMainLoopModel()
+      expect(mainLoopModel).toBe('claude-haiku-5-5')
+      expect(
+        getRuntimeMainLoopModel({
+          permissionMode: 'plan',
+          mainLoopModel,
+        }),
+      ).toBe('claude-haiku-5-5')
+
+      process.env.ANTHROPIC_BASE_URL = 'https://provider.example.invalid'
+      process.env.ANTHROPIC_API_KEY = 'fixture-key'
+      process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'deepseek-v4-flash'
+      process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'deepseek-v4-pro'
+      const customHaikuModel = getMainLoopModel()
+      expect(customHaikuModel).toBe('deepseek-v4-flash')
+      expect(
+        getRuntimeMainLoopModel({
+          permissionMode: 'plan',
+          mainLoopModel: customHaikuModel,
+        }),
+      ).toBe('deepseek-v4-flash')
+
+      // opusplan remains an explicit dual-mode alias (Opus in plan mode, Sonnet otherwise).
+      setMainLoopModelOverride('opusplan')
+      delete process.env.ANTHROPIC_BASE_URL
+      delete process.env.ANTHROPIC_API_KEY
+      delete process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+      delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+      const opusPlanDefault = getMainLoopModel()
+      expect(opusPlanDefault).toBe(getDefaultSonnetModel())
+      expect(
+        getRuntimeMainLoopModel({
+          permissionMode: 'plan',
+          mainLoopModel: opusPlanDefault,
+        }),
+      ).toBe(getDefaultOpusModel())
+    } finally {
+      setMainLoopModelOverride(previousOverride)
+    }
   })
 })
