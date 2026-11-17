@@ -418,17 +418,57 @@ export type TurnCheckpointDiffResult = WorkspaceDiffResult & {
   workDir?: string
 }
 
+type GitInfoListener = (info: SessionGitInfo) => void
+type GitInfoInvalidateListener = () => void
+
 const gitInfoRequests = new Map<string, Promise<SessionGitInfo>>()
+const gitInfoInFlightCounts = new Map<string, number>()
+const gitInfoGenerations = new Map<string, number>()
+const gitInfoListeners = new Map<string, Set<GitInfoListener>>()
+const gitInfoInvalidationListeners = new Map<string, Set<GitInfoInvalidateListener>>()
+
+function cleanupGitInfoSessionState(sessionId: string) {
+  if (
+    !gitInfoRequests.has(sessionId) &&
+    !gitInfoInFlightCounts.has(sessionId) &&
+    !gitInfoListeners.has(sessionId) &&
+    !gitInfoInvalidationListeners.has(sessionId)
+  ) {
+    gitInfoGenerations.delete(sessionId)
+  }
+}
+
+function notifyGitInfoListeners(sessionId: string, info: SessionGitInfo) {
+  const listeners = gitInfoListeners.get(sessionId)
+  if (!listeners) return
+  for (const listener of [...listeners]) {
+    listener(info)
+  }
+}
 
 function getSessionGitInfo(sessionId: string) {
   const pending = gitInfoRequests.get(sessionId)
   if (pending) return pending
 
+  const generation = gitInfoGenerations.get(sessionId) ?? 0
+  gitInfoInFlightCounts.set(sessionId, (gitInfoInFlightCounts.get(sessionId) ?? 0) + 1)
   const request = api.get<SessionGitInfo>(`/api/sessions/${sessionId}/git-info`)
-  const trackedRequest = request.finally(() => {
+  const trackedRequest = request.then((info) => {
+    if ((gitInfoGenerations.get(sessionId) ?? 0) === generation) {
+      notifyGitInfoListeners(sessionId, info)
+    }
+    return info
+  }).finally(() => {
+    const remaining = (gitInfoInFlightCounts.get(sessionId) ?? 1) - 1
+    if (remaining <= 0) {
+      gitInfoInFlightCounts.delete(sessionId)
+    } else {
+      gitInfoInFlightCounts.set(sessionId, remaining)
+    }
     if (gitInfoRequests.get(sessionId) === trackedRequest) {
       gitInfoRequests.delete(sessionId)
     }
+    cleanupGitInfoSessionState(sessionId)
   })
   gitInfoRequests.set(sessionId, trackedRequest)
   return trackedRequest
@@ -614,8 +654,59 @@ export const sessionsApi = {
   getGitInfo: getSessionGitInfo,
 
   invalidateGitInfo(sessionId: string) {
-    // A cwd notification supersedes requests already reading the old checkout.
+    // A cwd notification or explicit refresh supersedes requests reading an older checkout.
+    gitInfoGenerations.set(sessionId, (gitInfoGenerations.get(sessionId) ?? 0) + 1)
     gitInfoRequests.delete(sessionId)
+    const invalidationListeners = gitInfoInvalidationListeners.get(sessionId)
+    if (invalidationListeners) {
+      for (const onInvalidate of [...invalidationListeners]) {
+        onInvalidate()
+      }
+    }
+    cleanupGitInfoSessionState(sessionId)
+  },
+
+  subscribeGitInfo(
+    sessionId: string,
+    listener: GitInfoListener,
+    options?: { onInvalidate?: GitInfoInvalidateListener },
+  ) {
+    let listeners = gitInfoListeners.get(sessionId)
+    if (!listeners) {
+      listeners = new Set()
+      gitInfoListeners.set(sessionId, listeners)
+    }
+    listeners.add(listener)
+
+    const onInvalidate = options?.onInvalidate
+    if (onInvalidate) {
+      let invalidationListeners = gitInfoInvalidationListeners.get(sessionId)
+      if (!invalidationListeners) {
+        invalidationListeners = new Set()
+        gitInfoInvalidationListeners.set(sessionId, invalidationListeners)
+      }
+      invalidationListeners.add(onInvalidate)
+    }
+
+    return () => {
+      const current = gitInfoListeners.get(sessionId)
+      if (current) {
+        current.delete(listener)
+        if (current.size === 0) {
+          gitInfoListeners.delete(sessionId)
+        }
+      }
+      if (onInvalidate) {
+        const currentInvalidations = gitInfoInvalidationListeners.get(sessionId)
+        if (currentInvalidations) {
+          currentInvalidations.delete(onInvalidate)
+          if (currentInvalidations.size === 0) {
+            gitInfoInvalidationListeners.delete(sessionId)
+          }
+        }
+      }
+      cleanupGitInfoSessionState(sessionId)
+    }
   },
 
   getSlashCommands(sessionId: string) {
