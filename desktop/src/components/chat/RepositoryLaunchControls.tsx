@@ -79,6 +79,8 @@ export type RepositoryLaunchControlsHandle = {
    * the folder as it is.
    */
   resolveLaunchBranch: () => Promise<string | null>
+  /** Re-reads the repository context (e.g. when focus returns from the docked terminal). */
+  refreshContext: () => void
 }
 
 /**
@@ -397,7 +399,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       }
       return next
     },
-  }), [onBranchChange, setAutomaticBranch])
+    refreshContext,
+  }), [onBranchChange, refreshContext, setAutomaticBranch])
 
   // A new directory starts over. A parent that keeps the launch target and
   // mounts these controls again later says which branch was chosen for the

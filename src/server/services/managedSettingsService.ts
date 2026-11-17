@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
 export class ManagedSettingsService {
   private static writeLocks = new Map<string, Promise<void>>()
@@ -51,6 +52,7 @@ export class ManagedSettingsService {
     try {
       await fs.writeFile(tmpFile, contents, 'utf-8')
       await fs.rename(tmpFile, filePath)
+      resetSettingsCache()
     } catch (error) {
       await fs.unlink(tmpFile).catch(() => {})
       throw ApiError.internal(`Failed to write settings.json: ${error}`)
