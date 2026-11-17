@@ -995,6 +995,7 @@ async function* queryLoop(
 
             // Update tool use context with new model
             toolUseContext.options.mainLoopModel = fallbackModel
+            toolUseContext.options.refreshMainLoopModel = undefined
 
             // Thinking signatures are model-bound: replaying a protected-thinking
             // block (e.g. capybara) to an unprotected fallback (e.g. opus) 400s.
@@ -1835,6 +1836,21 @@ async function* queryLoop(
           options: {
             ...updatedToolUseContext.options,
             tools: refreshedTools,
+          },
+        }
+      }
+    }
+
+    // Refresh main-loop model between turns so mid-turn set_model switches
+    // (such as changing the model on an ExitPlanMode card) apply immediately.
+    if (updatedToolUseContext.options.refreshMainLoopModel) {
+      const refreshedModel = updatedToolUseContext.options.refreshMainLoopModel()
+      if (refreshedModel !== updatedToolUseContext.options.mainLoopModel) {
+        updatedToolUseContext = {
+          ...updatedToolUseContext,
+          options: {
+            ...updatedToolUseContext.options,
+            mainLoopModel: refreshedModel,
           },
         }
       }

@@ -11,6 +11,9 @@ import {
   migrateLegacyDeepSeekAccountModels,
 } from './deepseekAccountProvider.js'
 import {
+  isModelReasoningEffort,
+} from '../../shared/modelReasoning.js'
+import {
   BUILT_IN_PROVIDER_IDS,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION,
@@ -248,17 +251,46 @@ function migrateProvidersIndex(value: unknown): JsonObject {
 
 function migrateManagedSettings(value: unknown, activeProviderId?: string): JsonObject {
   const current = isRecord(value) ? value : {}
-  const owned = !Object.hasOwn(current, 'providerEnvOwner') && activeProviderId
+  const next: JsonObject = !Object.hasOwn(current, 'providerEnvOwner') && activeProviderId
     ? { ...current, providerEnvOwner: activeProviderId }
-    : current
-  if (owned.env !== undefined && !isRecord(owned.env)) {
-    return { ...owned, env: {} }
+    : { ...current }
+
+  if (Object.hasOwn(next, 'effort')) {
+    if (
+      !Object.hasOwn(next, 'defaultEffort') &&
+      typeof next.effort === 'string' &&
+      isModelReasoningEffort(next.effort)
+    ) {
+      next.defaultEffort = next.effort
+    }
+    delete next.effort
   }
-  if (isRecord(owned.env)) {
-    const { env, changed } = normalizeLegacyDeepSeekManagedEnv(owned.env as Record<string, string>)
-    if (changed) return { ...owned, env }
+
+  if (
+    Object.hasOwn(next, 'defaultEffort') &&
+    !(typeof next.defaultEffort === 'string' && isModelReasoningEffort(next.defaultEffort))
+  ) {
+    delete next.defaultEffort
   }
-  return owned
+
+  if (
+    Object.hasOwn(next, 'language') &&
+    !(typeof next.language === 'string' && next.language.trim().length > 0)
+  ) {
+    delete next.language
+  }
+
+  if (next.env !== undefined && !isRecord(next.env)) {
+    next.env = {}
+    return next
+  }
+  if (isRecord(next.env)) {
+    const { env, changed } = normalizeLegacyDeepSeekManagedEnv(next.env as Record<string, string>)
+    if (changed) {
+      next.env = env
+    }
+  }
+  return next
 }
 
 async function migrateJsonEntry(

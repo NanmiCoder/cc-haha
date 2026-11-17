@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import last from 'lodash-es/last.js'
 import {
   addToTotalGenerationDuration,
+  getMainLoopModelOverride,
   getSessionId,
   getMainThreadAgentType,
   isSessionPersistenceDisabled,
@@ -369,6 +370,7 @@ export class QueryEngine {
     }
 
     const initialAppState = getAppState()
+    const initialModelOverride = getMainLoopModelOverride()
     const initialMainLoopModel = userSpecifiedModel
       ? parseUserSpecifiedModel(userSpecifiedModel)
       : getMainLoopModel()
@@ -659,6 +661,12 @@ export class QueryEngine {
         tools,
         verbose,
         mainLoopModel,
+        refreshMainLoopModel: modelFromUserInput
+          ? undefined
+          : () =>
+              getMainLoopModelOverride() !== initialModelOverride
+                ? getMainLoopModel()
+                : mainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
         mcpResources: {},
