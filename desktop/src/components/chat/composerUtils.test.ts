@@ -120,6 +120,38 @@ describe('composerUtils', () => {
     )
   })
 
+  it('guards non-string runtime argumentHint and description values in merge and filter', () => {
+    const merged = mergeSlashCommands([
+      {
+        name: 'plugin:port',
+        description: 123 as unknown as string,
+        argumentHint: 8080 as unknown as string,
+        kind: 'command',
+      },
+    ], [])
+
+    expect(merged).toEqual([
+      {
+        name: 'plugin:port',
+        description: '',
+        kind: 'command',
+      },
+    ])
+    expect(
+      filterSlashCommands(
+        [
+          {
+            name: 'plugin:port',
+            description: 123 as unknown as string,
+            argumentHint: 8080 as unknown as string,
+            kind: 'command',
+          },
+        ],
+        'port',
+      ),
+    ).toHaveLength(1)
+  })
+
   it('keeps /goal as a single command with argument hints instead of pseudo subcommands', () => {
     const commands = filterSlashCommands(mergeSlashCommands([]), 'goal')
 

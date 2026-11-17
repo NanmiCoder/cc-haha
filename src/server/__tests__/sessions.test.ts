@@ -5977,6 +5977,126 @@ describe('Sessions API', () => {
     )
   })
 
+  it('GET /api/sessions/:id/slash-commands should include enabled plugin manifest commands before CLI init', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-fffffffffff0'
+    const workDir = path.join(tmpDir, 'workspace', 'app')
+    const marketplaceRoot = path.join(tmpDir, 'nexuskit-marketplace')
+    const cachedPluginRoot = path.join(tmpDir, 'plugins', 'cache', 'nexuskit-skills', 'nexuskit', '0.4.0')
+    const pluginsDir = path.join(tmpDir, 'plugins')
+    const marketplaceFile = path.join(
+      marketplaceRoot,
+      '.claude-plugin',
+      'marketplace.json',
+    )
+
+    await fs.mkdir(path.join(cachedPluginRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.join(cachedPluginRoot, '.claude', 'commands'), { recursive: true })
+    await fs.mkdir(path.dirname(marketplaceFile), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+    await fs.mkdir(workDir, { recursive: true })
+
+    await fs.writeFile(
+      path.join(cachedPluginRoot, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'nexuskit',
+        version: '0.4.0',
+        description: 'NexusKit commands',
+        commands: ['./.claude/commands'],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(cachedPluginRoot, '.claude', 'commands', 'nk-build.md'),
+      [
+        '---',
+        'description: Build with NexusKit',
+        'argument-hint: <app>',
+        '---',
+        '',
+        'Build the target app.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      marketplaceFile,
+      JSON.stringify({
+        name: 'nexuskit-skills',
+        owner: { name: 'NexusKit' },
+        plugins: [
+          {
+            name: 'nexuskit',
+            source: { source: 'github', repo: 'nexuskit/nexuskit-skills' },
+            version: '0.4.0',
+          },
+        ],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(pluginsDir, 'known_marketplaces.json'),
+      JSON.stringify({
+        'nexuskit-skills': {
+          source: { source: 'github', repo: 'nexuskit/nexuskit-skills' },
+          installLocation: marketplaceRoot,
+          lastUpdated: new Date(0).toISOString(),
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(pluginsDir, 'installed_plugins.json'),
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          'nexuskit@nexuskit-skills': [
+            {
+              scope: 'user',
+              installPath: cachedPluginRoot,
+              version: '0.4.0',
+              installedAt: new Date(0).toISOString(),
+              lastUpdated: new Date(0).toISOString(),
+            },
+          ],
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        enabledPlugins: {
+          'nexuskit@nexuskit-skills': true,
+        },
+      }),
+      'utf-8',
+    )
+
+    resetSettingsCache()
+    clearPluginCache('sessions-api-plugin-commands')
+    clearCommandsCache()
+    await writeSessionFile('-tmp-api-test', sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(workDir),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      commands: Array<{ name: string; description: string; argumentHint?: string; kind?: string; source?: string }>
+    }
+
+    expect(body.commands).toContainEqual(
+      expect.objectContaining({
+        name: 'nexuskit:nk-build',
+        description: 'Build with NexusKit',
+        argumentHint: '<app>',
+        kind: 'command',
+        source: 'plugin',
+      }),
+    )
+  })
+
   it('GET /api/sessions/:id/workspace/status|tree|search|file|diff should return workspace data', async () => {
     const workDir = await createWorkspaceApiGitRepo(tmpDir)
     const { sessionId } = await service.createSession(workDir)
