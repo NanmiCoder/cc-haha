@@ -62,6 +62,7 @@ export type MessageEntry = {
   error?: string
   businessErrorCode?: string
   toolUseResult?: unknown
+  durationMs?: number
   timestamp: string
   model?: string
   usage?: MessageUsage

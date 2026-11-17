@@ -4369,6 +4369,16 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       }
 
       if (cliMsg.message?.content && Array.isArray(cliMsg.message.content)) {
+        const toolResultBlocks = cliMsg.message.content.filter(
+          (block: { type?: unknown }) => block?.type === 'tool_result',
+        )
+        const singleToolDurationMs =
+          toolResultBlocks.length === 1 &&
+          typeof cliMsg.durationMs === 'number' &&
+          Number.isFinite(cliMsg.durationMs) &&
+          cliMsg.durationMs >= 0
+            ? cliMsg.durationMs
+            : undefined
         for (const block of cliMsg.message.content) {
           if (block.type === 'tool_result') {
             const directParentToolUseId = cliParentToolUseId(cliMsg)
@@ -4386,6 +4396,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               content: normalizeAskUserQuestionToolResult(block.content, cliMsg.toolUseResult),
               isError: !!block.is_error,
               parentToolUseId,
+              ...(singleToolDurationMs !== undefined ? { durationMs: singleToolDurationMs } : {}),
             })
           }
         }
@@ -4863,6 +4874,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           }]
         }
         if (activity?.kind === 'tool_result') {
+          const activityDurationMs =
+            typeof activity.duration_ms === 'number' &&
+            Number.isFinite(activity.duration_ms) &&
+            activity.duration_ms >= 0
+              ? activity.duration_ms
+              : undefined
           return [{
             type: 'tool_result',
             toolUseId: scopedToolUseId(parentToolUseId, activity.tool_use_id),
@@ -4870,6 +4887,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             content: activity.content,
             isError: activity.is_error === true,
             parentToolUseId,
+            ...(activityDurationMs !== undefined ? { durationMs: activityDurationMs } : {}),
           }]
         }
         return []

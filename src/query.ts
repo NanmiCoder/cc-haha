@@ -137,7 +137,7 @@ const taskSummaryModule = feature('BG_SESSIONS')
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-function* yieldMissingToolResultBlocks(
+export function* yieldMissingToolResultBlocks(
   assistantMessages: AssistantMessage[],
   errorMessage: string,
 ) {
@@ -159,6 +159,7 @@ function* yieldMissingToolResultBlocks(
           },
         ],
         toolUseResult: errorMessage,
+        durationMs: 0,
         sourceToolAssistantUUID: assistantMessage.uuid,
       })
     }

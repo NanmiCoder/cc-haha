@@ -429,6 +429,46 @@ describe('extractAgentToolActivities', () => {
     ])
   })
 
+  test('forwards single-tool durationMs as duration_ms and omits invalid or multi-result values (#1915)', () => {
+    const single = createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_timed', content: 'ok' }],
+      durationMs: 185,
+    }) as Message
+    expect(extractAgentToolActivities(single)).toEqual([
+      { kind: 'tool_result', tool_use_id: 'toolu_timed', content: 'ok', is_error: false, duration_ms: 185 },
+    ])
+
+    const zero = createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_zero', content: 'denied', is_error: true }],
+      durationMs: 0,
+    }) as Message
+    expect(extractAgentToolActivities(zero)).toEqual([
+      { kind: 'tool_result', tool_use_id: 'toolu_zero', content: 'denied', is_error: true, duration_ms: 0 },
+    ])
+
+    for (const invalidDuration of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const invalid = createUserMessage({
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_invalid', content: 'ok' }],
+        durationMs: invalidDuration,
+      }) as Message
+      expect(extractAgentToolActivities(invalid)).toEqual([
+        { kind: 'tool_result', tool_use_id: 'toolu_invalid', content: 'ok', is_error: false },
+      ])
+    }
+
+    const multi = createUserMessage({
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_a', content: 'a' },
+        { type: 'tool_result', tool_use_id: 'toolu_b', content: 'b' },
+      ],
+      durationMs: 185,
+    }) as Message
+    expect(extractAgentToolActivities(multi)).toEqual([
+      { kind: 'tool_result', tool_use_id: 'toolu_a', content: 'a', is_error: false },
+      { kind: 'tool_result', tool_use_id: 'toolu_b', content: 'b', is_error: false },
+    ])
+  })
+
   test('returns empty for string-only user content', () => {
     const message = createUserMessage({ content: 'just text' }) as Message
     expect(extractAgentToolActivities(message)).toEqual([])

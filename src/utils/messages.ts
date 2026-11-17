@@ -498,6 +498,7 @@ export function createUserMessage({
   isCompactSummary,
   summarizeMetadata,
   toolUseResult,
+  durationMs,
   mcpMeta,
   uuid,
   timestamp,
@@ -512,6 +513,8 @@ export function createUserMessage({
   isVirtual?: true
   isCompactSummary?: true
   toolUseResult?: unknown // Matches tool's `Output` type
+  /** Actual tool execution duration in ms (excludes streaming buffer, queue wait, and permission dialog wait). */
+  durationMs?: number
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
   mcpMeta?: {
     _meta?: Record<string, unknown>
@@ -546,6 +549,7 @@ export function createUserMessage({
     uuid: (uuid as UUID | undefined) || randomUUID(),
     timestamp: timestamp ?? new Date().toISOString(),
     toolUseResult,
+    ...(durationMs !== undefined ? { durationMs } : {}),
     mcpMeta,
     imagePasteIds,
     sourceToolAssistantUUID,
@@ -830,6 +834,10 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
         }
         isNewChain = isNewChain || message.message.content.length > 1
         let imageIndex = 0
+        const singleToolResultDurationMs =
+          message.message.content.filter(block => block.type === 'tool_result').length === 1
+            ? message.durationMs
+            : undefined
         return message.message.content.map((_, index) => {
           const isImage = _.type === 'image'
           // For image content blocks, extract just the ID for this image
@@ -842,6 +850,7 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             ...createUserMessage({
               content: [_],
               toolUseResult: message.toolUseResult,
+              durationMs: _.type === 'tool_result' ? singleToolResultDurationMs : undefined,
               mcpMeta: message.mcpMeta,
               isMeta: message.isMeta,
               isVisibleInTranscriptOnly: message.isVisibleInTranscriptOnly,

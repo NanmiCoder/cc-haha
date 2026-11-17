@@ -167,6 +167,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 tool_use_result: _.mcpMeta
                   ? { content: _.toolUseResult, ..._.mcpMeta }
                   : _.toolUseResult,
+                ...(_.durationMs !== undefined ? { durationMs: _.durationMs } : {}),
               }
               break
           }
@@ -230,6 +231,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
           tool_use_result: _.mcpMeta
             ? { content: _.toolUseResult, ..._.mcpMeta }
             : _.toolUseResult,
+          ...(_.durationMs !== undefined ? { durationMs: _.durationMs } : {}),
         }
       }
       return

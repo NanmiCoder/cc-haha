@@ -2037,6 +2037,7 @@ function overlayLiveHistoryMessage(
     }
   }
   if (restoredMessage.type === 'tool_result' && liveMessage.type === 'tool_result') {
+    const durationMs = restoredMessage.durationMs ?? liveMessage.durationMs
     return {
       ...restoredMessage,
       toolUseId: nonEmptyHistoryIdentityPart(liveMessage.toolUseId)
@@ -2049,6 +2050,7 @@ function overlayLiveHistoryMessage(
         ? restoredMessage.content
         : liveMessage.content,
       isError: liveMessage.isError,
+      ...(durationMs !== undefined ? { durationMs } : {}),
       id: restoredMessage.id,
       timestamp: restoredMessage.timestamp,
     }
@@ -5619,11 +5621,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const now = Date.now()
         const pendingParentToolUseId = consumePendingToolParentUseId(sessionId, msg.toolUseId)
         const parentToolUseId = msg.parentToolUseId ?? pendingParentToolUseId
+        const toolDurationMs =
+          typeof msg.durationMs === 'number' && Number.isFinite(msg.durationMs) && msg.durationMs >= 0
+            ? msg.durationMs
+            : undefined
         update((s) => {
           let messages: UIMessage[] = [...s.messages, {
             id: nextId(), type: 'tool_result', toolUseId: msg.toolUseId,
             originalToolUseId: msg.originalToolUseId,
             content: msg.content, isError: msg.isError, timestamp: now, parentToolUseId,
+            ...(toolDurationMs !== undefined ? { durationMs: toolDurationMs } : {}),
           }]
           let backgroundAgentTasks = s.backgroundAgentTasks ?? {}
           const stoppedTask = msg.isError
@@ -8459,8 +8466,17 @@ export function mapHistoryMessagesToUiMessages(
       const attachments: UIAttachment[] = []
       const imageSourcePaths: string[] = []
       let teammateSender: string | undefined
-      const hasImageBlock = (msg.content as UserHistoryBlock[]).some((block) => block.type === 'image')
-      for (const [blockIndex, block] of (msg.content as UserHistoryBlock[]).entries()) {
+      const userBlocks = msg.content as UserHistoryBlock[]
+      const hasImageBlock = userBlocks.some((block) => block.type === 'image')
+      const toolResultCount = userBlocks.filter((block) => block.type === 'tool_result').length
+      const entryDurationMs =
+        toolResultCount === 1 &&
+        typeof msg.durationMs === 'number' &&
+        Number.isFinite(msg.durationMs) &&
+        msg.durationMs >= 0
+          ? msg.durationMs
+          : undefined
+      for (const [blockIndex, block] of userBlocks.entries()) {
         if (block.type === 'text' && block.text && isTeammateMessage(block.text)) {
           modelTextParts.push(block.text)
           if (!includeTeammateMessages) continue
@@ -8488,6 +8504,7 @@ export function mapHistoryMessagesToUiMessages(
           isError: !!block.is_error,
           timestamp,
           parentToolUseId: msg.parentToolUseId,
+          ...(entryDurationMs !== undefined ? { durationMs: entryDurationMs } : {}),
         })
       }
       applyImageMetadataSourcePaths(attachments, imageSourcePaths)
