@@ -9,6 +9,12 @@ import {
   getUseCoworkPlugins,
 } from '../../bootstrap/state.js'
 import { getRemoteManagedSettingsSyncFromCache } from '../../services/remoteManagedSettings/syncCacheState.js'
+import {
+  isModelReasoningEffort,
+  isPersistableSchemaEffortLevel,
+  type ModelReasoningEffort,
+  resolveConfiguredEffortSetting,
+} from '../../shared/modelReasoning.js'
 import { uniq } from '../array.js'
 import { logForDebugging } from '../debug.js'
 import { logForDiagnosticsNoPII } from '../diagLogs.js'
@@ -507,9 +513,23 @@ export function updateSettingsForSource(
       }
     }
 
+    let patchSettings: Record<string, unknown> = settings as Record<string, unknown>
+    let managedGeneralSync: {
+      defaultEffort?: ModelReasoningEffort | null
+      language?: string | null
+    } | null = null
+
+    if (source === 'userSettings' && getUserSettingsFilePath() === 'settings.json') {
+      const normalized = normalizeUserSettingsGeneralPatch(
+        settings as Record<string, unknown>,
+      )
+      patchSettings = normalized.patch
+      managedGeneralSync = normalized.managedSync
+    }
+
     const updatedSettings = mergeWith(
       existingSettings || {},
-      settings,
+      patchSettings,
       (
         _objValue: unknown,
         srcValue: unknown,
@@ -538,6 +558,10 @@ export function updateSettingsForSource(
       filePath,
       jsonStringify(updatedSettings, null, 2) + '\n',
     )
+
+    if (managedGeneralSync) {
+      syncCcHahaUserGeneralSettings(managedGeneralSync)
+    }
 
     // Invalidate the session cache since settings have been updated
     resetSettingsCache()
@@ -675,6 +699,275 @@ export function getManagedSettingsKeysForLogging(
 // Flag to prevent infinite recursion when loading settings
 let isLoadingSettings = false
 
+function normalizeUserSettingsGeneralPatch(
+  rawSettings: Record<string, unknown>,
+): {
+  patch: Record<string, unknown>
+  managedSync: {
+    defaultEffort?: ModelReasoningEffort | null
+    language?: string | null
+  } | null
+} {
+  const hasLanguage = Object.hasOwn(rawSettings, 'language')
+  const hasEffort = Object.hasOwn(rawSettings, 'effort')
+  const hasEffortLevel = Object.hasOwn(rawSettings, 'effortLevel')
+  if (!hasLanguage && !hasEffort && !hasEffortLevel) {
+    return { patch: rawSettings, managedSync: null }
+  }
+
+  const patch: Record<string, unknown> = { ...rawSettings }
+  const managedSync: {
+    defaultEffort?: ModelReasoningEffort | null
+    language?: string | null
+  } = {}
+
+  if (hasLanguage) {
+    const rawLanguage = rawSettings.language
+    if (typeof rawLanguage === 'string' && rawLanguage.trim().length > 0) {
+      patch.language = rawLanguage
+      managedSync.language = rawLanguage
+    } else {
+      patch.language = undefined
+      managedSync.language = null
+    }
+  }
+
+  if (hasEffort || hasEffortLevel) {
+    const isAnt = process.env.USER_TYPE === 'ant'
+    const rawEffort = rawSettings.effort
+    const rawEffortLevel = rawSettings.effortLevel
+
+    if (hasEffort) {
+      if (rawEffort === undefined || rawEffort === null || rawEffort === '') {
+        if (
+          hasEffortLevel &&
+          typeof rawEffortLevel === 'string' &&
+          isModelReasoningEffort(rawEffortLevel)
+        ) {
+          patch.effort = rawEffortLevel
+          patch.effortLevel = isPersistableSchemaEffortLevel(rawEffortLevel, isAnt)
+            ? rawEffortLevel
+            : undefined
+          managedSync.defaultEffort = rawEffortLevel
+        } else {
+          patch.effort = undefined
+          patch.effortLevel = undefined
+          managedSync.defaultEffort = null
+        }
+      } else if (typeof rawEffort === 'string' && isModelReasoningEffort(rawEffort)) {
+        patch.effort = rawEffort
+        patch.effortLevel = isPersistableSchemaEffortLevel(rawEffort, isAnt)
+          ? rawEffort
+          : undefined
+        managedSync.defaultEffort = rawEffort
+      }
+    } else if (
+      rawEffortLevel === undefined ||
+      rawEffortLevel === null ||
+      rawEffortLevel === ''
+    ) {
+      patch.effortLevel = undefined
+      patch.effort = undefined
+      managedSync.defaultEffort = null
+    } else if (
+      typeof rawEffortLevel === 'string' &&
+      isModelReasoningEffort(rawEffortLevel)
+    ) {
+      patch.effort = rawEffortLevel
+      patch.effortLevel = isPersistableSchemaEffortLevel(rawEffortLevel, isAnt)
+        ? rawEffortLevel
+        : undefined
+      managedSync.defaultEffort = rawEffortLevel
+    }
+  }
+
+  return {
+    patch,
+    managedSync: Object.keys(managedSync).length > 0 ? managedSync : null,
+  }
+}
+
+function syncCcHahaUserGeneralSettings(sync: {
+  defaultEffort?: ModelReasoningEffort | null
+  language?: string | null
+}): void {
+  const onlyClearing =
+    (sync.defaultEffort === undefined || sync.defaultEffort === null) &&
+    (sync.language === undefined || sync.language === null)
+  const managedPath = join(getClaudeConfigHomeDir(), 'cc-haha', 'settings.json')
+
+  let content: string | null = null
+  try {
+    content = readFileSync(managedPath)
+  } catch (e) {
+    if (!isENOENT(e)) {
+      logForDebugging(`Failed to read ${managedPath} while syncing General settings: ${e}`)
+    }
+    if (onlyClearing || !isENOENT(e)) {
+      return
+    }
+  }
+
+  let existing: Record<string, unknown> = {}
+  if (content !== null) {
+    if (content.trim() === '') {
+      if (onlyClearing) return
+    } else {
+      const parsed = safeParseJSONWithoutCache(content)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        logForDebugging(
+          `Skipping General settings backup sync for malformed ${managedPath}`,
+        )
+        return
+      }
+      existing = parsed as Record<string, unknown>
+    }
+  }
+
+  const next: Record<string, unknown> = { ...existing }
+  let changed = false
+
+  if (sync.defaultEffort !== undefined) {
+    if (sync.defaultEffort === null) {
+      if (Object.hasOwn(next, 'defaultEffort')) {
+        delete next.defaultEffort
+        changed = true
+      }
+      if (Object.hasOwn(next, 'effort')) {
+        delete next.effort
+        changed = true
+      }
+    } else {
+      if (next.defaultEffort !== sync.defaultEffort) {
+        next.defaultEffort = sync.defaultEffort
+        changed = true
+      }
+      if (Object.hasOwn(next, 'effort')) {
+        delete next.effort
+        changed = true
+      }
+    }
+  }
+
+  if (sync.language !== undefined) {
+    if (sync.language === null) {
+      if (Object.hasOwn(next, 'language')) {
+        delete next.language
+        changed = true
+      }
+    } else if (next.language !== sync.language) {
+      next.language = sync.language
+      changed = true
+    }
+  }
+
+  if (!changed) {
+    return
+  }
+
+  try {
+    getFsImplementation().mkdirSync(dirname(managedPath))
+    markInternalWrite(managedPath)
+    writeFileSyncAndFlush_DEPRECATED(
+      managedPath,
+      jsonStringify(next, null, 2) + '\n',
+    )
+  } catch (e) {
+    logForDebugging(`Failed to write ${managedPath} while syncing General settings: ${e}`)
+  }
+}
+
+function loadCcHahaUserGeneralFallback(
+  userMerged: SettingsJson,
+): Record<string, unknown> | null {
+  if (getUserSettingsFilePath() !== 'settings.json') {
+    return null
+  }
+  const hasLanguage =
+    Object.hasOwn(userMerged, 'language') && userMerged.language !== undefined
+  const hasEffort =
+    (userMerged as Record<string, unknown>).effort !== undefined ||
+    userMerged.effortLevel !== undefined
+  if (hasLanguage && hasEffort) {
+    return null
+  }
+
+  try {
+    const managedPath = join(getClaudeConfigHomeDir(), 'cc-haha', 'settings.json')
+    const content = readFileSync(managedPath)
+    if (content.trim() === '') return null
+    const parsed = safeParseJSON(content, false)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null
+    }
+    const record = parsed as Record<string, unknown>
+    const fallback: Record<string, unknown> = {}
+
+    if (
+      !hasLanguage &&
+      typeof record.language === 'string' &&
+      record.language.trim().length > 0
+    ) {
+      fallback.language = record.language
+    }
+
+    if (
+      !hasEffort &&
+      typeof record.defaultEffort === 'string' &&
+      isModelReasoningEffort(record.defaultEffort)
+    ) {
+      fallback.effort = record.defaultEffort
+      if (
+        isPersistableSchemaEffortLevel(
+          record.defaultEffort,
+          process.env.USER_TYPE === 'ant',
+        )
+      ) {
+        fallback.effortLevel = record.defaultEffort
+      }
+    }
+
+    return Object.keys(fallback).length > 0 ? fallback : null
+  } catch {
+    return null
+  }
+}
+
+export function getUserLanguageSettingWithFallback(
+  rawUserSettings: SettingsJson | null | undefined = getSettingsForSource('userSettings'),
+): string | undefined {
+  if (
+    rawUserSettings &&
+    Object.hasOwn(rawUserSettings, 'language') &&
+    rawUserSettings.language !== undefined
+  ) {
+    return rawUserSettings.language
+  }
+  const fallback = loadCcHahaUserGeneralFallback(rawUserSettings ?? {})
+  return typeof fallback?.language === 'string' ? fallback.language : undefined
+}
+
+function mergeSettingsLayerWithEffortPrecedence(
+  target: SettingsJson,
+  layer: SettingsJson | Record<string, unknown>,
+): SettingsJson {
+  const isAnt = process.env.USER_TYPE === 'ant'
+  const layerEffort = resolveConfiguredEffortSetting(
+    layer as { effort?: unknown; effortLevel?: unknown },
+    { allowAntMaxEffortLevel: isAnt },
+  )
+  const merged = mergeWith(target, layer, settingsMergeCustomizer) as SettingsJson
+  if (layerEffort !== undefined) {
+    ;(merged as Record<string, unknown>).effort = layerEffort
+    if (isPersistableSchemaEffortLevel(layerEffort, isAnt)) {
+      merged.effortLevel = layerEffort
+    } else {
+      delete merged.effortLevel
+    }
+  }
+  return merged
+}
+
 /**
  * Load settings from disk without using cache
  * This is the original implementation that actually reads from files
@@ -758,10 +1051,9 @@ function loadSettingsFromDisk(): SettingsWithErrors {
 
         // Merge the winning policy source into the settings chain
         if (policySettings) {
-          mergedSettings = mergeWith(
+          mergedSettings = mergeSettingsLayerWithEffortPrecedence(
             mergedSettings,
             policySettings,
-            settingsMergeCustomizer,
           )
         }
         for (const error of policyErrors) {
@@ -795,12 +1087,21 @@ function loadSettingsFromDisk(): SettingsWithErrors {
           }
 
           if (settings) {
-            mergedSettings = mergeWith(
+            mergedSettings = mergeSettingsLayerWithEffortPrecedence(
               mergedSettings,
               settings,
-              settingsMergeCustomizer,
             )
           }
+        }
+      }
+
+      if (source === 'userSettings') {
+        const ccHahaFallback = loadCcHahaUserGeneralFallback(mergedSettings)
+        if (ccHahaFallback) {
+          mergedSettings = mergeSettingsLayerWithEffortPrecedence(
+            mergedSettings,
+            ccHahaFallback,
+          )
         }
       }
 
@@ -810,10 +1111,9 @@ function loadSettingsFromDisk(): SettingsWithErrors {
         if (inlineSettings) {
           const parsed = SettingsSchema().safeParse(inlineSettings)
           if (parsed.success) {
-            mergedSettings = mergeWith(
+            mergedSettings = mergeSettingsLayerWithEffortPrecedence(
               mergedSettings,
               parsed.data,
-              settingsMergeCustomizer,
             )
           }
         }

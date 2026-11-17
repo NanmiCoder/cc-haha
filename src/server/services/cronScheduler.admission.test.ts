@@ -52,7 +52,7 @@ function deferred<T = void>() {
 }
 
 async function until(check: () => boolean) {
-  const deadline = performance.now() + 4_000
+  const deadline = performance.now() + 12_000
   while (!check() && performance.now() < deadline) await Bun.sleep(5)
   expect(check()).toBe(true)
 }

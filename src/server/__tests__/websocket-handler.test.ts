@@ -5093,6 +5093,243 @@ describe('WebSocket handler session isolation', () => {
     )
   })
 
+  it('switches the planning model in-process before denying ExitPlanMode on Keep planning', async () => {
+    mockSavedDeepSeekProvider()
+    const sessionId = `plan-keep-same-provider-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const callOrder: string[] = []
+
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionToolName').mockReturnValue('ExitPlanMode')
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'setModel').mockImplementation(async () => {
+      callOrder.push('setModel')
+      return true
+    })
+    spyOn(conversationService, 'respondToPermission').mockImplementation(() => {
+      callOrder.push('respondToPermission')
+      return true
+    })
+    const launchInfo = {
+      filePath: '/tmp/plan-session.jsonl',
+      projectDir: '/tmp',
+      workDir: '/tmp',
+      transcriptMessageCount: 0,
+      customTitle: null,
+      permissionMode: 'plan',
+      runtimeProviderId: 'deepseek',
+      runtimeModelId: 'deepseek-v4-pro',
+      effortLevel: 'high',
+    }
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => {
+      Object.assign(launchInfo, metadata)
+    })
+    const startSession = spyOn(conversationService, 'startSession').mockResolvedValue()
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'perm-plan-keep-1',
+      allowed: false,
+      denyMessage: 'Use migrating adapters instead of a full rewrite.',
+      runtimeOverride: {
+        providerId: 'deepseek',
+        modelId: 'deepseek-v4-flash',
+      },
+    }))
+    await flushMicrotasks(30)
+
+    expect(callOrder).toEqual(['setModel', 'respondToPermission'])
+    expect(conversationService.setModel).toHaveBeenCalledWith(sessionId, 'deepseek-v4-flash')
+    expect(conversationService.respondToPermission).toHaveBeenCalledWith(
+      sessionId,
+      'perm-plan-keep-1',
+      false,
+      undefined,
+      undefined,
+      'Use migrating adapters instead of a full rewrite.',
+      undefined,
+    )
+    expect(startSession).not.toHaveBeenCalled()
+    expect(stopSession).not.toHaveBeenCalled()
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'runtime_config_applied',
+      providerId: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      effortLevel: 'high',
+      requestedConfig: { providerId: 'deepseek', modelId: 'deepseek-v4-flash' },
+    })
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({
+      permissionMode: 'plan',
+      model: 'deepseek-v4-flash',
+      effort: 'high',
+    })
+  })
+
+  it('denies ExitPlanMode with a cross-provider switch via restart in plan mode and auto-revision', async () => {
+    const sessionId = `plan-keep-cross-provider-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+
+    let sessionRunning = true
+    const launchInfo: Record<string, unknown> = {
+      filePath: '/tmp/plan-session.jsonl',
+      projectDir: '/tmp',
+      workDir: '/tmp',
+      transcriptMessageCount: 0,
+      customTitle: null,
+      runtimeProviderId: 'deepseek',
+      runtimeModelId: 'deepseek-v4-pro',
+    }
+    spyOn(conversationService, 'hasSession').mockImplementation(() => sessionRunning)
+    spyOn(conversationService, 'getPendingPermissionToolName').mockReturnValue('ExitPlanMode')
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+    spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    spyOn(conversationService, 'stopSession').mockImplementation(() => {
+      sessionRunning = false
+    })
+    spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
+    spyOn(conversationService, 'startSession').mockImplementation(async () => {
+      sessionRunning = true
+    })
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo as any)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => {
+      Object.assign(launchInfo, metadata)
+    })
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
+    spyOn(sessionService, 'shouldPersistSession').mockReturnValue(false)
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {})
+
+    const outputCallbacks = new Set<(msg: any) => void>()
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.add(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, callback) => {
+      outputCallbacks.delete(callback)
+    })
+
+    handleWebSocket.open(ws)
+    __markActiveTurnForTests(sessionId)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'perm-plan-keep-2',
+      allowed: false,
+      denyMessage: 'Keep backwards compatibility for old clients.',
+      runtimeOverride: {
+        providerId: null,
+        modelId: 'claude-sonnet-5',
+      },
+    }))
+    await flushMicrotasks(30)
+
+    expect(consoleError).not.toHaveBeenCalled()
+    expect(conversationService.respondToPermission).toHaveBeenCalledWith(
+      sessionId,
+      'perm-plan-keep-2',
+      false,
+      undefined,
+      undefined,
+      'Keep backwards compatibility for old clients.',
+      undefined,
+    )
+    expect(conversationService.sendInterrupt).toHaveBeenCalledWith(sessionId)
+
+    for (const callback of outputCallbacks) {
+      callback({ type: 'result', subtype: 'success', is_error: false })
+    }
+    await flushMicrotasks(30)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await flushMicrotasks(30)
+
+    expect(conversationService.stopSession).toHaveBeenCalledWith(sessionId, { keepTeamWorkers: true })
+    expect(conversationService.startSession).toHaveBeenCalledWith(
+      sessionId,
+      '/tmp',
+      expect.stringContaining(`/sdk/${sessionId}`),
+      expect.objectContaining({
+        providerId: null,
+        model: 'claude-sonnet-5',
+        permissionMode: 'plan',
+      }),
+    )
+    expect(conversationService.sendMessage).toHaveBeenCalledWith(
+      sessionId,
+      'Stay in plan mode. Revise the plan to address this feedback and present it again for approval:\nKeep backwards compatibility for old clients.',
+      undefined,
+      expect.objectContaining({ canSend: expect.any(Function) }),
+    )
+  })
+
+  it('auto-revises without feedback suffix when cross-provider Keep planning has no denyMessage', async () => {
+    const sessionId = `plan-keep-cross-empty-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+
+    let sessionRunning = true
+    const launchInfo: Record<string, unknown> = {
+      filePath: '/tmp/plan-session.jsonl',
+      projectDir: '/tmp',
+      workDir: '/tmp',
+      transcriptMessageCount: 0,
+      customTitle: null,
+      runtimeProviderId: 'deepseek',
+      runtimeModelId: 'deepseek-v4-pro',
+    }
+    spyOn(conversationService, 'hasSession').mockImplementation(() => sessionRunning)
+    spyOn(conversationService, 'getPendingPermissionToolName').mockReturnValue('ExitPlanMode')
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+    spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    spyOn(conversationService, 'stopSession').mockImplementation(() => {
+      sessionRunning = false
+    })
+    spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
+    spyOn(conversationService, 'startSession').mockImplementation(async () => {
+      sessionRunning = true
+    })
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo as any)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => {
+      Object.assign(launchInfo, metadata)
+    })
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
+    spyOn(sessionService, 'shouldPersistSession').mockReturnValue(false)
+
+    const outputCallbacks = new Set<(msg: any) => void>()
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.add(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, callback) => {
+      outputCallbacks.delete(callback)
+    })
+
+    handleWebSocket.open(ws)
+    __markActiveTurnForTests(sessionId)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'perm-plan-keep-3',
+      allowed: false,
+      runtimeOverride: {
+        providerId: null,
+        modelId: 'claude-sonnet-5',
+      },
+    }))
+    await flushMicrotasks(30)
+    for (const callback of outputCallbacks) {
+      callback({ type: 'result', subtype: 'success', is_error: false })
+    }
+    await flushMicrotasks(30)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await flushMicrotasks(30)
+
+    expect(conversationService.sendMessage).toHaveBeenCalledWith(
+      sessionId,
+      'Stay in plan mode. Revise the plan and present it again for approval.',
+      undefined,
+      expect.objectContaining({ canSend: expect.any(Function) }),
+    )
+  })
+
   it('keeps the permission pending when the in-process model switch fails', async () => {
     mockSavedDeepSeekProvider()
     const sessionId = `plan-set-model-fail-${crypto.randomUUID()}`

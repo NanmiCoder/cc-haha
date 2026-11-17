@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -273,5 +273,60 @@ describe('worktree metadata across the live session lifecycle', () => {
       expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument()
       expect(screen.queryByTestId('worktree-details-trigger')).not.toBeInTheDocument()
     })
+  })
+
+  it('synchronizes both header and composer branch badges when a regular checkout switches branches', async () => {
+    let liveBranch = 'master'
+    server.getGitInfo.mockImplementation(async () => ({
+      branch: liveBranch,
+      repoName: 'plain-project',
+      workDir: REGULAR_WORK_DIR,
+      changedFiles: 0,
+      worktree: null,
+    }))
+
+    let regularSessionId = ''
+    await act(async () => {
+      regularSessionId = await useSessionStore.getState().createSession(REGULAR_WORK_DIR)
+    })
+    act(() => {
+      useTabStore.getState().openTab(regularSessionId, 'Regular Session', 'session')
+    })
+
+    render(
+      <div>
+        <textarea data-testid="external-terminal-focus" aria-label="Terminal" />
+        <ActiveSession />
+      </div>,
+    )
+    await finishTurn(regularSessionId, 'initial reply')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-header-branch')).toHaveTextContent('master')
+      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('master')
+    })
+
+    liveBranch = 'dev_xxxx'
+    const callsBeforeWindowFocus = server.getGitInfo.mock.calls.length
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('session-header-branch')).toHaveTextContent('dev_xxxx')
+      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('dev_xxxx')
+    })
+    expect(server.getGitInfo).toHaveBeenCalledTimes(callsBeforeWindowFocus + 1)
+
+    // Switching branches in the docked terminal and focusing the composer updates the header too.
+    const terminalFocus = screen.getByTestId('external-terminal-focus')
+    fireEvent.focus(terminalFocus)
+    liveBranch = 'feat/synced-header'
+    const callsBeforeComposerFocus = server.getGitInfo.mock.calls.length
+    fireEvent.focus(within(screen.getByTestId('chat-input-panel')).getByRole('textbox'), { relatedTarget: terminalFocus })
+    await waitFor(() => {
+      expect(screen.getByTestId('session-header-branch')).toHaveTextContent('feat/synced-header')
+      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('feat/synced-header')
+    })
+    expect(server.getGitInfo).toHaveBeenCalledTimes(callsBeforeComposerFocus + 1)
   })
 })

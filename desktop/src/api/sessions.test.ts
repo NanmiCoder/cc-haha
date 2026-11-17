@@ -239,6 +239,68 @@ describe('sessionsApi', () => {
     expect((await fresh).workDir).toBe('/repo/worktree')
   })
 
+  it('notifies subscribed Git info and invalidation listeners and suppresses invalidated stale responses', async () => {
+    const resolvers: Array<(response: Response) => void> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+
+    const seen: string[] = []
+    let invalidations = 0
+    const unsubscribe = sessionsApi.subscribeGitInfo(
+      'sub-session',
+      (info) => {
+        seen.push(info.branch ?? 'detached')
+      },
+      {
+        onInvalidate: () => {
+          invalidations += 1
+        },
+      },
+    )
+
+    try {
+      const stale = sessionsApi.getGitInfo('sub-session')
+      sessionsApi.invalidateGitInfo('sub-session')
+      expect(invalidations).toBe(1)
+      const fresh = sessionsApi.getGitInfo('sub-session')
+
+      resolvers[0]!(new Response(JSON.stringify({
+        branch: 'master',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await stale
+      expect(seen).toEqual([])
+
+      resolvers[1]!(new Response(JSON.stringify({
+        branch: 'dev_xxxx',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await fresh
+      expect(seen).toEqual(['dev_xxxx'])
+    } finally {
+      unsubscribe()
+    }
+
+    sessionsApi.invalidateGitInfo('sub-session')
+    expect(invalidations).toBe(1)
+
+    const afterUnsubscribe = sessionsApi.getGitInfo('sub-session')
+    resolvers[2]!(new Response(JSON.stringify({
+      branch: 'after-unsubscribe',
+      repoName: 'repo',
+      workDir: '/repo',
+      changedFiles: 0,
+      worktree: null,
+    })))
+    await afterUnsubscribe
+    expect(seen).toEqual(['dev_xxxx'])
+  })
+
   it('fetches a single trace call from the call detail endpoint', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({

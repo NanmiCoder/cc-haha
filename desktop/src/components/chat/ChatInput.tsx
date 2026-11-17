@@ -34,7 +34,7 @@ import {
   useWorkspaceChatContextStore,
   type WorkspaceChatReference,
 } from '../../stores/workspaceChatContextStore'
-import { sessionsApi, type SessionGitInfo } from '../../api/sessions'
+import { sessionsApi } from '../../api/sessions'
 import { agentsApi } from '../../api/agents'
 import { PermissionModeSelector, type PermissionModeSelectorHandle } from '../controls/PermissionModeSelector'
 import { PERMISSION_MODE_LABEL_KEYS, useResolvedPermissionMode } from '../controls/permissionModeState'
@@ -101,11 +101,10 @@ import {
 import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
 import { useSessionStopOffer } from '../../hooks/useSessionStopOffer'
+import { useSessionGitInfo } from '../../hooks/useSessionGitInfo'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
-
-type GitInfo = SessionGitInfo
 
 type Attachment = ComposerAttachment
 
@@ -323,8 +322,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       (historyIndex !== null && historyIndex !== undefined),
     )
   })
-  const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
-  const gitInfoRequest = useRef(0)
   const workspaceReferences = useWorkspaceChatContextStore(
     (s) => activeTabId ? s.referencesBySession[activeTabId] ?? EMPTY_WORKSPACE_REFERENCES : EMPTY_WORKSPACE_REFERENCES,
   )
@@ -375,6 +372,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [])
 
   const isMemberSession = !!memberInfo || activeTabType === 'subagent'
+  const { gitInfo, refreshGitInfo } = useSessionGitInfo({
+    sessionId: activeTabId,
+    enabled: Boolean(activeTabId) && !isMemberSession,
+    visible,
+    workDir: activeSession?.workDir,
+    chatState,
+    messageCount,
+    secondaryRefreshKey: slashCommands.length,
+  })
   // A desktop team member runs in its own CLI. That CLI's session, not this
   // page's tab id, answers for the member's commands, context and model. A
   // SubAgent run, or a member without a CLI of its own, has none of them.
@@ -501,7 +507,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     ],
     [attachments, workspaceReferences],
   )
-  const slashCommandCount = slashCommands.length
 
   useEffect(() => {
     inputRef.current = input
@@ -547,8 +552,20 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     mentionsRef.current = mentions
   }, [mentions])
 
+  const hadExternalFocusRef = useRef(false)
+  const lastComposerFocusRefreshRef = useRef<number | undefined>(undefined)
+  const programmaticFocusRef = useRef(false)
+
   useEffect(() => {
-    if (visible) composerRef.current?.focus()
+    hadExternalFocusRef.current = false
+    lastComposerFocusRefreshRef.current = undefined
+    if (!visible) return
+    programmaticFocusRef.current = true
+    try {
+      composerRef.current?.focus()
+    } finally {
+      programmaticFocusRef.current = false
+    }
   }, [activeTabId, visible])
 
   useEffect(() => {
@@ -674,34 +691,45 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setComposerInput,
   ])
 
-  const refreshGitInfo = useCallback(() => {
-    const request = ++gitInfoRequest.current
-    if (!activeTabId) {
-      setGitInfo(null)
-      return
-    }
-    if (isMemberSession) {
-      setGitInfo(null)
-      return
-    }
-    sessionsApi.getGitInfo(activeTabId).then(info => {
-      if (gitInfoRequest.current === request) setGitInfo(info)
-    }).catch(() => {
-      if (gitInfoRequest.current === request) setGitInfo(null)
-    })
-  }, [activeTabId, isMemberSession, activeSession?.workDir])
-
   useEffect(() => {
-    setGitInfo(null)
-    refreshGitInfo()
-    return () => { gitInfoRequest.current++ }
-  }, [refreshGitInfo])
+    if (!visible || !activeTabId || isMemberSession) return
+    const handleDocumentFocusIn = (event: FocusEvent) => {
+      const target = event.target
+      if (target instanceof Node && !panelRef.current?.contains(target)) {
+        hadExternalFocusRef.current = true
+      }
+    }
+    document.addEventListener('focusin', handleDocumentFocusIn)
+    return () => {
+      document.removeEventListener('focusin', handleDocumentFocusIn)
+    }
+  }, [activeTabId, isMemberSession, visible])
 
-  useEffect(() => {
-    if (!activeTabId || isMemberSession || messageCount === 0) return
-    const timeout = setTimeout(refreshGitInfo, chatState === 'idle' ? 0 : 500)
-    return () => clearTimeout(timeout)
-  }, [activeTabId, chatState, isMemberSession, messageCount, refreshGitInfo, slashCommandCount])
+  const handlePanelBlurCapture = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    if (!visible) return
+    const nextFocused = event.relatedTarget
+    if (!nextFocused || !event.currentTarget.contains(nextFocused)) {
+      hadExternalFocusRef.current = true
+    }
+  }, [visible])
+
+  const handlePanelFocusCapture = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    if (programmaticFocusRef.current || !visible || !activeTabId || isMemberSession) return
+    const previousFocused = event.relatedTarget
+    const enteredFromOutside =
+      hadExternalFocusRef.current ||
+      (previousFocused instanceof Node && !event.currentTarget.contains(previousFocused))
+    if (!enteredFromOutside) return
+    hadExternalFocusRef.current = false
+    const now = Date.now()
+    const last = lastComposerFocusRefreshRef.current
+    if (last !== undefined && now >= last && now - last < 1_000) return
+    lastComposerFocusRefreshRef.current = now
+    if (showLaunchControls) {
+      launchControlsRef.current?.refreshContext()
+    }
+    void refreshGitInfo()
+  }, [activeTabId, isMemberSession, refreshGitInfo, showLaunchControls, visible])
 
   useEffect(() => {
     if (!isMemberSession) return
@@ -1168,9 +1196,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       }
     }
     if (showLaunchControls && activeLaunchWorkDir && resolvedLaunchBranch) {
+      let currentSessionBranch = gitInfo?.branch ?? null
+      const shouldVerifyLiveBranch =
+        !launchUseWorktree && (
+          (!launchBranchAutomatic && currentSessionBranch === resolvedLaunchBranch) ||
+          (launchBranchAutomatic && currentSessionBranch !== resolvedLaunchBranch)
+        )
+      if (shouldVerifyLiveBranch) {
+        setLaunchTransitioning(true)
+        try {
+          const latestGitInfo = await refreshGitInfo()
+          if (latestGitInfo) {
+            currentSessionBranch = latestGitInfo.branch
+          }
+        } finally {
+          setLaunchTransitioning(false)
+        }
+      }
       const shouldReplaceForRepositoryLaunch =
         launchUseWorktree ||
-        (gitInfo?.branch ? resolvedLaunchBranch !== gitInfo.branch : true)
+        (currentSessionBranch ? resolvedLaunchBranch !== currentSessionBranch : true)
       if (shouldReplaceForRepositoryLaunch) {
         setLaunchTransitioning(true)
         const placeholderSessionId = targetSessionId
@@ -1668,6 +1713,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           // variant — the editor and the toolbar carry their own insets, so a
           // draft turning into a live session moves nothing.
           className={`glass-panel glass-panel--composer relative flex flex-col overflow-visible rounded-[var(--radius-xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          onFocusCapture={handlePanelFocusCapture}
+          onBlurCapture={handlePanelBlurCapture}
           {...dragHandlers}
         >
           {isDragActive && (
