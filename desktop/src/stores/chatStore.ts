@@ -2416,6 +2416,7 @@ function normalizeSlashCommand(command: unknown): SlashCommandState | null {
     argumentHint?: unknown
     kind?: unknown
     source?: unknown
+    leanCompatible?: unknown
   }
   if (typeof candidate.name !== 'string' || !candidate.name) return null
   const kind: SlashCommandKind | undefined =
@@ -2434,6 +2435,7 @@ function normalizeSlashCommand(command: unknown): SlashCommandState | null {
       : {}),
     ...(kind ? { kind } : {}),
     ...(source ? { source } : {}),
+    ...(candidate.leanCompatible === false ? { leanCompatible: false } : {}),
   }
 }
 
@@ -2752,6 +2754,22 @@ function advanceHistoryLifecycle(sessionId: string): number {
 
 function isCurrentHistoryLifecycle(sessionId: string, generation: number): boolean {
   return currentHistoryLifecycle(sessionId) === generation
+}
+
+const slashCommandGenerations = new Map<string, number>()
+
+function currentSlashCommandGeneration(sessionId: string): number {
+  return slashCommandGenerations.get(sessionId) ?? 0
+}
+
+function advanceSlashCommandGeneration(sessionId: string): number {
+  const nextGeneration = currentSlashCommandGeneration(sessionId) + 1
+  slashCommandGenerations.set(sessionId, nextGeneration)
+  return nextGeneration
+}
+
+function isCurrentSlashCommandGeneration(sessionId: string, generation: number): boolean {
+  return currentSlashCommandGeneration(sessionId) === generation
 }
 
 function isReconnectDiscardableForegroundMessage(message: UIMessage): boolean {
@@ -3319,6 +3337,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           preHydrationSocketGapPending: false,
           historyBootstrapDisabled: options?.minimalBootstrap === true,
           activeGoal: existing?.activeGoal ?? null,
+          slashCommands: existing?.slashCommands ?? [],
           composerDraft: existing?.composerDraft ?? null,
           composerPrefill: existing?.composerPrefill ?? null,
           repositoryLaunchDraft: existing?.repositoryLaunchDraft ?? null,
@@ -3493,16 +3512,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
     if (!options?.minimalBootstrap || isSideChatSession(sessionId)) {
       if (!options?.minimalBootstrap) get().loadHistory(sessionId)
+      const slashGeneration = advanceSlashCommandGeneration(sessionId)
       sessionsApi.getSlashCommands(sessionId)
         .then(({ commands }) => {
+          if (!isCurrentSlashCommandGeneration(sessionId, slashGeneration)) return
           if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: commands })) }))
+            set((s) => ({
+              sessions: updateSessionIn(s.sessions, sessionId, () => ({
+                slashCommands: normalizeSlashCommandList(commands),
+              })),
+            }))
           }
         })
         .catch(() => {
-          if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: [] })) }))
-          }
+          // Keep existing slashCommands when initial discovery fails.
         })
     }
   },
@@ -3518,6 +3541,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     advanceHistoryLifecycle(sessionId)
+    advanceSlashCommandGeneration(sessionId)
     wsManager.disconnect(sessionId)
     if (options?.keepTranscript) {
       // connectToSession reopens a disconnected session on top of this cache.
@@ -6105,12 +6129,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
         }
         if (msg.subtype === 'slash_commands' && Array.isArray(msg.data)) {
+          const slashGeneration = advanceSlashCommandGeneration(sessionId)
           const incomingCommands = normalizeSlashCommandList(msg.data)
           update((session) => ({
             slashCommands: mergeSlashCommandUpdates(session.slashCommands, incomingCommands),
           }))
           void sessionsApi.getSlashCommands(sessionId)
             .then(({ commands }) => {
+              if (!isCurrentSlashCommandGeneration(sessionId, slashGeneration)) return
               if (!get().sessions[sessionId]) return
               set((s) => ({
                 sessions: updateSessionIn(s.sessions, sessionId, () => ({
@@ -6125,6 +6151,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (msg.subtype === 'session_cleared') {
           pendingOwnedTaskEvents.delete(sessionId)
           advanceHistoryLifecycle(sessionId)
+          advanceSlashCommandGeneration(sessionId)
           const session = get().sessions[sessionId]
           if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
           update(() => ({

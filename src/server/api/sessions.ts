@@ -1317,6 +1317,7 @@ function mergeSessionSlashCommands(
       ...(argumentHint ? { argumentHint } : {}),
       kind: fallbackCommand?.kind ?? 'command',
       ...(fallbackCommand?.source ? { source: fallbackCommand.source } : {}),
+      ...(fallbackCommand?.leanCompatible === false ? { leanCompatible: false } : {}),
     })
   }
 
