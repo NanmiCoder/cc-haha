@@ -208,11 +208,6 @@ export function getRuntimeMainLoopModel(params: {
     return getDefaultOpusModel()
   }
 
-  // sonnetplan by default
-  if (getUserSpecifiedModelSetting() === 'haiku' && permissionMode === 'plan') {
-    return getDefaultSonnetModel()
-  }
-
   return mainLoopModel
 }
 
