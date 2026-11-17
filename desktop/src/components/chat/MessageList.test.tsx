@@ -29,7 +29,8 @@ import { subagentsApi, type SubagentRunResponse } from '../../api/subagents'
 import { teamsApi } from '../../api/teams'
 import { resetAgentRunActivityCache } from './useAgentRunActivity'
 import { resetWorkspaceFileStatsForTests } from '../../lib/workspaceFileStats'
-import { useChatStore } from '../../stores/chatStore'
+import { mapHistoryMessagesToUiMessages, reconstructRunActivityFromTranscript, useChatStore } from '../../stores/chatStore'
+import { buildSessionActivityModel } from '@/components/activity/sessionActivityModel'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -1838,201 +1839,105 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText('Goal status')).toBeNull()
   })
 
-  it('renders non-agent background progress inline in the transcript', () => {
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({
-          messages: [
-            {
-              id: 'user-1',
-              type: 'user_text',
-              content: 'run review',
-              timestamp: 1,
-            },
-            {
-              id: 'background-task-shell-1',
-              type: 'background_task',
-              timestamp: 2,
-              task: {
-                taskId: 'shell-task-1',
-                toolUseId: 'shell-tool-1',
-                status: 'running',
-                taskType: 'local_bash',
-                summary: 'Running Playwright checks',
-                usage: {
-                  totalTokens: 1200,
-                  toolUses: 4,
-                  durationMs: 45000,
-                },
-                startedAt: 2,
-                updatedAt: 2,
-              },
-            },
-            {
-              id: 'assistant-1',
-              type: 'assistant_text',
-              content: 'continuing',
-              timestamp: 3,
-            },
-          ],
-        }),
-      },
-    })
+  it.each(['running', 'completed', 'failed', 'stopped'] as const)(
+    'keeps %s background lifecycle events out of the conversation',
+    (status) => {
+      const events: UIMessage[] = ['local_bash', 'local_workflow', undefined].map((taskType, index) => ({
+        id: `background-task-${index}`,
+        type: 'background_task',
+        timestamp: index + 2,
+        task: {
+          taskId: `task-${index}`,
+          taskType,
+          status,
+          summary: 'Background command "temporary server" failed with exit code 143',
+          startedAt: 1,
+          updatedAt: index + 2,
+        },
+      }))
+      const messages: UIMessage[] = [
+        { id: 'user', type: 'user_text', content: 'Run the checks', timestamp: 1 },
+        ...events,
+        { id: 'reply', type: 'assistant_text', content: 'The checks found an issue that needs fixing.', timestamp: 6 },
+      ]
+      useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+
+      render(<MessageList />)
+
+      expect(screen.queryByTestId('background-task-event-card')).toBeNull()
+      expect(screen.queryByText(/exit code 143/)).toBeNull()
+      expect(screen.getByText('The checks found an issue that needs fixing.')).toBeTruthy()
+      expect(buildRenderModel(messages).renderItems).toEqual([
+        { kind: 'message', message: messages[0] },
+        { kind: 'message', message: messages.at(-1) },
+      ])
+      // Presentation leaves the lifecycle evidence available to Activity/trace.
+      expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages).toEqual(messages)
+    },
+  )
+
+  it.each([{ taskIds: ['task-1'] }, { taskIds: [] }])('hides structured background continuation notices ($taskIds) without hiding regular system messages or useful replies', ({ taskIds }) => {
+    const messages: UIMessage[] = [
+      { id: 'notice', type: 'system', content: 'Background task completed; continuing automatically: exit code 143', backgroundContinueTaskIds: taskIds, timestamp: 1 },
+      { id: 'reply', type: 'assistant_text', content: 'The build failed because a dependency is missing.', timestamp: 2 },
+      { id: 'system', type: 'system', content: 'Connection restored', timestamp: 3 },
+      // User-authored text must never be filtered by matching notification wording.
+      { id: 'user', type: 'user_text', content: 'Background task completed; continuing automatically', timestamp: 4 },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
 
     render(<MessageList />)
 
-    const card = screen.getByTestId('background-task-event-card')
-    expect(card.textContent).toContain('Background command')
-    expect(card.textContent).toContain('running')
-    expect(card.textContent).toContain('Running Playwright checks')
-    expect(card.textContent).toContain('1.2k tokens')
-    expect(card.textContent).toContain('45s')
+    expect(screen.queryByText(/exit code 143/)).toBeNull()
+    expect(screen.getByText('The build failed because a dependency is missing.')).toBeTruthy()
+    expect(screen.getByText('Connection restored')).toBeTruthy()
+    expect(screen.getByText('Background task completed; continuing automatically')).toBeTruthy()
+    expect(buildRenderModel(messages).renderItems.map((item) => item.kind === 'message' && item.message.id)).toEqual(['reply', 'system', 'user'])
   })
 
-  it('localizes non-agent background task duration units', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({
-          messages: [
-            {
-              id: 'background-task-shell-1',
-              type: 'background_task',
-              timestamp: 2,
-              task: {
-                taskId: 'shell-task-1',
-                toolUseId: 'shell-tool-1',
-                // `stopped`, not `completed`: a cleanly finished task is left to
-                // the activity panel now. What this asserts is duration
-                // formatting, which does not depend on which end state it is.
-                status: 'stopped',
-                taskType: 'local_bash',
-                summary: 'Running Playwright checks',
-                usage: {
-                  totalTokens: 1200,
-                  toolUses: 4,
-                  durationMs: 65000,
-                },
-                startedAt: 2,
-                updatedAt: 2,
-              },
-            },
-          ],
-        }),
-      },
+  it('keeps reloaded background failures in Activity while hiding both current and legacy wake-up rows', () => {
+    const failure = 'Background command "temporary server" failed with exit code 143'
+    const history: MessageEntry[] = [
+      { id: 'tool', type: 'tool_use', timestamp: '2026-11-17T00:00:00.000Z', content: [{ type: 'tool_use', id: 'shell-2', name: 'Bash', input: { command: 'sleep 20', run_in_background: true } }] },
+      { id: 'result', type: 'tool_result', timestamp: '2026-11-17T00:00:00.500Z', content: [{ type: 'tool_result', tool_use_id: 'shell-2', content: 'Command running in background with ID: task-2. Output is being written to: /tmp/task-2.output' }] },
+      { id: 'projected', type: 'system', timestamp: '2026-11-17T00:00:01.000Z', content: {
+        subtype: 'background_continue', notifications: [{ taskId: 'task-1', status: 'failed', summary: failure }],
+      } },
+      { id: 'legacy', type: 'user', timestamp: '2026-11-17T00:00:02.000Z', content: `<task-notification><task-id>task-2</task-id><tool-use-id>shell-2</tool-use-id><status>failed</status><summary>${failure}</summary><output-file>/tmp/task-2.output</output-file></task-notification>` },
+      { id: 'reply', type: 'assistant', timestamp: '2026-11-17T00:00:03.000Z', content: [{ type: 'text', text: 'Validation is complete.' }] },
+    ]
+    const messages = mapHistoryMessagesToUiMessages(history)
+    const restored = reconstructRunActivityFromTranscript(history)
+    const activity = buildSessionActivityModel({
+      sessionId: ACTIVE_TAB,
+      messages,
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: Object.values(restored.backgroundAgentTasks),
+      agentNotifications: [],
     })
 
-    render(<MessageList />)
-
-    expect(screen.getByTestId('background-task-event-card').textContent).toContain('1 分 5 秒')
+    expect(messages.some((message) => message.type === 'system' && message.backgroundContinueTaskIds?.length)).toBe(true)
+    expect(activity.sections.backgroundTasks.rows).toContainEqual(expect.objectContaining({
+      taskId: 'task-2', status: 'failed', summary: failure, outputFile: '/tmp/task-2.output',
+    }))
+    expect(buildRenderModel(messages).renderItems).toMatchObject([
+      { kind: 'tool_group' },
+      { kind: 'message', message: { type: 'assistant_text', content: 'Validation is complete.' } },
+    ])
   })
 
-  it('leaves a completed background task to the activity panel, but keeps a failure', () => {
-    const task = (id: string, status: 'completed' | 'failed') => ({
-      id: `background-task-${id}`,
-      type: 'background_task' as const,
-      timestamp: 2,
-      task: {
-        taskId: id,
-        toolUseId: `${id}-tool`,
-        status,
-        taskType: 'local_bash',
-        summary: `Ran ${id}`,
-        startedAt: 1,
-        updatedAt: 2,
-      },
-    })
+  it('does not split tool activity around hidden task lifecycle messages', () => {
+    const messages: UIMessage[] = [
+      { id: 'tool-1', type: 'tool_use', toolUseId: 'bash-1', toolName: 'Bash', input: { command: 'echo first' }, timestamp: 1 },
+      { id: 'notice', type: 'system', content: 'Task completed', backgroundContinueTaskIds: ['task-1'], timestamp: 2 },
+      { id: 'event', type: 'background_task', task: { taskId: 'task-1', status: 'failed', startedAt: 1, updatedAt: 3 }, timestamp: 3 },
+      { id: 'tool-2', type: 'tool_use', toolUseId: 'bash-2', toolName: 'Bash', input: { command: 'echo second' }, timestamp: 4 },
+    ]
 
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({ messages: [task('done-1', 'completed'), task('broke-1', 'failed')] }),
-      },
-    })
-
-    render(<MessageList />)
-
-    // A team session emits dozens of "task completed" reports and the panel
-    // already lists every one of them; repeating each as a card buries the
-    // conversation. A failure still interrupts — it changes what the turn means,
-    // and the panel it would otherwise live in can be closed.
-    const cards = screen.getAllByTestId('background-task-event-card')
-    expect(cards).toHaveLength(1)
-    expect(cards[0]?.textContent).toContain('broke-1')
-  })
-
-  it('renders stopped non-agent background tasks as neutral transcript events', () => {
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({
-          messages: [{
-            id: 'background-task-shell-stopped',
-            type: 'background_task',
-            timestamp: 2,
-            task: {
-              taskId: 'shell-task-stopped',
-              toolUseId: 'shell-tool-stopped',
-              status: 'stopped',
-              taskType: 'local_bash',
-              summary: 'Command "bun test" was stopped',
-              startedAt: 1,
-              updatedAt: 2,
-            },
-          }],
-        }),
-      },
-    })
-
-    render(<MessageList />)
-
-    const card = screen.getByTestId('background-task-event-card')
-    expect(card.getAttribute('data-status')).toBe('stopped')
-    expect(card.textContent).toContain('stopped')
-    expect(card.querySelector('.text-\\[var\\(--color-error\\)\\]')).toBeNull()
-  })
-
-  it('uses user-facing labels for workflow and unknown background tasks', () => {
-    useChatStore.setState({
-      sessions: {
-        [ACTIVE_TAB]: makeSessionState({
-          messages: [
-            {
-              id: 'background-task-workflow',
-              type: 'background_task',
-              timestamp: 2,
-              task: {
-                taskId: 'workflow-task',
-                status: 'running',
-                taskType: 'local_workflow',
-                summary: 'Running release checklist',
-                startedAt: 1,
-                updatedAt: 2,
-              },
-            },
-            {
-              id: 'background-task-unknown',
-              type: 'background_task',
-              timestamp: 3,
-              task: {
-                taskId: 'unknown-task',
-                // See above: the label is what this asserts, and a cleanly
-                // finished task no longer draws a card to read it off.
-                status: 'stopped',
-                summary: 'Finished background work',
-                startedAt: 1,
-                updatedAt: 3,
-              },
-            },
-          ],
-        }),
-      },
-    })
-
-    render(<MessageList />)
-
-    const cards = screen.getAllByTestId('background-task-event-card')
-    expect(cards).toHaveLength(2)
-    expect(cards[0]?.textContent).toContain('Background workflow')
-    expect(cards[1]?.textContent).toContain('Background task')
+    expect(buildRenderModel(messages).renderItems).toMatchObject([
+      { kind: 'tool_group', toolCalls: [{ toolUseId: 'bash-1' }, { toolUseId: 'bash-2' }] },
+    ])
   })
 
   it('does not render agent background task events as separate transcript cards', () => {

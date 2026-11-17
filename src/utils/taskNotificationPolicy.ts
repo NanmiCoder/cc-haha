@@ -7,6 +7,25 @@ import {
   TOOL_USE_ID_TAG,
   WORKFLOW_RUN_ID_TAG,
 } from '../constants/xml.js'
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
+
+export const TASK_NOTIFICATION_MODEL_GUIDANCE = `Treat background task notifications as internal lifecycle updates, not new user requests. Continue any necessary work. Silently absorb duplicate or delayed results that do not change the latest verified conclusion, and intentional cleanup already established by the conversation. Do not acknowledge each notification or repeat a conclusion the user already received. Reply only when a result adds material information, changes the requested task's outcome, or requires user action; combine related results into one useful update. Investigate failures that block the requested task and report their actual impact and next steps. Do not infer intentional cleanup from exit code 143 alone.`
+
+/** Added only to model-facing copies; transcripts and lifecycle events stay intact. */
+export function addTaskNotificationModelGuidance(
+  content: string | ContentBlockParam[],
+): string | ContentBlockParam[] {
+  const reminder = `<system-reminder>\n${TASK_NOTIFICATION_MODEL_GUIDANCE}\n</system-reminder>`
+  if (typeof content === 'string') {
+    return content.includes(TASK_NOTIFICATION_MODEL_GUIDANCE)
+      ? content
+      : `${content}\n\n${reminder}`
+  }
+  if (content.some(block => block.type === 'text' && block.text.includes(TASK_NOTIFICATION_MODEL_GUIDANCE))) {
+    return content
+  }
+  return [...content, { type: 'text', text: reminder }]
+}
 
 type TaskNotificationStatus = 'completed' | 'failed' | 'stopped'
 

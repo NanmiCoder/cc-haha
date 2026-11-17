@@ -32,6 +32,7 @@ test('publishes real shell terminals while the model is still working, without r
   let waitingForModel = false
   let requestCount = 0
   let sawModelNotification = false
+  let sawNotificationGuidance = false
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     if (request.method !== 'POST') return new Response('ok')
     const body = await request.json() as { messages: unknown[] }
@@ -47,7 +48,10 @@ test('publishes real shell terminals while the model is still working, without r
       waitingForModel = true
       await modelBlocked
     }
-    if (JSON.stringify(body.messages).includes('<task-notification>')) sawModelNotification = true
+    if (JSON.stringify(body.messages).includes('<task-notification>')) {
+      sawModelNotification = true
+      sawNotificationGuidance = JSON.stringify(body.messages).includes('Treat background task notifications as internal lifecycle updates')
+    }
     return response([{ type: 'text', text: 'Finished developing.' }], 'end_turn')
   } })
   const child = Bun.spawn([process.execPath, '--no-env-file', resolve('bin/claude-haha'),
@@ -98,6 +102,7 @@ test('publishes real shell terminals while the model is still working, without r
     await stdout
     expect(terminals()).toHaveLength(2)
     expect(sawModelNotification).toBe(true)
+    expect(sawNotificationGuidance).toBe(true)
     expect(await stderr).toBe('')
   } finally {
     releaseModel()
