@@ -1265,6 +1265,17 @@ async function loadPluginHooks(
  * @param errors - Error array to push path-not-found errors into (mutated)
  * @returns Array of full paths that exist on disk, in original order
  */
+function resolveSafePluginComponentPath(
+  pluginPath: string,
+  relPath: string,
+): string | null {
+  try {
+    return validatePathWithinBase(pluginPath, relPath)
+  } catch {
+    return null
+  }
+}
+
 async function validatePluginPaths(
   relPaths: string[],
   pluginPath: string,
@@ -1278,13 +1289,29 @@ async function validatePluginPaths(
   // Parallelize the async pathExists checks
   const checks = await Promise.all(
     relPaths.map(async relPath => {
-      const fullPath = join(pluginPath, relPath)
+      const fullPath = resolveSafePluginComponentPath(pluginPath, relPath)
+      if (!fullPath) {
+        return { relPath, fullPath: null, exists: false }
+      }
       return { relPath, fullPath, exists: await pathExists(fullPath) }
     }),
   )
   // Process results in original order to keep error/log ordering deterministic
   const validPaths: string[] = []
   for (const { relPath, fullPath, exists } of checks) {
+    if (!fullPath) {
+      logForDebugging(
+        `${componentLabel} path ${relPath} ${contextLabel} escapes plugin directory ${pluginPath} for ${pluginName}`,
+        { level: 'warn' },
+      )
+      errors.push({
+        type: 'generic-error',
+        source,
+        plugin: pluginName,
+        error: `Path traversal detected in ${component}: "${relPath}" escapes plugin directory`,
+      })
+      continue
+    }
     if (exists) {
       validPaths.push(fullPath)
     } else {
@@ -1417,7 +1444,17 @@ export async function createPluginFromPath(
             return { commandName, metadata, kind: 'skip' as const }
           }
           if (metadata.source) {
-            const fullPath = join(pluginPath, metadata.source)
+            const fullPath = resolveSafePluginComponentPath(
+              pluginPath,
+              metadata.source,
+            )
+            if (!fullPath) {
+              return {
+                commandName,
+                metadata,
+                kind: 'escaped' as const,
+              }
+            }
             return {
               commandName,
               metadata,
@@ -1434,6 +1471,19 @@ export async function createPluginFromPath(
       )
       for (const check of checks) {
         if (check.kind === 'skip') continue
+        if (check.kind === 'escaped') {
+          logForDebugging(
+            `Command ${check.commandName} path ${check.metadata.source} in manifest escapes plugin directory for ${manifest.name}`,
+            { level: 'warn' },
+          )
+          errors.push({
+            type: 'generic-error',
+            source,
+            plugin: manifest.name,
+            error: `Path traversal detected in commands: "${check.metadata.source}" escapes plugin directory`,
+          })
+          continue
+        }
         if (check.kind === 'content') {
           // For inline content commands, add metadata without path
           commandsMetadata[check.commandName] = check.metadata
@@ -1483,7 +1533,10 @@ export async function createPluginFromPath(
           if (typeof cmdPath !== 'string') {
             return { cmdPath, kind: 'invalid' as const }
           }
-          const fullPath = join(pluginPath, cmdPath)
+          const fullPath = resolveSafePluginComponentPath(pluginPath, cmdPath)
+          if (!fullPath) {
+            return { cmdPath, kind: 'escaped' as const }
+          }
           return {
             cmdPath,
             kind: 'path' as const,
@@ -1499,6 +1552,19 @@ export async function createPluginFromPath(
             `Unexpected command format in manifest for ${manifest.name}`,
             { level: 'error' },
           )
+          continue
+        }
+        if (check.kind === 'escaped') {
+          logForDebugging(
+            `Command path ${check.cmdPath} specified in manifest escapes plugin directory for ${manifest.name}`,
+            { level: 'warn' },
+          )
+          errors.push({
+            type: 'generic-error',
+            source,
+            plugin: manifest.name,
+            error: `Path traversal detected in commands: "${check.cmdPath}" escapes plugin directory`,
+          })
           continue
         }
         if (check.exists) {
@@ -1916,9 +1982,11 @@ function mergeHooksSettings(
 async function loadPluginsFromMarketplaces({
   cacheOnly,
   projectRoot,
+  allowUnrecordedInstallations = false,
 }: {
   cacheOnly: boolean
   projectRoot?: string
+  allowUnrecordedInstallations?: boolean
 }): Promise<{
   plugins: LoadedPlugin[]
   errors: PluginError[]
@@ -2092,13 +2160,21 @@ async function loadPluginsFromMarketplaces({
       // (version for the full loader's first-pass probe, installPath for
       // the cache-only loader's direct read).
       const installations = installedPluginsData.plugins[pluginId] ?? []
-      const installEntry = projectRoot
-        ? installations.find(entry => entry.scope === 'local' && entry.projectPath && resolve(entry.projectPath) === resolve(projectRoot))
-          ?? installations.find(entry => entry.scope === 'project' && entry.projectPath && resolve(entry.projectPath) === resolve(projectRoot))
+      const resolvedProjectRoot = projectRoot ? resolve(projectRoot) : undefined
+      const installEntry = resolvedProjectRoot
+        ? installations.find(entry => entry.scope === 'managed')
+          ?? installations.find(entry => entry.scope === 'local' && entry.projectPath && resolve(entry.projectPath) === resolvedProjectRoot)
+          ?? installations.find(entry => entry.scope === 'project' && entry.projectPath && resolve(entry.projectPath) === resolvedProjectRoot)
           ?? installations.find(entry => entry.scope === 'user')
         : installations[0]
       // A different project's cached installation is not an installed capability here.
-      if (projectRoot && !installEntry) return null
+      if (
+        projectRoot &&
+        (!allowUnrecordedInstallations || installations.length > 0) &&
+        !installEntry
+      ) {
+        return null
+      }
       const enabled = isEnabledPluginSettingValue(enabledValue)
       return cacheOnly
         ? loadPluginFromMarketplaceEntryCacheOnly(
@@ -2108,6 +2184,7 @@ async function loadPluginsFromMarketplaces({
             enabled,
             errors,
             installEntry?.installPath,
+            allowUnrecordedInstallations,
           )
         : loadPluginFromMarketplaceEntry(
             result.entry,
@@ -2153,6 +2230,7 @@ async function loadPluginFromMarketplaceEntryCacheOnly(
   enabled: boolean,
   errorsOut: PluginError[],
   installPath: string | undefined,
+  allowFallbackCacheProbe = false,
 ): Promise<LoadedPlugin | null> {
   let pluginPath: string
 
@@ -2173,21 +2251,45 @@ async function loadPluginFromMarketplaceEntryCacheOnly(
       })
       return null
     }
-    pluginPath = join(marketplaceDir, entry.source)
+    const safeSourcePath = resolveSafePluginComponentPath(
+      marketplaceDir,
+      entry.source,
+    )
+    if (!safeSourcePath) {
+      errorsOut.push({
+        type: 'generic-error',
+        source: pluginId,
+        plugin: entry.name,
+        error: `Path traversal detected in marketplace source: "${entry.source}" escapes marketplace directory`,
+      })
+      return null
+    }
+    pluginPath = safeSourcePath
     // finishLoadingPluginFromPath reads pluginPath — its error handling
     // surfaces ENOENT as a load failure, no need to pre-check here.
   } else {
-    // External source (npm/github/url/git-subdir) — use recorded installPath.
-    if (!installPath || !(await pathExists(installPath))) {
+    // External source (npm/github/url/git-subdir) — use recorded installPath,
+    // with an optional local disk cache fallback when installed_plugins.json has not synced yet.
+    let resolvedInstallPath = installPath
+    if (
+      (!resolvedInstallPath || !(await pathExists(resolvedInstallPath))) &&
+      allowFallbackCacheProbe
+    ) {
+      const candidatePath = await resolvePluginPath(pluginId, entry.version)
+      if (await pathExists(candidatePath)) {
+        resolvedInstallPath = candidatePath
+      }
+    }
+    if (!resolvedInstallPath || !(await pathExists(resolvedInstallPath))) {
       errorsOut.push({
         type: 'plugin-cache-miss',
         source: pluginId,
         plugin: entry.name,
-        installPath: installPath ?? '(not recorded)',
+        installPath: resolvedInstallPath ?? '(not recorded)',
       })
       return null
     }
-    pluginPath = installPath
+    pluginPath = resolvedInstallPath
   }
 
   // Zip cache extraction — must still happen in cacheOnly mode (invariant 4)
@@ -2528,21 +2630,50 @@ async function finishLoadingPluginFromPath(
         const entries = Object.entries(entry.commands)
         const checks = await Promise.all(
           entries.map(async ([commandName, metadata]) => {
-            if (!metadata || typeof metadata !== 'object' || !metadata.source) {
-              return { commandName, metadata, skip: true as const }
+            if (!metadata || typeof metadata !== 'object') {
+              return { commandName, metadata, kind: 'skip' as const }
             }
-            const fullPath = join(pluginPath, metadata.source)
-            return {
-              commandName,
-              metadata,
-              skip: false as const,
-              fullPath,
-              exists: await pathExists(fullPath),
+            if (metadata.source) {
+              const fullPath = resolveSafePluginComponentPath(
+                pluginPath,
+                metadata.source,
+              )
+              if (!fullPath) {
+                return { commandName, metadata, kind: 'escaped' as const }
+              }
+              return {
+                commandName,
+                metadata,
+                kind: 'source' as const,
+                fullPath,
+                exists: await pathExists(fullPath),
+              }
             }
+            if (metadata.content) {
+              return { commandName, metadata, kind: 'content' as const }
+            }
+            return { commandName, metadata, kind: 'skip' as const }
           }),
         )
         for (const check of checks) {
-          if (check.skip) continue
+          if (check.kind === 'skip') continue
+          if (check.kind === 'escaped') {
+            logForDebugging(
+              `Command ${check.commandName} path ${check.metadata.source} from marketplace entry escapes plugin directory for ${entry.name}`,
+              { level: 'warn' },
+            )
+            errors.push({
+              type: 'generic-error',
+              source: pluginId,
+              plugin: entry.name,
+              error: `Path traversal detected in commands: "${check.metadata.source}" escapes plugin directory`,
+            })
+            continue
+          }
+          if (check.kind === 'content') {
+            commandsMetadata[check.commandName] = check.metadata
+            continue
+          }
           if (check.exists) {
             validPaths.push(check.fullPath)
             commandsMetadata[check.commandName] = check.metadata
@@ -2568,6 +2699,8 @@ async function finishLoadingPluginFromPath(
 
         if (validPaths.length > 0) {
           plugin.commandsPaths = validPaths
+        }
+        if (Object.keys(commandsMetadata).length > 0) {
           plugin.commandsMetadata = commandsMetadata
         }
       } else {
@@ -2582,7 +2715,10 @@ async function finishLoadingPluginFromPath(
             if (typeof cmdPath !== 'string') {
               return { cmdPath, kind: 'invalid' as const }
             }
-            const fullPath = join(pluginPath, cmdPath)
+            const fullPath = resolveSafePluginComponentPath(pluginPath, cmdPath)
+            if (!fullPath) {
+              return { cmdPath, kind: 'escaped' as const }
+            }
             return {
               cmdPath,
               kind: 'path' as const,
@@ -2598,6 +2734,19 @@ async function finishLoadingPluginFromPath(
               `Unexpected command format in marketplace entry for ${entry.name}`,
               { level: 'error' },
             )
+            continue
+          }
+          if (check.kind === 'escaped') {
+            logForDebugging(
+              `Command path ${check.cmdPath} from marketplace entry escapes plugin directory for ${entry.name}`,
+              { level: 'warn' },
+            )
+            errors.push({
+              type: 'generic-error',
+              source: pluginId,
+              plugin: entry.name,
+              error: `Path traversal detected in commands: "${check.cmdPath}" escapes plugin directory`,
+            })
             continue
           }
           if (check.exists) {
@@ -2659,41 +2808,16 @@ async function finishLoadingPluginFromPath(
         ? entry.skills
         : [entry.skills]
 
-      // Parallelize pathExists checks; process results in order.
-      // Note: previously this loop called pathExists() TWICE per iteration
-      // (once in a debug log template, once in the if) — now called once.
-      const checks = await Promise.all(
-        skillPaths.map(async skillPath => {
-          const fullPath = join(pluginPath, skillPath)
-          return { skillPath, fullPath, exists: await pathExists(fullPath) }
-        }),
+      const validPaths = await validatePluginPaths(
+        skillPaths,
+        pluginPath,
+        entry.name,
+        pluginId,
+        'skills',
+        'Skill',
+        'from marketplace entry',
+        errors,
       )
-      const validPaths: string[] = []
-      for (const { skillPath, fullPath, exists } of checks) {
-        logForDebugging(
-          `Checking skill path: ${skillPath} -> ${fullPath} (exists: ${exists})`,
-        )
-        if (exists) {
-          validPaths.push(fullPath)
-        } else {
-          logForDebugging(
-            `Skill path ${skillPath} from marketplace entry not found at ${fullPath} for ${entry.name}`,
-            { level: 'warn' },
-          )
-          logError(
-            new Error(
-              `Plugin component file not found: ${fullPath} for ${entry.name}`,
-            ),
-          )
-          errors.push({
-            type: 'path-not-found',
-            source: pluginId,
-            plugin: entry.name,
-            path: fullPath,
-            component: 'skills',
-          })
-        }
-      }
 
       logForDebugging(
         `Found ${validPaths.length} valid skill paths for plugin ${entry.name}, setting skillsPaths`,
@@ -2779,24 +2903,56 @@ async function finishLoadingPluginFromPath(
         const entries = Object.entries(entry.commands)
         const checks = await Promise.all(
           entries.map(async ([commandName, metadata]) => {
-            if (!metadata || typeof metadata !== 'object' || !metadata.source) {
-              return { commandName, metadata, skip: true as const }
+            if (!metadata || typeof metadata !== 'object') {
+              return { commandName, metadata, kind: 'skip' as const }
             }
-            const fullPath = join(pluginPath, metadata.source)
-            return {
-              commandName,
-              metadata,
-              skip: false as const,
-              fullPath,
-              exists: await pathExists(fullPath),
+            if (metadata.source) {
+              const fullPath = resolveSafePluginComponentPath(
+                pluginPath,
+                metadata.source,
+              )
+              if (!fullPath) {
+                return { commandName, metadata, kind: 'escaped' as const }
+              }
+              return {
+                commandName,
+                metadata,
+                kind: 'source' as const,
+                fullPath,
+                exists: await pathExists(fullPath),
+              }
             }
+            if (metadata.content) {
+              return { commandName, metadata, kind: 'content' as const }
+            }
+            return { commandName, metadata, kind: 'skip' as const }
           }),
         )
+        let hasNewMetadata = false
         for (const check of checks) {
-          if (check.skip) continue
+          if (check.kind === 'skip') continue
+          if (check.kind === 'escaped') {
+            logForDebugging(
+              `Command ${check.commandName} path ${check.metadata.source} from marketplace entry escapes plugin directory for ${entry.name}`,
+              { level: 'warn' },
+            )
+            errors.push({
+              type: 'generic-error',
+              source: pluginId,
+              plugin: entry.name,
+              error: `Path traversal detected in commands: "${check.metadata.source}" escapes plugin directory`,
+            })
+            continue
+          }
+          if (check.kind === 'content') {
+            commandsMetadata[check.commandName] = check.metadata
+            hasNewMetadata = true
+            continue
+          }
           if (check.exists) {
             validPaths.push(check.fullPath)
             commandsMetadata[check.commandName] = check.metadata
+            hasNewMetadata = true
           } else {
             logForDebugging(
               `Command ${check.commandName} path ${check.metadata.source} from marketplace entry not found at ${check.fullPath} for ${entry.name}`,
@@ -2822,6 +2978,8 @@ async function finishLoadingPluginFromPath(
             ...(plugin.commandsPaths || []),
             ...validPaths,
           ]
+        }
+        if (hasNewMetadata) {
           plugin.commandsMetadata = commandsMetadata
         }
       } else {
@@ -2836,7 +2994,10 @@ async function finishLoadingPluginFromPath(
             if (typeof cmdPath !== 'string') {
               return { cmdPath, kind: 'invalid' as const }
             }
-            const fullPath = join(pluginPath, cmdPath)
+            const fullPath = resolveSafePluginComponentPath(pluginPath, cmdPath)
+            if (!fullPath) {
+              return { cmdPath, kind: 'escaped' as const }
+            }
             return {
               cmdPath,
               kind: 'path' as const,
@@ -2852,6 +3013,19 @@ async function finishLoadingPluginFromPath(
               `Unexpected command format in marketplace entry for ${entry.name}`,
               { level: 'error' },
             )
+            continue
+          }
+          if (check.kind === 'escaped') {
+            logForDebugging(
+              `Command path ${check.cmdPath} from marketplace entry escapes plugin directory for ${entry.name}`,
+              { level: 'warn' },
+            )
+            errors.push({
+              type: 'generic-error',
+              source: pluginId,
+              plugin: entry.name,
+              error: `Path traversal detected in commands: "${check.cmdPath}" escapes plugin directory`,
+            })
             continue
           }
           if (check.exists) {
@@ -3202,6 +3376,43 @@ export async function loadInstalledPluginsForProject(projectRoot: string): Promi
   const { demoted, errors } = verifyAndDemote(result.plugins)
   const enabled = result.plugins.filter(plugin => plugin.enabled && !demoted.has(plugin.source))
   return { enabled, disabled: result.plugins.filter(plugin => !enabled.includes(plugin)), errors: [...result.errors, ...errors] }
+}
+
+/**
+ * Resolve active plugins for a specific project directory without mutating
+ * global process/session settings or hitting the network.
+ */
+export async function loadActivePluginsForProject(projectRoot: string): Promise<PluginLoadResult> {
+  const inlinePlugins = getInlinePlugins()
+  const [marketplaceResult, sessionResult] = await Promise.all([
+    loadPluginsFromMarketplaces({
+      cacheOnly: true,
+      projectRoot: resolve(projectRoot),
+      allowUnrecordedInstallations: true,
+    }),
+    inlinePlugins.length > 0
+      ? loadSessionOnlyPlugins(inlinePlugins)
+      : Promise.resolve({ plugins: [], errors: [] }),
+  ])
+  const builtinResult = getBuiltinPlugins()
+  const { plugins: allPlugins, errors: mergeErrors } = mergePluginSources({
+    session: sessionResult.plugins,
+    marketplace: marketplaceResult.plugins,
+    builtin: [...builtinResult.enabled, ...builtinResult.disabled],
+    managedNames: getManagedPluginNames(),
+  })
+  const { demoted, errors: depErrors } = verifyAndDemote(allPlugins)
+  const enabled = allPlugins.filter(plugin => plugin.enabled && !demoted.has(plugin.source))
+  return {
+    enabled,
+    disabled: allPlugins.filter(plugin => !enabled.includes(plugin)),
+    errors: [
+      ...marketplaceResult.errors,
+      ...sessionResult.errors,
+      ...mergeErrors,
+      ...depErrors,
+    ],
+  }
 }
 
 /**
