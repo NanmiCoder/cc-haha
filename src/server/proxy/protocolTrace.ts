@@ -216,6 +216,7 @@ export class ProtocolTraceObserver {
 export function observeProtocolStream(
   upstream: ReadableStream<Uint8Array>,
   observer: ProtocolTraceObserver,
+  downstreamSignal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let cancelled = false
@@ -239,7 +240,7 @@ export function observeProtocolStream(
         }
       } catch (error) {
         if (cancelled) return
-        diagnose(() => observer.finish('error'))
+        diagnose(() => observer.finish(downstreamSignal?.aborted ? 'cancelled' : 'error'))
         release()
         controller.error(error)
       }

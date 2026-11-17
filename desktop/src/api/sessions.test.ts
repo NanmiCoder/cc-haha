@@ -563,4 +563,13 @@ describe('full session history assembly', () => {
     await expect(sessionsApi.getFullHistory('fixture', { signal: controller.signal })).rejects.toThrow()
     expect(fetchMock).toHaveBeenCalledOnce()
   })
+
+  it('posts immediate session stop to /api/sessions/:id/chat/stop', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response({ ok: true }))
+    await expect(sessionsApi.stopChat('session-1917')).resolves.toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/sessions/session-1917/chat/stop'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
 })
