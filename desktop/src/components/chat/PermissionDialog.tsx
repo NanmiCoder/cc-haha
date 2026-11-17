@@ -292,28 +292,41 @@ function ExitPlanModePermissionDialog({
     setExecutionRuntime(unchanged ? null : selection)
   }
 
-  const approve = (options?: { permissionUpdates?: PermissionUpdate[] }) => {
+  const submitPlanDecision = (
+    allowed: boolean,
+    options?: { permissionUpdates?: PermissionUpdate[]; denyMessage?: string },
+  ) => {
     if (!sessionId) return
-    if (executionRuntime) {
+    const runtimeOverride = executionRuntime
+      ? {
+          providerId: executionRuntime.providerId,
+          modelId: executionRuntime.modelId,
+        }
+      : undefined
+    if (runtimeOverride) {
       // Local echo so the composer pill reflects the switch immediately; the
       // server already received the override inside the permission_response,
       // so deliberately do NOT also send set_runtime_config.
-      useSessionRuntimeStore.getState().setSelection(sessionId, {
-        providerId: executionRuntime.providerId,
-        modelId: executionRuntime.modelId,
-      })
+      useSessionRuntimeStore.getState().setSelection(sessionId, runtimeOverride)
     }
-    respondToPermission(sessionId, requestId, true, {
+    const nextOptions = {
       ...options,
-      ...(executionRuntime
-        ? {
-            runtimeOverride: {
-              providerId: executionRuntime.providerId,
-              modelId: executionRuntime.modelId,
-            },
-          }
-        : {}),
-    })
+      ...(runtimeOverride ? { runtimeOverride } : {}),
+    }
+    respondToPermission(
+      sessionId,
+      requestId,
+      allowed,
+      Object.keys(nextOptions).length > 0 ? nextOptions : undefined,
+    )
+  }
+
+  const approve = (options?: { permissionUpdates?: PermissionUpdate[] }) => {
+    submitPlanDecision(true, options)
+  }
+
+  const keepPlanning = () => {
+    submitPlanDecision(false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)
   }
 
   // Without an explicit mode the CLI resumes with whatever the session had
@@ -427,7 +440,7 @@ function ExitPlanModePermissionDialog({
         <Button
           variant="ghost"
           size="base"
-          onClick={() => sessionId && respondToPermission(sessionId, requestId, false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)}
+          onClick={keepPlanning}
         >
           {t('permission.planKeepPlanning')}
         </Button>

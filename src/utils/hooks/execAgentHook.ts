@@ -130,6 +130,7 @@ When done, return your result using the ${SYNTHETIC_OUTPUT_TOOL_NAME} tool with:
           ...toolUseContext.options,
           tools,
           mainLoopModel: model,
+          refreshMainLoopModel: undefined,
           isNonInteractiveSession: true,
           thinkingConfig: { type: 'disabled' as const },
         },

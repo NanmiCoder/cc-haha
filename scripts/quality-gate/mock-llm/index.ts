@@ -31,6 +31,7 @@ import { runConnectorProxyScenario } from './connectorProxy'
 import { runContextUsageScenario } from './contextUsage'
 import { runOutputTokensRecoveryScenario } from './outputTokensRecovery'
 import { runBackgroundNotificationScenario } from './backgroundNotifications'
+import { runPlanModeModelSwitchScenario } from './planModeModelSwitch'
 import { createMockOnlyRunners, describeRequests, MOCK_AGENT_SCENARIOS } from './scenarios'
 
 const MOCK_MODEL = 'mock-model'
@@ -47,6 +48,7 @@ const TEAM_RUNTIME_SCENARIO = 'mock-team-runtime-controls'
 const CONTEXT_SUMMARY_SCENARIO = 'mock-context-summary'
 const OUTPUT_TOKENS_SCENARIO = 'mock-output-tokens-recovery'
 const BACKGROUND_NOTIFICATIONS_SCENARIO = 'mock-background-notifications'
+const PLAN_MODE_MODEL_SWITCH_SCENARIO = 'mock-plan-mode-model-switch'
 
 function listArg(argv: string[], name: string) {
   const index = argv.indexOf(name)
@@ -59,6 +61,7 @@ async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--list')) {
     console.log(`  ${BACKGROUND_NOTIFICATIONS_SCENARIO.padEnd(32)} Settled background agents receive one internal-update instruction while preserving transcript and SDK facts`)
+    console.log(`  ${PLAN_MODE_MODEL_SWITCH_SCENARIO.padEnd(32)} ExitPlanMode switches models in-process on Keep planning and across providers on Approve`)
     console.log(`  ${OUTPUT_TOKENS_SCENARIO.padEnd(32)} Bounded output escalation, clean replay and continuation preserve native and explicit budgets`)
     console.log(`  ${CONTEXT_SUMMARY_SCENARIO.padEnd(32)} Resumed Qwen/DeepSeek context summary, full details and fast repeat controls without model requests`)
     console.log(`  ${CONNECTOR_PROXY_SCENARIO.padEnd(32)} Proxied connector save, persisted plugin reload and real old/new CLI tool calls`)
@@ -90,13 +93,18 @@ async function main() {
   const runContextSummary = only.length === 0 || only.includes(CONTEXT_SUMMARY_SCENARIO)
   const runOutputTokens = only.length === 0 || only.includes(OUTPUT_TOKENS_SCENARIO)
   const runBackgroundNotifications = only.length === 0 || only.includes(BACKGROUND_NOTIFICATIONS_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runConnectorProxy && !runTeamReview && !runTeamRuntime && !runContextSummary && !runOutputTokens && !runBackgroundNotifications) {
+  const runPlanModeModelSwitch = only.length === 0 || only.includes(PLAN_MODE_MODEL_SWITCH_SCENARIO)
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runConnectorProxy && !runTeamReview && !runTeamRuntime && !runContextSummary && !runOutputTokens && !runBackgroundNotifications && !runPlanModeModelSwitch) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
   const rootDir = resolve(import.meta.dir, '../../..')
   const artifactDir = join(rootDir, 'artifacts', 'agent-e2e')
   mkdirSync(artifactDir, { recursive: true })
+  if (runPlanModeModelSwitch) {
+    await runPlanModeModelSwitchScenario(rootDir, join(artifactDir, 'plan-mode-model-switch'))
+    console.log(`[agent-e2e] PASS ${PLAN_MODE_MODEL_SWITCH_SCENARIO}`)
+  }
   if (runBackgroundNotifications) {
     await runBackgroundNotificationScenario(rootDir, join(artifactDir, 'background-notifications'))
     console.log(`[agent-e2e] PASS ${BACKGROUND_NOTIFICATIONS_SCENARIO}`)

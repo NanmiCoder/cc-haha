@@ -31,7 +31,7 @@ import type {
   TurnTiming,
 } from './events.js'
 import { RUNTIME_CONFIG_APPLIED_EVENT } from './events.js'
-import { PLAN_EXECUTION_CONTINUE_MESSAGE } from '../../constants/messages.js'
+import { buildPlanContinueMessage } from '../../constants/messages.js'
 import * as os from 'node:os'
 import {
   ConversationStartupError,
@@ -2107,16 +2107,15 @@ function handlePermissionResponse(
 ) {
   const { sessionId } = ws.data
   if (
-    message.allowed &&
     message.runtimeOverride &&
     conversationService.getPendingPermissionToolName(sessionId, message.requestId) ===
       EXIT_PLAN_MODE_TOOL_NAME
   ) {
     void handlePlanApprovalWithRuntimeOverride(ws, message).catch((err) => {
-      // The approval was NOT sent: the CLI is still waiting on the permission
+      // The response was NOT sent: the CLI is still waiting on the permission
       // and the user can retry. Note the desktop optimistically dismissed the
       // approval bar on send — it reappears on the reconnect replay.
-      console.error(`[WS] Plan approval with runtime override failed for ${sessionId}:`, err)
+      console.error(`[WS] Plan permission response with runtime override failed for ${sessionId}:`, err)
       sendMessage(ws, {
         type: 'error',
         message: 'Failed to apply the execution model. The plan is still waiting for approval.',
@@ -2263,7 +2262,7 @@ async function handlePlanApprovalWithRuntimeOverride(
   }
 
   // Cross-provider (or effort change): provider env is fixed at process spawn,
-  // so this automates the manual "approve → stop → switch model → continue"
+  // so this automates the manual "respond → stop → switch model → continue"
   // flow. The interrupted turn may bill one partial request to the planning
   // model — same as the manual flow.
   await enqueueRuntimeTransition(sessionId, async () => {
@@ -2274,9 +2273,11 @@ async function handlePlanApprovalWithRuntimeOverride(
       (runtimeOverrideVersions.get(sessionId) ?? 0) + 1,
     )
     await persistSessionRuntimeConfig(sessionId, nextOverride)
-    const approvedMode = extractSessionModeUpdate(message.permissionUpdates)
-    if (approvedMode) {
-      await persistSessionPermissionMode(sessionId, approvedMode)
+    const targetMode = message.allowed
+      ? extractSessionModeUpdate(message.permissionUpdates)
+      : 'plan'
+    if (targetMode) {
+      await persistSessionPermissionMode(sessionId, targetMode)
     }
   })
 
@@ -2299,10 +2300,13 @@ async function handlePlanApprovalWithRuntimeOverride(
   const resumeTurn: ActiveUserTurnState = { messageSent: false }
   void handleUserMessage(
     resumeWs,
-    { type: 'user_message', content: PLAN_EXECUTION_CONTINUE_MESSAGE },
+    {
+      type: 'user_message',
+      content: buildPlanContinueMessage(message.allowed, message.denyMessage),
+    },
     resumeTurn,
   ).catch((err) => {
-    console.error(`[WS] Failed to auto-continue plan execution for ${sessionId}:`, err)
+    console.error(`[WS] Failed to auto-continue plan turn for ${sessionId}:`, err)
   })
 }
 

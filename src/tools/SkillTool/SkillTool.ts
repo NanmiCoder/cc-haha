@@ -836,6 +836,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
                 model,
                 ctx.options.mainLoopModel,
               ),
+              refreshMainLoopModel: undefined,
             },
           }
         }
