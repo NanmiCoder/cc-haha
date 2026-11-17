@@ -124,6 +124,8 @@ export type RepositoryWorktreeInfo = {
   current: boolean
 }
 export type RepositoryContextResult = {
+  /** Logical project identity, separate from the Git repository root. */
+  projectRoot?: string | null
   state: 'ok' | 'not_git_repo' | 'missing_workdir' | 'error'
   workDir: string
   repoRoot: string | null

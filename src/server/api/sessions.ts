@@ -57,6 +57,7 @@ import {
   createRepositoryBranch,
   getRepositoryContext,
   type CreateSessionRepositoryOptions,
+  type RepositoryContextResult,
 } from '../services/repositoryLaunchService.js'
 import {
   executeSessionRewind,
@@ -72,6 +73,7 @@ import {
   SessionBranchingError,
 } from '../../utils/sessionBranching.js'
 import { registerChangedFileAccessRoot, registerFilesystemAccessRoot } from '../services/filesystemAccessRoots.js'
+import { findExplicitProjectRoot, readProjectIdentity } from '../services/projectIdentity.js'
 import { findGitRoot } from '../../utils/git.js'
 import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCaptureService.js'
 import { getSubagentRunByAgentId, getSubagentRunByTool } from '../services/subagentRunService.js'
@@ -1049,8 +1051,15 @@ async function getSessionRepositoryContext(url: URL): Promise<Response> {
     throw ApiError.badRequest('workDir query parameter is required')
   }
 
-  const context = await getRepositoryContext(workDir)
-  return Response.json(context)
+  return Response.json(withProjectIdentity(await getRepositoryContext(workDir)))
+}
+
+function withProjectIdentity(context: RepositoryContextResult): RepositoryContextResult & { projectRoot: string } {
+  const explicitRoot = findExplicitProjectRoot(context.workDir, readProjectIdentity(getClaudeConfigHomeDir()).roots)
+  const projectRoot = explicitRoot && (!context.repoRoot || findExplicitProjectRoot(explicitRoot, [context.repoRoot]))
+    ? explicitRoot
+    : context.repoRoot || context.workDir
+  return { ...context, projectRoot }
 }
 
 async function createSessionRepositoryBranch(req: Request): Promise<Response> {
@@ -1078,7 +1087,7 @@ async function createSessionRepositoryBranch(req: Request): Promise<Response> {
     name: body.name,
     from: body.from ?? null,
   })
-  return Response.json(result, { status: 201 })
+  return Response.json({ ...result, context: withProjectIdentity(result.context) }, { status: 201 })
 }
 
 async function requireSessionWorkspace(sessionId: string): Promise<string> {
@@ -1896,6 +1905,7 @@ type RecentProjectEntry = {
 
 // In-memory cache for recent projects (TTL: 30s)
 let recentProjectsCache: {
+  identityRevision: string
   scope: string
   /** How many sessions were scanned to build `projects` — see getRecentProjects. */
   scanLimit: number
@@ -1924,12 +1934,14 @@ async function getRecentProjects(url: URL): Promise<Response> {
     ? Math.min(Math.max(scanParam, 100), 5000)
     : Math.min(Math.max(limit * 16, 100), 500)
   const scope = path.resolve(getClaudeConfigHomeDir())
+  const identityRevision = readProjectIdentity(scope).revision
 
   // Return cached response if fresh. The cache is only valid for requests whose
   // scan depth it already covers — a shallow (small-limit) scan must not serve
   // a deeper one, or older projects would be silently truncated away.
   if (
     recentProjectsCache?.scope === scope &&
+    recentProjectsCache.identityRevision === identityRevision &&
     recentProjectsCache.scanLimit >= sessionScanLimit &&
     Date.now() - recentProjectsCache.timestamp < RECENT_PROJECTS_CACHE_TTL
   ) {
@@ -2039,6 +2051,6 @@ async function getRecentProjects(url: URL): Promise<Response> {
   // Sort by most recent
   projects.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
 
-  recentProjectsCache = { scope, scanLimit: sessionScanLimit, projects, timestamp: Date.now() }
+  recentProjectsCache = { scope, identityRevision, scanLimit: sessionScanLimit, projects, timestamp: Date.now() }
   return Response.json({ projects: projects.slice(0, limit) })
 }
