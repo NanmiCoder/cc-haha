@@ -234,6 +234,13 @@ export type PerSessionState = {
   stoppingBackgroundTaskIds?: Record<string, boolean>
   pendingBackgroundTaskStopFailures?: Record<string, string>
   stopAllSubagentsRequested?: boolean
+  /**
+   * Client-side stopping fence (#1917): set when the user clicks Stop so dense
+   * in-flight DeepSeek `thinking` / `content_delta` / `status: thinking` frames
+   * already queued on the WebSocket cannot flip `chatState` back to running
+   * before the server's terminal `{ type: 'status', state: 'idle' }` arrives.
+   */
+  awaitingStopIdle?: boolean
   awaitingReconnectSync?: boolean
   /**
    * Background tasks that ended since the model last started an attempt and
@@ -304,6 +311,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   stoppingBackgroundTaskIds: {},
   pendingBackgroundTaskStopFailures: {},
   stopAllSubagentsRequested: false,
+  awaitingStopIdle: false,
   awaitingReconnectSync: false,
   preHydrationSocketGapPending: false,
   historyBootstrapDisabled: false,
@@ -3648,6 +3656,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             scheduledTaskTurn: false,
             historyPageLoading: false,
             chatState: 'thinking',
+            awaitingStopIdle: false,
             pendingBackgroundContinue: [],
             backgroundContinueNoticeId: undefined,
             isPreparingTurn: false,
@@ -3770,6 +3779,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         return {
           pendingPermissions,
           pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
+          awaitingStopIdle: false,
           chatState: remainingPermissions.length > 0 ||
             Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
             ? 'permission_pending'
@@ -3801,6 +3811,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingComputerUsePermissions,
             session.pendingComputerUsePermission,
           ),
+          awaitingStopIdle: false,
           chatState: Object.keys(getPendingPermissionRecord(session)).length > 0 ||
             remainingPermissions.length > 0
             ? 'permission_pending'
@@ -3830,6 +3841,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   stopGeneration: (sessionId) => {
     wsManager.send(sessionId, { type: 'stop_generation' })
+    if (
+      !isSideChatSession(sessionId) &&
+      !sessionId.startsWith('__') &&
+      (wsManager as { isConnected?: (id: string) => boolean }).isConnected?.(sessionId) === false
+    ) {
+      void (sessionsApi as { stopChat?: (id: string) => Promise<unknown> }).stopChat?.(sessionId)?.catch(() => {})
+    }
     const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
@@ -3866,6 +3884,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ...session,
             messages: markPendingToolUseMessagesStopped(stoppedMessages),
             chatState: 'idle',
+            awaitingStopIdle: true,
             promptSuggestion: null,
             activeToolUseId: null,
             activeToolName: null,
@@ -4867,6 +4886,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           queuedUserMessages: (currentSession.queuedUserMessages ?? [])
             .filter((message) => message.id !== messageId),
           ...(pendingText.trim() ? { streamingText: '' } : {}),
+          awaitingStopIdle: false,
           replaceHistoryOnCompletion: false,
         }
       }),
@@ -4890,6 +4910,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       activeGoal: null,
       streamingText: '',
       chatState: 'idle',
+      awaitingStopIdle: false,
       historyStatus: 'ready',
       historyHydrated: true,
       historyError: null,
@@ -5068,6 +5089,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                   !(message.type === 'tool_use' && message.isPending)),
               ],
               chatState: 'thinking',
+              awaitingStopIdle: false,
               streamingText: '',
               streamingToolInput: '',
               activeThinkingId: null,
@@ -5094,6 +5116,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
 
         if (session.chatState === 'idle') {
+          if (session.awaitingStopIdle) {
+            update(() => ({ awaitingStopIdle: false }))
+          }
           if (reconciledBackgroundTaskSnapshot) {
             useTabStore.getState().updateTabStatus(
               sessionId,
@@ -5143,6 +5168,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         update(() => ({
           messages: markPendingToolUseMessagesStopped(messagesWithText),
           chatState: 'idle',
+          awaitingStopIdle: false,
           activeThinkingId: null,
           activeToolUseId: null,
           activeToolName: null,
@@ -5182,6 +5208,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'status':
+        if (msg.state !== 'idle' && get().sessions[sessionId]?.awaitingStopIdle) {
+          break
+        }
         // A new attempt only starts once the previous one committed or was
         // retried, so its task bar change is no longer undoable.
         if (msg.attemptStart) taskBarBeforeAttemptBySession.delete(sessionId)
@@ -5224,7 +5253,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               : msg.verb && msg.verb !== 'Thinking'
                 ? msg.verb
                 : '',
-            ...(msg.state === 'idle' ? { activeThinkingId: null } : {}),
+            ...(msg.state === 'idle' ? { activeThinkingId: null, awaitingStopIdle: false } : {}),
             ...(msg.state === 'idle' ? { apiRetry: null, streamingFallback: null } : {}),
             // Any new model activity makes the previous turn's prediction stale.
             ...(msg.state !== 'idle' && session.promptSuggestion ? { promptSuggestion: null } : {}),
@@ -5292,7 +5321,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'content_start': {
         const session = get().sessions[sessionId]
-        if (!session) break
+        if (!session || session.awaitingStopIdle) break
         // The server keeps a stopped-turn fence until it attributes a replay
         // (or a pure local command's first output) to the replacement turn.
         // Mirror that boundary instead of clearing the SubAgent stop latch on
@@ -5351,6 +5380,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'api_retry': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         const attempt = Math.max(1, Math.trunc(msg.attempt))
         const maxRetries = Math.max(attempt, Math.trunc(msg.maxRetries))
         const retryDelayMs = Math.max(0, Math.trunc(msg.retryDelayMs))
@@ -5375,6 +5405,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'streaming_fallback': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         if (msg.cause === 'stream_retry') {
           const taskBarBeforeAttempt = taskBarBeforeAttemptBySession.get(sessionId)
           consumePendingDelta(sessionId)
@@ -5447,6 +5478,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'content_delta':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         let receivedLiveDelta = false
         if (msg.text !== undefined) {
           if (!get().sessions[sessionId]) break
@@ -5507,6 +5539,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'thinking': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         // 重放/空块都不该冒出一个新的「已思考」气泡，也不该把会话拖回 thinking 态
         // 或者启动计时器 —— 那正是"打开一个早就结束的会话，它自己开始输出"的观感。
         let skippedThinkingBlock = false
@@ -5561,6 +5594,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_use_complete': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         clearPendingToolInputDelta(sessionId)
         const session = get().sessions[sessionId]
         const toolName = msg.toolName || session?.activeToolName || 'unknown'
@@ -5611,6 +5645,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_result': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         const scheduledResult = parseScheduledTaskResult(findToolUseMessage(get().sessions[sessionId]?.messages ?? [], msg.toolUseId)?.toolName ?? '', msg.content, msg.isError)
         if (scheduledResult?.kind === 'scheduled_task') {
           useTaskStore.getState().applyToolResult(scheduledResult)
@@ -5658,6 +5693,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'permission_request':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         notifyDesktop({
           dedupeKey: `permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
@@ -5726,6 +5762,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'computer_use_permission_request':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         notifyDesktop({
           dedupeKey: `computer-use-permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
@@ -5799,6 +5836,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'permission_requests_snapshot':
         update((session) => {
+          if (session.awaitingStopIdle) {
+            return {
+              connectionSnapshotReady: true,
+              pendingPermissions: {},
+              pendingPermission: null,
+              pendingComputerUsePermissions: {},
+              pendingComputerUsePermission: null,
+              chatState: 'idle',
+              ...(!msg.turnActive ? { awaitingStopIdle: false } : {}),
+            }
+          }
           const toolRequestIds = new Set(msg.toolRequestIds)
           const pendingPermissions = Object.fromEntries(
             Object.entries(getPendingPermissionRecord(session))
@@ -5866,6 +5914,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           scheduledTaskTurn: false,
           tokenUsage: msg.usage,
           chatState: 'idle',
+          awaitingStopIdle: false,
           activeThinkingId: null,
           pendingPermission: null,
           pendingPermissions: {},
@@ -5925,6 +5974,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
             stopAllSubagentsRequested: false,
+            awaitingStopIdle: false,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
             // Another client (phone, IM, a second window) started a turn: only
             // its own socket gets the thinking status, so drop the stale
@@ -5966,6 +6016,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           return {
             messages: newMessages,
             chatState: 'idle',
+            awaitingStopIdle: false,
             activeThinkingId: null,
             streamingText: '',
             statusVerb: '',
@@ -6153,6 +6204,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications: {},
             pendingBackgroundTaskStopFailures: {},
             stopAllSubagentsRequested: false,
+            awaitingStopIdle: false,
             awaitingReconnectSync: false,
             preHydrationSocketGapPending: false,
             queuedUserMessages: [],
@@ -6237,6 +6289,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 (goalEvent.action === 'message' ? 0 : 1),
               historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
               stopAllSubagentsRequested: false,
+              awaitingStopIdle: false,
               messages: [
                 ...session.messages,
                 {

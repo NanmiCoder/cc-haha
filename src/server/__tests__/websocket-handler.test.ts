@@ -12,9 +12,12 @@ import {
   closeSessionConnection,
   ensureCliSessionStartedForControl,
   getActiveSessionIds,
+  getSessionChatActivityState,
   getSessionTurnState,
   getRuntimeSettings,
   handleWebSocket,
+  interruptUserSession,
+  markSessionChatQueued,
   stopSessionTurn,
   __registerPendingSessionStartupForTests,
   translateCliMessage,
@@ -34,7 +37,11 @@ import * as teamRuntime from '../services/teamPlanRuntime.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import * as sideChatRegistry from '../services/sideChatRegistry.js'
-import { activeBackgroundTaskIds } from '../ws/agentTaskState.js'
+import {
+  activeBackgroundTaskIds,
+  agentStopRequestedSessions,
+  nonAgentStopRequestedSessions,
+} from '../ws/agentTaskState.js'
 import * as teleportApi from '../../utils/teleport/api.js'
 import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
 import { clearGrokModelCatalogCache, getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
@@ -6239,5 +6246,235 @@ describe('resumable streams over the real session handler', () => {
     expect(plain.sent.some(text => text.includes('"seq"'))).toBe(false)
     sockets.close(plain, 1006, '')
     expect(getActiveSessionIds()).not.toContain(sessionId)
+  })
+
+  it('interruptUserSession stops a foreground CLI run without activeUserTurns and suppresses interrupt errors (#1917)', () => {
+    const sessionId = `http-stop-cli-run-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const callbacks = new Set<(cliMsg: any) => void>()
+    let timeoutCallback: (() => void) | null = null
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, cb) => {
+      callbacks.add(cb)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, cb) => {
+      callbacks.delete(cb)
+    })
+    const sendInterrupt = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number) => {
+      if (ms === 3_000 && typeof fn === 'function') {
+        timeoutCallback = fn as () => void
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+
+    try {
+      handleWebSocket.open(ws)
+      for (const cb of [...callbacks]) {
+        cb({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+      }
+
+      interruptUserSession(sessionId)
+
+      expect(sendInterrupt).toHaveBeenCalledWith(sessionId)
+      expect(ws.sent.map(p => JSON.parse(p))).toContainEqual({ type: 'status', state: 'idle' })
+      // Interrupted stream error must be suppressed when sessionStopRequested was set.
+      expect(translateCliMessage({
+        type: 'assistant',
+        isApiErrorMessage: true,
+        error: 'Stream ended without receiving any events',
+      }, sessionId)).toEqual([])
+
+      // 3s force-kill backstop fires if the foreground CLI run still has not exited.
+      expect(timeoutCallback).not.toBeNull()
+      timeoutCallback!()
+      expect(stopSession).toHaveBeenCalledWith(sessionId)
+    } finally {
+      setTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('does not mute or force-kill an autonomous task-notification follow-up turn after stopSessionTurn (#1917)', async () => {
+    for (const hasUserTurn of [true, false]) {
+      const sessionId = `stop-turn-autonomous-followup-${hasUserTurn ? 'user' : 'cli'}-${crypto.randomUUID()}`
+      const ws = makeClientSocket(sessionId)
+      const callbacks = new Set<(cliMsg: any) => void>()
+      const timers: Array<() => void> = []
+      spyOn(conversationService, 'hasSession').mockReturnValue(true)
+      spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+      spyOn(conversationService, 'onOutput').mockImplementation((_sid, cb) => {
+        callbacks.add(cb)
+      })
+      spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, cb) => {
+        callbacks.delete(cb)
+      })
+      spyOn(conversationService, 'sendMessage').mockImplementation(async (_sid, _text, _attachments, options) => {
+        options?.onCommitted?.()
+        return true
+      })
+      spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+      spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+      const sendInterrupt = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+      const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+      const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number) => {
+        if (ms === 3_000 && typeof fn === 'function') {
+          timers.push(fn as () => void)
+        }
+        return 0 as unknown as ReturnType<typeof setTimeout>
+      }) as typeof setTimeout)
+
+      const emit = (msg: any) => {
+        for (const cb of [...callbacks]) cb(msg)
+      }
+
+      try {
+        handleWebSocket.open(ws)
+        if (hasUserTurn) {
+          handleWebSocket.message(ws, JSON.stringify({
+            type: 'user_message',
+            content: 'Run build in background',
+          }))
+          await flushMicrotasks(30)
+        }
+
+        emit({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+        emit({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'bash-survives-stop',
+          tool_use_id: 'tool-bash-survives-stop',
+          task_type: 'local_bash',
+          description: 'Background build',
+        })
+
+        stopSessionTurn(sessionId)
+        expect(sendInterrupt).toHaveBeenCalledWith(sessionId)
+        expect(timers).toHaveLength(1)
+
+        // Interrupted turn settles while local_bash continues running in waiting_for_agents.
+        emit({
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          result: 'Request interrupted by user',
+          usage: { input_tokens: 5, output_tokens: 2 },
+        })
+
+        // Background local_bash completes within 3s and triggers an autonomous task-notification follow-up turn.
+        emit({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'bash-survives-stop',
+          tool_use_id: 'tool-bash-survives-stop',
+          task_type: 'local_bash',
+          status: 'completed',
+          summary: 'Build succeeded',
+        })
+        await flushMicrotasks()
+
+        ws.sent.length = 0
+        emit({ type: 'system', subtype: 'init', session_id: sessionId, model: 'deepseek-reasoner', cwd: '/tmp' })
+        emit({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start' } })
+        emit({
+          type: 'stream_event',
+          parent_tool_use_id: null,
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          },
+        })
+        emit({
+          type: 'stream_event',
+          parent_tool_use_id: null,
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'Autonomous follow-up summary' },
+          },
+        })
+
+        expect(getSessionChatActivityState(sessionId)).toBe('running')
+        const forwarded = ws.sent.map(p => JSON.parse(p))
+        expect(forwarded).toContainEqual({
+          type: 'content_delta',
+          text: 'Autonomous follow-up summary',
+        })
+
+        // 3s force-kill timer from the earlier stopSessionTurn fires mid-follow-up:
+        // it must NOT kill the CLI subprocess now running the new foreground epoch.
+        timers[0]!()
+        expect(stopSession).not.toHaveBeenCalled()
+
+        emit({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'Autonomous follow-up summary',
+          usage: { input_tokens: 10, output_tokens: 8 },
+        })
+        emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
+        expect(getSessionChatActivityState(sessionId)).toBe('idle')
+      } finally {
+        setTimeoutSpy.mockRestore()
+        __resetWebSocketHandlerStateForTests()
+      }
+    }
+  })
+
+  it('interruptUserSession does not leak stop latches when completely idle without WebSocket clients and schedules cleanup when stopping disconnected work (#1917)', () => {
+    const idleSessionId = `http-stop-disconnected-idle-${crypto.randomUUID()}`
+    markSessionChatQueued(idleSessionId)
+    expect(getSessionChatActivityState(idleSessionId)).toBe('running')
+
+    let hasLiveSession = false
+    spyOn(conversationService, 'hasSession').mockImplementation(() => hasLiveSession)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    let nextTimerId = 1
+    const liveDisconnectTimers = new Map<number, () => void>()
+    __setDisconnectGraceMsForTests(1_234)
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number) => {
+      const id = nextTimerId++
+      if (ms === 1_234 && typeof fn === 'function') {
+        liveDisconnectTimers.set(id, fn as () => void)
+      }
+      return id as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(((id?: ReturnType<typeof setTimeout>) => {
+      if (typeof id === 'number') liveDisconnectTimers.delete(id)
+    }) as typeof clearTimeout)
+
+    try {
+      interruptUserSession(idleSessionId)
+
+      expect(getSessionChatActivityState(idleSessionId)).toBe('idle')
+      expect(agentStopRequestedSessions.has(idleSessionId)).toBe(false)
+      expect(nonAgentStopRequestedSessions.has(idleSessionId)).toBe(false)
+      expect(liveDisconnectTimers.size).toBe(0)
+
+      // Disconnected session with a live CLI runtime converges through standard disconnect cleanup.
+      const liveDisconnectedSessionId = `http-stop-disconnected-live-${crypto.randomUUID()}`
+      hasLiveSession = true
+      __registerPendingUserTurnForTests(liveDisconnectedSessionId)
+      expect(getSessionChatActivityState(liveDisconnectedSessionId)).toBe('running')
+
+      interruptUserSession(liveDisconnectedSessionId)
+
+      expect(getSessionChatActivityState(liveDisconnectedSessionId)).toBe('idle')
+      expect(agentStopRequestedSessions.has(liveDisconnectedSessionId)).toBe(true)
+      expect(liveDisconnectTimers.size).toBe(1)
+
+      const expireDisconnectCleanup = [...liveDisconnectTimers.values()][0]!
+      expireDisconnectCleanup()
+      expect(stopSession).toHaveBeenCalledWith(liveDisconnectedSessionId)
+      expect(agentStopRequestedSessions.has(liveDisconnectedSessionId)).toBe(false)
+      expect(nonAgentStopRequestedSessions.has(liveDisconnectedSessionId)).toBe(false)
+    } finally {
+      clearTimeoutSpy.mockRestore()
+      setTimeoutSpy.mockRestore()
+      __resetDisconnectGraceMsForTests()
+    }
   })
 })

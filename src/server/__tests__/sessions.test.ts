@@ -23,7 +23,11 @@ import { sanitizePath } from '../../utils/sessionStoragePortable.js'
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
 import { clearPluginCache } from '../../utils/plugins/pluginLoader.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
-import { updateSessionSlashCommands } from '../ws/handler.js'
+import {
+  __markActiveTurnForTests,
+  __resetWebSocketHandlerStateForTests,
+  updateSessionSlashCommands,
+} from '../ws/handler.js'
 import { reduceTranscript } from '../services/localIndex/transcriptReducer.js'
 import { openLocalIndexDatabase } from '../services/localIndex/database.js'
 import { readSessionEntriesByLocator } from '../services/localIndex/sessionEntries.js'
@@ -10289,6 +10293,31 @@ describe('Sessions API', () => {
     const status = (await statusRes.json()) as { state: string; activityState: string }
     expect(status.state).toBe('idle')
     expect(status.activityState).toBe('idle')
+  })
+
+  it('POST /api/sessions/:id/chat/stop interrupts a live CLI turn immediately without waiting for WebSocket handshake (#1917)', async () => {
+    const sessionId = 'bbbbbbbb-1917-cccc-dddd-eeeeeeeeeeee'
+    __markActiveTurnForTests(sessionId)
+    const hasSessionSpy = spyOn(conversationService, 'hasSession').mockImplementation((id) => id === sessionId)
+    const sendInterruptSpy = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+
+    try {
+      const beforeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
+      expect(((await beforeRes.json()) as { activityState: string }).activityState).toBe('running')
+
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/stop`, {
+        method: 'POST',
+      })
+      expect(res.status).toBe(200)
+      expect(sendInterruptSpy).toHaveBeenCalledWith(sessionId)
+
+      const afterRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
+      expect(((await afterRes.json()) as { activityState: string }).activityState).toBe('idle')
+    } finally {
+      hasSessionSpy.mockRestore()
+      sendInterruptSpy.mockRestore()
+      __resetWebSocketHandlerStateForTests()
+    }
   })
 
   it('frozen review never uses current bytes for the latest legacy turn', async () => {

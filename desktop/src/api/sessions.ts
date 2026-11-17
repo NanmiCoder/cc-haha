@@ -552,6 +552,10 @@ export const sessionsApi = {
     return api.get<SessionChatStatusResponse>(`/api/sessions/${sessionId}/chat/status`, { signal })
   },
 
+  stopChat(sessionId: string) {
+    return api.post<{ ok: boolean }>(`/api/sessions/${sessionId}/chat/stop`)
+  },
+
   getTrace(sessionId: string, options?: ApiRequestOptions, page?: { offset?: number; revisionToken?: string; scanCursor?: string }) {
     const query = new URLSearchParams()
     if (page?.offset) query.set('offset', String(page.offset))
