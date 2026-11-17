@@ -15,6 +15,7 @@ import * as bindings from '../../keybindings/useKeybinding.js'
 import * as search from '../../hooks/useSearchInput.js'
 import * as terminal from '../../hooks/useTerminalSize.js'
 import * as instructions from '../../utils/instructionFiles.js'
+import * as languagePicker from '../LanguagePicker.js'
 import { Config } from './Config.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -88,6 +89,127 @@ test('list Escape belongs to Config and restores project instructions', async ()
     expect(user.pluginConfigs['agents-md@builtin'].options.sibling).toBe(true)
   } finally {
     app.unmount()
+    for (const spy of spies.reverse()) spy.mockRestore()
+    if (oldHome === undefined) delete process.env.HOME
+    else process.env.HOME = oldHome
+    if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = oldConfig
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('list Escape preserves cc-haha fallback language when untouched and restores it when modified', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'config-lang-cancel-'))
+  const oldHome = process.env.HOME
+  const oldConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.HOME = dir
+  process.env.CLAUDE_CONFIG_DIR = dir
+  const spies: Array<{ mockRestore(): void }> = []
+  let keyDown: (event: any) => void = () => {}
+  const handlers = new Map<string, () => void>()
+  let state = appState.getDefaultAppState()
+  const store = { getState: () => state }
+  // Simulate ~/.claude/settings.json missing `language` while cc-haha/settings.json fallback supplies 'chinese'.
+  let rawUser: Record<string, unknown> = {
+    pluginConfigs: { 'agents-md@builtin': { options: { instructionFiles: 'claude-md-or-agents-md' } } },
+  }
+  let fallbackLanguage: string | undefined = 'chinese'
+  const recordedPatches: Array<Record<string, unknown>> = []
+  let completeLanguagePicker: ((lang: string | undefined) => void) | undefined
+
+  spies.push(
+    spyOn(ink, 'Box').mockImplementation((props: any) => { if (props.onKeyDown) keyDown = props.onKeyDown; return props.children ?? null }),
+    spyOn(ink, 'useTheme').mockReturnValue([{}, () => {}] as any),
+    spyOn(ink, 'useThemeSetting').mockReturnValue('dark' as any),
+    spyOn(ink, 'useTerminalFocus').mockReturnValue(true),
+    spyOn(appState, 'useAppState').mockImplementation((selector: any) => selector(state)),
+    spyOn(appState, 'useSetAppState').mockReturnValue((updater: any) => { state = updater(state) }),
+    spyOn(appState, 'useAppStateStore').mockReturnValue(store as any),
+    spyOn(config, 'getGlobalConfig').mockReturnValue({} as any),
+    spyOn(config, 'saveGlobalConfig').mockImplementation(() => {}),
+    spyOn(config, 'getCurrentProjectConfig').mockReturnValue({} as any),
+    spyOn(settings, 'getInitialSettings').mockImplementation(() => ({
+      ...rawUser,
+      ...(fallbackLanguage !== undefined ? { language: fallbackLanguage } : {}),
+    }) as any),
+    spyOn(settings, 'getSettingsForSource').mockImplementation(source => source === 'userSettings' ? rawUser as any : {}),
+    spyOn(settings, 'getUserLanguageSettingWithFallback').mockImplementation(() => fallbackLanguage),
+    spyOn(settings, 'updateSettingsForSource').mockImplementation((source, patch) => {
+      if (source === 'userSettings') {
+        const record = patch as Record<string, unknown>
+        recordedPatches.push(record)
+        if (Object.hasOwn(record, 'language')) {
+          fallbackLanguage = typeof record.language === 'string' && record.language ? record.language : undefined
+        }
+      }
+      return { error: null }
+    }),
+    spyOn(languagePicker, 'LanguagePicker').mockImplementation((props: any) => {
+      completeLanguagePicker = props.onComplete
+      return null
+    }),
+    spyOn(memory, 'getMemoryFiles').mockReturnValue(Promise.resolve([])),
+    spyOn(memory, 'clearMemoryFileCaches').mockImplementation(() => {}),
+    spyOn(tabs, 'useTabHeaderFocus').mockReturnValue({ headerFocused: false, focusHeader: () => {} } as any),
+    spyOn(search, 'useSearchInput').mockImplementation(() => ({ query: 'language', setQuery: () => {}, cursorOffset: 8 }) as any),
+    spyOn(terminal, 'useTerminalSize').mockReturnValue({ rows: 30, columns: 100 } as any),
+    spyOn(bindings, 'useKeybinding').mockImplementation((action, handler, options) => {
+      if (options?.isActive) handlers.set(action, handler as () => void)
+      else handlers.delete(action)
+    }),
+    spyOn(bindings, 'useKeybindings').mockImplementation((actions, options) => {
+      for (const [action, handler] of Object.entries(actions)) {
+        if (options?.isActive) handlers.set(action, handler as () => void)
+        else handlers.delete(action)
+      }
+    }),
+  )
+
+  const renderDialog = () => render(
+    <React.Suspense fallback={null}>
+      <Config context={{ options: { mcpClients: [] } } as any} onClose={() => {}} setTabsHidden={() => {}} />
+    </React.Suspense>,
+    { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), exitOnCtrlC: false, patchConsole: false },
+  )
+
+  // 1) Open Language submenu, change to 'spanish', then Escape -> must restore 'chinese' (not undefined!).
+  const firstApp = renderDialog()
+  try {
+    await new Promise(resolve => setTimeout(resolve, 350))
+    keyDown({ key: 'return', preventDefault() {} })
+    await tick()
+    handlers.get('select:accept')?.()
+    await tick()
+    expect(completeLanguagePicker).toBeDefined()
+    completeLanguagePicker?.('spanish')
+    await tick()
+    expect(fallbackLanguage).toBe('spanish')
+
+    handlers.get('confirm:no')?.()
+    await tick()
+    expect(fallbackLanguage).toBe('chinese')
+  } finally {
+    firstApp.unmount()
+  }
+
+  // 2) Modify another setting without touching Language, then Escape -> must NOT emit language: undefined!
+  recordedPatches.length = 0
+  ;(search.useSearchInput as any).mockImplementation(() => ({ query: 'instructions', setQuery: () => {}, cursorOffset: 12 }))
+  const secondApp = renderDialog()
+  try {
+    await new Promise(resolve => setTimeout(resolve, 350))
+    keyDown({ key: 'return', preventDefault() {} })
+    await tick()
+    handlers.get('select:accept')?.()
+    await tick()
+    handlers.get('confirm:no')?.()
+    await tick()
+    expect(fallbackLanguage).toBe('chinese')
+    for (const patch of recordedPatches) {
+      expect(Object.hasOwn(patch, 'language')).toBe(false)
+    }
+  } finally {
+    secondApp.unmount()
     for (const spy of spies.reverse()) spy.mockRestore()
     if (oldHome === undefined) delete process.env.HOME
     else process.env.HOME = oldHome

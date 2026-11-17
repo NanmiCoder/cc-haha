@@ -829,7 +829,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const prev = get().responseLanguage
     set({ responseLanguage: language })
     try {
-      await settingsApi.updateUser({ language: language || undefined })
+      await settingsApi.updateUser({ language })
     } catch {
       set({ responseLanguage: prev })
     }
@@ -870,16 +870,53 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 }))
 
-export function hasProxyManagedOnlyUserSettings(settings: UserSettings): boolean {
-  const keys = Object.keys(settings)
-  if (keys.length !== 1 || keys[0] !== 'env') return false
+const PROXY_TEMPLATE_PASSTHROUGH_KEYS = new Set([
+  '$schema',
+  'attribution',
+  'cleanupPeriodDays',
+  'env',
+  'hooks',
+  'includeCoAuthoredBy',
+  'outputStyle',
+  'permissions',
+  'statusLine',
+])
 
+function isSyntheticReadDefault(key: string, value: unknown): boolean {
+  return (
+    (key === 'leanModeEnabled' && value === false) ||
+    (key === 'autoUpdateEnabled' && value === true) ||
+    (key === 'agentTeamsEnabled' && value === true) ||
+    (key === 'maxConcurrentSubagents' && value === null)
+  )
+}
+
+export function hasProxyManagedOnlyUserSettings(settings: UserSettings): boolean {
   const env = settings.env
   if (typeof env !== 'object' || env === null || Array.isArray(env)) return false
 
   const values = env as Record<string, unknown>
-  return values.ANTHROPIC_API_KEY === 'PROXY_MANAGED'
+  const isProxyManaged =
+    values.ANTHROPIC_API_KEY === 'PROXY_MANAGED'
     || values.ANTHROPIC_AUTH_TOKEN === 'PROXY_MANAGED'
+  if (!isProxyManaged) return false
+
+  const fallbackKeySet = new Set<string>(
+    Array.isArray(settings.ccHahaFallbackKeys)
+      ? (settings.ccHahaFallbackKeys as unknown[]).filter(
+          (key): key is string => typeof key === 'string',
+        )
+      : [],
+  )
+
+  return Object.entries(settings).every(
+    ([key, value]) =>
+      value === undefined ||
+      key === 'ccHahaFallbackKeys' ||
+      fallbackKeySet.has(key) ||
+      PROXY_TEMPLATE_PASSTHROUGH_KEYS.has(key) ||
+      isSyntheticReadDefault(key, value),
+  )
 }
 
 subscribeLocaleChanges((locale) => {
