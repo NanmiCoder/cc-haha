@@ -327,6 +327,24 @@ describe('RepositoryLaunchControls', () => {
     expect(within(pill).getByText('main')).toBeInTheDocument()
   })
 
+  it('shows the independent project name while retaining its parent Git branch context', async () => {
+    apiMocks.getRepositoryContext.mockResolvedValue({ ...okRepositoryContext, workDir: '/repo/child', projectRoot: '/repo/child' })
+    act(() => {
+      hydrateProjectDisplayNames(
+        { '/repo': 'Parent', '/repo/child': 'Child project' }, captureProjectDisplayNameHydrationRevision(),
+      )
+    })
+    renderControls({ workDir: '/repo/child' })
+    const pill = await screen.findByRole('button', { name: 'Location: Child project / main' })
+    expect(pill).toHaveAttribute('title', '/repo/child\nBranch: main')
+  })
+
+  it('uses the independent folder name when it has no custom alias', async () => {
+    apiMocks.getRepositoryContext.mockResolvedValue({ ...okRepositoryContext, workDir: '/repo/child', projectRoot: '/repo/child' })
+    renderControls({ workDir: '/repo/child' })
+    await screen.findByRole('button', { name: 'Location: child / main' })
+  })
+
   it('truncates the branch from the start so its tail survives', async () => {
     renderControls()
 

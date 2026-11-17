@@ -41,6 +41,7 @@ export type DesktopUiPreferences = {
   voiceInput?: VoicePreferences
   projectDisplayNames: Record<string, string>
   projectAdditionalDirectories?: Record<string, string[]>
+  explicitProjectRoots?: string[]
 }
 
 export type DesktopUiPreferencesResponse = {
@@ -70,12 +71,12 @@ export type ProjectDirectories = {
 }
 
 export const desktopUiPreferencesApi = {
-  getProjectDirectories(workDir: string) {
-    return api.get<ProjectDirectories>(`/api/desktop-ui/preferences/project-directories?workDir=${encodeURIComponent(workDir)}`)
+  getProjectDirectories(workDir: string, options?: { createProject?: boolean }) {
+    return api.get<ProjectDirectories>(`/api/desktop-ui/preferences/project-directories?workDir=${encodeURIComponent(workDir)}${options?.createProject ? '&createProject=true' : ''}`)
   },
 
-  updateProjectDirectories(workDir: string, additionalDirectories: string[]) {
-    return api.put<ProjectDirectories & { ok: true }>('/api/desktop-ui/preferences/project-directories', { workDir, additionalDirectories })
+  updateProjectDirectories(workDir: string, additionalDirectories: string[], options?: { createProject?: boolean }) {
+    return api.put<ProjectDirectories & { ok: true }>('/api/desktop-ui/preferences/project-directories', { workDir, additionalDirectories, ...options })
   },
 
   getProfile() {

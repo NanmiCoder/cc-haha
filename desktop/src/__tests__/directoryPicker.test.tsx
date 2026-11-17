@@ -179,7 +179,7 @@ describe('DirectoryPicker project list', () => {
       expect(desktopUiPreferencesApi.updateProjectDisplayName)
         .toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha', '我的项目')
     })
-    expect(desktopUiPreferencesApi.updateProjectDirectories).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha', [])
+    expect(desktopUiPreferencesApi.updateProjectDirectories).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha', [], { createProject: true })
     await waitFor(() => {
       expect(onWorkDirChange).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha')
     })
