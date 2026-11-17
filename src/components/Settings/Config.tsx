@@ -835,7 +835,7 @@ export function Config({
   }] : []), {
     id: 'language',
     label: 'Language',
-    value: currentLanguage ?? 'Default (English)',
+    value: currentLanguage || 'Default (English)',
     type: 'managedEnum' as const,
     onChange: () => {} // handled by LanguagePicker submenu
   }, {

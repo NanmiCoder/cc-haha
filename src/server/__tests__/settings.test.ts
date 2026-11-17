@@ -1925,7 +1925,7 @@ describe('Models API', () => {
     expect((await handleSettingsApi(resetLang.req, resetLang.url, resetLang.segments)).status).toBe(200)
 
     const userDiskAfterLangReset = JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'))
-    expect(userDiskAfterLangReset).not.toHaveProperty('language')
+    expect(userDiskAfterLangReset.language).toBe('')
     expect(userDiskAfterLangReset).not.toHaveProperty('ccHahaFallbackKeys')
 
     await fs.writeFile(path.join(tmpDir, 'settings.json'), overwrittenJson, 'utf-8')

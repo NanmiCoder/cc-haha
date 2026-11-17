@@ -302,9 +302,7 @@ export class SettingsService {
 
       if (
         Object.hasOwn(settings, 'language') &&
-        (settings.language === undefined ||
-          settings.language === null ||
-          (typeof settings.language === 'string' && settings.language.trim() === ''))
+        (settings.language === undefined || settings.language === null)
       ) {
         delete merged.language
       }
