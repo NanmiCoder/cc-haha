@@ -1681,15 +1681,23 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
   const repository = launchInfo?.repository
   const worktreeSession = launchInfo?.worktreeSession
-  // The visible business branch comes from Desktop's launch choice when present.
-  // CLI originalBranch is the source checkout before creating the worktree, which
-  // can differ from the selected base ref.
-  const sessionBranch = repository?.branch || worktreeSession?.originalBranch || null
+  const preferRepositoryBranch =
+    Boolean(repository?.worktree) &&
+    (!worktreeSession || sameResolvedPath(worktreeSession.worktreePath, repository.worktreePath))
+  // The visible business branch comes from Desktop's isolated worktree launch choice
+  // when it still matches the active worktree. Regular checkouts and subsequent CLI
+  // EnterWorktree transitions prefer CLI originalBranch over stale launch metadata.
+  const sessionBranch = preferRepositoryBranch
+    ? (repository?.branch || worktreeSession?.originalBranch || null)
+    : (worktreeSession?.originalBranch || null)
   const plannedWorktreePath = worktreeSession?.worktreePath || repository?.worktreePath || null
   const activeWorktreePath = worktreeSession?.worktreePath || (
     sameResolvedPath(workDir, plannedWorktreePath) ? workDir : null
   )
-  const worktree = repository?.worktree || worktreeSession
+  const hasActiveOrPlannedWorktree = Boolean(worktreeSession) || (
+    Boolean(repository?.worktree) && worktreeSession !== null
+  )
+  const worktree = hasActiveOrPlannedWorktree
     ? {
         enabled: true,
         path: activeWorktreePath,
@@ -1707,7 +1715,7 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   if (!gitRoot) {
     const dirName = repoNameFromWorkDir(workDir)
     return Response.json({
-      branch: sessionBranch,
+      branch: worktree ? sessionBranch : null,
       repoName: dirName,
       workDir,
       changedFiles: 0,
@@ -1716,17 +1724,37 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   }
 
   try {
-    // Get branch name
-    const gitBranch = await runGitInfoCommand(workDir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    // `branch --show-current` reports the live branch on normal and unborn checkouts,
+    // empty stdout (`''`) on detached HEAD, and `null` when git fails or times out.
+    const rawGitBranch = await runGitInfoCommand(workDir, ['branch', '--show-current'])
+    const isDetachedHead = rawGitBranch === ''
+    const gitBranch = rawGitBranch || null
     const materializedWorktree = !!worktree && (
       sameResolvedPath(workDir, worktree.path) ||
       sameResolvedPath(workDir, worktree.plannedPath)
     )
-    const branch = sessionBranch || (
-      materializedWorktree
-        ? (worktree.branch || gitBranch)
-        : gitBranch
-    )
+    const plannedUnmaterializedWorktree = !!worktree &&
+      !materializedWorktree &&
+      (launchInfo?.transcriptMessageCount ?? 0) === 0 &&
+      !!repository?.worktree &&
+      worktreeSession !== null
+
+    let branch: string | null
+    if (plannedUnmaterializedWorktree) {
+      branch = sessionBranch || gitBranch
+    } else if (materializedWorktree) {
+      if (isDetachedHead) {
+        branch = null
+      } else if (rawGitBranch === null) {
+        branch = sessionBranch || worktree.branch || null
+      } else if (worktree.branch && gitBranch === worktree.branch) {
+        branch = sessionBranch || worktree.branch
+      } else {
+        branch = gitBranch
+      }
+    } else {
+      branch = gitBranch
+    }
 
     // Get repo name from remote or directory
     const remote = await runGitInfoCommand(workDir, ['remote', 'get-url', 'origin'])
@@ -1746,7 +1774,7 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   } catch {
     // Not a git repo or git not available
     return Response.json({
-      branch: sessionBranch,
+      branch: worktree ? sessionBranch : null,
       repoName: null,
       workDir,
       changedFiles: 0,

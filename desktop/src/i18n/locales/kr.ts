@@ -3570,7 +3570,7 @@ export const kr: Record<TranslationKey, string> = {
   'permission.planKeepPlanning': '계속 계획하기',
   'permission.planFeedbackPlaceholder': 'Claude에게 변경할 내용을 알려주세요',
   'permission.planExecutionModel': '실행 모델',
-  'permission.planExecutionModelPending': '승인 후 적용',
+  'permission.planExecutionModelPending': '제출 후 적용',
   'permission.planEmpty': '계획 내용이 없습니다.',
   'permission.planApproved': '계획 승인됨',
   'permission.planRejected': '계획 거부됨',
