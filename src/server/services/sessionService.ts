@@ -277,6 +277,7 @@ export type MessageEntry = {
   businessErrorCode?: string
   bodyTruncated?: boolean
   toolUseResult?: unknown
+  durationMs?: number
   timestamp: string
   model?: string
   usage?: MessageUsage
@@ -513,6 +514,7 @@ type RawEntry = {
     }
   }
   timestamp?: string
+  durationMs?: number
   version?: string
   snapshot?: {
     messageId?: string
@@ -2279,6 +2281,13 @@ export class SessionService {
         })
       }
     }
+    const durationMs =
+      type === 'tool_result' &&
+      typeof entry.durationMs === 'number' &&
+      Number.isFinite(entry.durationMs) &&
+      entry.durationMs >= 0
+        ? entry.durationMs
+        : undefined
     return {
       id: entry.uuid || crypto.randomUUID(),
       type,
@@ -2291,6 +2300,7 @@ export class SessionService {
       ...(scheduledTask ? { scheduledTask } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
       ...(usage ? { usage } : {}),

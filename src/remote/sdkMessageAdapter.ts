@@ -188,6 +188,7 @@ export function convertSDKMessage(
           message: createUserMessage({
             content,
             toolUseResult: msg.tool_use_result,
+            durationMs: msg.durationMs,
             uuid: msg.uuid,
             timestamp: msg.timestamp,
           }),
