@@ -49,6 +49,77 @@ function toolResult(id: string) {
   })
 }
 
+describe('background task guidance at the model boundary', () => {
+  const notification = '<task-notification><task-id>build</task-id><status>failed</status><summary>Background command "build" failed with exit code 143</summary></task-notification>'
+  const guidance = 'Treat background task notifications as internal lifecycle updates'
+  const text = (messages: ReturnType<typeof normalizeMessagesForAPI>) =>
+    JSON.stringify(messages.map(message => message.message.content))
+
+  test('guides an idle follow-up without changing its original XML or provenance', () => {
+    const message = createUserMessage({ content: notification, origin: { kind: 'task-notification' } })
+    const before = JSON.stringify(message)
+    const normalized = normalizeMessagesForAPI([message])
+
+    expect(text(normalized)).toContain(guidance)
+    expect(text(normalized)).toContain('Do not infer intentional cleanup from exit code 143 alone')
+    expect(text(normalized)).toContain('Investigate failures that block the requested task')
+    expect(normalized[0]?.type === 'user' && normalized[0].origin).toEqual({ kind: 'task-notification' })
+    expect(JSON.stringify(message)).toBe(before)
+    expect(text(normalized)).toContain('task-id>build</task-id>')
+    expect(text(normalizeMessagesForAPI(normalized)).split(guidance)).toHaveLength(2)
+  })
+
+  test('guides queued results while preserving a real user message in the same tool round', () => {
+    const human = createUserMessage({ content: 'Please also check the API.' })
+    const update = createAttachmentMessage({ type: 'queued_command', commandMode: 'task-notification', prompt: notification })
+    const before = JSON.stringify([human, update])
+    const normalized = normalizeMessagesForAPI([human, update])
+
+    expect(text(normalized)).toContain(guidance)
+    expect(text(normalized)).toContain('Please also check the API.')
+    expect(text(normalized)).toContain('failed with exit code 143')
+    expect(JSON.stringify([human, update])).toBe(before)
+  })
+
+  test('does not reclassify a user quoting a task notification as an internal update', () => {
+    const message = createUserMessage({ content: `Why did this fail? ${notification}` })
+    expect(text(normalizeMessagesForAPI([message]))).not.toContain(guidance)
+  })
+
+  test('leaves hook and cancellation instructions using the same queue mode unchanged', () => {
+    const message = createUserMessage({ content: 'The user stopped this task. Wait for their next message.', origin: { kind: 'task-notification' } })
+    const update = createAttachmentMessage({ type: 'queued_command', commandMode: 'task-notification', prompt: 'A hook blocked this action. Fix its reported error.' })
+    expect(text(normalizeMessagesForAPI([message, update]))).not.toContain(guidance)
+  })
+
+  test.each([
+    { name: 'missing', prompt: undefined },
+    { name: 'null', prompt: null },
+    { name: 'number', prompt: 42 },
+    { name: 'object', prompt: {} },
+    { name: 'null block', prompt: [null] },
+    { name: 'primitive block', prompt: [7] },
+    { name: 'missing text', prompt: [{ type: 'text' }] },
+    { name: 'non-string text', prompt: [{ type: 'text', text: 42 }] },
+  ])('keeps normal user input after malformed queued prompt: $name', ({ prompt }) => {
+    const update = createAttachmentMessage({ type: 'queued_command', commandMode: 'task-notification', prompt: prompt as never })
+    const human = createUserMessage({ content: 'Please continue checking the API.' })
+    const normalized = normalizeMessagesForAPI([update, human])
+
+    expect(text(normalized)).toContain('Please continue checking the API.')
+    expect(text(normalized)).not.toContain(guidance)
+  })
+
+  test('adds the shared guidance once for several separate background results', () => {
+    const messages = [
+      createUserMessage({ content: notification, origin: { kind: 'task-notification' } }),
+      createAssistantMessage({ content: 'The requested work is complete.' }),
+      createUserMessage({ content: notification.replace('build', 'checks'), origin: { kind: 'task-notification' } }),
+    ]
+    expect(text(normalizeMessagesForAPI(messages)).split(guidance)).toHaveLength(2)
+  })
+})
+
 describe('normalizeMessagesForAPI assistant fragment indexing', () => {
   test('preserves a 10,000-step tool-result chain', () => {
     const messages = [createUserMessage({ content: 'start' })]
