@@ -239,6 +239,7 @@
           if (window.__CC_HAHA_BOOTSTRAPPED__) return
           var root = document.getElementById('root')
           if (!root) return
+          window.clearTimeout(bootTimer)
 
           var summary = summarize(reason)
           var details = [
@@ -303,7 +304,7 @@
           renderStartupError(event.reason || 'Unhandled startup promise rejection')
         })
 
-        window.setTimeout(function () {
+        var bootTimer = window.setTimeout(function () {
           renderStartupError('Desktop app did not finish bootstrapping within ' + bootDeadlineMs + 'ms. This usually means the WebView could not execute the app bundle or startup code stopped before React mounted.')
         }, bootDeadlineMs)
       })()

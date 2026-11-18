@@ -5,7 +5,6 @@ import './theme/globals.css'
 import { initializeAppZoom } from './lib/appZoom'
 import { initializeTouchH5 } from './lib/touchH5'
 import { runDesktopPersistenceMigrations } from './lib/persistenceMigrations'
-import { initWorkspacePersistence } from './lib/workspace/persistenceBridge'
 import { getDesktopHost } from './lib/desktopHost'
 import { initializeLocale } from './i18n/locale'
 import { initializeChatAppearance } from './stores/chatAppearanceStore'
@@ -41,7 +40,15 @@ export function isPrimaryWorkspaceWindow(search = window.location.search): boole
   return params.get('petWindow') !== '1'
 }
 
-function loadDesktopBootstrapModules() {
+async function loadDesktopBootstrapModules() {
+  if (isPrimaryWorkspaceWindow()) {
+    // Load the workspace's store graph after entry evaluation so production
+    // chunks can initialize their shared dependencies before creating stores.
+    // Migrations have already normalized the data that the hydrator trusts.
+    const { initWorkspacePersistence } = await import('./lib/workspace/persistenceBridge')
+    initWorkspacePersistence()
+  }
+
   const appModule = isPetWindowLocation()
     ? import('./features/pets/PetApp').then(({ PetApp }) => ({ App: PetApp }))
     : import('./App')
@@ -93,9 +100,6 @@ export async function bootstrapDesktopApp(
 
 runDesktopPersistenceMigrations()
 initializeChatAppearance()
-// Strictly after the migrations: the hydrator trusts the shape the migration
-// step just normalized rather than re-validating a possibly future schema.
-if (isPrimaryWorkspaceWindow()) initWorkspacePersistence()
 initializeTouchH5()
 void initializeAppZoom()
 
