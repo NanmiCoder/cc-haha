@@ -421,9 +421,7 @@ export class ProviderService {
     })
 
     if (id === CLAUDE_OFFICIAL_PROVIDER_ID) {
-      if (index.activeId === null) {
-        await this.settingsService.updateOfficialModelMapping(normalized)
-      }
+      await this.syncOfficialToUserSettings()
       return normalized
     }
 
@@ -434,7 +432,6 @@ export class ProviderService {
           ? { ...DEEPSEEK_ACCOUNT_PROVIDER, models: normalized }
           : { ...GROK_OFFICIAL_PROVIDER, models: normalized }
       await this.syncToSettings(provider)
-      await this.updateManagedSettings({ model: normalized.main, modelContext: undefined })
     }
 
     return normalized
@@ -635,14 +632,7 @@ export class ProviderService {
       return provider
     })
 
-    if (
-      provider.runtimeKind === 'openai_oauth' ||
-      provider.runtimeKind === 'grok_oauth' ||
-      provider.runtimeKind === 'deepseek_oauth'
-    ) {
-      await this.syncToSettings(provider)
-      await this.updateManagedSettings({ model: provider.models.main, modelContext: undefined })
-    } else if (provider.presetId === 'official') {
+    if (provider.presetId === 'official') {
       await this.clearProviderFromSettings(provider.id)
     } else {
       await this.syncToSettings(provider)
@@ -702,16 +692,21 @@ export class ProviderService {
   }
 
   async activateOfficial(): Promise<void> {
-    const index = await this.withIndexMutation(async () => {
+    await this.withIndexMutation(async () => {
       const index = await this.readIndex()
       index.activeId = null
       await this.writeIndex(index)
-      return index
     })
     await this.clearProviderFromSettings()
-    await this.settingsService.updateOfficialModelMapping(
-      this.resolveOfficialProviderModels(index, CLAUDE_OFFICIAL_PROVIDER_ID),
-    )
+    await this.syncOfficialToUserSettings()
+  }
+
+  private async syncOfficialToUserSettings(): Promise<void> {
+    await this.settingsService.updateOfficialModelMapping(async () => {
+      const latestIndex = await this.readIndex()
+      if (latestIndex.activeId !== null) return null
+      return this.resolveOfficialProviderModels(latestIndex, CLAUDE_OFFICIAL_PROVIDER_ID)
+    })
   }
 
   // --- Settings sync ---
@@ -764,15 +759,25 @@ export class ProviderService {
       // persisted settings that outlive the authenticated catalog cache.
       delete providerEnv[GROK_MODEL_CATALOG_ENV_KEY]
 
-      return {
-        settings: {
-          ...settings,
-          providerEnvOwner: currentProvider.id,
-          env: {
-            ...cleanedEnv,
-            ...providerEnv,
-          },
+      const nextSettings: Record<string, unknown> = {
+        ...settings,
+        providerEnvOwner: currentProvider.id,
+        env: {
+          ...cleanedEnv,
+          ...providerEnv,
         },
+      }
+      if (
+        currentProvider.runtimeKind === 'openai_oauth' ||
+        currentProvider.runtimeKind === 'grok_oauth' ||
+        currentProvider.runtimeKind === 'deepseek_oauth'
+      ) {
+        nextSettings.model = currentProvider.models.main
+        delete nextSettings.modelContext
+      }
+
+      return {
+        settings: nextSettings,
         result: undefined,
       }
     })

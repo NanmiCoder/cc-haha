@@ -4,10 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { ProviderService } from './providerService.js'
+import { SettingsService } from './settingsService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import * as magpie from './magpieGateway.js'
-import { OPENAI_OFFICIAL_PROVIDER_ID } from '../types/provider.js'
-import type { CreateProviderInput } from '../types/provider.js'
+import {
+  CLAUDE_OFFICIAL_PROVIDER_ID,
+  OPENAI_OFFICIAL_PROVIDER_ID,
+} from '../types/provider.js'
+import type { CreateProviderInput, ModelMapping } from '../types/provider.js'
 
 const originalEnv = { ...process.env }
 let sandbox: string
@@ -169,6 +173,185 @@ test('official model changes and switching to Official preserve concurrent impor
   expect(await service.listProviders()).toMatchObject({ activeId: null })
   expect((await service.listProviders()).providers.map(entry => entry.name)).toEqual(['previous-active', 'imported'])
   expect(await service.getManagedSettings()).not.toHaveProperty('providerEnvOwner')
+})
+
+test('out-of-order OAuth official model syncs do not clobber custom or newer active models', async () => {
+  const firstClient = new ProviderService()
+  const secondClient = new ProviderService()
+  const custom = await firstClient.addProvider(input('custom-active'))
+
+  await firstClient.updateManagedSettings({ model: 'pre-oauth-model', modelContext: '1m' })
+  await firstClient.activateProvider(OPENAI_OFFICIAL_PROVIDER_ID)
+  expect(await firstClient.getManagedSettings()).toMatchObject({
+    providerEnvOwner: OPENAI_OFFICIAL_PROVIDER_ID,
+    model: (await firstClient.getOfficialProviderModels(OPENAI_OFFICIAL_PROVIDER_ID)).main,
+  })
+  expect(await firstClient.getManagedSettings()).not.toHaveProperty('modelContext')
+
+  const internals = firstClient as unknown as {
+    syncToSettings(target: unknown): Promise<void>
+  }
+  const originalSync = internals.syncToSettings.bind(firstClient)
+  let enteredSync!: () => void
+  let releaseSync!: () => void
+  let syncPaused = new Promise<void>(resolve => { enteredSync = resolve })
+  let syncBarrier = new Promise<void>(resolve => { releaseSync = resolve })
+  const syncSpy = spyOn(internals, 'syncToSettings').mockImplementation(async (target) => {
+    enteredSync()
+    await syncBarrier
+    await originalSync(target)
+  })
+
+  const staleModels: ModelMapping = {
+    main: 'gpt-5-stale',
+    haiku: 'gpt-5-mini-stale',
+    sonnet: 'gpt-5-stale',
+    opus: 'gpt-5-stale',
+  }
+  const staleUpdate = firstClient.updateOfficialProviderModels(OPENAI_OFFICIAL_PROVIDER_ID, staleModels)
+  await Promise.race([syncPaused, staleUpdate])
+
+  try {
+    await secondClient.activateProvider(custom.id)
+    await secondClient.updateManagedSettings({
+      model: 'custom-selected-model',
+      modelContext: '1m',
+    }, custom.id)
+  } finally {
+    releaseSync()
+    await staleUpdate
+  }
+
+  expect(await secondClient.listProviders()).toMatchObject({ activeId: custom.id })
+  expect(await secondClient.getOfficialProviderModels(OPENAI_OFFICIAL_PROVIDER_ID)).toEqual(staleModels)
+  expect(await secondClient.getManagedSettings()).toMatchObject({
+    providerEnvOwner: custom.id,
+    model: 'custom-selected-model',
+    modelContext: '1m',
+    env: {
+      ANTHROPIC_MODEL: custom.models.main,
+    },
+  })
+
+  syncPaused = new Promise<void>(resolve => { enteredSync = resolve })
+  syncBarrier = new Promise<void>(resolve => { releaseSync = resolve })
+  const finalModels: ModelMapping = {
+    main: 'gpt-5-final',
+    haiku: 'gpt-5-mini-final',
+    sonnet: 'gpt-5-final',
+    opus: 'gpt-5-final',
+  }
+  const delayedActivation = firstClient.activateProvider(OPENAI_OFFICIAL_PROVIDER_ID)
+  await Promise.race([syncPaused, delayedActivation])
+
+  try {
+    await secondClient.updateOfficialProviderModels(OPENAI_OFFICIAL_PROVIDER_ID, finalModels)
+  } finally {
+    releaseSync()
+    await delayedActivation
+    syncSpy.mockRestore()
+  }
+
+  const finalManaged = await secondClient.getManagedSettings()
+  expect(finalManaged).toMatchObject({
+    providerEnvOwner: OPENAI_OFFICIAL_PROVIDER_ID,
+    model: 'gpt-5-final',
+    env: {
+      ANTHROPIC_MODEL: 'gpt-5-final',
+    },
+  })
+  expect(finalManaged).not.toHaveProperty('modelContext')
+})
+
+test('concurrent Official activation and Claude Official model edits converge user settings without clobbering custom providers', async () => {
+  const firstClient = new ProviderService()
+  const secondClient = new ProviderService()
+  const userSettings = new SettingsService()
+  const custom = await firstClient.addProvider(input('custom'))
+  await firstClient.activateProvider(custom.id)
+
+  const firstSettings = (firstClient as unknown as { settingsService: SettingsService }).settingsService
+  const originalUpdateOfficial = firstSettings.updateOfficialModelMapping.bind(firstSettings)
+  let enteredUpdate!: () => void
+  let releaseUpdate!: () => void
+  let updatePaused = new Promise<void>(resolve => { enteredUpdate = resolve })
+  let updateBarrier = new Promise<void>(resolve => { releaseUpdate = resolve })
+  const updateSpy = spyOn(firstSettings, 'updateOfficialModelMapping').mockImplementation(async (modelsOrResolver) => {
+    enteredUpdate()
+    await updateBarrier
+    await originalUpdateOfficial(modelsOrResolver)
+  })
+
+  const latestOfficialModels: ModelMapping = {
+    main: 'claude-opus-latest',
+    haiku: 'claude-haiku-latest',
+    sonnet: 'claude-sonnet-latest',
+    opus: 'claude-opus-latest',
+    fable: 'claude-fable-latest',
+  }
+  const activatingOfficial = firstClient.activateOfficial()
+  await Promise.race([updatePaused, activatingOfficial])
+
+  try {
+    await secondClient.updateOfficialProviderModels(CLAUDE_OFFICIAL_PROVIDER_ID, latestOfficialModels)
+  } finally {
+    releaseUpdate()
+    await activatingOfficial
+  }
+
+  expect(await userSettings.getUserSettings()).toMatchObject({
+    model: 'claude-opus-latest',
+    env: {
+      ANTHROPIC_MODEL: 'claude-opus-latest',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-latest',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-latest',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-latest',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-latest',
+    },
+  })
+
+  updatePaused = new Promise<void>(resolve => { enteredUpdate = resolve })
+  updateBarrier = new Promise<void>(resolve => { releaseUpdate = resolve })
+  const staleOfficialModels: ModelMapping = {
+    main: 'claude-stale-after-switch',
+    haiku: 'claude-haiku-stale',
+    sonnet: 'claude-sonnet-stale',
+    opus: 'claude-opus-stale',
+  }
+  const delayedOfficialEdit = firstClient.updateOfficialProviderModels(
+    CLAUDE_OFFICIAL_PROVIDER_ID,
+    staleOfficialModels,
+  )
+  await Promise.race([updatePaused, delayedOfficialEdit])
+
+  try {
+    await secondClient.activateProvider(custom.id)
+    await userSettings.updateUserSettings({
+      model: 'custom-user-model',
+      modelContext: '1m',
+      env: {
+        ANTHROPIC_MODEL: 'custom-user-env-model',
+        EXTRA_USER_ENV: 'keep',
+      },
+    })
+  } finally {
+    releaseUpdate()
+    await delayedOfficialEdit
+    updateSpy.mockRestore()
+  }
+
+  expect(await secondClient.listProviders()).toMatchObject({ activeId: custom.id })
+  expect(await secondClient.getOfficialProviderModels(CLAUDE_OFFICIAL_PROVIDER_ID)).toEqual(staleOfficialModels)
+  const finalUserSettings = await userSettings.getUserSettings()
+  expect(finalUserSettings).toMatchObject({
+    model: 'custom-user-model',
+    modelContext: '1m',
+    env: {
+      ANTHROPIC_MODEL: 'custom-user-env-model',
+      EXTRA_USER_ENV: 'keep',
+    },
+  })
+  expect(finalUserSettings.env).not.toHaveProperty('ANTHROPIC_DEFAULT_HAIKU_MODEL')
 })
 
 test('Magpie catalog synchronization preserves a concurrent provider edit', async () => {

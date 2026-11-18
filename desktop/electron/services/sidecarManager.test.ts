@@ -310,6 +310,28 @@ describe('Electron sidecar manager', () => {
     expect(env.NO_PROXY).toContain('127.0.0.1')
   })
 
+  it.each([
+    ['NO_PROXY', '*'],
+    ['no_proxy', ' * '],
+    ['no_proxy', 'localhost,*'],
+    ['NO_PROXY', '* .corp.local'],
+  ] as const)('preserves standalone wildcard bypass for sidecar and adapter proxy environments (%s=%s)', (key, value) => {
+    const bridgeUrl = 'http://127.0.0.1:49123'
+    const baseEnv: NodeJS.ProcessEnv = {
+      HTTPS_PROXY: 'http://stale.example:8080',
+      [key]: value,
+    }
+
+    expect(clearProxyEnv(baseEnv)).toMatchObject({ NO_PROXY: '*', no_proxy: '*' })
+    expect(withSystemProxyBridgeEnv(baseEnv, bridgeUrl)).toMatchObject({ NO_PROXY: '*', no_proxy: '*' })
+    expect(withSystemProxyErrorEnv(baseEnv, new Error('bridge unavailable'))).toMatchObject({ NO_PROXY: '*', no_proxy: '*' })
+    expect(withAdapterProxyBridgeEnv(baseEnv, bridgeUrl)).toMatchObject({
+      HTTPS_PROXY: bridgeUrl,
+      NO_PROXY: '*',
+      no_proxy: '*',
+    })
+  })
+
   it('keeps startup logs bounded', () => {
     const logs: string[] = []
     for (let index = 0; index < 85; index++) {

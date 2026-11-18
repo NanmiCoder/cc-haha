@@ -109,6 +109,9 @@ export function shouldBypassProxy(
 
     return noProxyList.some(pattern => {
       pattern = pattern.toLowerCase().trim()
+      if (!pattern) return false
+      if (pattern === '*') return true
+
       const normalizedPattern = pattern.startsWith('[') && pattern.endsWith(']')
         ? pattern.slice(1, -1)
         : pattern
@@ -126,6 +129,11 @@ export function shouldBypassProxy(
         }
 
         return hostname === normalizedPattern
+      }
+
+      if (pattern.startsWith('*.')) {
+        const suffix = pattern.slice(1)
+        return suffix.length > 1 && hostname.endsWith(suffix)
       }
 
       // Check for domain suffix match (with or without leading dot)
