@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBaseUrl } from './client'
 import { sessionsApi, type SessionHistoryPage } from './sessions'
 import { mapHistoryMessagesToUiMessages } from '@/stores/chatStore'
+import type { AgentTaskNotification } from '@/types/chat'
 import type { MessageEntry } from '@/types/session'
 import fullHistoryReplayPages from './__fixtures__/full-history-replay-pages.json'
 
@@ -534,6 +535,48 @@ describe('full session history assembly', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response(newer)).mockResolvedValueOnce(response(older))
 
     expect((await sessionsApi.getFullHistory('fixture')).messages).toEqual([prompt, answer, newCall])
+  })
+
+  it('deduplicates three-page message replays and cross-page task notifications by owner and tool identity', async () => {
+    const timestamp = '2026-11-01T00:00:00Z'
+    const replayedOldest: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v1', parentToolUseId: 'p1', timestamp }
+    const replayedMiddle: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v2', parentToolUseId: 'p2', timestamp }
+    const replayedNewest: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v3', parentToolUseId: 'p3', timestamp }
+    const oldestAnchor: MessageEntry = { id: 'anchor-1', type: 'user', content: 'first', timestamp }
+    const middleAnchor: MessageEntry = { id: 'anchor-2', type: 'user', content: 'second', timestamp }
+    const newestAnchor: MessageEntry = { id: 'anchor-3', type: 'user', content: 'third', timestamp }
+
+    const rootOld: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'stopped', summary: 'queued' }
+    const rootMid: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'failed', summary: 'retrying' }
+    const rootNew: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'completed', summary: 'root-final' }
+    const agentAOld: AgentTaskNotification = { taskId: 'task-a', toolUseId: 'shared-tool', ownerAgentId: 'agent-a', status: 'stopped', summary: 'a-v1' }
+    const agentANew: AgentTaskNotification = { taskId: 'task-a', toolUseId: 'shared-tool', ownerAgentId: 'agent-a', status: 'completed', summary: 'a-final' }
+    const agentBOnly: AgentTaskNotification = { taskId: 'task-b', toolUseId: 'shared-tool', ownerAgentId: 'agent-b', status: 'completed', summary: 'b-final' }
+    const blankNotice: AgentTaskNotification = { taskId: 'legacy-blank', toolUseId: '  ', status: 'completed' }
+
+    const oldest: SessionHistoryPage = {
+      ...page('unused', null),
+      messages: [replayedOldest, oldestAnchor],
+      taskNotifications: [rootOld, agentAOld, blankNotice],
+    }
+    const middle: SessionHistoryPage = {
+      ...page('unused', 'oldest'),
+      messages: [replayedMiddle, middleAnchor],
+      taskNotifications: [rootMid, agentBOnly],
+    }
+    const newest: SessionHistoryPage = {
+      ...page('unused', 'middle'),
+      messages: [newestAnchor, replayedNewest],
+      taskNotifications: [agentANew, rootNew],
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(newest))
+      .mockResolvedValueOnce(response(middle))
+      .mockResolvedValueOnce(response(oldest))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    expect(result.messages).toEqual([oldestAnchor, middleAnchor, newestAnchor, replayedNewest])
+    expect(result.taskNotifications).toEqual([blankNotice, agentBOnly, agentANew, rootNew])
   })
 
   it('preserves equal bodies, shared tool ids, and records without a usable message identity', async () => {

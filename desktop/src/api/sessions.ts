@@ -560,6 +560,17 @@ export const sessionsApi = {
     messages.forEach((message, index) => {
       if (typeof message.id === 'string' && message.id.trim()) latestIndexById.set(message.id, index)
     })
+    const taskNotifications = pages.flatMap(page => page.taskNotifications ?? [])
+    const latestNoticeIndexByKey = new Map<string, number>()
+    const noticeIdentity = (notice: AgentTaskNotification) => (
+      typeof notice.toolUseId === 'string' && notice.toolUseId.trim()
+        ? JSON.stringify([notice.ownerAgentId || null, notice.toolUseId])
+        : null
+    )
+    taskNotifications.forEach((notice, index) => {
+      const key = noticeIdentity(notice)
+      if (key !== null) latestNoticeIndexByKey.set(key, index)
+    })
     return {
       // Server projection deduplicates each slice separately. Replays spanning
       // slices must also keep only the last record, in its original position,
@@ -568,7 +579,10 @@ export const sessionsApi = {
         const latestIndex = latestIndexById.get(message.id)
         return latestIndex === undefined || latestIndex === index
       }),
-      taskNotifications: pages.flatMap(page => page.taskNotifications ?? []),
+      taskNotifications: taskNotifications.filter((notice, index) => {
+        const key = noticeIdentity(notice)
+        return key === null || latestNoticeIndexByKey.get(key) === index
+      }),
       page: {
         ...newest.page,
         nextCursor: null,
