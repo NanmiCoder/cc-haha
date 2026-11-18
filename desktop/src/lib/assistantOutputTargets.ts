@@ -107,7 +107,9 @@ type LocalhostTargetMatch = {
   href: string
 }
 
-type CandidateTarget = {
+export type AssistantOutputMention = {
+  /** Parsed disk path before normalization, so explicit paths keep their identity. */
+  path?: string
   key: string
   position: number
   order: number
@@ -144,19 +146,25 @@ export function extractAssistantOutputTargets(
   content: string,
   options: ExtractAssistantOutputTargetOptions = {},
 ): AssistantOutputTarget[] {
+  const mentions = collectAssistantOutputMentions(content, options)
+  return selectAssistantOutputTargets(mentions, options)
+}
+
+export function collectAssistantOutputMentions(
+  content: string,
+  options: Pick<ExtractAssistantOutputTargetOptions, 'workDir' | 'includeUnconfirmedNames'>,
+): AssistantOutputMention[] {
   const workDir = options.workDir ? resolveFilePath(options.workDir) : null
-  const limit = options.limit ?? 6
-  const candidates: CandidateTarget[] = []
-  const results: AssistantOutputTarget[] = []
-  const seen = new Set<string>()
+  const candidates: AssistantOutputMention[] = []
   const markdownLinks = extractMarkdownLinks(content)
   const codeBlocks = extractFencedCodeBlocks(content)
   let order = 0
 
-  const queueTarget = (target: AssistantOutputTarget, key: string, position: number) => {
+  const queueTarget = (target: AssistantOutputTarget, key: string, position: number, path?: string) => {
     candidates.push({
       key,
       position,
+      path,
       order,
       target,
     })
@@ -208,7 +216,7 @@ export function extractAssistantOutputTargets(
       normalizedPath: fileTarget.normalizedPath,
       confidence: 'high',
       source: 'markdown-link',
-    }, createFileKey(fileTarget), match.start)
+    }, createFileKey(fileTarget), match.start, filePath)
   }
 
   for (const match of content.matchAll(localhostUrlPattern)) {
@@ -254,7 +262,7 @@ export function extractAssistantOutputTargets(
       normalizedPath: fileTarget.normalizedPath,
       confidence: 'high',
       source: 'plain-path',
-    }, createFileKey(fileTarget), treeMatch.position)
+    }, createFileKey(fileTarget), treeMatch.position, treeMatch.href)
   }
 
   const queuePlainPath = (
@@ -281,7 +289,7 @@ export function extractAssistantOutputTargets(
       source: 'plain-path',
       ...(nameCandidates?.length ? { nameCandidates } : {}),
       ...(awaitsConfirmation ? { awaitsConfirmation } : {}),
-    }, createFileKey(fileTarget), position)
+    }, createFileKey(fileTarget), position, href)
   }
 
   // A code span is bounded by its backticks, not by the sentence, so a name in
@@ -290,7 +298,7 @@ export function extractAssistantOutputTargets(
   // verb), and run over `开题报告2.docx` it kept only `2.docx`.
   const codeSpans = extractInlineCodeSpans(content, codeBlocks)
   for (const span of codeSpans) {
-    if (isInMarkdownLink(span.start, markdownLinks)) {
+    if (!span.ref || isInMarkdownLink(span.start, markdownLinks)) {
       continue
     }
 
@@ -352,14 +360,50 @@ export function extractAssistantOutputTargets(
     return left.order - right.order
   })
 
-  for (const candidate of candidates) {
-    if (options.changedFiles === undefined && results.length >= limit) {
-      break
-    }
-    if (seen.has(candidate.key)) {
-      continue
-    }
+  return candidates
+}
 
+/** Use the same confirmed identity for the player, file card, and its open actions. */
+export function resolveAssistantOutputMentions(
+  mentions: AssistantOutputMention[],
+  aliases: ReadonlyMap<string, string>,
+  pending: ReadonlySet<string>,
+  workDir?: string,
+): AssistantOutputMention[] {
+  if (!aliases.size && !pending.size) return mentions
+  return mentions.flatMap((mention) => {
+    if (!mention.path) return [mention]
+    if (pending.has(mention.path)) return []
+    const corrected = aliases.get(mention.path)
+    if (!corrected) return [mention]
+    const target = mention.target
+    return [{
+      ...mention,
+      key: `file:${target.kind}:${corrected}`,
+      target: {
+        ...target,
+        id: createId(target.kind, corrected),
+        // Preserve the confirmed identity through changed-file reconciliation.
+        href: workDir ? resolveFilePath(corrected, workDir) : corrected,
+        normalizedPath: corrected,
+        subtitle: corrected,
+      },
+    }]
+  })
+}
+
+export function selectAssistantOutputTargets(
+  mentions: AssistantOutputMention[],
+  options: ExtractAssistantOutputTargetOptions,
+): AssistantOutputTarget[] {
+  const limit = options.limit ?? 6
+  const workDir = options.workDir ? resolveFilePath(options.workDir) : null
+  const results: AssistantOutputTarget[] = []
+  const seen = new Set<string>()
+  for (const candidate of mentions) {
+    if (options.changedFiles === undefined && results.length >= limit) break
+    if (candidate.target.awaitsConfirmation && !options.includeUnconfirmedNames) continue
+    if (seen.has(candidate.key)) continue
     seen.add(candidate.key)
     results.push(candidate.target)
   }
@@ -772,10 +816,10 @@ function normalizeMarkdownDestination(destination: string): string {
 type InlineCodeSpan = {
   start: number
   end: number
-  ref: NonNullable<ReturnType<typeof parseFilePathRef>>
+  ref: ReturnType<typeof parseFilePathRef>
 }
 
-/** Single-line `code` spans outside fenced blocks whose whole content is one file reference. */
+/** Keep every span's bounds so the prose scan cannot turn part of its content into a file. */
 function extractInlineCodeSpans(content: string, codeBlocks: FencedCodeBlock[]): InlineCodeSpan[] {
   const spans: InlineCodeSpan[] = []
 
@@ -786,9 +830,7 @@ function extractInlineCodeSpans(content: string, codeBlocks: FencedCodeBlock[]):
     }
 
     const ref = parseFilePathRef(match[1] ?? '')
-    if (ref) {
-      spans.push({ start, end: start + match[0].length, ref })
-    }
+    spans.push({ start, end: start + match[0].length, ref })
   }
 
   return spans

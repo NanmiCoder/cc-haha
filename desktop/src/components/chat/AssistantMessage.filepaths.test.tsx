@@ -140,6 +140,53 @@ describe('AssistantMessage file references', () => {
     await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
   })
 
+  it('opens the workspace-prefixed shell video from the prose and failed player at the actual file', async () => {
+    const name = '结尾重录_预览1080p_带口播.mp4'
+    statWorkspaceFiles.mockImplementation(async (_id: string, paths: string[]) => ({
+      files: paths.map((path) => ({
+        path, state: path === name || path === '/work/' + name ? 'file' : 'missing',
+      })),
+    }))
+    const content = '先看这个：`work/' + name + '`，旧版（`out/final/10_…_字幕240-271.mp4`）。'
+    const { container } = render(<AssistantMessage sessionId="s1" content={content}
+      turnChangedFiles={[]} turnOutputEvidence={shellTurn} />)
+    expect(container.querySelector('video')).toBeNull()
+    const expectedSrc = 'http://127.0.0.1:4321/preview-fs/s1/' + encodeURIComponent(name)
+    await waitFor(() => expect(Array.from(container.querySelectorAll('video'), (v) => v.src)).toEqual([expectedSrc]))
+    fireEvent.error(container.querySelector('video')!)
+    fireEvent.click(await screen.findByRole('button', { name: 'assistantOutputs.openAria' }))
+    await waitFor(() => expect(openPath).toHaveBeenCalledWith('/work/' + name))
+    openPath.mockClear()
+    fireEvent.click(await screen.findByRole('link', { name: 'work/' + name }))
+    await waitFor(() => expect(openPath).toHaveBeenCalledWith('/work/' + name))
+  })
+
+  it('keeps a confirmed shell output at the workspace root when the turn edited a script elsewhere', async () => {
+    const path = '/work/notes%20v1.md'
+    statWorkspaceFiles.mockImplementation(async (_id: string, paths: string[]) => ({
+      files: paths.map((candidate) => ({
+        path: candidate, state: candidate === path || candidate === 'notes%20v1.md' ? 'file' : 'missing', mtimeMs: Date.now(),
+      })),
+    }))
+    render(<AssistantMessage
+      sessionId="s1" content="[结果](work/notes%2520v1.md#L7)"
+      turnChangedFiles={['/work/scripts/render.ts']} turnOutputEvidence={shellTurn}
+    />)
+    fireEvent.click(await screen.findByRole('button', { name: 'assistantOutputs.openAria' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
+    fireEvent.click(screen.getByRole('link', { name: '结果' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', 'notes%20v1.md', { line: 7 }))
+  })
+
+  it('keeps the real nested video even when a checkpoint names another file with the same basename', async () => {
+    const { container } = render(<AssistantMessage
+      sessionId="s1" content="文件在 `work/nested.mp4`" turnChangedFiles={['/work/nested.mp4']}
+      turnOutputEvidence={shellTurn}
+    />)
+    await waitFor(() => expect(container.querySelector('video')?.src)
+      .toBe('http://127.0.0.1:4321/local-file/work/work/nested.mp4'))
+  })
+
   // Native QA: the renderer had decoded the Markdown destination into data-file-path,
   // then the click router decoded that filesystem path a second time.
   it.each([

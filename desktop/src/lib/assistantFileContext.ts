@@ -14,11 +14,13 @@ function declaredDirectories(content: string): string[] {
 }
 
 /** A single declared root applies to the whole reply, including prose and cards. */
-export function resolveAssistantFileHref(href: string, content: string): string
-export function resolveAssistantFileHref(href: PreviewFileRef, content: string): PreviewFileRef
-export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string): PreviewLinkTarget
-export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string): PreviewLinkTarget {
+export function resolveAssistantFileHref(href: string, content: string, aliases?: ReadonlyMap<string, string>): string
+export function resolveAssistantFileHref(href: PreviewFileRef, content: string, aliases?: ReadonlyMap<string, string>): PreviewFileRef
+export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string, aliases?: ReadonlyMap<string, string>): PreviewLinkTarget
+export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string, aliases?: ReadonlyMap<string, string>): PreviewLinkTarget {
   const path = typeof href === 'string' ? href : href.path
+  const corrected = aliases?.get(path)
+  if (corrected) return typeof href === 'string' ? corrected : { ...href, path: corrected }
   if (/^(?:[a-z][a-z0-9+.-]*:|\/|\\\\|~[\\/])/i.test(path)
     || (typeof href === 'string' && !parseFilePathRef(path))) return href
   const directories = declaredDirectories(content)

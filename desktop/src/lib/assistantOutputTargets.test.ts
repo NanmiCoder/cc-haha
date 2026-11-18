@@ -560,6 +560,15 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
       expect(targets.map((target) => target.normalizedPath)).toEqual(['论文/开题报告终稿.docx'])
     })
 
+    it('does not extract a video from the tail of an abbreviated code span', () => {
+      const targets = extractAssistantOutputTargets(
+        '先看 `结尾重录_预览1080p_带口播.mp4`，之前的版本保留着（`out/final/10_…_字幕240-271.mp4`）。',
+        { workDir: '/w', includeUnconfirmedNames: true },
+      )
+
+      expect(targets.map((target) => target.href)).toEqual(['结尾重录_预览1080p_带口播.mp4'])
+    })
+
     it('does not turn a command into a file card', () => {
       const targets = extractAssistantOutputTargets('运行 `open 开题报告.docx` 即可', {
         workDir: '/w',

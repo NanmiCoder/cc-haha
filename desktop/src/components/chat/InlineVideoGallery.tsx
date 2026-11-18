@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Film } from 'lucide-react'
 import { AssistantOutputTargetCard } from '@/components/chat/AssistantOutputTargetCard'
-import { extractAssistantOutputTargets } from '../../lib/assistantOutputTargets'
+import { selectAssistantOutputTargets, collectAssistantOutputMentions, type AssistantOutputMention } from '../../lib/assistantOutputTargets'
 import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
+import { useFileLinkVerification } from '@/hooks/useFileLinkVerification'
+import { createWorkspaceFileLinkVerifier } from '@/lib/workspaceFileStats'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 
 const VIDEO_EXTENSIONS = /\.(mp4|webm|mov|m4v)$/i
@@ -46,6 +48,7 @@ type Props = {
    */
   sessionId?: string
   workDir?: string | null
+  mentions?: AssistantOutputMention[]
   changedFiles?: string[]
 }
 
@@ -55,7 +58,7 @@ type Props = {
  * paths confirmed by the turn checkpoint use `/local-file`. Videos are large, so
  * we use a vertical stack, `preload="metadata"`, and never autoplay.
  */
-export function InlineVideoGallery({ text, sessionId, workDir, changedFiles }: Props) {
+export function InlineVideoGallery({ text, sessionId, workDir, mentions, changedFiles }: Props) {
   const videos = useMemo<GalleryVideo[]>(() => {
     if (!sessionId) {
       return []
@@ -68,7 +71,10 @@ export function InlineVideoGallery({ text, sessionId, workDir, changedFiles }: P
       changedFiles !== undefined && changedFiles.length === 0 ? undefined : changedFiles
 
     const base = getServerBaseUrl()
-    const targets = extractAssistantOutputTargets(text, { workDir, changedFiles: changedFileEvidence }).filter(
+    const targets = selectAssistantOutputTargets(
+      mentions ?? collectAssistantOutputMentions(text, { workDir }),
+      { workDir, changedFiles: changedFileEvidence },
+    ).filter(
       (target) => target.kind === 'video',
     )
     const representedPathKeys = new Set(
@@ -106,14 +112,14 @@ export function InlineVideoGallery({ text, sessionId, workDir, changedFiles }: P
     }
 
     return result
-  }, [changedFiles, sessionId, text, workDir])
+  }, [changedFiles, mentions, sessionId, text, workDir])
 
   if (videos.length === 0) return null
 
   return (
     <div className="mt-3 space-y-2">
       {videos.map((video) => (
-        <VideoPreview key={video.src} video={video} sessionId={sessionId!} workDir={workDir ?? undefined} />
+        <VideoPreview key={`${sessionId}|${video.src}`} video={video} sessionId={sessionId!} workDir={workDir ?? undefined} />
       ))}
     </div>
   )
@@ -121,6 +127,15 @@ export function InlineVideoGallery({ text, sessionId, workDir, changedFiles }: P
 
 function VideoPreview({ video, sessionId, workDir }: { video: GalleryVideo; sessionId: string; workDir?: string }) {
   const [failed, setFailed] = useState(false)
+  // Before status loads the workspace name is unknown. Check a relative path
+  // before fetching media, and check any failed player before offering Open.
+  const needsStat = failed || (!workDir && !isAbsoluteLocalPath(video.href))
+  const verifier = useMemo(() => needsStat
+    ? createWorkspaceFileLinkVerifier(sessionId, (path) => path)
+    : undefined, [needsStat, sessionId])
+  const paths = useMemo(() => [video.href], [video.href])
+  const missing = useFileLinkVerification(verifier, paths)
+  if (!missing || missing.has(video.href)) return null
 
   if (failed) {
     return (
