@@ -72,6 +72,7 @@ export const useSideChatStore = create<SideChatStore>((set, get) => ({
       // cannot make the temporary session eligible for persistence.
       await sideChatsApi.discard(entry.parentSessionId, id)
       useChatStore.getState().disconnectSession(id)
+      useChatStore.getState().markSessionCompletionRead(id)
       useWorkspaceChatContextStore.getState().clearSession(id)
       useSessionRuntimeStore.getState().clearSelection(id)
       unregisterSideChatSession(id)

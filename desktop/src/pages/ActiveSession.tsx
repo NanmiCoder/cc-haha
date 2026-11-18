@@ -987,7 +987,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   </div>
                 ) : (
                   <TrajectoryLinkContext.Provider value={isMobileLayout ? null : trajectoryLink}>
-                    <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} decisionsInComposer={isMobileLayout} />
+                    <MessageList sessionId={activeTabId ?? undefined} visible={active && !showTrajectory && !isWorkspaceFull}
+                      compact={showRightPanel} mobileLayout={isMobileLayout} decisionsInComposer={isMobileLayout} />
                   </TrajectoryLinkContext.Provider>
                 )}
               </div>

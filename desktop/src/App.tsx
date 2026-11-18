@@ -1,6 +1,7 @@
 import { AppShell } from './components/layout/AppShell'
 import { useScheduledTaskDesktopNotifications } from './hooks/useScheduledTaskDesktopNotifications'
 import { installDesktopNotificationNavigation } from './lib/desktopNotificationNavigation'
+import { installDesktopNotificationBadge } from './lib/desktopNotificationBadge'
 import { useEffect } from 'react'
 import { RemoteAccessGate } from './pages/RemoteAccess'
 import { isPublicAccessRuntime } from './lib/publicAccessRuntime'
@@ -21,6 +22,7 @@ export function App() {
 
 function ConnectedApp() {
   useScheduledTaskDesktopNotifications()
+  useEffect(installDesktopNotificationBadge, [])
   useEffect(() => {
     if (isDesktopRuntime()) void usePowerSettingsStore.getState().restore().catch(() => {})
   }, [])

@@ -3020,6 +3020,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.general.preventSleepEnabled': '运行任务时防止系统休眠',
   'settings.general.preventSleepDescription': '开启后，cc-haha 运行任务或等待确认时保持电脑唤醒，屏幕仍可自动关闭。任务结束或退出应用后恢复系统休眠设置。',
   'settings.general.preventSleepSaveFailed': '保存防休眠设置失败，请重试。',
+  'notifications.badgeDescription': '有待处理请求或未读回复的会话（{count}）',
   'settings.general.notificationsDescription': '使用操作系统原生通知提醒授权确认、Agent 回复完成和定时任务结果。',
   'settings.general.notificationsEnabled': '启用系统通知',
   'settings.general.notificationsHintOn': '开启后会请求系统通知权限，并通过系统通知中心提醒。',

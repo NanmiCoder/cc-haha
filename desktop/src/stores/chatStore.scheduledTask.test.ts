@@ -41,13 +41,13 @@ describe('scheduled turn completion notifications', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     notify.mockClear()
-    useChatStore.setState({ sessions: { target: {
+    useChatStore.setState({ unreadCompletions: new Map(), sessions: { target: {
       ...createDefaultSessionState(), connectionState: 'connected',
       historyBootstrapDisabled: true, chatState: 'thinking',
     } } })
   })
   afterEach(() => {
-    useChatStore.setState({ sessions: {} })
+    useChatStore.setState({ sessions: {}, unreadCompletions: new Map() })
     useTaskStore.setState({ tasks: [] })
     vi.clearAllTimers()
     vi.useRealTimers()
@@ -74,6 +74,7 @@ describe('scheduled turn completion notifications', () => {
     replayScheduled()
     complete()
     expect(notify).not.toHaveBeenCalled()
+    expect(useChatStore.getState().unreadCompletions.size).toBe(0)
   })
 
   it('does not let a queued user guide enable generic notifications for the running scheduled turn', () => {
@@ -90,6 +91,39 @@ describe('scheduled turn completion notifications', () => {
     useChatStore.getState().handleServerMessage('target', { type: 'user_message_replay', content: 'Explain the result' })
     complete('Here is the explanation')
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ cooldownScope: 'agent-completion', body: 'Here is the explanation' }))
+  })
+
+  it('tracks completed replies once per session independently of banner delivery', () => {
+    notify.mockResolvedValueOnce(false)
+    complete('First reply')
+    const first = useChatStore.getState().unreadCompletions
+    expect([...first.keys()]).toEqual(['target'])
+    complete('Second reply')
+    const second = useChatStore.getState().unreadCompletions
+    expect([...second.keys()]).toEqual(['target'])
+    expect(second.get('target')).not.toBe(first.get('target'))
+    useChatStore.getState().markSessionCompletionRead('target', first.get('target'))
+    useChatStore.getState().markSessionCompletionRead('another-session')
+    expect(useChatStore.getState().unreadCompletions).toBe(second)
+    useChatStore.getState().markSessionCompletionRead('target')
+    useChatStore.getState().handleServerMessage('target', {
+      type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    expect(useChatStore.getState().unreadCompletions.size).toBe(0)
+    complete('Third reply')
+    expect([...useChatStore.getState().unreadCompletions.keys()]).toEqual(['target'])
+    useChatStore.getState().clearMessages('target')
+    expect(useChatStore.getState().unreadCompletions.size).toBe(0)
+  })
+
+  it('marks a standalone image reply unread and clears it on a remote /clear', () => {
+    complete('![](/local-output/chart.png)')
+    expect(useChatStore.getState().unreadCompletions.has('target')).toBe(true)
+    expect(notify).not.toHaveBeenCalled()
+    useChatStore.getState().handleServerMessage('target', {
+      type: 'system_notification', subtype: 'session_cleared', message: 'Conversation cleared',
+    })
+    expect(useChatStore.getState().unreadCompletions.has('target')).toBe(false)
   })
 
   it.each([true, false])('uses the current history turn, not any old scheduled message (current scheduled: %s)', currentScheduled => {

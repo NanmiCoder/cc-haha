@@ -24,6 +24,7 @@ import {
   requestNotificationPermission,
   sendDesktopNotification,
 } from './services/notifications'
+import { createNotificationBadge } from './services/notificationBadge'
 import { installApplicationMenu, installRendererContextMenu } from './services/menu'
 import { saveWorkspaceBrowserPdf } from './services/workspaceBrowserPdf'
 import { workspaceBrowserMenuPosition } from './services/workspaceBrowserMenu'
@@ -118,6 +119,7 @@ import {
 } from './services/windows'
 
 let mainWindow: BrowserWindow | null = null
+let setNotificationBadge: ReturnType<typeof createNotificationBadge> | undefined
 let serverRuntime: ElectronServerRuntime | null = null
 let dataMigration: DataMigration | null = null
 const hostOperations = new Set<Promise<unknown>>()
@@ -612,6 +614,8 @@ async function handleCommandInvoke(payload: unknown): Promise<unknown> {
       return requestNotificationPermission(Notification)
     case 'macos_notification_permission_state':
       return notificationPermissionState(Notification)
+    case 'set_notification_badge':
+      return setNotificationBadge?.(args?.count, args?.description) ?? false
     case 'macos_send_notification':
       return sendDesktopNotification({
         NotificationClass: Notification,
@@ -1078,6 +1082,12 @@ async function createMainWindow() {
   installFullScreenKey(mainWindow, process.platform)
 
   const window = mainWindow
+  setNotificationBadge = createNotificationBadge({
+    platform: process.platform, app, window,
+    loadWindowsIcons: () => nativeImage.createFromBuffer(
+      readFileSync(path.join(appRoot(), 'src-tauri', 'icons', 'windows', 'taskbar-badges.png')),
+    ),
+  })
   const diagnosticsFile = electronHostDiagnosticsFile(process.env)
   const recordRendererDiagnostic = (detail: string) => {
     const sanitized = sanitizeHostDiagnostic(detail)

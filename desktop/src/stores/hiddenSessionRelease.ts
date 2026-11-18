@@ -4,7 +4,7 @@ import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { isSideChatSession } from '../lib/sideChatSessions'
 import { useTabStore, type Tab } from './tabStore'
 import { useTeamStore } from './teamStore'
-import type { PerSessionState } from './chatStore'
+import { isRecoveringSessionCompletion, type PerSessionState } from './chatStore'
 
 type HiddenSessionChatState = {
   sessions: Record<string, PerSessionState>
@@ -85,6 +85,7 @@ export function installHiddenSessionRelease(
       isSideChatSession(sessionId) ||
       !wsManager.getConnectedSessionIds().includes(sessionId) ||
       hasForegroundWork(session) ||
+      isRecoveringSessionCompletion(sessionId) ||
       isCliStillWorking(session) ||
       useTeamStore.getState().teamNameBySession[sessionId]
     ) return
