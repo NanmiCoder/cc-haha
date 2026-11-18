@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "status": "proposed",
+  "activationHead": null,
+  "normal": "existing exact target token environment",
+  "unavailable": "existing child-only bad CLR environment",
+  "packages": "exact full old NSIS setup and current full Electron/NSIS candidate only",
+  "manualRemovalHelperInvocation": false,
+  "newSetupCommand": "quoted exact pinned setup /S /currentuser /D=exact-owned-default-root",
+  "uninstallerCommand": "existing exact old argv with KEEP_APP_DATA and keep-shortcuts",
+  "providerCredentials": false
+}

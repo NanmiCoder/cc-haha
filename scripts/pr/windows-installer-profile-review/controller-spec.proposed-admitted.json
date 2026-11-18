@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "mode": "historical-v078-controller",
+  "executionStage": "B",
+  "realExecutionAdmitted": true,
+  "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+  "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+  "generation": 1,
+  "sourceRoot": "D:\\a\\_temp\\cc-haha-1879-b-e5aad0f-52f4ce19-g1\\input",
+  "gitRoot": "D:\\a\\cc-haha\\cc-haha",
+  "controllerRoot": "D:\\a\\_temp\\cc-haha-1879-b-e5aad0f-52f4ce19-g1\\controller",
+  "output": "D:\\a\\_temp\\cc-haha-1879-b-e5aad0f-52f4ce19-g1\\controller\\controller-report.json",
+  "setupPath": "D:\\a\\_temp\\cc-haha-1879-b-e5aad0f-52f4ce19-g1\\input\\old-setup.exe",
+  "expectedBinarySha256": "da7dfc9ffa9adbeb693736b79afaf78e9872a1df239b4e1e1eb6b377690c5cf8",
+  "sourcePins": [
+    {
+      "file": "windows-installer-profile-fixture.cs",
+      "sha256": "be94a5b91a66f9d30eb8ecf459520fa07089d1db777771ef2e00738d8cfe99eb"
+    },
+    {
+      "file": "windows-installer-profile-native.cs",
+      "sha256": "6c32ed94be091b3ed60875edc538ca12aaca2585c30f44842539871271792a63"
+    },
+    {
+      "file": "windows-installer-profile-fixture-tests.cs",
+      "sha256": "f49653cbd4ee376bf697fbe24ed284bdc93718bb638c4cfd3bc6348869bd4fc1"
+    }
+  ],
+  "frozenPlanManifestSha256": "71bd11ce0f76cd98de7dbbe429f00269782e8c9e64156a2d0b493578c93a5376",
+  "argvEnvPlanSha256": "c43a2ecd835e2c090a2058dc54f83cc0c2df06fafc087e8d6ef26a4061fb4e5f"
+}

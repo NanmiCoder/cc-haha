@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "mode": "guarded-f1-controller",
+  "executionStage": "F1",
+  "realExecutionAdmitted": false,
+  "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+  "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+  "generation": 1,
+  "gitRoot": null,
+  "sourceRoot": null,
+  "controllerRoot": null,
+  "output": null,
+  "setupPath": null,
+  "expectedBinarySha256": null,
+  "sourcePins": null,
+  "frozenPlanManifestSha256": "2de900f8e84dd881a9654f202dfcb651f8e143f1a817a5c1cee3db62e4ea82ad",
+  "argvEnvPlanSha256": "af4ce4ad3d0efb7b67b36b92149fde28a7723b79bd60e65eecc22c56402c67bd",
+  "f1": {
+    "version": 1,
+    "status": "proposed",
+    "activationHead": null,
+    "candidateSourceHead": null,
+    "stageASourceHead": null,
+    "stageARunId": null,
+    "stageAArtifactId": null,
+    "fixtureBytes": null,
+    "stageAArtifactSha256": null,
+    "stageAReceipt": null,
+    "oldMemberReceipt": null,
+    "newPackage": null
+  }
+}

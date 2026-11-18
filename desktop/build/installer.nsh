@@ -1,11 +1,13 @@
 !include "LogicLib.nsh"
 !include "getProcessInfo.nsh"
 !include "${BUILD_RESOURCES_DIR}\check-install-processes.nsh"
+!include "${BUILD_RESOURCES_DIR}\guarded-removal-launch.nsh"
 !define /ifndef INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
 !define /ifndef UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
 Var pid
 Var ccHahaProcessDiagnostic
 Var ccHahaProcessHelperWriteBlocked
+Var ccHahaFallbackOutput
 
 !ifndef BUILD_UNINSTALLER
 Var ccHahaRecoveryDone
@@ -297,6 +299,230 @@ FunctionEnd
   System::Call 'kernel32::SetEnvironmentVariable(w "PSModulePath", p 0)'
 !macroend
 
+; The tasklist fallback below matches image names only, and other software
+; ships three of them: Windows Terminal's console host is OpenConsole.exe, and
+; Claude Code and VS Code bundle rg.exe. An open terminal therefore made every
+; upgrade stop at "close it manually" (#1879). Reading a process's executable
+; path needs no PowerShell, so those three shared names only block setup when
+; the process runs from the install directory, or when that cannot be told (its
+; path or the install directory cannot be read), which stays fail-closed. The
+; names only this app uses still block on the name alone. Keep the names in
+; sync with the findstr list in CcHahaFindInstallProcess.
+; Clobbers R1, R6, R7 and R8; the caller saves them. Opening the actual file or
+; directory resolves aliases on both sides of the comparison. An existence
+; query cannot distinguish a missing directory from denied access.
+!macro CcHahaReadFinalProcessPath _PATH _RETURN
+  ; FILE_READ_ATTRIBUTES, share read|write|delete, OPEN_EXISTING, BACKUP_SEMANTICS
+  System::Call 'kernel32::CreateFileW(w "${_PATH}", i 0x80, i 7, p 0, i 3, i 0x02000000, p 0) p.R6'
+  StrCpy ${_RETURN} ""
+  ${If} $R6 <> -1
+    System::Call 'kernel32::GetFinalPathNameByHandleW(p R6, w .R7, i ${NSIS_MAX_STRLEN}, i 0) i.R8'
+    System::Call 'kernel32::CloseHandle(p R6)'
+    StrLen $R1 $R7
+    ${If} $R8 > 0
+    ${AndIf} $R8 < ${NSIS_MAX_STRLEN}
+    ${AndIf} $R8 = $R1
+      ; VOLUME_NAME_DOS returns an extended drive or UNC path. Do not accept an
+      ; unexpected namespace as proof that a process belongs to other software.
+      StrCpy $R1 $R7 8
+      ${If} $R1 == "\\?\UNC\"
+        StrCpy ${_RETURN} $R7
+      ${Else}
+        StrCpy $R1 $R7 4
+        ${If} $R1 == "\\?\"
+          StrCpy $R1 $R7 2 5
+          ${If} $R1 == ":\"
+            StrCpy ${_RETURN} $R7
+          ${Else}
+            StrCpy ${_RETURN} ""
+          ${EndIf}
+        ${Else}
+          StrCpy ${_RETURN} ""
+        ${EndIf}
+      ${EndIf}
+    ${Else}
+      StrCpy ${_RETURN} ""
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro CcHahaAttributeFallbackMatches _FILE _RETURN
+  Push $0  ; canonical installation directory, empty means unknown
+  Push $R1 ; scratch
+  Push $R2 ; process snapshot
+  Push $R3 ; PROCESSENTRY32W
+  Push $R4 ; process id
+  Push $R5 ; image name
+  Push $R6 ; handles, then scratch
+  Push $R7 ; executable path
+  Push $R8 ; call results
+  Push $R9 ; processes that block setup
+  StrCpy $R9 ""
+  !insertmacro CcHahaReadFinalProcessPath "$INSTDIR" $0
+  ${If} $0 == ""
+    StrCpy $R9 " (the install directory could not be resolved);"
+  ${Else}
+    StrCpy $R8 $0 1 -1
+    ${If} $R8 != "\"
+      StrCpy $0 "$0\"
+    ${EndIf}
+    StrCpy $R8 $0 1 -1
+    ${If} $R8 != "\"
+      StrCpy $0 ""
+      StrCpy $R9 " (the install directory path is too long);"
+    ${EndIf}
+  ${EndIf}
+
+  ; TH32CS_SNAPPROCESS
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p.R2'
+  ${If} $R2 = -1
+    StrCpy $R9 " (the process list could not be read);"
+  ${Else}
+    System::Alloc 1024
+    Pop $R3
+    ${If} $R3 = 0
+      StrCpy $R9 " (the process list buffer could not be allocated);"
+    ${Else}
+      ; dwSize of the 32-bit PROCESSENTRY32W this installer stub uses.
+      System::Call '*$R3(i 556)'
+      System::Call 'kernel32::Process32FirstW(p R2, p R3) i.R8'
+      ${If} $R8 = 0
+        StrCpy $R9 " (the process list could not be read);"
+      ${EndIf}
+      ${While} $R8 <> 0
+        System::Call '*$R3(i, i, i .R4, i, i, i, i, i, i, &w260 .R5)'
+        ${If} $R4 != $pid
+          ${If} $R5 == "${_FILE}"
+          ${OrIf} $R5 == "claude-sidecar-x86_64-pc-windows-msvc.exe"
+          ${OrIf} $R5 == "claude-sidecar-aarch64-pc-windows-msvc.exe"
+          ${OrIf} $R5 == "claude-sidecar.exe"
+            StrCpy $R9 "$R9 $R5 (PID $R4);"
+          ${ElseIf} $R5 == "OpenConsole.exe"
+          ${OrIf} $R5 == "winpty-agent.exe"
+          ${OrIf} $R5 == "rg.exe"
+            StrCpy $R7 ""
+            ; PROCESS_QUERY_LIMITED_INFORMATION
+            System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i R4) p.R6'
+            ${If} $R6 <> 0
+              System::Call 'kernel32::QueryFullProcessImageNameW(p R6, i 0, w .R7, *i ${NSIS_MAX_STRLEN}) i.R8'
+              ${If} $R8 = 0
+                StrCpy $R7 ""
+              ${EndIf}
+              System::Call 'kernel32::CloseHandle(p R6)'
+            ${EndIf}
+            ${If} $R7 == ""
+              StrCpy $R9 "$R9 $R5 (PID $R4, path unavailable);"
+            ${ElseIf} $0 == ""
+              StrCpy $R9 "$R9 $R5 (PID $R4, install directory could not be resolved);"
+            ${Else}
+              !insertmacro CcHahaReadFinalProcessPath "$R7" $R7
+              StrLen $R6 $0
+              StrCpy $R6 $R7 $R6
+              ${If} $R7 == ""
+                StrCpy $R9 "$R9 $R5 (PID $R4, path identity unavailable);"
+              ${ElseIf} $R6 == $0
+                StrCpy $R9 "$R9 $R5 (PID $R4);"
+              !ifdef CC_HAHA_LEGACY_COMPAT_TEMPLATE
+              ${Else}
+                StrCpy $ccHahaCompatExternalMatch 1
+              !endif
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        ; Capture the API error before any plug-in cleanup can overwrite it.
+        System::Call 'kernel32::Process32NextW(p R2, p R3) i.R8 ?e'
+        Pop $R6
+        ${If} $R8 = 0
+        ${AndIf} $R6 <> 18 ; ERROR_NO_MORE_FILES is the only successful end
+          StrCpy $R9 "$R9 (the process list could not be completed);"
+        ${EndIf}
+      ${EndWhile}
+      System::Free $R3
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p R2)'
+  ${EndIf}
+
+  ${If} $R9 == ""
+    StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the matching image names belong to other software outside the install directory, so setup continues."
+    StrCpy ${_RETURN} 1
+  ${Else}
+    StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; these processes are the app itself, run from the install directory, or cannot be told apart (possibly another user's session):$R9 Close them manually."
+  ${EndIf}
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $0
+!macroend
+
+!macro CcHahaFilterFallbackProcesses _FILE _CSV _RETURN _OUTPUT
+  nsExec::ExecToStack /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "${_CSV}"'
+  Pop ${_RETURN}
+  Pop ${_OUTPUT}
+!macroend
+
+!macro CcHahaVerifyFallbackRemainder _FILE _RETURN _CMD
+  Push $R1
+  Push $R2
+  Push $R3
+  StrCpy ${_RETURN} 0
+  StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the original tasklist matches could not all be verified; blocking setup. Close the matching processes manually."
+
+  ; Native attribution has already rejected every exact app/sidecar name and
+  ; every exact shared helper whose path is internal or unreadable. Remove only
+  ; those positively external shared names and our own PID from the original
+  ; CSV. A literal hit such as foorg.exe must remain protected even though the
+  ; native census does not classify that image as an exact shared-helper name.
+  ClearErrors
+  FileOpen $R1 "$PLUGINSDIR\cc-haha-fallback-allowed.txt" w
+  ${IfNot} ${Errors}
+    ClearErrors
+    FileWrite $R1 '^"OpenConsole[.]exe","$\r$\n^"winpty-agent[.]exe","$\r$\n^"rg[.]exe","$\r$\n^"[^"]*","$pid",$\r$\n'
+    StrCpy $R2 0
+    ${If} ${Errors}
+      StrCpy $R2 1
+    ${EndIf}
+    ClearErrors
+    FileClose $R1
+    ${If} ${Errors}
+      StrCpy $R2 1
+    ${EndIf}
+    ${If} $R2 == 0
+      Delete "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+      ${IfNot} ${FileExists} "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+        nsExec::Exec /TIMEOUT=30000 '"${_CMD}" /D /C ""$SYSDIR\findstr.exe" /V /R /I /G:"$PLUGINSDIR\cc-haha-fallback-allowed.txt" "$PLUGINSDIR\cc-haha-processes.csv" > "$PLUGINSDIR\cc-haha-fallback-unattributed.csv""'
+        Pop $R2
+        ; tasklist also contains System rows, so a successful exclusion leaves
+        ; output and returns 0. Any other result, including timeout/error or a
+        ; failed redirection, must not authorize continuing from a stale file.
+        ${If} $R2 == 0
+        ${AndIf} ${FileExists} "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+          !insertmacro CcHahaFilterFallbackProcesses "${_FILE}" "$PLUGINSDIR\cc-haha-fallback-unattributed.csv" $R2 $R3
+          ${If} $R2 == 1
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; every original tasklist match is the installer itself or an exact shared helper verified outside the install directory, so setup continues."
+            StrCpy ${_RETURN} 1
+          ${ElseIf} $R2 == 0
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; these original tasklist matches have no verified external path:$\r$\n$R3$\r$\nClose them manually."
+          ${Else}
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; residual process filtering failed (result: $R2); blocking setup."
+          ${EndIf}
+        ${Else}
+          StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; tasklist match verification failed (result: $R2); blocking setup."
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $R3
+  Pop $R2
+  Pop $R1
+!macroend
+
 !macro CcHahaFindInstallProcess _FILE _RETURN
   ${If} $IsPowerShellAvailable == 0
     nsExec::ExecToStack '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\check-install-processes.ps1" -InstallDir "$INSTDIR" -ProcessName "${_FILE}" -Action Find -InstallerPid "$pid" -InstallerParentPid "$1"'
@@ -329,10 +555,13 @@ FunctionEnd
       StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable and tasklist process enumeration failed (exit code ${_RETURN}); blocking setup."
       StrCpy ${_RETURN} 0
     ${Else}
-      nsExec::Exec /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "$PLUGINSDIR\cc-haha-processes.csv"'
-      Pop ${_RETURN}
+      !insertmacro CcHahaFilterFallbackProcesses "${_FILE}" "$PLUGINSDIR\cc-haha-processes.csv" ${_RETURN} $ccHahaFallbackOutput
       ${If} ${_RETURN} == 0
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path, possibly in another user's session. Close it manually."
+        !insertmacro CcHahaAttributeFallbackMatches "${_FILE}" ${_RETURN}
+        ${If} ${_RETURN} == 1
+          !insertmacro CcHahaVerifyFallbackRemainder "${_FILE}" ${_RETURN} "$CmdPath"
+        ${EndIf}
       ${ElseIf} ${_RETURN} == 1
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; exact-image fallback found no main app, known sidecar, or bundled terminal/search helper. Differently named child processes cannot be attributed without path data."
       ${Else}
@@ -367,6 +596,9 @@ FunctionEnd
 !macroend
 
 !macro customCheckAppRunning
+  !ifdef BUILD_UNINSTALLER
+    !insertmacro CcHahaGuardCheckUninstallerEntry cc_haha_guarded_process_check_done
+  !endif
   InitPluginsDir
   !insertmacro CcHahaUseDefaultPowerShellModulePath
   !insertmacro IS_POWERSHELL_AVAILABLE
@@ -436,10 +668,80 @@ FunctionEnd
   ${EndIf}
   !ifndef BUILD_UNINSTALLER
     !insertmacro CcHahaRunLegacyRecovery
+  !else
+    cc_haha_guarded_process_check_done:
   !endif
 !macroend
 
 !ifndef BUILD_UNINSTALLER
+!include "${BUILD_RESOURCES_DIR}\legacy-uninstaller-compat.nsh"
+!endif
+
+; Both !system and !execute use a shell on the pinned Mac compiler. Encode
+; before command parsing, including ~ first so decoding is exactly one pass.
+; The fixed Node program receives only data and never evaluates a path as JS.
+!macro CcHahaEncodeBuildArgument _OUT _VALUE
+  !searchreplace ${_OUT} "${_VALUE}" "~" "~7e"
+  !searchreplace ${_OUT} "${${_OUT}}" "'" "~27"
+  !searchreplace ${_OUT} "${${_OUT}}" "\" "~5c"
+  !searchreplace ${_OUT} "${${_OUT}}" "$" "~24"
+  !searchreplace ${_OUT} "${${_OUT}}" "`" "~60"
+  !searchreplace ${_OUT} "${${_OUT}}" "%" "~25"
+  !searchreplace ${_OUT} "${${_OUT}}" "!" "~21"
+  !searchreplace ${_OUT} "${${_OUT}}" "^" "~5e"
+!macroend
+
+!macro CcHahaRunBuildHelper _MODE _ARG1 _ARG2
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_SCRIPT "${BUILD_RESOURCES_DIR}/../scripts/nsis-legacy-compat.cjs"
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_ARG1 "${_ARG1}"
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_ARG2 "${_ARG2}"
+  !execute "$\"node$\" -e $\"const d=s=>s.replace(/~([0-9a-f]{2})/gi,(_,h)=>String.fromCharCode(parseInt(h,16)));require(d(process.argv[1])).run(process.argv[2],process.argv.slice(3).map(d))$\" $\"${CC_HAHA_BUILD_SCRIPT}$\" ${_MODE} $\"${CC_HAHA_BUILD_ARG1}$\" $\"${CC_HAHA_BUILD_ARG2}$\"" = 0
+  !undef CC_HAHA_BUILD_SCRIPT
+  !undef CC_HAHA_BUILD_ARG1
+  !undef CC_HAHA_BUILD_ARG2
+!macroend
+
+; This supported header runs before installer.nsi includes installUtil.nsh.
+; Only installUtil is adapted, in a private per-compilation directory. The
+; uninstaller uses the official customRemoveFiles hook and a byte-identical
+; pinned default block. Default script selection and signIf remain intact.
+!macro customHeader
+  !ifdef BUILD_UNINSTALLER
+    !tempfile CC_HAHA_NSIS_GUARDED_BOOTSTRAP
+    !insertmacro CcHahaRunBuildHelper prepare-guarded "${BUILD_RESOURCES_DIR}/guarded-removal.cs" "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !include "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !delfile "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !undef CC_HAHA_NSIS_GUARDED_BOOTSTRAP
+    !insertmacro CcHahaGuardFunctions
+    !insertmacro CcHahaGuardUninstallerFunctions
+  !else
+  !tempfile CC_HAHA_NSIS_COMPAT_BOOTSTRAP
+  !insertmacro CcHahaRunBuildHelper prepare "${UNINSTALLER_OUT_FILE}" "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !include "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !delfile "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !undef CC_HAHA_NSIS_COMPAT_BOOTSTRAP
+  !insertmacro CcHahaGuardFunctions
+  !insertmacro CcHahaLegacyCompatFunctions
+  !endif
+!macroend
+
+!ifdef BUILD_UNINSTALLER
+!macro customUnInit
+  Call un.CcHahaGuardReceive
+  ${If} $ccHahaGuardMode == "invalid"
+    SetErrorLevel 22
+    Quit
+  ${EndIf}
+!macroend
+
+!macro customUnInstallSection
+  !insertmacro CcHahaRunBuildHelper cleanup "${CC_HAHA_NSIS_GUARDED_DIRECTORY}" "${CC_HAHA_NSIS_GUARDED_OWNER}"
+!macroend
+!else
+!macro customInstall
+  !insertmacro CcHahaRunBuildHelper cleanup "${CC_HAHA_NSIS_COMPAT_DIRECTORY}" "${CC_HAHA_NSIS_COMPAT_OWNER}"
+!macroend
+
 !macro customPageAfterChangeDir
   Function CcHahaRecoveryBeforeInstall
     ${If} ${UAC_IsInnerInstance}
@@ -454,9 +756,12 @@ FunctionEnd
 ; `File`, so a security tool that blocks the .ps1 write makes them abort in
 ; un.onInit before touching any file (#1486). electron-builder would then quit
 ; and strand the user on the old version. Only when this installer saw the
-; same block itself, install over the old files; exit code 22 (the old
-; uninstaller found the app running) and every other failure stay fatal.
+; same block itself, install over the old files. Apart from the separately
+; verified v0.7.8 trusted-removal path, exit 22 and other failures stay fatal.
 !macro CcHahaHandleOldUninstallerResult
+  !ifdef CC_HAHA_LEGACY_COMPAT_TEMPLATE
+    Call CcHahaTryTrustedLegacyRemoval
+  !endif
   ${If} $R0 != 0
   ${AndIf} $R0 != 22
   ${AndIf} $ccHahaProcessHelperWriteBlocked == "1"
