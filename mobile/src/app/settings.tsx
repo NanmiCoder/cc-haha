@@ -45,14 +45,17 @@ import {
   channelRows,
   computerSettingsTitle,
   computersValue,
-  deliveryNote,
+  createPushTestFeedback,
+  deliveryCardNote,
   deliveryStatus,
   liveActivityValue,
   permissionLabel,
+  reconcilePushTestFeedback,
   remindFootnote,
   runTestNotification,
   versionLabel,
   type Delivery,
+  type PushTestFeedback,
   type PushTestResult,
 } from '../ui/settings/deliveryModel'
 import { quietSummary } from '../ui/settings/settingsModel'
@@ -76,8 +79,11 @@ export default function Settings() {
   const retryPush = useRetryPushRegistration(host?.id)
   const permissions = useSystemPermissions()
   const [busy, setBusy] = useState<Delivery['actions'][number]['kind'] | null>(null)
-  const [deliveryError, setDeliveryError] = useState('')
-  const [testNote, setTestNote] = useState('')
+  const [deliveryFailure, setDeliveryFailure] = useState<{
+    hostId: string | undefined
+    message: string
+  } | null>(null)
+  const [testFeedback, setTestFeedback] = useState<PushTestFeedback | null>(null)
   const [notifyError, setNotifyError] = useState('')
   const [appearanceError, setAppearanceError] = useState('')
   const [linkError, setLinkError] = useState('')
@@ -90,6 +96,11 @@ export default function Settings() {
       (decisions || completed || errors)
   )
 
+  const reconciledFeedback = reconcilePushTestFeedback(testFeedback, push, host?.id)
+  if (reconciledFeedback !== testFeedback) setTestFeedback(reconciledFeedback)
+  const deliveryError =
+    deliveryFailure && deliveryFailure.hostId === host?.id ? deliveryFailure.message : ''
+
   const delivery = deliveryStatus({
     platform,
     permission: permissions.notifications,
@@ -100,7 +111,7 @@ export default function Settings() {
     liveActivity: preferences.liveActivity,
     duty,
   })
-  const note = deliveryNote(push, duty)
+  const note = deliveryCardNote(reconciledFeedback, push, duty, host?.id)
   const remind = remindFootnote(permissions.notifications)
 
   /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
@@ -114,8 +125,10 @@ export default function Settings() {
   }
 
   async function runAction(kind: Delivery['actions'][number]['kind']) {
-    setDeliveryError('')
-    setTestNote('')
+    const actionHostId = host?.id
+    const actionPush = push
+    setDeliveryFailure(null)
+    setTestFeedback(null)
     setBusy(kind)
     try {
       if (kind === 'request') await requestNotifications()
@@ -126,19 +139,23 @@ export default function Settings() {
       else {
         if (host && !client) throw new Error('电脑还没连上，稍后再试')
         const outcome = await runTestNotification({
-          hostId: host?.id,
+          hostId: actionHostId,
+          push: actionPush,
           // The test must reach the phone the same way the computer's real alerts do.
-          getToken: () => pushTokens.token(push?.provider ?? 'direct', host?.id ?? ''),
+          getToken: () => pushTokens.token(actionPush?.provider ?? 'direct', actionHostId ?? ''),
           postTest: (body) =>
             client!.post<PushTestResult>('/api/sessions/mobile-push/test', body),
           scheduleLocal: scheduleTestNotification,
         })
-        setTestNote(outcome.note)
+        setTestFeedback(createPushTestFeedback(outcome, actionHostId, actionPush))
         // The computer just sent through its relay: read the fresh delivery state.
         if (outcome.via === 'remote') retryPush()
       }
     } catch (e) {
-      setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))
+      setDeliveryFailure({
+        hostId: actionHostId,
+        message: kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e),
+      })
     } finally {
       setBusy(null)
     }
@@ -198,7 +215,7 @@ export default function Settings() {
             <DeliveryCard
               delivery={delivery}
               busy={busy ?? (push?.status === 'loading' ? 'retry' : null)}
-              note={testNote || note}
+              note={note}
               error={deliveryError}
               onAction={(kind) => void runAction(kind)}
               onGuide={() => void open(aboutLinks.pushSetup)}

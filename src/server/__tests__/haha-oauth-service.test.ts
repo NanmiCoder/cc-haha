@@ -270,6 +270,31 @@ describe('HahaOAuthService — ensureFreshAccessToken', () => {
   beforeEach(setup)
   afterEach(teardown)
 
+  function createGate() {
+    let release!: () => void
+    const promise = new Promise<void>(resolve => { release = resolve })
+    return { promise, release }
+  }
+
+  function pauseInitialTokenReads(count: number) {
+    const loadTokens = service.loadTokens.bind(service)
+    const reads = Array.from({ length: count }, () => ({
+      captured: createGate(),
+      resume: createGate(),
+    }))
+    let nextRead = 0
+    service.loadTokens = async () => {
+      const read = reads[nextRead++]
+      const tokens = await loadTokens()
+      if (read) {
+        read.captured.release()
+        await read.resume.promise
+      }
+      return tokens
+    }
+    return { reads, loadTokens }
+  }
+
   test('returns null when no token file exists', async () => {
     expect(await service.ensureFreshAccessToken()).toBeNull()
   })
@@ -349,6 +374,141 @@ describe('HahaOAuthService — ensureFreshAccessToken', () => {
     expect(first?.accessToken).toBe('expiry-recovered-token')
     expect(second?.accessToken).toBe('expiry-recovered-token')
     expect(refreshCalls).toBe(1)
+  })
+
+  for (const entry of ['expiry', '401'] as const) {
+    const requestTokens = () => entry === 'expiry'
+      ? service.ensureFreshTokens()
+      : service.recoverFromUnauthorized('expiring-shared-token')
+
+    for (const rotation of ['new access token', 'renewed expiry only'] as const) {
+      test(`reuses ${rotation} after a late stale ${entry} read`, async () => {
+        const oldTokens: StoredOAuthTokens = {
+          accessToken: 'expiring-shared-token',
+          refreshToken: 'refresh-shared-token',
+          expiresAt: 1,
+          scopes: ['user:inference'],
+          subscriptionType: 'pro',
+        }
+        const updated: StoredOAuthTokens = {
+          ...oldTokens,
+          accessToken: rotation === 'new access token' ? 'recovered-token' : oldTokens.accessToken,
+          expiresAt: Date.now() + 60 * 60_000,
+        }
+        await service.saveTokens(oldTokens)
+        const { reads, loadTokens } = pauseInitialTokenReads(2)
+        let refreshCalls = 0
+        service.setRefreshFn(async refreshToken => {
+          refreshCalls += 1
+          expect(refreshToken).toBe(oldTokens.refreshToken)
+          return { ...updated, rateLimitTier: null }
+        })
+
+        const first = requestTokens()
+        const second = requestTokens()
+        try {
+          await Promise.all(reads.map(read => read.captured.promise))
+          reads[0].resume.release()
+          expect(await first).toEqual(updated)
+          expect(await loadTokens()).toEqual(updated)
+          // The first request has saved and cleared its pending refresh before
+          // the second request receives the old file snapshot it already read.
+          reads[1].resume.release()
+          expect(await second).toEqual(updated)
+          expect(refreshCalls).toBe(1)
+          expect(await loadTokens()).toEqual(updated)
+        } finally {
+          for (const read of reads) read.resume.release()
+          await Promise.allSettled([first, second])
+        }
+      })
+    }
+
+    test(`does not refresh tokens deleted before a stale ${entry} read returns`, async () => {
+      await service.saveTokens({
+        accessToken: 'expiring-shared-token',
+        refreshToken: 'refresh-shared-token',
+        expiresAt: 1,
+        scopes: ['user:inference'],
+        subscriptionType: 'pro',
+      })
+      const { reads, loadTokens } = pauseInitialTokenReads(1)
+      let refreshCalls = 0
+      service.setRefreshFn(async () => {
+        refreshCalls += 1
+        throw new Error('deleted credentials must not be refreshed')
+      })
+      const pending = requestTokens()
+      try {
+        await reads[0].captured.promise
+        await service.deleteTokens()
+        reads[0].resume.release()
+        expect(await pending).toBeNull()
+        expect(refreshCalls).toBe(0)
+        expect(await loadTokens()).toBeNull()
+      } finally {
+        reads[0].resume.release()
+        await Promise.allSettled([pending])
+      }
+    })
+
+    test(`can retry ${entry} refresh after a failed attempt`, async () => {
+      const oldTokens: StoredOAuthTokens = {
+        accessToken: 'expiring-shared-token',
+        refreshToken: 'refresh-shared-token',
+        expiresAt: 1,
+        scopes: ['user:inference'],
+        subscriptionType: 'pro',
+      }
+      const updated = {
+        ...oldTokens,
+        accessToken: 'recovered-token',
+        expiresAt: Date.now() + 60 * 60_000,
+      }
+      await service.saveTokens(oldTokens)
+      let refreshCalls = 0
+      service.setRefreshFn(async () => {
+        refreshCalls += 1
+        if (refreshCalls === 1) throw new Error('401 Unauthorized')
+        return { ...updated, rateLimitTier: null }
+      })
+
+      expect(await requestTokens()).toBeNull()
+      expect(await service.loadTokens()).toEqual(oldTokens)
+      expect(await requestTokens()).toEqual(updated)
+      expect(refreshCalls).toBe(2)
+      expect(await service.loadTokens()).toEqual(updated)
+    })
+  }
+
+  test('reuses a newer refresh token after a late stale 401 read', async () => {
+    const oldTokens: StoredOAuthTokens = {
+      accessToken: 'rejected-token',
+      refreshToken: 'old-refresh-token',
+      expiresAt: Date.now() + 30 * 60_000,
+      scopes: ['user:inference'],
+      subscriptionType: 'pro',
+    }
+    const updated = { ...oldTokens, refreshToken: 'new-refresh-token' }
+    await service.saveTokens(oldTokens)
+    const { reads, loadTokens } = pauseInitialTokenReads(1)
+    let refreshCalls = 0
+    service.setRefreshFn(async () => {
+      refreshCalls += 1
+      throw new Error('rotated credentials must not be refreshed again')
+    })
+    const pending = service.recoverFromUnauthorized(oldTokens.accessToken)
+    try {
+      await reads[0].captured.promise
+      await service.saveTokens(updated)
+      reads[0].resume.release()
+      expect(await pending).toEqual(updated)
+      expect(refreshCalls).toBe(0)
+      expect(await loadTokens()).toEqual(updated)
+    } finally {
+      reads[0].resume.release()
+      await Promise.allSettled([pending])
+    }
   })
 
   test('returns null when refresh fails', async () => {

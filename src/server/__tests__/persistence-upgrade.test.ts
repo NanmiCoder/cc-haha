@@ -251,6 +251,35 @@ describe('persistent storage upgrade migrations', () => {
     expect(await new SettingsService().getAutoUpdateEnabled()).toBe(true)
   })
 
+  test('reads auto escalation mode for missing field and preserves unknown fields on save', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    expect(await service.getMaxOutputTokensEscalationMode()).toBe('auto')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'enabled' })
+
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('enabled')
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, maxOutputTokensEscalationMode: 'enabled' })
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'disabled' })
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('disabled')
+  })
+
+  test('rejects an invalid escalation mode without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ maxOutputTokensEscalationMode: 'auto', unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(new SettingsService().updateUserSettings({ maxOutputTokensEscalationMode: 'bogus' })).rejects.toThrow('maxOutputTokensEscalationMode')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
   test('rejects a non-boolean automatic update choice without changing the settings file', async () => {
     const userPath = path.join(tempDir, 'settings.json')
     const original = JSON.stringify({ autoUpdateEnabled: false, unknownFuturePreference: 'keep' })
@@ -903,5 +932,84 @@ describe('persistent storage upgrade migrations', () => {
     expect(rewritten.providers[0]).toEqual({ ...fixture.providers[0], notes: 'edited' })
     expect(rewritten.providers[0]).not.toHaveProperty('usageScript')
     expect(rewritten.providers[1]).toEqual({ ...fixture.providers[1], name: 'Renamed' })
+  })
+
+  test('keeps old cc-haha/settings.json fixtures unchanged until General preferences are saved and preserves unknown fields', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    const managedPath = path.join(ccHahaDir, 'settings.json')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    const oldFixture = {
+      providerEnvOwner: 'legacy-provider',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://legacy.example.test',
+        ANTHROPIC_AUTH_TOKEN: 'fake-token',
+      },
+      futureManagedField: { keep: true },
+    }
+    await fs.writeFile(managedPath, JSON.stringify(oldFixture, null, 2) + '\n', 'utf-8')
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).not.toContain('cc-haha/settings.json')
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual(oldFixture)
+
+    const settingsSvc = new SettingsService()
+    await settingsSvc.updateUserSettings({ effort: 'xhigh', effortLevel: 'xhigh', language: 'chinese' })
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      ...oldFixture,
+      defaultEffort: 'xhigh',
+      language: 'chinese',
+    })
+
+    // Clearing active provider keeps both the General backups and unknown fields.
+    await new ProviderService().activateOfficial()
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      futureManagedField: { keep: true },
+      defaultEffort: 'xhigh',
+      language: 'chinese',
+    })
+  })
+
+  test('migrates legacy effort and strips malformed General fields in cc-haha/settings.json with a backup', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    const managedPath = path.join(ccHahaDir, 'settings.json')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    const legacyManaged = {
+      effort: 'xhigh',
+      language: '   ',
+      futureManagedField: { keep: true },
+    }
+    await fs.writeFile(managedPath, JSON.stringify(legacyManaged, null, 2) + '\n', 'utf-8')
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).toContain('cc-haha/settings.json')
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      defaultEffort: 'xhigh',
+      futureManagedField: { keep: true },
+    })
+
+    const backups = (await listFiles(ccHahaDir)).filter((name) =>
+      name.startsWith('settings.json.bak-before-migration-'),
+    )
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(ccHahaDir, backups[0]!), 'utf-8'))).toEqual(legacyManaged)
+
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+
+    // Invalid defaultEffort values and non-object env fields are also cleaned up safely.
+    await fs.writeFile(
+      managedPath,
+      JSON.stringify({ defaultEffort: 'turbo', env: 'not-an-object', futureManagedField: { keep: true } }, null, 2) + '\n',
+      'utf-8',
+    )
+    resetPersistentStorageMigrationsForTests()
+    const secondReport = await ensurePersistentStorageUpgraded()
+    expect(secondReport.failures).toEqual([])
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      env: {},
+      futureManagedField: { keep: true },
+    })
   })
 })

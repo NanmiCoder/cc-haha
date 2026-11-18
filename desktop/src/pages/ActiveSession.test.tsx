@@ -1086,6 +1086,75 @@ describe('ActiveSession task polling', () => {
     expect(useSessionStore.getState().sessions.find(row => row.id === 'entered')?.workDir).toBe(source)
   })
 
+  it('refreshes the session header branch on window focus and when ActiveSession returns to the foreground', async () => {
+    const sessionId = 'live-branch-header-session'
+    let currentBranch = 'master'
+    sessionApiMocks.getGitInfo.mockImplementation(async () => ({
+      branch: currentBranch,
+      repoName: 'project',
+      workDir: '/workspace/project',
+      changedFiles: 0,
+      worktree: null,
+    }))
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Header Branch Session',
+        createdAt: '2026-08-07T00:00:00.000Z',
+        modifiedAt: '2026-08-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        projectRoot: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Header Branch Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          messages: [{ id: 'ready-msg', type: 'assistant_text', content: 'ready', timestamp: 1 }],
+        },
+      },
+    })
+
+    const { rerender } = render(<ActiveSession active />)
+    expect(await screen.findByTestId('session-header-branch')).toHaveTextContent('master')
+
+    currentBranch = 'dev_xxxx'
+    const callsBeforeFocus = sessionApiMocks.getGitInfo.mock.calls.length
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('session-header-branch')).toHaveTextContent('dev_xxxx')
+    })
+    expect(sessionApiMocks.getGitInfo).toHaveBeenCalledTimes(callsBeforeFocus + 1)
+
+    // Hidden page ignores window focus until it becomes active again.
+    rerender(<ActiveSession active={false} />)
+    currentBranch = 'release/next'
+    const callsWhileHidden = sessionApiMocks.getGitInfo.mock.calls.length
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(sessionApiMocks.getGitInfo).toHaveBeenCalledTimes(callsWhileHidden)
+
+    rerender(<ActiveSession active />)
+    await waitFor(() => {
+      expect(screen.getByTestId('session-header-branch')).toHaveTextContent('release/next')
+    })
+  })
+
   it('shows a loading state for historical sessions while messages are loading', () => {
     const sessionId = 'history-visible-loading-session'
 

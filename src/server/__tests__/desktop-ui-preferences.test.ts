@@ -76,7 +76,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(result.exists).toBe(false)
     expect(result.preferences).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 8,
       profile: {
         displayName: 'cc-haha',
         subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -86,6 +86,7 @@ describe('DesktopUiPreferencesService', () => {
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: {},
       sidebar: {
         projectOrder: [],
@@ -110,6 +111,7 @@ describe('DesktopUiPreferencesService', () => {
           hiddenProjects: [null, '/workspace/gamma'],
         },
         projectAdditionalDirectories: {},
+        explicitProjectRoots: [],
         projectDisplayNames: {
           '/workspace/alpha': '  Alpha project  ',
           '/workspace/beta': 42,
@@ -133,7 +135,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(before.exists).toBe(true)
     expect(before.preferences).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -144,6 +146,7 @@ describe('DesktopUiPreferencesService', () => {
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: {
         '/workspace/alpha': 'Alpha project',
       },
@@ -156,7 +159,7 @@ describe('DesktopUiPreferencesService', () => {
       },
     })
     expect(after).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -167,6 +170,7 @@ describe('DesktopUiPreferencesService', () => {
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: {
         '/workspace/alpha': 'Alpha project',
       },
@@ -324,7 +328,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       profile: {
         displayName: 'Local Operator',
@@ -403,7 +407,7 @@ describe('DesktopUiPreferencesService', () => {
     const after = await new DesktopUiPreferencesService().updatePetPreferences({ enabled: true })
 
     expect(after).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       pet: {
         futurePetField: { keep: 'pet-too' },
@@ -447,6 +451,7 @@ describe('DesktopUiPreferencesService', () => {
           futurePet: { keep: 'pet' },
         },
         projectAdditionalDirectories: {},
+        explicitProjectRoots: [],
         projectDisplayNames: {
           '/workspace/future': 'Future project',
         },
@@ -466,6 +471,7 @@ describe('DesktopUiPreferencesService', () => {
         futurePet: { keep: 'pet' },
       },
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: {
         '/workspace/future': 'Future project',
       },
@@ -488,6 +494,7 @@ describe('DesktopUiPreferencesService', () => {
       profile: { futureProfile: { keep: 'profile' } },
       pet: { futurePet: { keep: 'pet' } },
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: { '/workspace/future': 'Future project' },
     })
   })
@@ -502,7 +509,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 8,
       profile: {
         displayName: 'Claude Captain',
         subtitle: 'local.example/profile',
@@ -512,6 +519,7 @@ describe('DesktopUiPreferencesService', () => {
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
+      explicitProjectRoots: [],
       projectDisplayNames: {},
       sidebar: {
         projectOrder: [],
@@ -597,7 +605,7 @@ describe('desktop UI preferences API', () => {
     expect(putBody).toEqual({
       ok: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -607,6 +615,7 @@ describe('desktop UI preferences API', () => {
         pet: DEFAULT_PET_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
         projectAdditionalDirectories: {},
+        explicitProjectRoots: [],
         projectDisplayNames: {},
         sidebar: {
           projectOrder: ['/workspace/beta', '/workspace/alpha'],
@@ -626,7 +635,7 @@ describe('desktop UI preferences API', () => {
     expect(getBody).toEqual({
       exists: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -636,6 +645,7 @@ describe('desktop UI preferences API', () => {
         pet: DEFAULT_PET_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
         projectAdditionalDirectories: {},
+        explicitProjectRoots: [],
         projectDisplayNames: {},
         sidebar: {
           projectOrder: ['/workspace/beta', '/workspace/alpha'],
@@ -726,7 +736,7 @@ describe('desktop UI preferences API', () => {
     await expect(putRes.json()).resolves.toMatchObject({
       ok: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         pet: {
           enabled: true,
           selectedPetId: 'seedy',
@@ -1027,7 +1037,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     const read = await service.readPreferences()
     expect(read.exists).toBe(true)
     expect(read.preferences).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       pet: { enabled: true },
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
@@ -1037,7 +1047,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
 
     expect(after.voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'zh' })
     expect(await readDesktopUiFile()).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       futureField: { keep: true },
       pet: { enabled: true },
       sidebar: { projectOrder: ['/workspace/alpha'] },

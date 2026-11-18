@@ -102,6 +102,7 @@ import { quote } from './bash/shellQuote.js'
 import { formatNumber, formatTokens } from './format.js'
 import { getPewterLedgerVariant } from './planModeV2.js'
 import { jsonStringify } from './slowOperations.js'
+import { addTaskNotificationModelGuidance } from './taskNotificationPolicy.js'
 
 // Hook attachments that have a hookName field (excludes HookPermissionDecisionAttachment)
 type HookAttachmentWithName = Exclude<
@@ -497,6 +498,7 @@ export function createUserMessage({
   isCompactSummary,
   summarizeMetadata,
   toolUseResult,
+  durationMs,
   mcpMeta,
   uuid,
   timestamp,
@@ -511,6 +513,8 @@ export function createUserMessage({
   isVirtual?: true
   isCompactSummary?: true
   toolUseResult?: unknown // Matches tool's `Output` type
+  /** Actual tool execution duration in ms (excludes streaming buffer, queue wait, and permission dialog wait). */
+  durationMs?: number
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
   mcpMeta?: {
     _meta?: Record<string, unknown>
@@ -545,6 +549,7 @@ export function createUserMessage({
     uuid: (uuid as UUID | undefined) || randomUUID(),
     timestamp: timestamp ?? new Date().toISOString(),
     toolUseResult,
+    ...(durationMs !== undefined ? { durationMs } : {}),
     mcpMeta,
     imagePasteIds,
     sourceToolAssistantUUID,
@@ -829,6 +834,10 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
         }
         isNewChain = isNewChain || message.message.content.length > 1
         let imageIndex = 0
+        const singleToolResultDurationMs =
+          message.message.content.filter(block => block.type === 'tool_result').length === 1
+            ? message.durationMs
+            : undefined
         return message.message.content.map((_, index) => {
           const isImage = _.type === 'image'
           // For image content blocks, extract just the ID for this image
@@ -841,6 +850,7 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             ...createUserMessage({
               content: [_],
               toolUseResult: message.toolUseResult,
+              durationMs: _.type === 'tool_result' ? singleToolResultDurationMs : undefined,
               mcpMeta: message.mcpMeta,
               isMeta: message.isMeta,
               isVisibleInTranscriptOnly: message.isVisibleInTranscriptOnly,
@@ -2099,6 +2109,36 @@ function isRequestTooLargeAnchor(
   )
 }
 
+function prepareTaskNotificationForAPI(message: UserMessage): UserMessage {
+  if (message.origin?.kind !== 'task-notification') return message
+  const content = addTaskNotificationModelGuidance(message.message.content)
+  return content === message.message.content
+    ? message
+    : { ...message, message: { ...message.message, content } }
+}
+
+function isBackgroundTaskNotification(message: Message): boolean {
+  let content: unknown
+  if (message.type === 'user' && message.origin?.kind === 'task-notification') {
+    content = message.message.content
+  } else if (
+    message.type === 'attachment' && message.attachment?.type === 'queued_command' &&
+    (message.attachment.origin?.kind === 'task-notification' ||
+      (!message.attachment.origin && message.attachment.commandMode === 'task-notification'))
+  ) {
+    content = message.attachment.prompt
+  } else {
+    return false
+  }
+  // The queue mode is also used for hook and cancellation instructions.
+  // Only lifecycle XML should receive the background-result guidance.
+  return typeof content === 'string'
+    ? content.includes('<task-notification>')
+    : Array.isArray(content) && content.some(block =>
+      block !== null && typeof block === 'object' && block.type === 'text' &&
+      typeof block.text === 'string' && block.text.includes('<task-notification>'))
+}
+
 export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
@@ -2114,6 +2154,9 @@ export function normalizeMessagesForAPI(
   const reorderedMessages = reorderAttachmentsForAPI(messages).filter(
     m => !((m.type === 'user' || m.type === 'assistant') && m.isVirtual),
   )
+  // One instruction covers all results in this request. Keep it next to the
+  // newest internal update rather than adding another copy for every old task.
+  const latestTaskNotification = reorderedMessages.findLast(isBackgroundTaskNotification)
 
   // Build a fallback map from legacy error text → which block types to strip
   // from the preceding user message. New synthetic errors use stable
@@ -2356,6 +2399,9 @@ export function normalizeMessagesForAPI(
             }
           }
 
+          if (message === latestTaskNotification) {
+            normalizedMessage = prepareTaskNotificationForAPI(normalizedMessage)
+          }
           normalizedMessage = mapImageInput?.(message, normalizedMessage) ?? normalizedMessage
 
           // If the last message is also a user message, merge them
@@ -2467,6 +2513,9 @@ export function normalizeMessagesForAPI(
               { level: 'warn' },
             )
             return
+          }
+          if (message === latestTaskNotification) {
+            rawAttachmentMessage = rawAttachmentMessage.map(prepareTaskNotificationForAPI)
           }
           const keptAttachmentMessage = mediaStripped.has(message)
             ? rawAttachmentMessage.map(m => replaceMediaWithPlaceholders(m))

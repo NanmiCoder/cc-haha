@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  addTaskNotificationModelGuidance,
   parseTaskNotificationXml,
   shouldForwardTaskNotificationToModel,
   TaskNotificationFollowUpBatch,
 } from './taskNotificationPolicy.js'
 
 describe('task notification policy', () => {
+  test('preserves lifecycle payloads when adding model-only guidance', () => {
+    const notification = '<task-notification><task-id>failure</task-id><status>failed</status><summary>Failed with exit code 143</summary><result>Original details</result></task-notification>'
+    const guided = addTaskNotificationModelGuidance(notification)
+    expect(typeof guided).toBe('string')
+    expect((guided as string).startsWith(notification)).toBe(true)
+    expect(parseTaskNotificationXml(guided as string)).toEqual(parseTaskNotificationXml(notification))
+    expect(addTaskNotificationModelGuidance(guided)).toBe(guided)
+  })
+
   test('defers local agent terminal notifications in structured output', () => {
     const notification = parseTaskNotificationXml(`<task-notification>
 <task-id>agent-1</task-id>

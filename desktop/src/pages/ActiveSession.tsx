@@ -77,7 +77,7 @@ import {
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { getSessionBrowsablePath, getSessionWorkspaceState } from '../lib/sessionWorkspace'
 import type { AgentTaskNotification, UIMessage } from '../types/chat'
-import { sessionsApi, type SessionGitInfo } from '../api/sessions'
+import { useSessionGitInfo } from '../hooks/useSessionGitInfo'
 
 /**
  * Stable fallbacks for optional session state. A `?? []` / `?? {}` literal allocates a
@@ -428,10 +428,16 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     ? s.activeTeamStartedAtBySession[activeTabId]
     : undefined)
   const fetchTeamForSession = useTeamStore((s) => s.fetchTeamForSession)
-  const [sessionGitInfo, setSessionGitInfo] = useState<{
-    sessionId: string
-    info: SessionGitInfo
-  } | null>(null)
+  const isSessionTab = Boolean(activeTabId) && isSessionTabState(activeTabId, activeTabType)
+  const { gitInfo: currentGitInfo } = useSessionGitInfo({
+    sessionId: activeTabId,
+    enabled: isSessionTab,
+    visible: active,
+    workDir: session?.workDir,
+    chatState,
+    messageCount: sessionMessageCount,
+    secondaryRefreshKey: sessionSlashCommandCount,
+  })
   const activeWorkspaceIsSideChat = useWorkspaceStore(state => {
     const workspace = activeTabId ? state.bySession[activeTabId] : undefined
     return Boolean(workspace?.tabs.some(tab => tab.id === workspace.activeSideTabId && tab.kind === 'side-chat'))
@@ -487,60 +493,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     cwd: getSessionTerminalCwd(session) ?? '',
     enabled: active && workspaceEnabled,
   })
-
-  useEffect(() => {
-    if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
-
-    let cancelled = false
-    setSessionGitInfo((current) => current?.sessionId === activeTabId ? null : current)
-    // Kept for every session, not only worktree ones: the header names the
-    // branch too. The worktree indicator reads `worktree.enabled` itself.
-    void sessionsApi.getGitInfo(activeTabId)
-      .then((info) => {
-        if (!cancelled) {
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        }
-      })
-      .catch(() => {
-        // Git metadata is supplementary; the session remains usable without it.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeTabId, activeTabType, session?.workDir])
-
-  useEffect(() => {
-    if (
-      !activeTabId ||
-      !isSessionTabState(activeTabId, activeTabType) ||
-      sessionMessageCount === 0
-    ) return
-
-    let cancelled = false
-    const timeout = setTimeout(() => {
-      void sessionsApi.getGitInfo(activeTabId)
-        .then((info) => {
-          if (cancelled) return
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        })
-        .catch(() => {
-          // Keep the last useful snapshot when supplementary Git metadata cannot refresh.
-        })
-    }, chatState === 'idle' ? 0 : 500)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timeout)
-    }
-  }, [
-    activeTabId,
-    activeTabType,
-    chatState,
-    sessionMessageCount,
-    sessionSlashCommandCount,
-    session?.workDir,
-  ])
 
   useEffect(() => {
     if (!activeTabId) return
@@ -610,7 +562,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       : null
   const visibleMessageCount = messages.length > 0 ? messages.length : session?.messageCount ?? 0
   const headerTitle = session?.title || activeTabTitle || t('session.untitled')
-  const currentGitInfo = sessionGitInfo?.sessionId === activeTabId ? sessionGitInfo.info : null
   const worktree = currentGitInfo?.worktree?.enabled ? currentGitInfo.worktree : null
   const worktreePath = worktree?.path || worktree?.plannedPath || null
   const worktreeName = getWorktreeDisplayName(worktree?.slug, worktreePath)

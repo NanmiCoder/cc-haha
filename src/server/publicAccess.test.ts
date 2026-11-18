@@ -159,6 +159,20 @@ describe('public transport boundary', () => {
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ error: 'Network proxy unavailable', code: 'proxy' })
   })
+
+  test('correlates authenticated connection checks with the host attempt and ignores arbitrary header text', async () => {
+    const calls: unknown[] = []
+    const f = fixture(undefined, 'https://fixture.trycloudflare.com', {
+      resolveProxy: async context => { calls.push(['network', context]); return { proxyUrl: null } },
+      verifyGateway: async (_origin, _gateway, context) => { calls.push(['verify', context]); return true },
+    })
+    const attemptId = '81d5559c-a61e-4871-a185-4e7aaf02c693'
+    for (const [route, method, attempt] of [['network', 'GET', attemptId], ['verify', 'POST', attemptId], ['network', 'GET', 'not-a-valid-id;password=private-secret']]) {
+      const response = await f.service.control(new Request(`http://localhost/api/public-access/${route}`, { method, headers: { Authorization: 'Bearer fixture-process-credential', 'X-CC-Haha-Connection-Attempt': attempt } }))
+      expect(response.ok).toBe(true)
+    }
+    expect(calls).toEqual([['network', { attemptId }], ['verify', { attemptId }], ['network', {}]])
+  })
   test('custom tunnels use the requested fixed port across restarts without changing device credentials', async () => {
     const f = fixture()
     const { claim } = await f.pairNative()

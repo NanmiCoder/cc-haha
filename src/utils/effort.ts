@@ -17,6 +17,9 @@ import {
   isOpenAIResponsesModel,
 } from 'src/services/openaiAuth/models.js'
 import { GROK_MODEL_CATALOG, getGrokRuntimeModelCatalog } from 'src/services/grokAuth/models.js'
+import {
+  resolveConfiguredEffortSetting,
+} from '../shared/modelReasoning.js'
 import { readProviderEnv } from './model/providerEnvScope.js'
 
 export type EffortLevel = RuntimeEffortLevel | 'xhigh'
@@ -224,9 +227,12 @@ export function toPersistableEffort(
 }
 
 export function getInitialEffortSetting(): EffortLevel | undefined {
-  // toPersistableEffort filters 'max' for non-ants on read, so a manually
-  // edited settings.json doesn't leak session-scoped max into a fresh session.
-  return toPersistableEffort(getInitialSettings().effortLevel)
+  // resolveConfiguredEffortSetting filters external 'max' on effortLevel while
+  // keeping 'xhigh'/'max' persisted via cc-haha's `effort` field deterministic.
+  return resolveConfiguredEffortSetting(
+    getInitialSettings() as { effort?: unknown; effortLevel?: unknown },
+    { allowAntMaxEffortLevel: process.env.USER_TYPE === 'ant' },
+  )
 }
 
 /**

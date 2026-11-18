@@ -46,6 +46,9 @@ export function toInternalMessages(
             uuid: message.uuid ?? randomUUID(),
             timestamp: message.timestamp ?? new Date().toISOString(),
             isMeta: message.isSynthetic,
+            ...(message.durationMs !== undefined
+              ? { durationMs: message.durationMs }
+              : {}),
           } as Message,
         ]
       case 'system':
@@ -142,6 +145,9 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             // without it polluting model context.
             ...(message.toolUseResult !== undefined
               ? { tool_use_result: message.toolUseResult }
+              : {}),
+            ...(message.durationMs !== undefined
+              ? { durationMs: message.durationMs }
               : {}),
           },
         ]

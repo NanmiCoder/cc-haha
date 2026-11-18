@@ -94,6 +94,7 @@ export class StreamingToolExecutor {
               },
             ],
             toolUseResult: `Error: No such tool available: ${block.name}`,
+            durationMs: 0,
             sourceToolAssistantUUID: assistantMessage.uuid,
           }),
         ],
@@ -168,6 +169,7 @@ export class StreamingToolExecutor {
           },
         ],
         toolUseResult: 'User rejected tool use',
+        durationMs: 0,
         sourceToolAssistantUUID: assistantMessage.uuid,
       })
     }
@@ -183,6 +185,7 @@ export class StreamingToolExecutor {
           },
         ],
         toolUseResult: 'Streaming fallback - tool execution discarded',
+        durationMs: 0,
         sourceToolAssistantUUID: assistantMessage.uuid,
       })
     }
@@ -200,6 +203,7 @@ export class StreamingToolExecutor {
         },
       ],
       toolUseResult: msg,
+      durationMs: 0,
       sourceToolAssistantUUID: assistantMessage.uuid,
     })
   }

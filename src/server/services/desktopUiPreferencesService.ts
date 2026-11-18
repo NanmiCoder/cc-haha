@@ -7,9 +7,10 @@ import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 import { normalizeVoicePreferences } from './voice/preferences.js'
 import { normalizeProjectAdditionalDirectories, resolveProjectDirectories, validateProjectAdditionalDirectories, type ProjectAdditionalDirectories, type ProjectDirectories } from './projectDirectories.js'
+import { normalizeExplicitProjectRoots } from './projectIdentity.js'
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from './voice/types.js'
 
-const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 7
+const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 8
 const MAX_PROJECT_PREFERENCE_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_KEY_LENGTH = 4_096
@@ -74,6 +75,7 @@ export type DesktopUiPreferences = {
   pet: DesktopPetPreferences
   voiceInput: DesktopVoiceInputPreferences
   projectDisplayNames: ProjectDisplayNames
+  explicitProjectRoots: string[]
   projectAdditionalDirectories: ProjectAdditionalDirectories
   [key: string]: unknown
 }
@@ -120,6 +122,7 @@ function defaultPreferences(): DesktopUiPreferences {
     pet: { ...DEFAULT_PET_PREFERENCES },
     voiceInput: { ...DEFAULT_VOICE_PREFERENCES },
     projectDisplayNames: createProjectDisplayNames(),
+    explicitProjectRoots: [],
     projectAdditionalDirectories: {},
   }
 }
@@ -360,6 +363,7 @@ function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | n
     pet: normalizeDesktopPetPreferences(record.pet),
     voiceInput: normalizeVoicePreferences(record.voiceInput),
     projectDisplayNames: normalizeProjectDisplayNames(record.projectDisplayNames),
+    explicitProjectRoots: normalizeExplicitProjectRoots(record.explicitProjectRoots),
     projectAdditionalDirectories: normalizeProjectAdditionalDirectories(record.projectAdditionalDirectories),
   }
 }
@@ -516,9 +520,9 @@ export class DesktopUiPreferencesService {
     })
   }
 
-  async getProjectDirectories(workDir: unknown): Promise<ProjectDirectories> {
-    const project = await resolveProjectDirectories(workDir)
+  async getProjectDirectories(workDir: unknown, options: { createProject?: boolean } = {}): Promise<ProjectDirectories> {
     const { preferences } = await this.readPreferences()
+    const project = await resolveProjectDirectories(workDir, preferences.explicitProjectRoots, options.createProject)
     const directories = preferences.projectAdditionalDirectories
     return { ...project, additionalDirectories: [...(Object.hasOwn(directories, project.projectKey) ? directories[project.projectKey]! : [])] }
   }
@@ -526,15 +530,20 @@ export class DesktopUiPreferencesService {
   async updateProjectDirectories(value: unknown): Promise<ProjectDirectories> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw ApiError.badRequest('Project directories update must be an object')
     const patch = value as Record<string, unknown>
-    const project = await resolveProjectDirectories(patch.workDir)
-    const additionalDirectories = await validateProjectAdditionalDirectories(project.mainDirectory, patch.additionalDirectories)
+    if (patch.createProject !== undefined && typeof patch.createProject !== 'boolean') throw ApiError.badRequest('createProject must be a boolean')
     return this.withWriteLock(this.getPreferencesPath(), async () => {
       const { preferences } = await this.readPreferences()
+      const project = await resolveProjectDirectories(patch.workDir, preferences.explicitProjectRoots, patch.createProject === true)
+      const additionalDirectories = await validateProjectAdditionalDirectories(project.mainDirectory, patch.additionalDirectories)
+      const explicitProjectRoots = patch.createProject === true
+        ? [...new Set([...preferences.explicitProjectRoots, project.projectKey])]
+        : preferences.explicitProjectRoots
+      if (explicitProjectRoots.length > MAX_PROJECT_PREFERENCE_ENTRIES) throw ApiError.badRequest('Too many project roots')
       const projectAdditionalDirectories = {
         ...preferences.projectAdditionalDirectories,
         [project.projectKey]: additionalDirectories,
       }
-      await this.writePreferences({ ...preferences, projectAdditionalDirectories })
+      await this.writePreferences({ ...preferences, explicitProjectRoots, projectAdditionalDirectories })
       return { ...project, additionalDirectories }
     })
   }

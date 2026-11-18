@@ -190,6 +190,10 @@ export type UserSettings = {
   desktopTerminal?: Partial<DesktopTerminalSettings>
   /** Days to keep transcripts. 0 disables session persistence entirely. */
   cleanupPeriodDays?: number
+  /** Max output tokens escalation mode; absent means 'auto' (follow GrowthBook). */
+  maxOutputTokensEscalationMode?: 'auto' | 'enabled' | 'disabled'
+  /** Non-persisted read hint naming General settings hydrated from cc-haha/settings.json fallback. */
+  ccHahaFallbackKeys?: Array<'effort' | 'language'>
   [key: string]: unknown
 }
 

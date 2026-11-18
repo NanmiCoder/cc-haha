@@ -132,14 +132,14 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
       return
     }
     setDirectoriesLoading(true)
-    void desktopUiPreferencesApi.getProjectDirectories(sourceFolder)
+    void desktopUiPreferencesApi.getProjectDirectories(sourceFolder, mode === 'create' ? { createProject: true } : undefined)
       .then((project) => { if (!cancelled) setAdditionalDirectories(project.additionalDirectories) })
       .catch((failure: unknown) => {
         if (!cancelled) setDirectoriesError(messageFromError(failure, directoryFailureMessage))
       })
       .finally(() => { if (!cancelled) setDirectoriesLoading(false) })
     return () => { cancelled = true }
-  }, [open, sourceFolder, directoryFailureMessage])
+  }, [mode, open, sourceFolder, directoryFailureMessage])
 
   const addDirectories = (paths: string[]) => {
     setAdditionalDirectories((current) => [...new Set([...current, ...paths.filter((path) => path && path !== sourceFolder)])])

@@ -249,8 +249,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const [atCursorPos, setAtCursorPos] = useState(-1)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
-  const [slashCommands, setSlashCommands] = useState<SlashCommandOption[]>([])
-  const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
+  const [slashCommandState, setSlashCommandState] = useState<{
+    cwd: string | null
+    commands: SlashCommandOption[]
+  }>({ cwd: null, commands: [] })
+  const slashCommands = slashCommandState.commands
+  const slashCommandsCwd = slashCommandState.cwd
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
   const materializingRef = useRef<{
@@ -390,36 +394,72 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     let cancelled = false
 
     const cwd = workDir || undefined
+    const mapSkillsToSlashCommands = (
+      skills: Array<{
+        name: string
+        description: string
+        source?: string
+        userInvocable?: boolean
+        leanCompatible?: boolean
+      }>,
+    ): SlashCommandOption[] =>
+      skills
+        .filter((skill) => skill.userInvocable !== false)
+        .map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          kind: 'skill' as const,
+          ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
+            ? { source: skill.source }
+            : {}),
+          // Kept on the row so the lean/standard choice, made later, can filter without a refetch.
+          ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
+        }))
 
-    skillsApi.list(cwd)
-      .then(({ skills }) => {
+    const sanitizeSlashCommands = (commands: SlashCommandOption[]): SlashCommandOption[] =>
+      commands.map(({ argumentHint, description, ...rest }) => {
+        const normalizedHint =
+          typeof argumentHint === 'string' && argumentHint.trim()
+            ? argumentHint.trim()
+            : undefined
+        return {
+          ...rest,
+          description: typeof description === 'string' ? description : '',
+          ...(normalizedHint ? { argumentHint: normalizedHint } : {}),
+        }
+      })
+
+    const loadFromSkillsFallback = () =>
+      skillsApi.list(cwd).then(({ skills }) => mapSkillsToSlashCommands(skills))
+
+    const loadPromise =
+      typeof skillsApi.commands === 'function'
+        ? skillsApi.commands(cwd).then(
+            ({ commands }) => sanitizeSlashCommands(commands),
+            (error) => {
+              if (error instanceof ApiError && error.status === 400) {
+                return loadFromSkillsFallback()
+              }
+              throw error
+            },
+          )
+        : loadFromSkillsFallback()
+
+    loadPromise
+      .then((commands) => {
         if (cancelled) return
-        setSlashCommandsCwd(workDir)
-        setSlashCommands(
-          skills
-            .filter((skill) => skill.userInvocable)
-            .map((skill) => ({
-              name: skill.name,
-              description: skill.description,
-              kind: 'skill' as const,
-              ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
-                ? { source: skill.source }
-                : {}),
-              // Kept on the row so the lean/standard choice, made later, can filter without a refetch.
-              ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
-            })),
-        )
+        setSlashCommandState({ cwd: workDir, commands })
       })
       .catch(() => {
         if (!cancelled) {
-          setSlashCommands([])
+          setSlashCommandState((prev) => (prev.cwd === workDir ? prev : { cwd: workDir, commands: [] }))
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [workDir, lastPluginReloadSummary])
+  }, [workDir, lastPluginReloadSummary, referencesVersion])
 
   useEffect(() => {
     let cancelled = false

@@ -46,6 +46,26 @@ describe('desktopUiPreferencesApi', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, `http://127.0.0.1:49237/api/desktop-ui/preferences/project-directories?workDir=${encodeURIComponent(project.mainDirectory)}`, expect.objectContaining({ method: 'GET' }))
   })
 
+  it('registers an explicitly created project without changing ordinary directory updates', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await desktopUiPreferencesApi.updateProjectDirectories('D:\\Github\\obsidian\\projects\\输入法', [], { createProject: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:49237/api/desktop-ui/preferences/project-directories',
+      expect.objectContaining({ body: JSON.stringify({ workDir: 'D:\\Github\\obsidian\\projects\\输入法', additionalDirectories: [], createProject: true }) }),
+    )
+  })
+
+  it('previews directory configuration for a new independent project without registering it', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await desktopUiPreferencesApi.getProjectDirectories('/workspace/parent/child', { createProject: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:49237/api/desktop-ui/preferences/project-directories?workDir=%2Fworkspace%2Fparent%2Fchild&createProject=true',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('loads only the shareable profile through its read-only endpoint', async () => {
     setBaseUrl('http://127.0.0.1:49237')
     const profile = { displayName: 'Ada', subtitle: 'My activity', avatarDataUrl: null }

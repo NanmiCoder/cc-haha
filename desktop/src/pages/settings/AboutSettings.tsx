@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react'
-import { ChevronDown, ChevronUp, ExternalLink, MessageSquareWarning, QrCode } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, MessageSquareWarning } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTranslation } from '../../i18n'
 import { Input } from '@/components/ui/Input'
@@ -21,7 +21,6 @@ import { formatBytes } from '../../lib/formatBytes'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { publicAssetPath } from '../../lib/publicAsset'
 import { BrandSeal } from '../../components/composite/BrandSeal'
-import { Modal } from '@/components/ui/Modal'
 import { isValidHttpProxyUrl } from '../settings/shared'
 
 /**
@@ -66,7 +65,6 @@ export function AboutSettings() {
   const [isSavingUpdateProxy, setIsSavingUpdateProxy] = useState(false)
   const [isSavingAutoUpdate, setIsSavingAutoUpdate] = useState(false)
   const [autoUpdateSaveError, setAutoUpdateSaveError] = useState<string | null>(null)
-  const [communityOpen, setCommunityOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -219,15 +217,6 @@ export function AboutSettings() {
           description={t('settings.about.feedbackDesc')}
           onClick={() => openUrl(GITHUB_ISSUES)}
           external
-        />
-        {/* The QR is the same image README.md embeds under "User Group". A dialog
-            keeps it on screen; expanding inline pushed it below the fold. */}
-        <LinkRow
-          icon={<QrCode size={16} strokeWidth={1.75} aria-hidden="true" />}
-          title={t('settings.about.community')}
-          description={t('settings.about.communityDesc')}
-          onClick={() => setCommunityOpen(true)}
-          aria-haspopup="dialog"
         />
       </SettingsGroup>
 
@@ -437,24 +426,6 @@ export function AboutSettings() {
           ))}
         </SettingsGroup>
       </SettingsSection>
-
-      <Modal
-        open={communityOpen}
-        onClose={() => setCommunityOpen(false)}
-        title={t('settings.about.community')}
-        width={360}
-      >
-        <div className="flex flex-col items-center gap-3 pb-2">
-          <img
-            src={publicAssetPath('icons/wechat-group-qr.png')}
-            alt={t('settings.about.communityQrAlt')}
-            width={240}
-            height={240}
-            className="rounded-[var(--radius-md)]"
-          />
-          <p className="text-center text-xs text-[var(--color-text-tertiary)]">{t('settings.about.communityHint')}</p>
-        </div>
-      </Modal>
     </div>
   )
 }
@@ -471,7 +442,6 @@ function LinkRow({ icon, title, description, meta, external = false, onClick, ..
   meta?: string
   external?: boolean
   onClick: () => void
-  'aria-haspopup'?: 'dialog'
 }) {
   return (
     <button

@@ -9,6 +9,7 @@ import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, pr
 import type { WebSocketData } from './ws/handler.js'
 import { parseResumeRequest } from './ws/resumableStreams.js'
 import type { TunnelGateway } from './p2p/mux.js'
+import { remoteAccessDiagnosticContext, type RemoteAccessDiagnosticContext } from './services/remoteAccessConnectivity.js'
 
 const PREFIX = '/api/public-access'
 const COOKIE = '__Host-haha-remote'
@@ -165,8 +166,8 @@ type Dependencies = {
   serverPort: () => number
   storePath?: string
   now?: () => number
-  resolveProxy?: () => Promise<{ proxyUrl: string | null }>
-  verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean>
+  resolveProxy?: (context?: RemoteAccessDiagnosticContext) => Promise<{ proxyUrl: string | null }>
+  verifyGateway?: (origin: string, gatewayId: string, context?: RemoteAccessDiagnosticContext) => Promise<boolean>
   /**
    * The public address differs from the one phones were last given (a Quick
    * Tunnel restarted). `sign` proves the address to one paired device.
@@ -441,7 +442,7 @@ export class PublicAccessServer {
       if (route === 'network' && request.method === 'GET') {
         try {
           if (!this.deps.resolveProxy) throw new Error('Network settings unavailable')
-          return json(await this.deps.resolveProxy())
+          return json(await this.deps.resolveProxy(remoteAccessDiagnosticContext(request)))
         } catch { return json({ error: 'Network proxy unavailable', code: 'proxy' }, 503) }
       }
       const input = request.method === 'GET' ? {} : await this.readInput(request)
@@ -453,7 +454,7 @@ export class PublicAccessServer {
       if (route === 'origin' && request.method === 'PUT') { this.setOrigin(input.publicUrl); return json(this.status()) }
       if (route === 'verify' && request.method === 'POST') {
         if (!this.server || !this.publicUrl || !this.gatewayId || !this.deps.verifyGateway) return json({ ok: false })
-        return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId) })
+        return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId, remoteAccessDiagnosticContext(request)) })
       }
       if (route === 'disable' && request.method === 'POST') return json(this.disable({ restart: input.reason === 'restart' }))
       if (route === 'pairing' && request.method === 'POST') {

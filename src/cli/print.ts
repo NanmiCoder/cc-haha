@@ -2674,7 +2674,7 @@ function runHeadlessStreaming(
           const hasMainThreadQueued = peek(isMainThread) !== undefined
           const agentFollowUp = deferredAgentNotifications.takeIfSettled(hasRunningBg || hasMainThreadQueued)
           if (agentFollowUp) {
-            enqueue({ mode: 'prompt', value: agentFollowUp, priority: 'later', isMeta: true })
+            enqueue({ mode: 'prompt', value: agentFollowUp, priority: 'later', isMeta: true, origin: { kind: 'task-notification' } })
           }
           if (hasRunningBg || hasMainThreadQueued || agentFollowUp) {
             waitingForAgents = true
