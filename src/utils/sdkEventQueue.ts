@@ -86,6 +86,7 @@ export type AgentToolActivity =
       tool_use_id: string
       content: unknown
       is_error: boolean
+      duration_ms?: number
     }
 
 // Emitted per tool_use / tool_result produced by a BACKGROUND (async) agent.

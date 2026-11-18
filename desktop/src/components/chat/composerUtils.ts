@@ -314,10 +314,14 @@ export function mergeSlashCommands(
     // description so users see translated text instead of the CLI's English.
     const useLocalDescription =
       BUILT_IN_COMMAND_NAMES.has(command.name) && Boolean(localized?.description)
+    const rawDescription =
+      typeof command.description === 'string' ? command.description.trim() : ''
     const description = useLocalDescription
       ? localized!.description
-      : command.description?.trim() || localized?.description || ''
-    const argumentHint = command.argumentHint?.trim() || localized?.argumentHint
+      : rawDescription || localized?.description || ''
+    const rawArgumentHint =
+      typeof command.argumentHint === 'string' ? command.argumentHint.trim() : ''
+    const argumentHint = rawArgumentHint || localized?.argumentHint
     merged.set(command.name, {
       name: command.name,
       description,
@@ -343,8 +347,10 @@ export function mergeSlashCommands(
 
 function getSlashCommandMatchRank(command: SlashCommandOption, filter: string): number {
   const name = command.name.toLowerCase()
-  const description = command.description.toLowerCase()
-  const argumentHint = command.argumentHint?.toLowerCase() ?? ''
+  const description =
+    typeof command.description === 'string' ? command.description.toLowerCase() : ''
+  const argumentHint =
+    typeof command.argumentHint === 'string' ? command.argumentHint.toLowerCase() : ''
   const nameParts = name.split(/[:/._-]+/).filter(Boolean)
 
   if (name === filter) return 0

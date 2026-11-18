@@ -2,7 +2,7 @@
 @plugin "@tailwindcss/typography";
 
 /* ─── Dark variant binding ────────────────────────────────────────
-   The app has six themes switched via `<html data-theme>`. Following the OS
+   The app switches themes via `<html data-theme>`. Following the OS
    is resolved in JS (src/theme/systemAppearance.ts) and lands on that same
    attribute, so `data-theme` stays the single source of truth here. Without
    this binding, Tailwind's default `dark:` compiles to
@@ -10,10 +10,9 @@
    accident for someone following the system, plainly wrong for anyone on a
    fixed palette.
 
-   Two of the six sit on a dark ground — `dark` and `ink-blue` — so both are
-   listed. Binding only `dark` is how a `dark:` utility would silently render
-   its light branch on ink-blue. */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *));
+   Every dark ground is listed. Binding only the theme literally named `dark`
+   would silently render the light branch on the other dark palettes. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *, [data-theme="neutral-dark"], [data-theme="neutral-dark"] *));
 
 /* ─── Self-hosted fonts (no Google CDN dependency) ────────────── */
 
@@ -262,10 +261,11 @@
   --settings-zoom-thumb-shadow: var(--shadow-raised);
 }
 
-/* On the two ink grounds a light thumb on a light track disappears; the brand
+/* On dark grounds a light thumb on a light track disappears; the brand
    rim keeps it legible. */
 [data-theme="dark"] .settings-zoom-control,
-[data-theme="ink-blue"] .settings-zoom-control {
+[data-theme="ink-blue"] .settings-zoom-control,
+[data-theme="neutral-dark"] .settings-zoom-control {
   --settings-zoom-track-empty: var(--color-surface-container-highest);
   --settings-zoom-thumb-bg: var(--color-surface-bright);
   --settings-zoom-thumb-border: var(--color-brand);
@@ -611,7 +611,8 @@
 }
 
 [data-theme="dark"],
-[data-theme="ink-blue"] {
+[data-theme="ink-blue"],
+[data-theme="neutral-dark"] {
   --color-terminal-ansi-black: #1F1F1F;
   --color-terminal-ansi-red: #FF6D67;
   --color-terminal-ansi-green: #7EF18A;
@@ -1266,6 +1267,85 @@
   --cc-scrim-rgb: 6, 6, 6;
 }
 
+/* 深灰 neutral-dark — neutral grounds and reading tiers, without a color cast. */
+[data-theme="neutral-dark"] {
+  color-scheme: dark;
+
+  --cc-bg: #202020;
+  --cc-s0: #191919;
+  --cc-s1: #2B2B2B;
+  --cc-s2: #252525;
+  --cc-bd: #383838;
+  --cc-bd2: #4C4C4C;
+  --cc-bd-strong: #777777;
+  --cc-tab-edge: #353535;
+  --cc-tab-sep: #2D2D2D;
+  --cc-t1: #F2F2F2;
+  --cc-t2: #C4C4C4;
+  --cc-t3: #AAAAAA;
+
+  --cc-ac: #D07B52;
+  --cc-ac2: #DE8F66;
+  --cc-ac-soft: #2C2C2C;
+  --cc-ac-soft-hover: #363636;
+  --cc-ac-border: #585858;
+  --cc-ac-ink: #E09A74;
+  --cc-on-ac: #202020;
+
+  --cc-ok: #6FB58C;
+  --cc-ok-soft: #213026;
+  --cc-ok-ink: #6FB58C;
+  --cc-wn: #D3A34C;
+  --cc-wn-soft: #2F2917;
+  --cc-wn-ink: #D3A34C;
+  --cc-er: #E0685E;
+  --cc-er-soft: #37211D;
+  --cc-er-soft-hover: #522C27;
+  --cc-er-ink: #E06A60;
+  --cc-info: #8FA8E8;
+  --cc-info-soft: #2D3343;
+  --cc-info-ink: #8FA8E8;
+
+  --cc-teal: #7DD3C7;
+  --cc-teal-soft: #263338;
+  --cc-teal-border: #385455;
+  --cc-teal-icon: #2C3E41;
+
+  --cc-diff-add: #233028;
+  --cc-diff-add-gutter: #2C3B31;
+  --cc-diff-add-word: #29382E;
+  --cc-diff-del: #36282C;
+  --cc-diff-del-gutter: #422C30;
+  --cc-diff-del-word: #513234;
+  --cc-diff-mark: #34302A;
+  --cc-diff-mark-gutter: #3F382C;
+  --cc-code: #191919;
+
+  --cc-heat-0: #2B2B2B;
+  --cc-heat-1: #42322E;
+  --cc-heat-2: #6A4638;
+  --cc-heat-3: #965D43;
+  --cc-heat-4: #C5754F;
+  --cc-series-1: #35A69D;
+  --cc-series-2: #AD644E;
+  --cc-series-3: #6177B6;
+  --cc-series-4: #99732B;
+  --cc-series-5: #B4B4B4;
+
+  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
+  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
+  --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
+
+  --cc-bg-rgb: 32, 32, 32;
+  --cc-s1-rgb: 43, 43, 43;
+  --cc-t1-rgb: 242, 242, 242;
+  --cc-t2-rgb: 196, 196, 196;
+  --cc-bd2-rgb: 76, 76, 76;
+  --cc-ac-rgb: 208, 123, 82;
+  --cc-er-rgb: 224, 104, 94;
+  --cc-scrim-rgb: 6, 6, 6;
+}
+
 /* ─── Semantic layer ──────────────────────────────────────────────
    Every `--color-*` the app consumes is defined exactly once, here, in terms
    of the `--cc-*` source variables above. Adding a theme therefore means
@@ -1615,9 +1695,10 @@
   --radius-full: 9999px;
 }
 
-/* Ink themes: lift the syntax ramp off the paper values. */
+/* Dark themes: lift the syntax ramp off the paper values. */
 [data-theme="dark"],
-[data-theme="ink-blue"] {
+[data-theme="ink-blue"],
+[data-theme="neutral-dark"] {
   --color-file-typescript-container: #203B55;
   --color-on-file-typescript-container: #92CAF7;
   --color-file-javascript-container: #BFA453;
@@ -3009,7 +3090,8 @@ html[data-window-kind='pet'] #root {
 }
 
 html[data-theme='dark'] .pet-activity-card,
-html[data-theme='ink-blue'] .pet-activity-card {
+html[data-theme='ink-blue'] .pet-activity-card,
+html[data-theme='neutral-dark'] .pet-activity-card {
   border-color: rgba(255, 255, 255, 0.12);
   background: rgba(24, 23, 30, 0.78);
   box-shadow:
@@ -3051,7 +3133,8 @@ html[data-theme='ink-blue'] .pet-activity-card {
 }
 
 html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'],
-html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listitem'] {
+html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listitem'],
+html[data-theme='neutral-dark'] .pet-session-list > [role='listitem'] + [role='listitem'] {
   border-top-color: rgba(255, 255, 255, 0.07);
 }
 
@@ -3116,7 +3199,8 @@ html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listi
 }
 
 html[data-theme='dark'] .pet-session-row:hover,
-html[data-theme='ink-blue'] .pet-session-row:hover {
+html[data-theme='ink-blue'] .pet-session-row:hover,
+html[data-theme='neutral-dark'] .pet-session-row:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -3189,14 +3273,16 @@ html[data-theme='ink-blue'] .pet-session-row:hover {
 }
 
 html[data-theme='dark'] .pet-panel-toggle,
-html[data-theme='ink-blue'] .pet-panel-toggle {
+html[data-theme='ink-blue'] .pet-panel-toggle,
+html[data-theme='neutral-dark'] .pet-panel-toggle {
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(36, 39, 45, 0.82);
   color: rgba(239, 235, 246, 0.62);
 }
 
 html[data-theme='dark'] .pet-panel-toggle:hover,
-html[data-theme='ink-blue'] .pet-panel-toggle:hover {
+html[data-theme='ink-blue'] .pet-panel-toggle:hover,
+html[data-theme='neutral-dark'] .pet-panel-toggle:hover {
   background: rgba(255, 255, 255, 0.09);
   color: rgba(255, 255, 255, 1);
 }

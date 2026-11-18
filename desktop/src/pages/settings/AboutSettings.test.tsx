@@ -100,24 +100,12 @@ it('keeps manual checking and installing available while automatic updates are o
   await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
 })
 
-it('opens the group QR in a dialog instead of pushing it below the fold', async () => {
+it('no longer offers the user group QR entry while keeping repo and feedback links', async () => {
   await renderAboutSettings()
-  // The version arrives from an async host call; let it settle so the assertion
-  // is not racing a state update.
-  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
 
-  const entry = screen.getByRole('button', { name: /加入 cc-haha 交流群/ })
-  expect(entry.compareDocumentPosition(screen.getByRole('button', { name: /反馈问题/ })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
-  expect(entry).toHaveAttribute('aria-haspopup', 'dialog')
+  expect(screen.getByRole('button', { name: /NanmiCoder\/cc-haha/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /反馈问题/ })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /加入 cc-haha 交流群/ })).not.toBeInTheDocument()
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-
-  fireEvent.click(entry)
-
-  const dialog = screen.getByRole('dialog', { name: '加入 cc-haha 交流群' })
-  const qr = screen.getByRole('img', { name: 'cc-haha 企业微信用户群二维码' })
-  expect(dialog).toContainElement(qr)
-  expect(qr).toHaveAttribute('src', expect.stringContaining('icons/wechat-group-qr.png'))
-
-  fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(document.querySelector('img[src*="wechat-group-qr"]')).toBeNull()
 })

@@ -30,6 +30,7 @@ import { releaseWorkspaceSession } from '../lib/workspace/releaseSession'
 import { useActivityPanelStore } from './activityPanelStore'
 import type { MessageEntry } from '../types/session'
 import type { RuntimeSelection } from '../types/runtime'
+import { teamRuntimeScope, useTeamRuntimeControlStore } from './teamRuntimeControlStore'
 
 const MEMBER_POLL_INTERVAL_MS = 1500
 const MEMBER_TRANSCRIPT_MATCH_WINDOW_MS = 120_000
@@ -390,11 +391,12 @@ function appendWorkbenchSnapshot(
   snapshot: TeamWorkbenchSnapshot,
 ): TeamWorkbenchTimeline {
   if (timeline?.snapshots.at(-1)?.version === snapshot.version) {
-    return { ...timeline, loading: false, error: null }
+    return { ...timeline, source: 'live', loading: false, error: null }
   }
   const snapshots = [...(timeline?.snapshots ?? []), snapshot].slice(-WORKBENCH_HISTORY_LIMIT)
   return {
     teamName: snapshot.team.name,
+    source: 'live',
     snapshots,
     loading: false,
     error: null,
@@ -807,7 +809,8 @@ function mergeDurableMemberMessage(durable: UIMessage, live: UIMessage): UIMessa
     return { ...durable, ...live }
   }
   if (durable.type === 'tool_result' && live.type === 'tool_result') {
-    return { ...durable, ...live }
+    const durationMs = durable.durationMs ?? live.durationMs
+    return { ...durable, ...live, ...(durationMs !== undefined ? { durationMs } : {}) }
   }
   if (durable.type === 'thinking' && live.type === 'thinking') return live
   return durable
@@ -1320,6 +1323,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
           ...state.workbenchesBySession,
           [sessionId]: {
             teamName: timeline.teamName,
+            source: timeline.source,
             snapshots,
             loading: false,
             error: null,
@@ -1510,6 +1514,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
           // Structured tool output drives the richer result renderers; omitting
           // it here flattened every member tool call back to plain text.
           toolUseResult: msg.toolUseResult,
+          ...(typeof msg.durationMs === 'number' &&
+          Number.isFinite(msg.durationMs) &&
+          msg.durationMs >= 0
+            ? { durationMs: msg.durationMs }
+            : {}),
         }))
         const existingMessages = useChatStore.getState().sessions[sessionId]?.messages ?? []
         const hasIncrementalMetadata = typeof response.signature === 'string' &&
@@ -1792,14 +1801,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
   updateMemberRuntime: async (sessionId, selection) => {
     const team = get().getTeamByMemberSessionId(sessionId)
     const member = get().getMemberBySessionId(sessionId)
-    if (!team || !member) {
+    const scope = teamRuntimeScope(team)
+    if (!team || !member?.sessionId || !scope) {
       throw new Error('Team member session is no longer available')
     }
-    const { member: updated } = await teamsApi.updateMemberRuntime(team.name, member.agentId, {
-      providerId: selection.providerId,
-      modelId: selection.modelId,
-      ...(selection.effortLevel ? { effortLevel: selection.effortLevel } : {}),
-    })
+    const { member: updated } = await useTeamRuntimeControlStore.getState().saveMember(scope, member.agentId, member.sessionId, selection)
     // The picker shows the member's own entry; patch it now rather than leave
     // the old model on screen until the next workbench read lands.
     const runtime = {
@@ -1865,6 +1871,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
 
   clearTeam: () => {
     teamStoreGeneration += 1
+    useTeamRuntimeControlStore.getState().clear()
     get().stopMemberPolling()
     clearMemberSessionState(new Set([
       ...Object.keys(get().memberTeamBySession),

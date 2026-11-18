@@ -713,6 +713,45 @@ describe('default provider settings ownership', () => {
     expect(saved).not.toHaveProperty('modelContext')
   })
 
+  it.each([
+    ['saved-fennoai', 'fixture-subagent'],
+    ['saved-xuanshuapi', 'fixture-subagent'],
+    ['saved-xuanshuapi', 'inherit'],
+    ['saved-xuanshuapi', ''],
+  ])('retains the active provider %s subagent override %j when reopening and saving JSON', async (activeId, subagentModel) => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      providerEnvOwner: activeId,
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: subagentModel },
+    })
+    vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId(`provider-${activeId}`)).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('ANTHROPIC_BASE_URL'))
+    expect(JSON.parse(settingsJsonOf(dialog)).env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(subagentModel)
+    expect(JSON.parse(settingsJsonOf(dialog))).not.toHaveProperty('providerEnvOwner')
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({ CLAUDE_CODE_SUBAGENT_MODEL: subagentModel }),
+    }), activeId))
+  })
+
+  it('does not preview a previous provider override while activation settings are stale', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: 'saved-fennoai' })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      providerEnvOwner: 'saved-xuanshuapi', env: { CLAUDE_CODE_SUBAGENT_MODEL: 'old-provider-only' },
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('ANTHROPIC_BASE_URL'))
+    expect(JSON.parse(settingsJsonOf(dialog)).env).not.toHaveProperty('CLAUDE_CODE_SUBAGENT_MODEL')
+  })
+
   it.each([null, 'saved-xuanshuapi'])('keeps the draft and refreshes the default after a settings ownership conflict (default=%s)', async (destination) => {
     let serverActive: string | null = 'saved-fennoai'
     vi.spyOn(providersApi, 'list').mockImplementation(async () => ({ providers: savedProviders, activeId: serverActive }))

@@ -47,7 +47,7 @@ export type ContextUsageIndicatorHandle = {
   open: () => void
 }
 
-const ACTIVE_REFRESH_MS = 30_000
+const ACTIVE_REFRESH_MS = 3_000
 // Lifetime totals only change when a turn completes, but a turn can run for minutes and the
 // user is staring at the panel while it does. Polling is scoped to the open popover/sheet —
 // a closed panel costs nothing — and the request it makes is the single-control `usageOnly`
@@ -85,13 +85,30 @@ function formatUpdatedAt(timestamp: number | null, t: ReturnType<typeof useTrans
   return t('contextIndicator.updatedMinutes', { count: minutes })
 }
 
-function pickUsedContextCategory(context: SessionContextSnapshot) {
+function pickUsedContextCategory(context: SessionContextSnapshot, totalTokens = context.totalTokens) {
   const ignored = new Set(['free space', 'autocompact buffer'])
   // No top-N cap: the segmented bar compresses any count into one strip, and the collapsible
   // breakdown is the diagnostic view where the long tail (MCP tools, memory files) matters.
-  return context.categories
+  const categories = context.categories
     .filter((category) => category.tokens > 0 && !category.isDeferred && !ignored.has(category.name.toLowerCase()))
-    .sort((a, b) => b.tokens - a.tokens)
+    .map((category) => ({ ...category }))
+  if (categories.length === 0) return categories
+  const fixed = categories.filter((category) => category.name !== 'Messages')
+  const fixedTotal = fixed.reduce((sum, category) => sum + category.tokens, 0)
+  if (fixedTotal > totalTokens) {
+    // A newer reading can be smaller than the earlier category estimates.
+    // Keep the breakdown bounded by the same total as the headline meter.
+    let remaining = totalTokens
+    fixed.forEach((category, index) => {
+      category.tokens = index === fixed.length - 1 ? remaining : Math.floor(category.tokens * totalTokens / fixedTotal)
+      remaining -= category.tokens
+    })
+    return fixed.filter((category) => category.tokens > 0).sort((a, b) => b.tokens - a.tokens)
+  }
+  const messages = categories.find((category) => category.name === 'Messages')
+  if (messages) messages.tokens = totalTokens - fixedTotal
+  else if (totalTokens > fixedTotal) categories.push({ name: 'Messages', tokens: totalTokens - fixedTotal, color: 'var(--color-brand)' })
+  return categories.filter((category) => category.tokens > 0).sort((a, b) => b.tokens - a.tokens)
 }
 
 function firstNonEmpty(...values: Array<string | undefined | null>) {
@@ -193,6 +210,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   const [usage, setUsage] = useState<SessionUsageSnapshot | null>(null)
   const usageSessionIdRef = useRef<string | undefined>(undefined)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const detailsOpenRef = useRef(false)
   const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -202,29 +220,40 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   revisionRef.current = { runtimeSelectionKey, refreshNonce, messageCount, contentRevision, chatState }
 
   const closeDetails = useCallback(() => {
+    detailsOpenRef.current = false
     setDetailsOpen(false)
-  }, [])
+    if (sessionId) useContextUsageStore.getState().cancelDetails(sessionId)
+  }, [sessionId])
 
-  const refresh = useCallback(async (mode: 'restore' | 'auto' | 'manual' | 'force' = 'manual'): Promise<boolean> => {
+  const refresh = useCallback(async (mode: 'restore' | 'auto' | 'manual' | 'force' = 'manual', includeDetails = false): Promise<boolean> => {
     if (!contextEnabledRef.current || !sessionId) return false
-    return useContextUsageStore.getState().refresh(sessionId, revisionRef.current, mode, isDocumentVisible())
+    return useContextUsageStore.getState().refresh(sessionId, revisionRef.current, mode, isDocumentVisible(), includeDetails)
+  }, [sessionId])
+
+  useEffect(() => () => {
+    if (sessionId) useContextUsageStore.getState().cancelDetails(sessionId)
   }, [sessionId])
 
   const forceRefreshWithRetry = useCallback(() => {
     if (!contextEnabledRef.current) return () => {}
+    const previousSnapshot = sessionId ? useContextUsageStore.getState().bySession[sessionId]?.snapshotRevision : undefined
     let cancelled = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     void refresh('force').then((ok) => {
       if (ok || cancelled) return
       retryTimer = setTimeout(() => {
+        const current = sessionId ? useContextUsageStore.getState().bySession[sessionId] : undefined
+        // The cheap active poll may already have recovered before this retry.
+        if (current?.snapshotRevision && current.snapshotRevision !== previousSnapshot && !current.error) return
         void refresh('force')
       }, FORCED_REFRESH_RETRY_MS)
     })
+    if (detailsOpenRef.current) void refresh('manual', true)
     return () => {
       cancelled = true
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [refresh])
+  }, [refresh, sessionId])
 
   const cancelBoundaryRetryRef = useRef<(() => void) | null>(null)
   const cancelBoundaryRetry = useCallback(() => {
@@ -254,6 +283,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
       cancelBoundaryRetryRef.current = forceRefreshWithRetry()
     } else if (previous.runtimeSelectionKey !== runtimeSelectionKey) {
       void refresh('restore')
+      if (detailsOpenRef.current) void refresh('manual', true)
     } else if (previous.messageCount !== messageCount || previous.contentRevision !== contentRevision) {
       void refresh('auto')
     }
@@ -275,7 +305,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
       void refresh('auto')
     }, ACTIVE_REFRESH_MS)
     return () => clearInterval(timer)
-  }, [chatState, messageCount, refresh])
+  }, [chatState, refresh])
 
   // Lifetime session totals, polled only while the breakdown is on screen. The request is the
   // single-control `usageOnly` one, so a 3s cadence costs far less than the context refresh it
@@ -322,13 +352,13 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   // If the presentation mode flips (Workbench drag, H5 resize), drop any open
   // shell so we don't leave a desktop popover stranded on a sheet layout.
   useEffect(() => {
-    setDetailsOpen(false)
-  }, [preferSheet])
+    closeDetails()
+  }, [preferSheet, closeDetails])
 
   const details = useMemo(() => {
     if (!context) return []
-    return pickUsedContextCategory(context)
-  }, [context])
+    return pickUsedContextCategory(cached?.detailContext ?? context, context.totalTokens)
+  }, [cached?.detailContext, context])
 
   const displayContext = context
   const hasPlaceholderContext = !displayContext && (
@@ -474,14 +504,21 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   })
 
   const handleTriggerClick = () => {
-    setDetailsOpen((open) => !open)
-    void refresh('manual')
+    const open = !detailsOpenRef.current
+    detailsOpenRef.current = open
+    setDetailsOpen(open)
+    if (open) {
+      void refresh('manual')
+      void refresh('manual', true)
+    } else if (sessionId) useContextUsageStore.getState().cancelDetails(sessionId)
   }
 
   useImperativeHandle(handleRef, () => ({
     open: () => {
+      detailsOpenRef.current = true
       setDetailsOpen(true)
       void refresh('manual')
+      void refresh('manual', true)
     },
   }), [refresh])
 

@@ -15,6 +15,7 @@ import { sessionService } from '../services/sessionService.js'
 import {
   clearLegacySessionChatState,
   getSessionChatActivityState,
+  interruptUserSession,
   markSessionChatQueued,
 } from '../ws/handler.js'
 
@@ -133,9 +134,8 @@ function getChatStatus(sessionId: string): Response {
 }
 
 function stopChat(sessionId: string): Response {
-  // Preserve the legacy endpoint's queue-reset behavior. Live generation is
-  // interrupted by the WebSocket stop_generation command.
   setSessionChatState(sessionId, 'idle')
+  interruptUserSession(sessionId)
   return Response.json({ ok: true })
 }
 

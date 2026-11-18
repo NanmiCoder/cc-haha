@@ -11,15 +11,18 @@ import {
   migrateLegacyDeepSeekAccountModels,
 } from './deepseekAccountProvider.js'
 import {
+  isModelReasoningEffort,
+} from '../../shared/modelReasoning.js'
+import {
   BUILT_IN_PROVIDER_IDS,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION,
   PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION,
-  PROVIDER_PROXY_CONFIG_SCHEMA_VERSION,
+  PROVIDER_USAGE_SCRIPT_SCHEMA_VERSION,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_PROXY_CONFIG_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_USAGE_SCRIPT_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -246,16 +249,48 @@ function migrateProvidersIndex(value: unknown): JsonObject {
   }
 }
 
-function migrateManagedSettings(value: unknown): JsonObject {
-  if (!isRecord(value)) return {}
-  if (value.env !== undefined && !isRecord(value.env)) {
-    return { ...value, env: {} }
+function migrateManagedSettings(value: unknown, activeProviderId?: string): JsonObject {
+  const current = isRecord(value) ? value : {}
+  const next: JsonObject = !Object.hasOwn(current, 'providerEnvOwner') && activeProviderId
+    ? { ...current, providerEnvOwner: activeProviderId }
+    : { ...current }
+
+  if (Object.hasOwn(next, 'effort')) {
+    if (
+      !Object.hasOwn(next, 'defaultEffort') &&
+      typeof next.effort === 'string' &&
+      isModelReasoningEffort(next.effort)
+    ) {
+      next.defaultEffort = next.effort
+    }
+    delete next.effort
   }
-  if (isRecord(value.env)) {
-    const { env, changed } = normalizeLegacyDeepSeekManagedEnv(value.env as Record<string, string>)
-    if (changed) return { ...value, env }
+
+  if (
+    Object.hasOwn(next, 'defaultEffort') &&
+    !(typeof next.defaultEffort === 'string' && isModelReasoningEffort(next.defaultEffort))
+  ) {
+    delete next.defaultEffort
   }
-  return value
+
+  if (
+    Object.hasOwn(next, 'language') &&
+    !(typeof next.language === 'string' && next.language.trim().length > 0)
+  ) {
+    delete next.language
+  }
+
+  if (next.env !== undefined && !isRecord(next.env)) {
+    next.env = {}
+    return next
+  }
+  if (isRecord(next.env)) {
+    const { env, changed } = normalizeLegacyDeepSeekManagedEnv(next.env as Record<string, string>)
+    if (changed) {
+      next.env = env
+    }
+  }
+  return next
 }
 
 async function migrateJsonEntry(
@@ -263,22 +298,23 @@ async function migrateJsonEntry(
   entryName: string,
   report: MigrationReport,
   migrate: (value: unknown) => JsonObject,
+  createIfMissing = false,
 ): Promise<void> {
   try {
     const current = await readJsonFile(filePath)
-    if (current.missing) return
+    if (current.missing && !createIfMissing) return
 
-    const migrated = migrate(current.value)
-    if (stableStringify(migrated) === stableStringify(current.value)) return
+    const migrated = migrate(current.missing ? {} : current.value)
+    if (!current.missing && stableStringify(migrated) === stableStringify(current.value)) return
 
-    await backupFile(filePath, 'bak-before-migration')
+    if (!current.missing) await backupFile(filePath, 'bak-before-migration')
     await writeJsonFile(filePath, migrated)
     report.migratedEntries.push(entryName)
   } catch (error) {
     if (error instanceof SyntaxError) {
       try {
         await quarantineMalformedFile(filePath)
-        await writeJsonFile(filePath, {})
+        await writeJsonFile(filePath, createIfMissing ? migrate({}) : {})
         report.migratedEntries.push(entryName)
         return
       } catch (recoveryError) {
@@ -448,18 +484,35 @@ async function runPersistentStorageMigrations(configDir: string): Promise<Migrat
 
   await migrateLegacyRootProviders(configDir, ccHahaDir, report)
 
-  await migrateJsonEntry(
-    path.join(ccHahaDir, 'providers.json'),
-    'cc-haha/providers.json',
-    report,
-    migrateProvidersIndex,
-  )
+  let activeProviderId: string | undefined
+  try {
+    const index = (await readJsonFile(path.join(ccHahaDir, 'providers.json'))).value
+    const migrated = migrateProvidersIndex(index)
+    if (typeof migrated.activeId === 'string') activeProviderId = migrated.activeId
+  } catch (error) {
+    // Malformed JSON still goes through the existing quarantine/recovery below.
+    // An I/O failure is different: no identity can safely be published yet.
+    if (!(error instanceof SyntaxError)) {
+      report.failures.push(`cc-haha/settings.json: Provider ownership lookup failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   await migrateJsonEntry(
     path.join(ccHahaDir, 'settings.json'),
     'cc-haha/settings.json',
     report,
-    migrateManagedSettings,
+    (value) => migrateManagedSettings(value, activeProviderId),
+    Boolean(activeProviderId),
   )
+  // Publish the schema that requires owner metadata only after that metadata
+  // was saved. A failed rename must leave standalone legacy reads usable.
+  if (!report.failures.some(failure => failure.startsWith('cc-haha/settings.json:'))) {
+    await migrateJsonEntry(
+      path.join(ccHahaDir, 'providers.json'),
+      'cc-haha/providers.json',
+      report,
+      migrateProvidersIndex,
+    )
+  }
 
   return report
 }
@@ -468,7 +521,15 @@ export function ensurePersistentStorageUpgraded(): Promise<MigrationReport> {
   const configDir = getConfigDir()
   if (!migrationPromise || migrationConfigDir !== configDir) {
     migrationConfigDir = configDir
-    migrationPromise = runPersistentStorageMigrations(configDir)
+    const attempt: Promise<MigrationReport> = runPersistentStorageMigrations(configDir).then(report => {
+      // Retry transient ownership writes at the next entry, without making a
+      // failed attempt look like a completed upgrade for this process lifetime.
+      if (report.failures.some(failure => failure.startsWith('cc-haha/settings.json:')) && migrationPromise === attempt) {
+        migrationPromise = null
+      }
+      return report
+    })
+    migrationPromise = attempt
   }
   return migrationPromise
 }

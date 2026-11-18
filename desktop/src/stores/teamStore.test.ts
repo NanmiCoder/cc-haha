@@ -762,6 +762,86 @@ describe('teamStore incremental transcript polling', () => {
     useTabStore.getState().closeTab('team-member:reviewer@archived-team')
   })
 
+  it('forwards per-tool durationMs from durable member transcripts into chatStore tool_result rows (#1915)', async () => {
+    getMemberTranscriptMock.mockResolvedValue({
+      messages: [
+        {
+          id: 'member-tool-calls',
+          type: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'edit-timed', name: 'Edit', input: { file_path: 'a.ts' } },
+            { type: 'tool_use', id: 'edit-denied', name: 'Edit', input: { file_path: 'b.ts' } },
+            { type: 'tool_use', id: 'edit-legacy', name: 'Edit', input: { file_path: 'c.ts' } },
+            { type: 'tool_use', id: 'edit-invalid', name: 'Edit', input: { file_path: 'd.ts' } },
+          ],
+          timestamp: '2026-08-08T00:00:01.000Z',
+        },
+        {
+          id: 'member-tr-timed',
+          type: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'edit-timed', content: 'Updated a.ts' }],
+          durationMs: 220,
+          timestamp: '2026-08-08T00:00:03.500Z',
+        },
+        {
+          id: 'member-tr-zero',
+          type: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'edit-denied', content: 'User rejected', is_error: true }],
+          durationMs: 0,
+          timestamp: '2026-08-08T00:00:05.000Z',
+        },
+        {
+          id: 'member-tr-legacy',
+          type: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'edit-legacy', content: 'Updated c.ts' }],
+          timestamp: '2026-08-08T00:00:06.000Z',
+        },
+        {
+          id: 'member-tr-invalid',
+          type: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'edit-invalid', content: 'Updated d.ts' }],
+          durationMs: -5,
+          timestamp: '2026-08-08T00:00:07.000Z',
+        },
+      ],
+      signature: 'duration-sig',
+      cursor: 'duration-cursor',
+      afterOrdinal: 4,
+    })
+    const member = {
+      agentId: 'implementer@duration-team',
+      name: 'implementer',
+      role: 'engineer',
+      status: 'completed' as const,
+    }
+    useTeamStore.setState({
+      activeTeam: {
+        name: 'duration-team',
+        leadAgentId: 'team-lead@duration-team',
+        leadSessionId: 'duration-lead-session',
+        members: [member],
+      },
+    })
+
+    const sessionId = 'team-member:implementer@duration-team'
+    useTeamStore.getState().openMemberSession(member)
+    await useTeamStore.getState().ensureMemberSession(sessionId)
+
+    const toolResults = (useChatStore.getState().sessions[sessionId]?.messages ?? []).filter(
+      (msg): msg is Extract<UIMessage, { type: 'tool_result' }> => msg.type === 'tool_result',
+    )
+    const byToolUseId = new Map(toolResults.map(msg => [msg.toolUseId, msg]))
+
+    expect(byToolUseId.get('edit-timed')?.durationMs).toBe(220)
+    expect(byToolUseId.get('edit-denied')?.durationMs).toBe(0)
+    expect(byToolUseId.get('edit-legacy')).toBeDefined()
+    expect('durationMs' in byToolUseId.get('edit-legacy')!).toBe(false)
+    expect(byToolUseId.get('edit-invalid')).toBeDefined()
+    expect('durationMs' in byToolUseId.get('edit-invalid')!).toBe(false)
+
+    useTabStore.getState().closeTab(sessionId)
+  })
+
   it('keeps concurrent direct turns active until every durable reply arrives', async () => {
     const firstDelivery = deferred<{ ok: true }>()
     const secondDelivery = deferred<{ ok: true }>()

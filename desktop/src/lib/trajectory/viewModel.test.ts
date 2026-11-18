@@ -18,6 +18,48 @@ describe('mergeRows', () => {
     expect(rowDurationMs(merged)).toBe(3000)
   })
 
+  it('preserves execution durationMs across split tool pieces and prefers it over buffered/queued timestamps (#1915)', () => {
+    // 5 serial Edits streamed at 10:00:00.000Z whose results landed 1.77s..3.57s later, each executing in ~220ms.
+    const resultOffsetsMs = [1770, 2220, 2670, 3120, 3570]
+    const mergedBatch = resultOffsetsMs.map((offsetMs, index) => {
+      const id = `t:edit_${index + 1}`
+      const use = makeRow({
+        id,
+        kind: 'tool',
+        ts: '2026-11-16T10:00:00.000Z',
+        toolName: 'Edit',
+        loc: [[100 + index * 10, 105 + index * 10]],
+      })
+      const resultTs = new Date(Date.parse('2026-11-16T10:00:00.000Z') + offsetMs).toISOString()
+      const result = makeRow({
+        id,
+        kind: 'tool',
+        ts: resultTs,
+        resultTs,
+        durationMs: 220,
+        partial: true,
+        loc: [[500 + index * 10, 505 + index * 10]],
+      })
+      // Arrival order across paginated loads must not drop durationMs.
+      const forward = mergeRowPieces(use, result)
+      const reverse = mergeRowPieces(result, use)
+      expect(forward.durationMs).toBe(220)
+      expect(reverse.durationMs).toBe(220)
+      return forward
+    })
+
+    expect(mergedBatch.map((row) => rowDurationMs(row))).toEqual([220, 220, 220, 220, 220])
+    // Turn wallClockMs still reflects the 3.57s span the turn occupied in real time.
+    expect(wallClockMs(mergedBatch)).toBe(3570)
+
+    // 0ms is preserved rather than treated as missing.
+    const zeroRow = mergeRowPieces(
+      makeRow({ id: 't:zero', kind: 'tool', ts: '2026-11-16T10:00:00.000Z', toolName: 'Edit' }),
+      makeRow({ id: 't:zero', kind: 'tool', ts: '2026-11-16T10:00:12.000Z', resultTs: '2026-11-16T10:00:12.000Z', durationMs: 0, partial: true }),
+    )
+    expect(rowDurationMs(zeroRow)).toBe(0)
+  })
+
   it('is idempotent when the same piece is delivered twice', () => {
     const piece = makeRow({ id: 'a:m1', kind: 'assistant', preview: 'hello', toolOnly: false, loc: [[10, 20]] })
     const once = mergeRows(new Map(), [piece])

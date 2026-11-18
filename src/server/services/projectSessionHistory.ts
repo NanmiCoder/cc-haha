@@ -18,7 +18,7 @@ export type ProjectSessionPreviews = {
   total: number
 }
 export type ProjectHistoryRow = IndexedSessionRow & { logicalProjectRoot: string }
-type Snapshot = { scope: string; root: string; archived: boolean; expiresAt: number; rows: ProjectHistoryRow[] }
+type Snapshot = { identityRevision: string; scope: string; root: string; archived: boolean; expiresAt: number; rows: ProjectHistoryRow[] }
 
 const SNAPSHOT_TTL_MS = 5 * 60_000
 const SNAPSHOT_LIMIT = 16
@@ -35,6 +35,7 @@ export class ProjectSessionHistory {
     scope: () => string
     revision: () => string
     mutation: () => string
+    identityRevision?: () => string
     load: () => Promise<ProjectHistoryRow[]>
     hydrate: (row: ProjectHistoryRow, archived: boolean) => Promise<SessionListItem | null>
     archiveIds: () => ReadonlySet<string>
@@ -67,6 +68,7 @@ export class ProjectSessionHistory {
       offset = decoded.offset
       const found = this.snapshots.get(snapshotId)
       if (!found) throw this.expired()
+      if (found.identityRevision !== (this.source.identityRevision?.() ?? '')) throw new ApiError(409, 'Project identities changed; retry from the first page', 'PROJECT_HISTORY_CHANGED')
       if (found.scope !== scope || found.root !== projectRoot || found.archived !== Boolean(options.archived)) throw ApiError.badRequest('Cursor does not belong to this project or archive view')
       if (offset > found.rows.length) throw ApiError.badRequest('Invalid cursor position')
       snapshot = found
@@ -83,7 +85,7 @@ export class ProjectSessionHistory {
         return row.id !== beforeId && (time < beforeTime || (time === beforeTime && row.id.localeCompare(beforeId!) > 0))
       })
       snapshotId = randomUUID()
-      snapshot = { scope, root: projectRoot, archived: Boolean(options.archived), expiresAt: this.source.now() + SNAPSHOT_TTL_MS, rows }
+      snapshot = { identityRevision: this.source.identityRevision?.() ?? '', scope, root: projectRoot, archived: Boolean(options.archived), expiresAt: this.source.now() + SNAPSHOT_TTL_MS, rows }
       this.snapshots.set(snapshotId, snapshot)
       this.prune(scope)
     }
@@ -91,6 +93,7 @@ export class ProjectSessionHistory {
     // Keep validation and hydration page-sized. Deleted files consume a cursor
     // position but not a rendered row, so sparse pages still make progress.
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (snapshot.identityRevision !== (this.source.identityRevision?.() ?? '')) throw new ApiError(409, 'Project identities changed; retry from the first page', 'PROJECT_HISTORY_CHANGED')
       const mutation = this.source.mutation()
       const archiveIds = this.source.archiveIds()
       const sessions: SessionListItem[] = []

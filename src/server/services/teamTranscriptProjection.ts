@@ -136,13 +136,22 @@ function collectTeamEvidence(entry: Record<string, unknown>, state: CachedProjec
   const teammate = raw.role === 'user' && text.includes('<teammate-message')
   const content = tools.length ? tools : results.length ? results : teammate ? raw.content : undefined
   if (content === undefined) return
+  const type: MessageEntry['type'] = tools.length ? 'tool_use' : results.length ? 'tool_result' : 'user'
+  const durationMs =
+    type === 'tool_result' &&
+    typeof entry.durationMs === 'number' &&
+    Number.isFinite(entry.durationMs) &&
+    entry.durationMs >= 0
+      ? entry.durationMs
+      : undefined
   const message: MessageEntry = {
     id: typeof entry.uuid === 'string' ? entry.uuid : `team:${state.indexedBytes}:${state.messages.length}`,
-    type: tools.length ? 'tool_use' : results.length ? 'tool_result' : 'user',
+    type,
     content,
     timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : new Date(0).toISOString(),
     ...(typeof entry.cwd === 'string' ? { cwd: entry.cwd } : {}),
     ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
     ...(typeof entry.parent_tool_use_id === 'string' ? { parentToolUseId: entry.parent_tool_use_id } : {}),
   }
   const bytes = Buffer.byteLength(JSON.stringify(message))

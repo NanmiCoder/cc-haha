@@ -101,6 +101,106 @@ describe('bundled Cloudflare connector', () => {
 })
 
 describe('Quick Tunnel readiness', () => {
+  it('records the registration timeout and a bounded, redacted tail of fragmented connector output', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const token = 'fake-diagnostic-tunnel-token-1234567890'
+    const proxyUrl = 'http://fixture-user:fixture-password@127.0.0.1:7890'
+    const f = fixture({ timeoutMs: 35, startProxyTransport: async () => ({
+      edgeAddresses: ['127.0.0.1:12345'], quickServiceUrl: 'http://127.0.0.1:12346/private', stop: async () => {},
+    }) })
+    const pending = f.start({ mode: 'named', token, proxyUrl, onDiagnostic: event => events.push(event as unknown as Record<string, unknown>) })
+    await f.spawned()
+    f.child.stderr.write('ERR dial tcp: lookup region1.v2.argotunnel.com: no such host token=fake-diagnostic-')
+    f.child.stderr.write('tunnel-token-1234567890 proxy=http://fixture-user:fixture-password@127.0.0.1:7890\n')
+    await expect(pending).rejects.toMatchObject({ code: 'proxy', message: 'Cloudflare connection timed out' })
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'tunnel_registration', outcome: 'failed', reason: 'startup_timeout', durationMs: expect.any(Number) }))
+    expect(JSON.stringify(events)).toContain('no such host')
+    for (const secret of [token, 'fixture-user', 'fixture-password']) expect(JSON.stringify(events)).not.toContain(secret)
+  })
+
+  it('records an early connector exit with its exit status and underlying log reason', async () => {
+    const events: unknown[] = []
+    const f = fixture()
+    const pending = f.start({ onDiagnostic: event => events.push(event) })
+    await f.spawned()
+    f.child.stderr.write('ERR TLS handshake failed: certificate has expired\n')
+    f.child.emit('exit', 23, null)
+    await expect(pending).rejects.toMatchObject({ code: 'network' })
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'connector_exit', outcome: 'failed', details: expect.objectContaining({ exitCode: 23 }) }))
+    expect(JSON.stringify(events)).toContain('certificate has expired')
+  })
+
+  it.each(['timeout', 'exit'] as const)('retains a final fatal line without a newline on %s', async failure => {
+    const events: Array<{ stage: string, details?: { logTail?: string } }> = []
+    const token = 'fake-final-line-tunnel-credential-1234567890'
+    const f = fixture({ timeoutMs: 35 })
+    const pending = f.start({ mode: 'named', token, onDiagnostic: event => events.push(event) })
+    await f.spawned()
+    f.child.stdout.write('INF establishing transport\n')
+    f.child.stderr.write('ERR TLS handshake failed: certificate has expired ')
+    f.child.stderr.write(failure === 'timeout' ? token.slice(0, 20) : token)
+    if (failure === 'exit') f.child.emit('exit', 23, null)
+    await expect(pending).rejects.toMatchObject({ code: 'network' })
+    const failed = events.filter(event => event.stage === 'tunnel_registration' || event.stage === 'connector_exit')
+    expect(failed.length).toBeGreaterThan(0)
+    for (const event of failed) {
+      expect(event.details?.logTail).toContain('certificate has expired')
+      expect(event.details?.logTail?.match(/certificate has expired/g)).toHaveLength(1)
+      expect(event.details?.logTail).not.toContain(token)
+      expect(event.details?.logTail).not.toContain(token.slice(0, 12))
+      expect(event.details?.logTail?.indexOf('establishing transport')).toBeLessThan(event.details?.logTail?.indexOf('certificate has expired') ?? -1)
+    }
+  })
+
+  it('keeps separate pending streams in observation order and omits an oversized unterminated line', async () => {
+    const events: Array<{ stage: string, details?: { logTail?: string } }> = []
+    const f = fixture()
+    const pending = f.start({ onDiagnostic: event => events.push(event) })
+    await f.spawned()
+    f.child.stderr.write('ERR first fatal detail')
+    f.child.stdout.write('INF second output detail')
+    f.child.emit('exit', 23, null)
+    await expect(pending).rejects.toMatchObject({ code: 'network' })
+    const tail = events.find(event => event.stage === 'connector_exit')?.details?.logTail ?? ''
+    expect(tail).toBe('stderr: ERR first fatal detail stdout: INF second output detail')
+
+    const oversizedEvents: Array<{ stage: string, details?: { logTail?: string } }> = []
+    const oversized = fixture()
+    const oversizedPending = oversized.start({ onDiagnostic: event => oversizedEvents.push(event) })
+    await oversized.spawned()
+    oversized.child.stderr.write('INF complete preceding line\n')
+    oversized.child.stderr.write('z'.repeat(256 * 1024 + 1))
+    oversized.child.stderr.write('oversized-secret-fragment')
+    oversized.child.emit('exit', 23, null)
+    await expect(oversizedPending).rejects.toMatchObject({ code: 'network' })
+    expect(JSON.stringify(oversizedEvents)).not.toContain('oversized-secret-fragment')
+    expect(oversizedEvents.find(event => event.stage === 'connector_exit')?.details?.logTail).toContain('complete preceding line')
+  })
+
+  it('redacts a connector credential before bounding long output lines', async () => {
+    const events: unknown[] = []
+    const token = 'fake-unlabelled-tunnel-credential-1234567890'
+    const f = fixture()
+    const pending = f.start({ mode: 'named', token, onDiagnostic: event => events.push(event) })
+    await f.spawned()
+    f.child.stderr.write(`${'x'.repeat(500)}${token}\n`)
+    f.child.stderr.write(`${'z'.repeat(256 * 1024)}${token.slice(0, 15)}`)
+    f.child.stderr.write(`${token.slice(15)}\nERR connection refused\n`)
+    f.child.emit('exit', 1, null)
+    await expect(pending).rejects.toMatchObject({ code: 'network' })
+    expect(JSON.stringify(events)).toContain('connection refused')
+    expect(JSON.stringify(events)).not.toContain(token.slice(0, 10))
+    expect(JSON.stringify(events).length).toBeLessThan(10_000)
+  })
+
+  it('keeps connector readiness working when the diagnostic sink throws', async () => {
+    const f = fixture()
+    const pending = f.start({ onDiagnostic: () => { throw new Error('diagnostic fixture failure') } })
+    await f.spawned()
+    f.child.stderr.write('https://diagnostic-fixture.trycloudflare.com\nRegistered tunnel connection\n')
+    await expect(pending).resolves.toMatchObject({ url: 'https://diagnostic-fixture.trycloudflare.com' })
+  })
+
   it('waits for both the actual public address and an edge connection before reporting ready', async () => {
     const f = fixture()
     const onPhase = vi.fn()

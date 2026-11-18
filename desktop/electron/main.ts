@@ -1,4 +1,5 @@
 import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
+import { createPublicAccessDiagnosticWriter } from './services/publicAccessDiagnostics'
 import { configureP2PSessionPermissions, P2P_PARTITION, p2pEndpointUrl, p2pHostWanted, P2PTerminator } from './services/p2pTerminator'
 import type { DesktopPublicAccessConfiguration, DesktopPublicAccessStatus } from '../src/lib/desktopHost/types'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
@@ -343,11 +344,12 @@ function getPublicAccessManager() {
   let queue: Promise<unknown> = Promise.resolve()
   publicAccessManager = new PublicAccessManager({
     desktopRoot: unpackedRoot(),
+    onDiagnostic: createPublicAccessDiagnosticWriter(electronHostDiagnosticsFile(process.env)),
     onState: status => { void getP2PTerminator().update(p2pHostWanted(status)) },
     powerSaveBlocker,
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
-      request<T>(route: string, method: string, body?: unknown): Promise<T> {
+      request<T>(route: string, method: string, body?: unknown, context?: { attemptId: string }): Promise<T> {
         const operation = queue.catch(() => {}).then(async () => {
           const runtime = getServerRuntime()
           // Never boot the sidecar merely to disable an already stopped tunnel.
@@ -355,7 +357,8 @@ function getPublicAccessManager() {
           if (!serverUrl) throw new Error('Server unavailable')
           const response = await fetch(`${serverUrl}/api/public-access${route}`, {
             method,
-            headers: { Authorization: `Bearer ${runtime.getLocalAccessToken()}`, 'Content-Type': 'application/json' },
+            headers: { Authorization: `Bearer ${runtime.getLocalAccessToken()}`, 'Content-Type': 'application/json',
+              ...(context ? { 'X-CC-Haha-Connection-Attempt': context.attemptId } : {}) },
             body: body === undefined ? undefined : JSON.stringify(body),
             signal: AbortSignal.timeout(10_000),
           })

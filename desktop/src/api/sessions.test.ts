@@ -102,6 +102,14 @@ describe('sessionsApi', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/session-1/inspection?statusOnly=1')
   })
 
+  it('requests only the context summary without calculating the breakdown', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', {
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await sessionsApi.getInspection('session-1', { includeContext: true, contextOnly: true, summaryOnly: true })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/session-1/inspection?includeContext=1&contextOnly=1&summaryOnly=1')
+  })
+
   it.each([
     [{ projectRoot: '/workspace/repo with spaces', limit: 50, cursor: 'opaque+/=' }, 'projectRoot=%2Fworkspace%2Frepo+with+spaces&limit=50&cursor=opaque%2B%2F%3D'],
     [{ projectRoot: '/workspace/repo', limit: 50, beforeModifiedAt: '2026-08-01T00:00:00.000Z', beforeId: 'boundary-id' }, 'projectRoot=%2Fworkspace%2Frepo&limit=50&beforeModifiedAt=2026-08-01T00%3A00%3A00.000Z&beforeId=boundary-id'],
@@ -232,6 +240,68 @@ describe('sessionsApi', () => {
     resolvers[1]!(new Response(JSON.stringify({ workDir: '/repo/worktree', worktree: { enabled: true } })))
     expect(await fresh).toEqual(await concurrent)
     expect((await fresh).workDir).toBe('/repo/worktree')
+  })
+
+  it('notifies subscribed Git info and invalidation listeners and suppresses invalidated stale responses', async () => {
+    const resolvers: Array<(response: Response) => void> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+
+    const seen: string[] = []
+    let invalidations = 0
+    const unsubscribe = sessionsApi.subscribeGitInfo(
+      'sub-session',
+      (info) => {
+        seen.push(info.branch ?? 'detached')
+      },
+      {
+        onInvalidate: () => {
+          invalidations += 1
+        },
+      },
+    )
+
+    try {
+      const stale = sessionsApi.getGitInfo('sub-session')
+      sessionsApi.invalidateGitInfo('sub-session')
+      expect(invalidations).toBe(1)
+      const fresh = sessionsApi.getGitInfo('sub-session')
+
+      resolvers[0]!(new Response(JSON.stringify({
+        branch: 'master',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await stale
+      expect(seen).toEqual([])
+
+      resolvers[1]!(new Response(JSON.stringify({
+        branch: 'dev_xxxx',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await fresh
+      expect(seen).toEqual(['dev_xxxx'])
+    } finally {
+      unsubscribe()
+    }
+
+    sessionsApi.invalidateGitInfo('sub-session')
+    expect(invalidations).toBe(1)
+
+    const afterUnsubscribe = sessionsApi.getGitInfo('sub-session')
+    resolvers[2]!(new Response(JSON.stringify({
+      branch: 'after-unsubscribe',
+      repoName: 'repo',
+      workDir: '/repo',
+      changedFiles: 0,
+      worktree: null,
+    })))
+    await afterUnsubscribe
+    expect(seen).toEqual(['dev_xxxx'])
   })
 
   it('fetches a single trace call from the call detail endpoint', async () => {
@@ -552,5 +622,14 @@ describe('full session history assembly', () => {
     })
     await expect(sessionsApi.getFullHistory('fixture', { signal: controller.signal })).rejects.toThrow()
     expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('posts immediate session stop to /api/sessions/:id/chat/stop', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response({ ok: true }))
+    await expect(sessionsApi.stopChat('session-1917')).resolves.toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/sessions/session-1917/chat/stop'),
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })

@@ -78,3 +78,19 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
     await rm(root, { recursive: true, force: true })
   }
 })
+
+
+test('runtime HTTP actions require team incarnation, member session, revision and human intent', async () => {
+  const cases = [
+    ['GET', '/api/teams/fixture/runtime-control', undefined],
+    ['POST', '/api/teams/fixture/runtime-control/resume', { leadSessionId: 'lead', incarnationId: 'inc', expectedRevision: 1 }],
+    ['POST', '/api/teams/fixture/runtime-control/resume', { leadSessionId: 'lead', incarnationId: 'inc', expectedRevision: 1, requestId: 'human', members: ['injected'] }],
+    ['PATCH', '/api/teams/fixture/members/worker/runtime', { providerId: null, modelId: 'model' }],
+    ['PATCH', '/api/teams/fixture/members/worker/runtime', { providerId: null, modelId: 'model', leadSessionId: 'lead', incarnationId: 'inc', expectedRevision: 1 }],
+  ] as const
+  for (const [method, path, body] of cases) {
+    const req = new Request(`http://localhost${path}`, { method, ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) })
+    const response = await handleTeamsApi(req, new URL(req.url), path.split('/').filter(Boolean))
+    expect(response.status).toBe(400)
+  }
+})

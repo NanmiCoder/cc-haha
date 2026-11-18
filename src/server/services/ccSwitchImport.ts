@@ -33,12 +33,14 @@ import {
   MODEL_CONTEXT_WINDOW_MIN,
 } from '../../utils/model/modelContextWindows.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
+import { ProviderUsageScriptSchema } from '../types/provider.js'
 import type {
   ApiFormat,
-  CreateProviderInput,
+  ImportProviderInput,
   Model1mSupport,
   ModelMapping,
   ProviderAuthStrategy,
+  ProviderUsageScript,
   SavedProvider,
 } from '../types/provider.js'
 import {
@@ -109,8 +111,11 @@ export type CcSwitchEntry = {
   candidate: CcSwitchCandidate
   /** Full API key — server-side only, never serialize it into a response. */
   apiKey: string
-  /** Ready-to-persist provider input; null when the candidate is not importable. */
-  createInput: CreateProviderInput | null
+  /**
+   * Ready-to-persist provider input; null when the candidate is not importable.
+   * It can carry the usage script's own credentials, so it is server-side only.
+   */
+  createInput: ImportProviderInput | null
 }
 
 /** Scan result that still carries the resolved secrets — server-side only. */
@@ -673,6 +678,19 @@ function redactSecret(text: string | undefined, secret: string): string | undefi
   return text.split(secret).join('[REDACTED]')
 }
 
+/**
+ * cc-switch keeps a provider's balance/quota query in `meta.usage_script`.
+ * Carry it over as written, so it is still there once cc-haha can run it; one
+ * that does not have cc-switch's shape is left behind instead of failing the
+ * provider's import.
+ */
+function readUsageScript(meta: unknown): ProviderUsageScript | undefined {
+  const parsed = parseJsonLike(meta)
+  if (!isRecord(parsed)) return undefined
+  const result = ProviderUsageScriptSchema.safeParse(parsed.usage_script)
+  return result.success ? result.data : undefined
+}
+
 function readApiFormat(meta: unknown): ApiFormat | null {
   const parsed = parseJsonLike(meta)
   if (!isRecord(parsed)) return 'anthropic'
@@ -805,8 +823,9 @@ function toEntry(
   const modelContextWindows = readModelContextWindows(env)
   const hasToolSearchKey = Object.prototype.hasOwnProperty.call(env, TOOL_SEARCH_ENV_KEY)
   const hasDisableBetasKey = Object.prototype.hasOwnProperty.call(env, DISABLE_EXPERIMENTAL_BETAS_ENV_KEY)
+  const usageScript = readUsageScript(row.meta)
 
-  const createInput: CreateProviderInput = {
+  const createInput: ImportProviderInput = {
     presetId,
     name,
     apiKey,
@@ -829,6 +848,7 @@ function toEntry(
       ),
     }),
     ...(notes ? { notes } : {}),
+    ...(usageScript ? { usageScript } : {}),
   }
 
   return { candidate, apiKey, createInput }
@@ -959,11 +979,11 @@ export async function scanCcSwitchProviders(
 export function resolveCcSwitchImports(
   scan: CcSwitchScan,
   sourceIds: string[],
-): { inputs: CreateProviderInput[]; skipped: { sourceId: string; reason: string }[] } {
+): { inputs: ImportProviderInput[]; skipped: { sourceId: string; reason: string }[] } {
   const entriesBySourceId = new Map(scan.entries.map((entry) => [entry.candidate.sourceId, entry]))
   const missingReason = scan.available ? 'not-found' : scan.reason ?? 'not-found'
 
-  const inputs: CreateProviderInput[] = []
+  const inputs: ImportProviderInput[] = []
   const skipped: { sourceId: string; reason: string }[] = []
   for (const sourceId of [...new Set(sourceIds)]) {
     const entry = entriesBySourceId.get(sourceId)

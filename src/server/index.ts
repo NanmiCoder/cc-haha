@@ -68,6 +68,7 @@ import {
 } from './petAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
 import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './services/remoteAccessConnectivity.js'
+import { configureMcpHostProxy } from './services/networkSettings.js'
 import { getMobilePushService, stopMobilePushServices } from './services/mobilePushRuntime.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
@@ -740,11 +741,13 @@ export function startServer(port = PORT, host = HOST) {
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
     const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
+    const disposeMcpHostProxy = configureMcpHostProxy()
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
       disposeScheduledTaskHost()
+      disposeMcpHostProxy()
       publicAccess.disable()
       broker.closeAll()
       publicAccessServers.delete(publicAccess)

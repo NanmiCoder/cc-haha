@@ -4,7 +4,7 @@ import { DelegatedSessionsManageButton, DelegationChangeStatusList, DelegationSy
 import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore, useSessionDelegationSync } from '@/stores/sessionDelegationStore'
 import { openSessionSource } from '@/lib/sessionNavigation'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { ArrowLeft, Folder, GitBranch, GitFork, History, Target, MessageCircleQuestion, TriangleAlert } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
@@ -68,6 +68,7 @@ import { useMobileViewport } from '../hooks/useMobileViewport'
 import { useWorkspaceShortcuts } from '../hooks/useWorkspaceShortcuts'
 import { useWorkspaceFocusReturn } from '../hooks/useWorkspaceFocusReturn'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
+import { constrainWorkspaceSideWidth, measureWorkspaceSidePanel, WORKSPACE_SIDE_MIN_WIDTH, type WorkspaceSideBounds } from '@/lib/workspace/sidePanelSize'
 import { formatTokenCount } from '../lib/formatTokenCount'
 import {
   createBackgroundTaskDismissKey,
@@ -76,7 +77,7 @@ import {
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { getSessionBrowsablePath, getSessionWorkspaceState } from '../lib/sessionWorkspace'
 import type { AgentTaskNotification, UIMessage } from '../types/chat'
-import { sessionsApi, type SessionGitInfo } from '../api/sessions'
+import { useSessionGitInfo } from '../hooks/useSessionGitInfo'
 
 /**
  * Stable fallbacks for optional session state. A `?? []` / `?? {}` literal allocates a
@@ -175,13 +176,6 @@ function ActiveGoalStrip({
   )
 }
 
-function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallbackWidth: number) {
-  const renderedWidth = panelRef.current?.getBoundingClientRect().width ?? 0
-  return Number.isFinite(renderedWidth) && renderedWidth > 0
-    ? renderedWidth
-    : fallbackWidth
-}
-
 /**
  * Bounds of the split workspace panel. It may take up to 70% of the row, but
  * never the room the chat column needs: `SessionChatSurface` pins the compact
@@ -193,70 +187,106 @@ function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallba
  */
 const WORKSPACE_SPLIT_PANEL_BOUNDS = 'max-w-[min(70%,calc(100%_-_401px))] min-w-[min(420px,54%,calc(100%_-_401px))]'
 
-function WorkspaceResizeHandle({ panelRef }: { panelRef: RefObject<HTMLElement> }) {
+function WorkspaceResizeHandle({ panelRef, active }: { panelRef: RefObject<HTMLElement>; active: boolean }) {
   const t = useTranslation()
   const width = useWorkspaceStore((state) => state.sideWidth)
   const setWidth = useWorkspaceStore((state) => state.setSideWidth)
-  const [dragState, setDragState] = useState<{ startX: number; startWidth: number } | null>(null)
-  const dragStateRef = useRef(dragState)
+  const [bounds, setBounds] = useState<WorkspaceSideBounds | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragRef = useRef<{
+    startX: number; startWidth: number; scale: number; pointerId: number; target: HTMLElement
+  } | null>(null)
+  const stopDrag = useCallback(() => {
+    dragRef.current = null
+    setDragging(false)
+  }, [])
 
   useEffect(() => {
-    dragStateRef.current = dragState
-  }, [dragState])
+    if (!active) stopDrag()
+  }, [active, stopDrag])
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = measureWorkspaceSidePanel(panelRef.current, 0).bounds
+      setBounds(current => current?.min === next?.min && current?.max === next?.max ? current : next)
+    }
+    measure()
+    const row = panelRef.current?.parentElement
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (row) observer?.observe(row)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [panelRef])
 
   useEffect(() => {
-    if (!dragState) return
-
+    if (!dragging) return
+    const drag = dragRef.current
+    const originalCursor = document.body.style.cursor
+    const originalSelect = document.body.style.userSelect
+    const matchesPointer = (event: PointerEvent) => event.pointerId === undefined || event.pointerId === drag?.pointerId
     const handlePointerMove = (event: PointerEvent) => {
-      const current = dragStateRef.current
-      if (!current) return
-      setWidth(current.startWidth + current.startX - event.clientX)
+      const current = dragRef.current
+      if (!current || !matchesPointer(event)) return
+      if (typeof event.buttons === 'number' && (event.buttons & 1) === 0) {
+        stopDrag()
+        return
+      }
+      const next = current.startWidth + (current.startX - event.clientX) / current.scale
+      const available = measureWorkspaceSidePanel(panelRef.current, current.startWidth).bounds
+      setWidth(constrainWorkspaceSideWidth(next, available))
     }
-
-    const handlePointerUp = () => {
-      setDragState(null)
-    }
-
+    const handlePointerUp = (event: PointerEvent) => { if (matchesPointer(event)) stopDrag() }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('pointercancel', handlePointerUp)
-
+    window.addEventListener('blur', stopDrag)
     return () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
+      dragRef.current = null
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalSelect
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
       window.removeEventListener('pointercancel', handlePointerUp)
+      window.removeEventListener('blur', stopDrag)
+      if (drag && drag.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId)
     }
-  }, [dragState, setWidth])
+  }, [dragging, panelRef, setWidth, stopDrag])
 
   return (
     <div
       role="separator"
       aria-label={t('workspace.resizePanel')}
       aria-orientation="vertical"
-      aria-valuenow={width}
-      tabIndex={0}
+      aria-valuemin={Math.round(bounds?.min ?? WORKSPACE_SIDE_MIN_WIDTH)}
+      aria-valuemax={Math.round(bounds?.max ?? Math.max(width, WORKSPACE_SIDE_MIN_WIDTH))}
+      aria-valuenow={Math.round(constrainWorkspaceSideWidth(width, bounds))}
+      tabIndex={active ? 0 : -1}
       data-testid="workspace-resize-handle"
       onPointerDown={(event) => {
-        if (event.button !== 0) return
+        if (!active || event.button !== 0 || event.isPrimary === false || dragRef.current) return
         event.preventDefault()
-        setDragState({ startX: event.clientX, startWidth: getRenderedWorkspacePanelWidth(panelRef, width) })
+        const measured = measureWorkspaceSidePanel(panelRef.current, width)
+        dragRef.current = {
+          startX: event.clientX, startWidth: measured.width, scale: measured.scale,
+          pointerId: event.pointerId, target: event.currentTarget,
+        }
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        setDragging(true)
       }}
+      onLostPointerCapture={stopDrag}
       onKeyDown={(event) => {
-        const renderedWidth = getRenderedWorkspacePanelWidth(panelRef, width)
-        if (event.key === 'ArrowLeft') {
-          event.preventDefault()
-          setWidth(renderedWidth + WORKSPACE_RESIZE_STEP)
-        }
-        if (event.key === 'ArrowRight') {
-          event.preventDefault()
-          setWidth(renderedWidth - WORKSPACE_RESIZE_STEP)
-        }
+        if (!active || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+        event.preventDefault()
+        const measured = measureWorkspaceSidePanel(panelRef.current, width)
+        const next = measured.width + (event.key === 'ArrowLeft' ? WORKSPACE_RESIZE_STEP : -WORKSPACE_RESIZE_STEP)
+        setWidth(constrainWorkspaceSideWidth(next, measured.bounds))
       }}
-      className="relative z-10 w-px shrink-0 cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
+      className="relative z-10 w-px shrink-0 touch-none cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
     >
       <div aria-hidden="true" className="absolute -inset-x-1 inset-y-0" />
     </div>
@@ -398,10 +428,16 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     ? s.activeTeamStartedAtBySession[activeTabId]
     : undefined)
   const fetchTeamForSession = useTeamStore((s) => s.fetchTeamForSession)
-  const [sessionGitInfo, setSessionGitInfo] = useState<{
-    sessionId: string
-    info: SessionGitInfo
-  } | null>(null)
+  const isSessionTab = Boolean(activeTabId) && isSessionTabState(activeTabId, activeTabType)
+  const { gitInfo: currentGitInfo } = useSessionGitInfo({
+    sessionId: activeTabId,
+    enabled: isSessionTab,
+    visible: active,
+    workDir: session?.workDir,
+    chatState,
+    messageCount: sessionMessageCount,
+    secondaryRefreshKey: sessionSlashCommandCount,
+  })
   const activeWorkspaceIsSideChat = useWorkspaceStore(state => {
     const workspace = activeTabId ? state.bySession[activeTabId] : undefined
     return Boolean(workspace?.tabs.some(tab => tab.id === workspace.activeSideTabId && tab.kind === 'side-chat'))
@@ -457,60 +493,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     cwd: getSessionTerminalCwd(session) ?? '',
     enabled: active && workspaceEnabled,
   })
-
-  useEffect(() => {
-    if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
-
-    let cancelled = false
-    setSessionGitInfo((current) => current?.sessionId === activeTabId ? null : current)
-    // Kept for every session, not only worktree ones: the header names the
-    // branch too. The worktree indicator reads `worktree.enabled` itself.
-    void sessionsApi.getGitInfo(activeTabId)
-      .then((info) => {
-        if (!cancelled) {
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        }
-      })
-      .catch(() => {
-        // Git metadata is supplementary; the session remains usable without it.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeTabId, activeTabType, session?.workDir])
-
-  useEffect(() => {
-    if (
-      !activeTabId ||
-      !isSessionTabState(activeTabId, activeTabType) ||
-      sessionMessageCount === 0
-    ) return
-
-    let cancelled = false
-    const timeout = setTimeout(() => {
-      void sessionsApi.getGitInfo(activeTabId)
-        .then((info) => {
-          if (cancelled) return
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        })
-        .catch(() => {
-          // Keep the last useful snapshot when supplementary Git metadata cannot refresh.
-        })
-    }, chatState === 'idle' ? 0 : 500)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timeout)
-    }
-  }, [
-    activeTabId,
-    activeTabType,
-    chatState,
-    sessionMessageCount,
-    sessionSlashCommandCount,
-    session?.workDir,
-  ])
 
   useEffect(() => {
     if (!activeTabId) return
@@ -580,7 +562,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       : null
   const visibleMessageCount = messages.length > 0 ? messages.length : session?.messageCount ?? 0
   const headerTitle = session?.title || activeTabTitle || t('session.untitled')
-  const currentGitInfo = sessionGitInfo?.sessionId === activeTabId ? sessionGitInfo.info : null
   const worktree = currentGitInfo?.worktree?.enabled ? currentGitInfo.worktree : null
   const worktreePath = worktree?.path || worktree?.plannedPath || null
   const worktreeName = getWorktreeDisplayName(worktree?.slug, worktreePath)
@@ -876,7 +857,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       sidePanel={<>
         {showWorkbench ? (
         <>
-          {isWorkspaceFull ? null : <WorkspaceResizeHandle panelRef={workbenchPanelRef} />}
+          {isWorkspaceFull ? null : <WorkspaceResizeHandle key={activeTabId} panelRef={workbenchPanelRef} active={active} />}
           <aside
             ref={workbenchPanelRef}
             data-testid="workbench-panel"

@@ -53,6 +53,8 @@ export type AppliedAppearance = {
    * rather than defaulting to pure white.
    */
   lightBackground: string
+  /** Optional for caches and renderer reports written before dark preferences were carried. */
+  darkBackground?: string
   followSystem: boolean
 }
 
@@ -81,6 +83,16 @@ export function isAppliedAppearance(value: unknown): value is AppliedAppearance 
     && HEX_COLOR.test(candidate.background)
     && typeof candidate.lightBackground === 'string'
     && HEX_COLOR.test(candidate.lightBackground)
+    && (candidate.darkBackground === undefined
+      || (typeof candidate.darkBackground === 'string' && HEX_COLOR.test(candidate.darkBackground)))
+}
+
+/** Add the dark preference to old caches without dropping their existing fields. */
+function normalizeAppearanceState(state: AppliedAppearance): AppliedAppearance & { darkBackground: string } {
+  return {
+    ...state,
+    darkBackground: state.darkBackground ?? (state.isDark ? state.background : DARK_WINDOW_BACKGROUND),
+  }
 }
 
 export function readAppearanceState(app: App, env: NodeJS.ProcessEnv = process.env): StoredAppearance | null {
@@ -88,7 +100,7 @@ export function readAppearanceState(app: App, env: NodeJS.ProcessEnv = process.e
   if (!existsSync(statePath)) return null
   try {
     const parsed: unknown = JSON.parse(readFileSync(statePath, 'utf-8'))
-    return isAppliedAppearance(parsed) ? parsed : null
+    return isAppliedAppearance(parsed) ? normalizeAppearanceState(parsed) : null
   } catch (error) {
     console.error(`[desktop] failed to read appearance state ${statePath}:`, error)
     return null
@@ -104,7 +116,7 @@ export function writeAppearanceState(
   const statePath = appearanceStatePath(app, env)
   try {
     mkdirSync(path.dirname(statePath), { recursive: true })
-    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`)
+    writeFileSync(statePath, `${JSON.stringify(normalizeAppearanceState(state), null, 2)}\n`)
     failedAppearanceWritePaths.delete(statePath)
   } catch (error) {
     if (!failedAppearanceWritePaths.has(statePath)) {
@@ -127,7 +139,7 @@ export function startupWindowBackground(
 ): string {
   if (!cached) return systemPrefersDark ? DARK_WINDOW_BACKGROUND : LIGHT_WINDOW_BACKGROUND
   if (!cached.followSystem) return cached.background
-  if (systemPrefersDark) return DARK_WINDOW_BACKGROUND
+  if (systemPrefersDark) return normalizeAppearanceState(cached).darkBackground
   // Light half of a follow-the-system setup. `background` is whatever was on
   // screen when the cache was written — dark, if the app was closed at night —
   // so the light theme is carried separately rather than falling back to white.
