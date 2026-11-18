@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { OPENAI_CODEX_STREAM_MARKER_HEADER } from '../../../src/services/openaiAuth/streamPolicy'
 import { createQualityGateSandbox } from '../sandbox'
 
 const STEP_TIMEOUT_MS = 60_000
 const PROMPT = 'OUTPUT_RECOVERY_FIXTURE: finish the deterministic response.'
 const DONE = 'OUTPUT_RECOVERY_COMPLETE'
+const stalledCodexToolEnv = {
+  CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
+  CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: '350',
+  CLAUDE_STREAM_MAX_DURATION_MS: '10000',
+  CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000',
+}
 
 type MessagesRequest = {
   model: string
@@ -15,6 +23,8 @@ type MessagesRequest = {
   tools?: Array<{ name: string }>
 }
 
+type InterruptedTool = 'max_tokens' | 'stall' | 'empty_input_stall'
+
 type RecoveryCase = {
   id: string
   model: string
@@ -23,7 +33,7 @@ type RecoveryCase = {
   cleanReplay: boolean
   mode?: 'enabled' | 'disabled'
   env?: Record<string, string>
-  truncatedTool?: boolean
+  interruptedTool?: InterruptedTool
   fallback?: 'stream-404' | 'stream-error'
   expectedStreamBudgets?: number[]
 }
@@ -54,7 +64,17 @@ const cases: RecoveryCase[] = [
   },
   {
     id: 'truncated-tool-clean-replay', model: 'claude-opus-4-1-20250805', limit: 32_000,
-    expectedBudgets: [8_000, 32_000, 8_000], cleanReplay: true, truncatedTool: true,
+    expectedBudgets: [8_000, 32_000, 8_000], cleanReplay: true, interruptedTool: 'max_tokens',
+  },
+  {
+    id: 'stalled-codex-tool-input-replay', model: 'gpt-6.1-terra', limit: 32_000,
+    expectedBudgets: [8_000, 8_000, 8_000], cleanReplay: true, interruptedTool: 'stall',
+    env: stalledCodexToolEnv,
+  },
+  {
+    id: 'empty-codex-tool-input-stall', model: 'gpt-6.1-terra', limit: 32_000,
+    expectedBudgets: [8_000], cleanReplay: false, interruptedTool: 'empty_input_stall',
+    env: stalledCodexToolEnv,
   },
   {
     id: 'explicit-global-budget', model: 'claude-opus-4-1-20250805', limit: 32_000,
@@ -93,25 +113,50 @@ function responseFor(request: MessagesRequest, text: string, truncated: boolean)
   ].join(''), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' } })
 }
 
-function toolResponseFor(request: MessagesRequest, filePath: string, truncated: boolean) {
-  const input = JSON.stringify({ file_path: filePath,
-    content: truncated ? 'UNCOMMITTED_TRUNCATED_CONTENT'.repeat(512) : 'OUTPUT_RECOVERY_VALID_WRITE' })
-  const stopReason = truncated ? 'max_tokens' : 'tool_use'
-  return new Response([
+function toolResponseFor(request: MessagesRequest, filePath: string, outcome: InterruptedTool | 'complete') {
+  const discarded = outcome !== 'complete'
+  const start = [
     sse('message_start', { type: 'message_start', message: {
       id: 'msg_output_recovery_tool', type: 'message', role: 'assistant', model: request.model,
       content: [], stop_reason: null, stop_sequence: null,
       usage: { input_tokens: 12, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     } }),
     sse('content_block_start', { type: 'content_block_start', index: 0,
-      content_block: { type: 'tool_use', id: truncated ? 'truncated_fixture_write' : 'completed_fixture_write', name: 'Write', input: {} } }),
-    sse('content_block_delta', { type: 'content_block_delta', index: 0,
-      delta: { type: 'input_json_delta', partial_json: truncated ? input.slice(0, -4) : input } }),
+      content_block: { type: 'tool_use', id: discarded ? 'discarded_fixture_write' : 'completed_fixture_write', name: 'Write', input: {} } }),
+  ].join('')
+  const toolDelta = (partial_json: string) => sse('content_block_delta', { type: 'content_block_delta', index: 0,
+    delta: { type: 'input_json_delta', partial_json } })
+  const headers = { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }
+  if (outcome === 'stall' || outcome === 'empty_input_stall') {
+    const partial = toolDelta(JSON.stringify({ file_path: filePath }).slice(0, -1) + ',"content":"')
+    let progressTimer: ReturnType<typeof setTimeout> | undefined
+    return new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder()
+        if (outcome === 'empty_input_stall') {
+          const emptyTool = sse('content_block_start', { type: 'content_block_start', index: 1,
+            content_block: { type: 'tool_use', id: 'empty_fixture_write', name: 'Write', input: {} } })
+          controller.enqueue(encoder.encode(start + emptyTool))
+          // Refresh block 0's watchdog so block 1, which has no JSON, expires first.
+          progressTimer = setTimeout(() => controller.enqueue(encoder.encode(partial)), 100)
+        } else {
+          controller.enqueue(encoder.encode(start + partial + toolDelta('x').repeat(6_199)))
+        }
+      },
+      cancel() { clearTimeout(progressTimer) },
+    }), { headers: { ...headers, [OPENAI_CODEX_STREAM_MARKER_HEADER]: '1' } })
+  }
+  const truncated = outcome === 'max_tokens'
+  const input = JSON.stringify({ file_path: filePath,
+    content: truncated ? 'UNCOMMITTED_TRUNCATED_CONTENT'.repeat(512) : 'OUTPUT_RECOVERY_VALID_WRITE' })
+  return new Response([
+    start,
+    toolDelta(truncated ? input.slice(0, -4) : input),
     sse('content_block_stop', { type: 'content_block_stop', index: 0 }),
-    sse('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null },
+    sse('message_delta', { type: 'message_delta', delta: { stop_reason: truncated ? 'max_tokens' : 'tool_use', stop_sequence: null },
       usage: { output_tokens: truncated ? request.max_tokens : 8 } }),
     sse('message_stop', { type: 'message_stop' }),
-  ].join(''), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' } })
+  ].join(''), { headers })
 }
 
 /** Real CLI request construction and recovery, with only the loopback model scripted. */
@@ -119,6 +164,7 @@ export async function runOutputTokensRecoveryScenario(rootDir: string, artifactD
   mkdirSync(artifactDir, { recursive: true })
   const evidence: Array<Record<string, unknown>> = []
   for (const testCase of cases) {
+    const expectsToolTimeout = testCase.interruptedTool === 'empty_input_stall'
     const sandbox = createQualityGateSandbox({
       label: `output-recovery-${testCase.id}`, seedProviders: false,
       sourceConfigDir: join(artifactDir, 'unused-user-config'),
@@ -132,7 +178,7 @@ export async function runOutputTokensRecoveryScenario(rootDir: string, artifactD
     const requests: MessagesRequest[] = []
     const attempts: Array<{ streaming: boolean; budget: number }> = []
     const outputFile = join(workDir, 'recovered-write.txt')
-    let truncatedWriteExecuted = false
+    let incompleteWriteExecuted = false
     const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       const path = new URL(request.url).pathname
       if (request.method === 'HEAD') return new Response(null, { status: 204 })
@@ -153,9 +199,9 @@ export async function runOutputTokensRecoveryScenario(rootDir: string, artifactD
         return Response.json({ type: 'error', error: { type: 'invalid_request_error',
           message: `max_tokens must be at most ${testCase.limit}; received ${body.max_tokens}` } }, { status: 400 })
       }
-      if (testCase.truncatedTool && requests.length < 3) {
-        if (requests.length === 2) truncatedWriteExecuted = existsSync(outputFile)
-        return toolResponseFor(body, outputFile, requests.length === 1)
+      if (testCase.interruptedTool && requests.length < 3) {
+        if (requests.length === 2) incompleteWriteExecuted = existsSync(outputFile)
+        return toolResponseFor(body, outputFile, requests.length === 1 ? testCase.interruptedTool : 'complete')
       }
       const truncated = requests.length < testCase.expectedBudgets.length
       return responseFor(body, truncated ? `OUTPUT_RECOVERY_PARTIAL_${requests.length}` : DONE, truncated)
@@ -197,27 +243,33 @@ export async function runOutputTokensRecoveryScenario(rootDir: string, artifactD
           { streaming: true, budget: testCase.expectedStreamBudgets?.[index] ?? budget }, { streaming: false, budget },
         ]), `${testCase.id}: the JSON fallback did not preserve the actual output budget`)
       }
-      assert.equal(exitCode, 0, `${testCase.id}: CLI failed: ${stderr}\n${stdout}`)
+      assert.equal(exitCode, expectsToolTimeout ? 1 : 0, `${testCase.id}: unexpected CLI exit: ${stderr}\n${stdout}`)
       const result = stdout.split('\n').flatMap(line => {
         try { const message = JSON.parse(line); return message.type === 'result' ? [message] : [] } catch { return [] }
       })
       assert.equal(result.length, 1, `${testCase.id}: expected one terminal result`)
-      assert.equal(result[0].is_error, false, `${testCase.id}: intermediate truncation ended the session`)
-      assert.ok(result[0].result.includes(DONE), `${testCase.id}: CLI did not finish recovery`)
+      assert.equal(result[0].is_error, expectsToolTimeout, `${testCase.id}: unexpected CLI result state`)
+      if (expectsToolTimeout) {
+        assert.match(result[0].result ?? result[0].errors?.join('\n') ?? '', /Tool input generation exceeded/)
+        assert.ok(!existsSync(outputFile), 'a tool executed despite the incomplete response')
+      } else {
+        assert.ok(result[0].result.includes(DONE), `${testCase.id}: CLI did not finish recovery`)
+      }
       if (testCase.cleanReplay) {
         assert.deepEqual(requests[1]!.messages, requests[0]!.messages, `${testCase.id}: replay appended the truncated response`)
       }
-      if (testCase.truncatedTool) {
-        assert.equal(truncatedWriteExecuted, false, 'truncated tool input executed before its clean replay')
+      if (testCase.interruptedTool && !expectsToolTimeout) {
+        assert.equal(incompleteWriteExecuted, false, 'incomplete tool input executed before its clean replay')
         assert.equal(readFileSync(outputFile, 'utf8'), 'OUTPUT_RECOVERY_VALID_WRITE', 'the completed retry did not execute the real Write tool')
         const lastHistory = JSON.stringify(requests[2]!.messages)
-        assert.ok(!lastHistory.includes('truncated_fixture_write'), 'discarded tool call entered the next request')
+        assert.ok(!lastHistory.includes('discarded_fixture_write'), 'discarded tool call entered the next request')
         const toolResults = requests[2]!.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
-        assert.ok(toolResults.some(block => block.type === 'tool_result' && block.tool_use_id === 'completed_fixture_write' && !block.is_error),
-          'the completed Write result did not return to the model')
+        const writes = toolResults.filter(block => block.type === 'tool_result' && block.tool_use_id === 'completed_fixture_write')
+        assert.equal(writes.length, 1, 'the completed Write result must return to the model once')
+        assert.ok(!writes[0]!.is_error, 'the completed Write returned an error')
       }
       const continuationStart = testCase.cleanReplay ? 2 : 1
-      for (let index = continuationStart; !testCase.truncatedTool && index < requests.length; index++) {
+      for (let index = continuationStart; !testCase.interruptedTool && index < requests.length; index++) {
         const history = JSON.stringify(requests[index]!.messages)
         assert.ok(history.includes(`OUTPUT_RECOVERY_PARTIAL_${index}`), `${testCase.id}: continuation lost the previous response`)
         assert.ok(history.includes('Output token limit hit. Resume directly'), `${testCase.id}: missing continuation instruction`)

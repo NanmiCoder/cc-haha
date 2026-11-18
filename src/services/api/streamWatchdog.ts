@@ -149,6 +149,7 @@ export class StreamWatchdogTimeoutError extends Error {
     readonly reason: StreamWatchdogAbortReason,
     readonly timeoutMs: number,
     readonly streamSnapshot: StreamWatchdogSnapshot,
+    readonly stalledToolInputProgressed = false,
   ) {
     super(buildMessage(reason, timeoutMs, streamSnapshot))
     this.name = 'StreamWatchdogTimeoutError'
@@ -161,8 +162,8 @@ export class StreamWatchdogTimeoutError extends Error {
   }
 
   /**
-   * Only an idle stall is re-sent: max_duration and tool_input_duration
-   * already spent their budget, and server-side tool work cannot be undone.
+   * Default watchdog recovery re-sends idle stalls. Provider-specific
+   * policies may opt into tool-input recovery inside the commit boundary.
    * A completed local tool_use does not block it — the commit buffer holds
    * that block until the response completes, so the tool has not run.
    */
@@ -304,8 +305,9 @@ class StreamWatchdogState {
   createTimeoutError(
     reason: StreamWatchdogAbortReason,
     timeoutMs: number,
+    stalledToolInputProgressed?: boolean,
   ): StreamWatchdogTimeoutError {
-    return new StreamWatchdogTimeoutError(reason, timeoutMs, this.snapshot())
+    return new StreamWatchdogTimeoutError(reason, timeoutMs, this.snapshot(), stalledToolInputProgressed)
   }
 }
 

@@ -776,6 +776,25 @@ describe('getStreamRetryKind', () => {
     expect(getStreamRetryKind({ ...stalled, error: disconnect })).toBeNull()
   })
 
+  test('only replays a Codex tool-input timeout after JSON progress and before side effects', () => {
+    const state = createStreamWatchdogState()
+    state.recordEvent({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use' } })
+    const stalled = { ...replayable, streamIdleAborted: true, toolInputTimeoutRetryAllowed: true }
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('tool_input_duration', 120_000) })).toBeNull()
+
+    state.recordEvent({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{' } })
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('tool_input_duration', 120_000) })).toBeNull()
+    const error = state.createTimeoutError('tool_input_duration', 120_000, true)
+    expect(getStreamRetryKind({ ...stalled, error })).toBe('tool_input_watchdog')
+    expect(getStreamRetryKind({ ...stalled, error, toolInputTimeoutRetryAllowed: false })).toBeNull()
+    expect(getStreamRetryKind({ ...stalled, error, canReplay: false })).toBeNull()
+    expect(getStreamRetryKind({ ...stalled, error, signalAborted: true })).toBeNull()
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('max_duration', 600_000) })).toBeNull()
+
+    state.recordEvent({ type: 'content_block_start', index: 1, content_block: { type: 'server_tool_use' } })
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('tool_input_duration', 120_000, true) })).toBeNull()
+  })
+
   test('never fights a user abort or a policy rejection', () => {
     expect(getStreamRetryKind({ ...replayable, signalAborted: true })).toBeNull()
     const policy = Object.assign(new Error('Disconnected'), {
@@ -811,6 +830,7 @@ describe('getMaxStreamRetries', () => {
       expect(getMaxStreamRetries('transport')).toBe(10)
       expect(getMaxStreamRetries('transient')).toBe(10)
       expect(getMaxStreamRetries('watchdog')).toBe(2)
+      expect(getMaxStreamRetries('tool_input_watchdog')).toBe(1)
     })
     withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: '4' }, () => {
       expect(getMaxStreamRetries('transport')).toBe(4)
@@ -825,6 +845,7 @@ describe('getMaxStreamRetries', () => {
     withEnv({ [TRANSIENT_ENV]: '0', [API_ENV]: undefined }, () => {
       expect(getMaxStreamRetries('transport')).toBe(0)
       expect(getMaxStreamRetries('transient')).toBe(0)
+      expect(getMaxStreamRetries('tool_input_watchdog')).toBe(0)
     })
     withEnv({ [TRANSIENT_ENV]: '3', [API_ENV]: '1' }, () => {
       expect(getMaxStreamRetries('transport')).toBe(1)

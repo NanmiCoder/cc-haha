@@ -2270,6 +2270,11 @@ async function* queryModel(
         streamResponse as Response | undefined,
         configuredFirstTokenTimeoutMs,
       );
+    // The watchdog releases the response before retry classification runs.
+    const canReplayCodexResponse = canRetryOpenAICodexStreamWithBufferedContent(
+      streamResponse as Response | undefined,
+      false,
+    );
     // The idle watchdog waits the first-token budget until the first chunk
     // arrives, then switches to the shorter mid-stream idle budget (#826).
     let currentStreamIdleTimeoutMs = STREAM_FIRST_TOKEN_TIMEOUT_MS;
@@ -2306,13 +2311,19 @@ async function* queryModel(
     const toolInputDurationGuard = new StreamToolInputDurationGuard({
       enabled: streamWatchdogEnabled,
       timeoutMs: STREAM_TOOL_INPUT_MAX_DURATION_MS,
-      onTimeout: () => {
+      onTimeout: (index) => {
+        if (streamIdleAborted) return;
+        toolInputDurationGuard.clear();
         streamIdleAborted = true;
         streamAbortReason = "tool_input_duration";
         streamWatchdogFiredAt = performance.now();
+        const stalledTool = contentBlocks[index];
         streamWatchdogTimeoutError = streamWatchdogState.createTimeoutError(
           "tool_input_duration",
           STREAM_TOOL_INPUT_MAX_DURATION_MS,
+          stalledTool?.type === "tool_use" &&
+            typeof stalledTool.input === "string" &&
+            stalledTool.input.length > 0,
         );
         releaseStreamResources();
       },
@@ -2336,9 +2347,10 @@ async function* queryModel(
       // with, even if the phase (first-token → idle) flips between arm and fire.
       // While a tool_use input is open, the upstream emits its JSON one complete
       // key/value at a time and only pings in between (the SDK drops pings), so
-      // a long `content` value is legitimately silent. The tool-input guard owns
-      // that gap; the idle budget must not cut it shorter (#1536).
-      const idleMs = toolInputDurationGuard.hasActiveInput()
+      // a long `content` value is legitimately silent (#1536). Keep the idle
+      // warning while the per-tool timers govern when that silence aborts.
+      const toolInputActive = toolInputDurationGuard.hasActiveInput();
+      const idleMs = toolInputActive
         ? Math.max(currentStreamIdleTimeoutMs, STREAM_TOOL_INPUT_MAX_DURATION_MS)
         : currentStreamIdleTimeoutMs;
       const warningMs = idleMs / 2;
@@ -2361,6 +2373,7 @@ async function* queryModel(
         warningMs,
         warningMs,
       );
+      if (toolInputActive) return;
       streamIdleTimer = setTimeout(() => {
         streamIdleAborted = true;
         streamAbortReason = "idle";
@@ -3094,12 +3107,8 @@ async function* queryModel(
         nonStreamingFallbackAvailable:
           !disableFallback &&
           !assistantCommitBuffer.hasCrossedSideEffectBoundary(),
-        transientRetryAllowed:
-          newMessages.length === 0 ||
-          canRetryOpenAICodexStreamWithBufferedContent(
-            streamResponse as Response | undefined,
-            !canReplay,
-          ),
+        transientRetryAllowed: newMessages.length === 0 || canReplayCodexResponse,
+        toolInputTimeoutRetryAllowed: canReplayCodexResponse,
       });
 
       // Never replay a response through the non-streaming fallback after it

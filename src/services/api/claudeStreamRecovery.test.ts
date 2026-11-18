@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { openaiChatStreamToAnthropic } from '../../server/proxy/streaming/openaiChatStreamToAnthropic.js'
+import { openaiResponsesStreamToAnthropic } from '../../server/proxy/streaming/openaiResponsesStreamToAnthropic.js'
 import type { AssistantMessage } from '../../types/message.js'
+import { OPENAI_CODEX_STREAM_MARKER_HEADER } from '../openaiAuth/streamPolicy.js'
 
 // Mid-stream failures through the real request path: SDK SSE parsing, the
 // provider proxy's OpenAI Chat converter, queryModel's retry classification
@@ -304,6 +306,82 @@ test('an idle stall after a completed tool block is re-sent on the watchdog budg
   const toolIds = replies.flatMap(message => message.message.content)
     .flatMap(block => block.type === 'tool_use' ? [block.id] : [])
   expect(toolIds).toEqual(['toolu_second'])
+}, 15_000)
+
+const toolInputTimeoutEnv = {
+  CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS: '1000',
+  CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: '80',
+}
+
+function stalledCodexWrite(addEmptyTool = false) {
+  const events: Array<Record<string, unknown>> = [
+    { type: 'response.created', response: { id: 'resp_stall', model: 'fixture-model' } },
+    { type: 'response.output_item.added', output_index: 0,
+      item: { type: 'function_call', id: 'item_write', call_id: 'call_stalled', name: 'Write', arguments: '' } },
+  ]
+  const progress = { type: 'response.function_call_arguments.delta', item_id: 'item_write', output_index: 0, delta: '{"content":"partial' }
+  let progressTimer: ReturnType<typeof setTimeout> | undefined
+  if (addEmptyTool) {
+    events.push({ type: 'response.output_item.added', output_index: 1,
+      item: { type: 'function_call', id: 'item_empty', call_id: 'call_empty', name: 'Write', arguments: '' } })
+  } else {
+    events.push(progress)
+  }
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse(events)))
+      if (addEmptyTool) {
+        // Advancing the first tool after both starts leaves the empty tool's timer due first.
+        progressTimer = setTimeout(() => controller.enqueue(encoder.encode(sse([progress]))), 100)
+      }
+    },
+    cancel() { clearTimeout(progressTimer) },
+  })
+  return new Response(openaiResponsesStreamToAnthropic(upstream, 'fixture-model', { openAICodexOAuth: true }), {
+    headers: { 'content-type': 'text/event-stream', [OPENAI_CODEX_STREAM_MARKER_HEADER]: '1' },
+  })
+}
+
+test('a Codex tool input stall re-sends the request once without releasing the first tool', async () => {
+  const { out, replies, errors } = await run([
+    stalledCodexWrite,
+    anthropicStream([messageStart, ...toolBlock('toolu_recovered'), ...terminal('tool_use')]),
+  ], toolInputTimeoutEnv)
+
+  expect(requests.map(request => request.stream)).toEqual([true, true])
+  expectRetriedOnce(out)
+  expect(errors).toHaveLength(0)
+  expect(replies.flatMap(reply => reply.message.content).map(block => block.type === 'tool_use' && block.id))
+    .toEqual(['toolu_recovered'])
+}, 15_000)
+
+test.each(['80', '1000'])('a repeated Codex tool input stall surfaces the original timeout after one retry with %sms stream idle timeout', async idleTimeout => {
+  const { out, replies, errors } = await run([
+    stalledCodexWrite, stalledCodexWrite, recovered,
+  ], {
+    ...toolInputTimeoutEnv,
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS: idleTimeout,
+    CLAUDE_CODE_MAX_RETRIES: '5',
+  })
+
+  expect(requests).toHaveLength(2)
+  expectRetriedOnce(out)
+  expect(replies).toHaveLength(0)
+  expect(errors).toHaveLength(1)
+  expect(contentOf(errors)).toContain('Tool input generation exceeded')
+}, 15_000)
+
+test('a stalled Codex tool with no JSON does not borrow progress from another open tool', async () => {
+  const { out, replies, errors } = await run([
+    () => stalledCodexWrite(true), recovered,
+  ], { ...toolInputTimeoutEnv, CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: '350' })
+
+  expect(requests.map(request => request.stream)).toEqual([true])
+  expect(out.some(message => message.subtype === 'streaming_fallback')).toBe(false)
+  expect(replies).toHaveLength(0)
+  expect(errors).toHaveLength(1)
+  expect(contentOf(errors)).toContain('Tool input generation exceeded')
 }, 15_000)
 
 test('retries are bounded, then the original error surfaces with the last attempt\'s text once', async () => {
