@@ -1,6 +1,10 @@
 import { getDesktopHost } from '../lib/desktopHost'
 import { createDiagnosticRateLimiter } from '../lib/diagnosticRateLimit'
 import { isPublicAccessRuntime } from '../lib/publicAccessRuntime'
+import {
+  getEnabledRemoteWorkspace,
+  normalizeRemoteWorkspaceToken,
+} from '../lib/remoteWorkspace'
 
 const ENV_BASE_URL =
   typeof import.meta !== 'undefined' &&
@@ -356,6 +360,31 @@ async function readJsonBody<T>(res: Response): Promise<{ value: T; readChars: nu
 async function recoverDesktopServerUrl(): Promise<boolean> {
   const host = getDesktopHost()
   if (!host.isDesktop) return false
+
+  // A saved remote workspace recovers to itself. The failure that triggered
+  // recovery was the tunnel or the remote server blipping, not the choice of
+  // machine — falling through to the Electron-local sidecar here would
+  // silently move the whole workspace back local mid-session, and the user
+  // watches the switch "flash back" with no error anywhere.
+  const profile = getEnabledRemoteWorkspace()
+  if (profile) {
+    const remoteRecovery = (async () => {
+      const response = await fetch(`${profile.url}/health`, { cache: 'no-store' })
+      const body = (await response.json().catch(() => null)) as { status?: string } | null
+      if (!response.ok || body?.status !== 'ok') {
+        throw new Error(`remote healthcheck returned ${response.status}`)
+      }
+      setBaseUrl(profile.url)
+      setAuthToken(normalizeRemoteWorkspaceToken(profile.token))
+      return profile.url
+    })()
+    const trackedRecovery = remoteRecovery.finally(() => {
+      if (desktopServerRecovery === trackedRecovery) desktopServerRecovery = null
+    })
+    desktopServerRecovery = trackedRecovery
+    await trackedRecovery
+    return true
+  }
 
   if (!desktopServerRecovery) {
     const recovery = host.runtime.getServerUrl().then((serverUrl) => {

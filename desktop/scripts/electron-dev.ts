@@ -30,6 +30,12 @@ export function createElectronDevEnv(env: NodeJS.ProcessEnv = process.env) {
     ...env,
     ELECTRON_RENDERER_URL: rendererUrl,
     CC_HAHA_TRUSTED_RENDERER_ORIGIN: new URL(rendererUrl).origin,
+    // The dev sidecar runs without a process credential: the vite renderer's
+    // origin is then classified as a locally trusted loopback page, the same
+    // way the packaged `file://` renderer always has been. With a credential
+    // configured, every request the dev renderer makes is demoted to an H5
+    // browser page and the whole UI is CORS-blocked.
+    CC_HAHA_DEV_NO_LOCAL_TOKEN: '1',
     NO_PROXY: noProxy,
     no_proxy: noProxy,
   }
