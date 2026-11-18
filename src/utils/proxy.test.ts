@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   getAxiosProxyOptions,
   getProxyFetchOptions,
+  getWebSocketProxyUrl,
   shouldBypassProxy,
 } from './proxy.js'
 
@@ -77,6 +78,48 @@ describe('proxy environment handling', () => {
     expect(getProxyFetchOptions({
       forAnthropicAPI: true,
       targetUrl: 'https://api.example.com',
+    }).proxy).toBe('http://127.0.0.1:1181')
+  })
+
+  test('bypasses proxy for padded and list-embedded wildcard NO_PROXY entries', () => {
+    delete process.env.http_proxy
+    delete process.env.https_proxy
+    delete process.env.no_proxy
+    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
+
+    for (const wildcardValue of [' * ', 'localhost,*,.corp.local', 'localhost * .corp.local']) {
+      process.env.NO_PROXY = wildcardValue
+      expect(shouldBypassProxy('https://api.example.com/v1/messages')).toBe(true)
+      expect(getWebSocketProxyUrl('wss://api.example.com/realtime')).toBeUndefined()
+      expect(getProxyFetchOptions({
+        forAnthropicAPI: true,
+        targetUrl: 'https://api.example.com/v1/messages',
+      }).proxy).toBeUndefined()
+    }
+  })
+
+  test('matches *.corp.local against subdomains without bypassing apex or unrelated hosts', () => {
+    delete process.env.http_proxy
+    delete process.env.https_proxy
+    delete process.env.no_proxy
+    process.env.HTTP_PROXY = 'http://127.0.0.1:1181'
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:1181'
+    process.env.NO_PROXY = '*.corp.local'
+
+    expect(shouldBypassProxy('https://api.corp.local/v1/messages')).toBe(true)
+    expect(shouldBypassProxy('https://nested.api.corp.local/v1/messages')).toBe(true)
+    expect(shouldBypassProxy('https://corp.local/v1/messages')).toBe(false)
+    expect(shouldBypassProxy('https://notcorp.local/v1/messages')).toBe(false)
+    expect(shouldBypassProxy('https://api.example.com/v1/messages')).toBe(false)
+
+    expect(getProxyFetchOptions({
+      forAnthropicAPI: true,
+      targetUrl: 'https://api.corp.local/v1/messages',
+    }).proxy).toBeUndefined()
+    expect(getProxyFetchOptions({
+      forAnthropicAPI: true,
+      targetUrl: 'https://api.example.com/v1/messages',
     }).proxy).toBe('http://127.0.0.1:1181')
   })
 

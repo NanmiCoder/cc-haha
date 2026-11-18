@@ -221,18 +221,20 @@ export class SettingsService {
     filePath: string,
     task: () => Promise<T>,
   ): Promise<T> {
-    const previousWrite = SettingsService.writeLocks.get(filePath) ?? Promise.resolve()
+    const lockKey = path.resolve(filePath)
+    const previousWrite = SettingsService.writeLocks.get(lockKey) ?? Promise.resolve()
     const nextWrite = previousWrite
       .catch(() => {})
       .then(task)
+    const trackedWrite = nextWrite.then(() => {}, () => {})
 
-    SettingsService.writeLocks.set(filePath, nextWrite)
+    SettingsService.writeLocks.set(lockKey, trackedWrite)
 
     try {
       return await nextWrite
     } finally {
-      if (SettingsService.writeLocks.get(filePath) === nextWrite) {
-        SettingsService.writeLocks.delete(filePath)
+      if (SettingsService.writeLocks.get(lockKey) === trackedWrite) {
+        SettingsService.writeLocks.delete(lockKey)
       }
     }
   }
@@ -422,9 +424,16 @@ export class SettingsService {
    * preserving unrelated user env keys. The provider picker writes all aliases
    * as one locked update so two settings actions cannot lose each other's env.
    */
-  async updateOfficialModelMapping(models: ModelMapping): Promise<void> {
+  async updateOfficialModelMapping(
+    modelsOrResolver: ModelMapping | (() => Promise<ModelMapping | null> | ModelMapping | null),
+  ): Promise<void> {
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {
+      const models = typeof modelsOrResolver === 'function'
+        ? await modelsOrResolver()
+        : modelsOrResolver
+      if (!models) return
+
       const current = await this.readJsonFile(filePath)
       const env = {
         ...(normalizeJsonObject(current.env) as Record<string, string> | undefined),

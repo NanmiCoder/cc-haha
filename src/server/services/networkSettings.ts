@@ -170,6 +170,9 @@ export function mergeLoopbackNoProxy(existing: string | undefined): string {
     .split(/[,\s]+/)
     .map(entry => entry.trim())
     .filter(Boolean)
+  // A wildcard already includes loopback. Keep it standalone so child
+  // runtimes and proxy clients retain its bypass-all meaning.
+  if (entries.includes('*')) return '*'
   const lowerEntries = new Set(entries.map(entry => entry.toLowerCase()))
 
   for (const entry of LOOPBACK_NO_PROXY_ENTRIES) {
