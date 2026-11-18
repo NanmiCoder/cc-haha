@@ -69,6 +69,66 @@ test('concurrent edits merge different fields and keep the active runtime settin
   })
 })
 
+test('out-of-order active provider settings syncs converge to the latest persisted index state', async () => {
+  const firstClient = new ProviderService()
+  const secondClient = new ProviderService()
+  const provider = await firstClient.addProvider(input('active'))
+  await firstClient.activateProvider(provider.id)
+  await firstClient.updateManagedSettings({
+    env: {
+      ...((await firstClient.getManagedSettings()).env as Record<string, string>),
+      CLAUDE_CODE_SUBAGENT_MODEL: 'fixture-subagent',
+    },
+  }, provider.id)
+
+  const internals = firstClient as unknown as {
+    syncToSettings(target: unknown): Promise<void>
+  }
+  const originalSync = internals.syncToSettings.bind(firstClient)
+  let enteredFirstSync!: () => void
+  let releaseFirstSync!: () => void
+  const firstSyncPaused = new Promise<void>(resolve => { enteredFirstSync = resolve })
+  const firstSyncBarrier = new Promise<void>(resolve => { releaseFirstSync = resolve })
+  const syncSpy = spyOn(internals, 'syncToSettings').mockImplementation(async (target) => {
+    enteredFirstSync()
+    await firstSyncBarrier
+    await originalSync(target)
+  })
+
+  const firstUpdate = firstClient.updateProvider(provider.id, {
+    apiKey: 'fake-stale-key',
+    baseUrl: 'https://updated.fixture.invalid',
+  })
+  await Promise.race([firstSyncPaused, firstUpdate])
+
+  try {
+    await secondClient.updateProvider(provider.id, {
+      apiKey: 'fake-final-key',
+      models: { ...provider.models, main: 'fixture-final-main' },
+    })
+  } finally {
+    releaseFirstSync()
+    await firstUpdate
+    syncSpy.mockRestore()
+  }
+
+  const persisted = await secondClient.getProvider(provider.id)
+  expect(persisted).toMatchObject({
+    apiKey: 'fake-final-key',
+    baseUrl: 'https://updated.fixture.invalid',
+    models: { ...provider.models, main: 'fixture-final-main' },
+  })
+  expect(await secondClient.getManagedSettings()).toMatchObject({
+    providerEnvOwner: provider.id,
+    env: {
+      ANTHROPIC_AUTH_TOKEN: persisted.apiKey,
+      ANTHROPIC_BASE_URL: persisted.baseUrl,
+      ANTHROPIC_MODEL: persisted.models.main,
+      CLAUDE_CODE_SUBAGENT_MODEL: 'fixture-subagent',
+    },
+  })
+})
+
 test('a deletion queued after activation cannot delete or resurrect the active provider', async () => {
   const service = new ProviderService()
   const provider = await service.addProvider(input('active'))

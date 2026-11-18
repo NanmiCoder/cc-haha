@@ -318,6 +318,12 @@ export class ProviderService {
 
   async getProvider(id: string): Promise<SavedProvider> {
     const index = await this.readIndex()
+    const provider = this.resolveProviderFromIndex(index, id)
+    if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
+    return provider
+  }
+
+  private resolveProviderFromIndex(index: ProvidersIndex, id: string): SavedProvider | undefined {
     if (isOpenAIOfficialProviderId(id)) {
       return this.resolveOpenAIOfficialProvider(index)
     }
@@ -333,10 +339,7 @@ export class ProviderService {
         models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
       }
     }
-
-    const provider = index.providers.find((p) => p.id === id)
-    if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
-    return provider
+    return index.providers.find((item) => item.id === id)
   }
 
   /** The built-in ChatGPT provider as saved: the user's model mapping and window overrides over its defaults. */
@@ -624,19 +627,7 @@ export class ProviderService {
   async activateProvider(id: string): Promise<void> {
     const provider = await this.withIndexMutation(async () => {
       const index = await this.readIndex()
-      const provider = isOpenAIOfficialProviderId(id)
-        ? this.resolveOpenAIOfficialProvider(index)
-        : isGrokOfficialProviderId(id)
-          ? {
-              ...GROK_OFFICIAL_PROVIDER,
-              models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
-            }
-          : isDeepSeekAccountProviderId(id)
-            ? {
-                ...DEEPSEEK_ACCOUNT_PROVIDER,
-                models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
-              }
-            : index.providers.find((p) => p.id === id)
+      const provider = this.resolveProviderFromIndex(index, id)
       if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
 
       index.activeId = id
@@ -755,15 +746,17 @@ export class ProviderService {
 
   private async syncToSettings(provider: SavedProvider): Promise<void> {
     await this.managedSettingsService.updateSettings(async (settings) => {
-      if ((await this.readIndex()).activeId !== provider.id) return { settings, result: undefined }
+      const index = await this.readIndex()
+      if (index.activeId !== provider.id) return { settings, result: undefined }
+      const currentProvider = this.resolveProviderFromIndex(index, provider.id) ?? provider
       const existingEnv = (settings.env as Record<string, string>) || {}
       const cleanedEnv = { ...existingEnv }
 
       for (const key of getManagedEnvKeys()) {
         delete cleanedEnv[key]
       }
-      const providerEnv = this.buildManagedEnv(provider)
-      if (settings.providerEnvOwner === provider.id &&
+      const providerEnv = this.buildManagedEnv(currentProvider)
+      if (settings.providerEnvOwner === currentProvider.id &&
         typeof existingEnv.CLAUDE_CODE_SUBAGENT_MODEL === 'string') {
         providerEnv.CLAUDE_CODE_SUBAGENT_MODEL = existingEnv.CLAUDE_CODE_SUBAGENT_MODEL
       }
@@ -774,7 +767,7 @@ export class ProviderService {
       return {
         settings: {
           ...settings,
-          providerEnvOwner: provider.id,
+          providerEnvOwner: currentProvider.id,
           env: {
             ...cleanedEnv,
             ...providerEnv,
