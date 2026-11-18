@@ -3022,6 +3022,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.general.preventSleepEnabled': 'Prevent system sleep while running tasks',
   'settings.general.preventSleepDescription': 'Keep your computer awake while cc-haha runs tasks or waits for approval. The display can still turn off. Normal sleep settings resume when tasks finish or the app quits.',
   'settings.general.preventSleepSaveFailed': 'Could not save the prevent-sleep setting. Please try again.',
+  'notifications.badgeDescription': 'Conversations with pending requests or unread replies ({count})',
   'settings.general.notificationsDescription': 'Use native OS notifications for permission prompts, agent replies, and scheduled task results.',
   'settings.general.notificationsEnabled': 'Enable system notifications',
   'settings.general.notificationsHintOn': 'When enabled, the app will request notification permission and use the OS notification center.',

@@ -25,6 +25,7 @@ import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
+import { createUnreadCompletion, recoveredUnreadCompletion, type UnreadCompletion } from '../lib/unreadCompletion'
 import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { formatBytes } from '../lib/formatBytes'
@@ -445,6 +446,9 @@ type ChatStore = {
   /** Test-only: register fixture rows as durable so eviction can exercise them. */
   markHistoryRowsDurable: (sessionId: string, rows: UIMessage[]) => void
   sessions: Record<string, PerSessionState>
+  /** Kept independently of transcripts so releasing a background socket keeps its unread reply. */
+  unreadCompletions: ReadonlyMap<string, UnreadCompletion>
+  markSessionCompletionRead: (sessionId: string, expected?: UnreadCompletion) => void
   /** sessionId → toolUseId → draft. In-memory, like `composerDraft`. */
   askUserQuestionDrafts: Record<string, Record<string, AskUserQuestionDraft>>
 
@@ -2692,6 +2696,7 @@ type HistoryLoadInFlight = {
 }
 
 type TerminalReconnectHistoryBoundary = {
+  pendingCompletionMessages?: readonly UIMessage[]
   lifecycleGeneration: number
   preHydrationGap: boolean
   activated: boolean
@@ -2717,6 +2722,12 @@ type TerminalReconnectHistoryBoundary = {
 }
 
 const historyLoadsInFlight = new Map<string, HistoryLoadInFlight>()
+/** A closed tab still needs the terminal REST result to learn what finished during its socket gap. */
+export function isRecoveringSessionCompletion(sessionId: string): boolean {
+  return !!terminalReconnectHistoryBoundaries.get(sessionId)?.pendingCompletionMessages && (
+    useChatStore.getState().sessions[sessionId]?.awaitingReconnectSync === true || historyLoadsInFlight.has(sessionId)
+  )
+}
 const historyRecoveryControllers = new Map<string, AbortController>()
 const historyPageControllers = new Map<string, AbortController>()
 // Rows produced by the most recent durable history load, per session. Idle-tab
@@ -2924,6 +2935,10 @@ function ensureTerminalReconnectHistoryBoundary(
 
   const taskStore = useCLITaskStore.getState()
   const boundary: TerminalReconnectHistoryBoundary = {
+    // The permission snapshot can already say idle by the time sync_state
+    // arrives. Capture the active turn at disconnect, while it is still known.
+    pendingCompletionMessages: options?.activated === false && session.chatState !== 'idle' &&
+      !session.awaitingStopIdle && !isScheduledTaskTurn(session) ? session.messages : undefined,
     lifecycleGeneration,
     preHydrationGap: options?.preHydrationGap ?? false,
     activated: options?.activated ?? true,
@@ -3256,6 +3271,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   applyBoundedUpdate: set,
   markHistoryRowsDurable,
   sessions: {},
+  unreadCompletions: new Map(),
+  markSessionCompletionRead: (sessionId, expected) => {
+    const current = get().unreadCompletions
+    if (!current.has(sessionId) || (expected && current.get(sessionId) !== expected)) return
+    const unreadCompletions = new Map(current)
+    unreadCompletions.delete(sessionId)
+    set({ unreadCompletions })
+  },
   askUserQuestionDrafts: {},
 
   setAskUserQuestionDraft: (sessionId, toolUseId, draft) => {
@@ -3402,6 +3425,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const taskStoreAtReconnect = useCLITaskStore.getState()
           terminalReconnectHistoryBoundaries.set(sessionId, {
             ...pendingTerminalBoundary,
+            pendingCompletionMessages: currentSession.chatState !== 'idle' && !currentSession.awaitingStopIdle &&
+              !isScheduledTaskTurn(currentSession) ? currentSession.messages : pendingTerminalBoundary.pendingCompletionMessages,
             lifecycleGeneration: nextLifecycleGeneration,
             latestTerminalBoundaryCaptured: false,
             // Foreground transcript rows produced since an earlier failed
@@ -3866,6 +3891,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   stopGeneration: (sessionId) => {
+    const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+    if (boundary) delete boundary.pendingCompletionMessages
     wsManager.send(sessionId, { type: 'stop_generation' })
     if (
       !isSideChatSession(sessionId) &&
@@ -4073,6 +4100,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         )
         durableHistoryRows.set(sessionId, new WeakSet(uiMessages))
         let historyApplied = false
+        let recoveredCompletion: UnreadCompletion | undefined
         set((state) => {
           if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
           const session = state.sessions[sessionId]
@@ -4120,6 +4148,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? { input_tokens: 0, output_tokens: 0 }
             : tokenUsage
           historyApplied = true
+          const before = terminalReconnectBoundary?.pendingCompletionMessages
+          if (before && discardBaselineMessages && session.chatState === 'idle') {
+            const previousIds = new Set(before.map(row => row.id))
+            const hasNewTurn = session.messages.some(row => !previousIds.has(row.id) &&
+              (row.type === 'user_text' || row.type === 'error' || (row.type === 'system' && row.generationStopped)))
+            if (!hasNewTurn) recoveredCompletion = recoveredUnreadCompletion(before, uiMessages)
+          }
           if (session.messages.length > 0) {
             return { sessions: updateSessionIn(state.sessions, sessionId, (s) => {
               const currentBackgroundAgentTasks = reconcileBackgroundActivityAtApply &&
@@ -4331,6 +4366,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }) }
         })
         if (!historyApplied) return
+        if (recoveredCompletion) {
+          const unreadCompletions = new Map(get().unreadCompletions).set(sessionId, recoveredCompletion)
+          set({ unreadCompletions })
+        }
         if (!historyComplete && page) void recoverSessionHistory(sessionId, page.sourceVersion)
         if (
           terminalReconnectBoundary &&
@@ -4922,6 +4961,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   clearMessages: (sessionId) => {
+    get().markSessionCompletionRead(sessionId)
     advanceHistoryLifecycle(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
@@ -5090,6 +5130,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
 
         if (msg.turnState === 'running') {
+          const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+          if (boundary) delete boundary.pendingCompletionMessages
           // Raw deltas are not replayable across a socket gap. Discard the
           // uncommitted attempt instead of appending new deltas (or a missed
           // stream_retry attempt) to stale text/tool JSON. Persisted completed
@@ -5938,30 +5980,39 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         const appendedCompletionMessage = completionMessages !== session.messages
         const finalMessages = markPendingToolUseMessagesStopped(completionMessages)
-        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
-        if (session.elapsedTimer) clearInterval(session.elapsedTimer)
-        update((current) => ({
-          messages: finalMessages,
-          scheduledTaskTurn: false,
-          tokenUsage: msg.usage,
-          chatState: 'idle',
-          awaitingStopIdle: false,
-          activeThinkingId: null,
-          pendingPermission: null,
-          pendingPermissions: {},
-          pendingComputerUsePermission: null,
-          pendingComputerUsePermissions: {},
-          elapsedTimer: null,
-          apiRetry: null,
-          streamingFallback: null,
-          replaceHistoryOnCompletion: false,
-          backgroundContinueNoticeId: undefined,
-          historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
-        }))
-        useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
-        const notification = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
+        const completedReply = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
+          ? completionMessages[findStreamMergeTargetIndex(completionMessages)]
+          : undefined
+        const marker = completedReply?.type === 'assistant_text' ? createUnreadCompletion(completionMessages, completedReply) : undefined
+        const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+        if (marker && boundary) delete boundary.pendingCompletionMessages
+        const notification = marker
           ? buildAgentCompletionNotification(sessionId, finalMessages, text)
           : null
+        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
+        if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        set(state => ({
+          unreadCompletions: marker ? new Map(state.unreadCompletions).set(sessionId, marker) : state.unreadCompletions,
+          sessions: updateSessionIn(state.sessions, sessionId, current => ({
+            messages: finalMessages,
+            scheduledTaskTurn: false,
+            tokenUsage: msg.usage,
+            chatState: 'idle',
+            awaitingStopIdle: false,
+            activeThinkingId: null,
+            pendingPermission: null,
+            pendingPermissions: {},
+            pendingComputerUsePermission: null,
+            pendingComputerUsePermissions: {},
+            elapsedTimer: null,
+            apiRetry: null,
+            streamingFallback: null,
+            replaceHistoryOnCompletion: false,
+            backgroundContinueNoticeId: undefined,
+            historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
+          })),
+        }))
+        useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
         if (notification) {
           void notifyDesktop({
             dedupeKey: notification.dedupeKey,
@@ -6207,6 +6258,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             })
         }
         if (msg.subtype === 'session_cleared') {
+          get().markSessionCompletionRead(sessionId)
           pendingOwnedTaskEvents.delete(sessionId)
           advanceHistoryLifecycle(sessionId)
           advanceSlashCommandGeneration(sessionId)

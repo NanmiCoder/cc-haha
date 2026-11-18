@@ -3025,6 +3025,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.general.preventSleepEnabled': '작업 실행 중 시스템 절전 모드 방지',
   'settings.general.preventSleepDescription': 'cc-haha가 작업을 실행하거나 승인을 기다리는 동안 컴퓨터를 깨어 있게 유지합니다. 화면은 자동으로 꺼질 수 있습니다. 작업이 끝나거나 앱을 종료하면 일반 절전 설정으로 돌아갑니다.',
   'settings.general.preventSleepSaveFailed': '절전 방지 설정을 저장하지 못했습니다. 다시 시도하세요.',
+  'notifications.badgeDescription': '대기 중인 요청이나 읽지 않은 답변이 있는 대화 {count}개',
   'settings.general.notificationsDescription': '권한 확인, 에이전트 응답, 예약 작업 결과에 OS 기본 알림을 사용합니다.',
   'settings.general.notificationsEnabled': '시스템 알림 사용',
   'settings.general.notificationsHintOn': '사용하면 앱이 알림 권한을 요청하고 OS 알림 센터를 사용합니다.',

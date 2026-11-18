@@ -1,4 +1,5 @@
 import { getDisclosure } from '@/lib/disclosureMemory'
+import { resolveUnreadCompletion } from '@/lib/unreadCompletion'
 import { ScheduledTaskCard } from '@/components/tasks/ScheduledTaskCard'
 import { ScheduledTaskTrigger } from '@/components/tasks/ScheduledTaskTrigger'
 import { parseScheduledTaskResult } from '@/lib/scheduledTask'
@@ -1565,6 +1566,7 @@ function MemoryEventCard({ message }: { message: MemoryEvent }) {
 
 type MessageListProps = {
   sessionId?: string | null
+  visible?: boolean
   compact?: boolean
   mobileLayout?: boolean
   /**
@@ -2403,6 +2405,7 @@ const MeasuredRenderItem = memo(function MeasuredRenderItem({
 
 export function MessageList({
   sessionId,
+  visible = true,
   compact = false,
   mobileLayout = false,
   decisionsInComposer = false,
@@ -2419,6 +2422,9 @@ export function MessageList({
   )
   const sessionState = useChatStore((s) =>
     resolvedSessionId ? s.sessions[resolvedSessionId] : undefined,
+  )
+  const unreadCompletion = useChatStore((s) =>
+    resolvedSessionId ? s.unreadCompletions.get(resolvedSessionId) : undefined,
   )
   const branchSession = useSessionStore((s) => s.branchSession)
   const reloadHistory = useChatStore((s) => s.reloadHistory)
@@ -3208,6 +3214,43 @@ export function MessageList({
     ),
     [measuredItemsVersion, renderItemKeys, renderItemMetrics, renderItems, scrollAnchor, virtualItemHeights, virtualViewport],
   )
+
+  const unreadReplyId = useMemo(
+    () => visible && unreadCompletion ? resolveUnreadCompletion(messages, unreadCompletion)?.id : undefined,
+    [visible, messages, unreadCompletion],
+  )
+  useEffect(() => {
+    if (!unreadReplyId || !unreadCompletion || !resolvedSessionId || typeof IntersectionObserver === 'undefined') return
+    const reply = Array.from(scrollContentRef.current?.querySelectorAll<HTMLElement>('[data-chat-render-item-key]') ?? [])
+      .find(element => element.dataset.chatRenderItemKey === unreadReplyId)
+      ?.querySelector('[data-chat-selectable-message="assistant"]')
+    if (!reply) return
+
+    // Hidden tabs and the trajectory view keep their transcripts mounted. Only
+    // acknowledge a reply once its row enters the focused window's viewport.
+    let active = true
+    const observer = new IntersectionObserver(entries => {
+      const entry = entries[entries.length - 1]
+      if (active && entry?.isIntersecting && entry.intersectionRect.height > 0 && entry.intersectionRect.width > 0 &&
+        document.visibilityState === 'visible' && document.hasFocus()) {
+        useChatStore.getState().markSessionCompletionRead(resolvedSessionId, unreadCompletion)
+      }
+    }, { threshold: [0, 0.001] })
+    const observeAgain = () => {
+      observer.disconnect()
+      observer.takeRecords()
+      observer.observe(reply)
+    }
+    observer.observe(reply)
+    window.addEventListener('focus', observeAgain)
+    document.addEventListener('visibilitychange', observeAgain)
+    return () => {
+      active = false
+      observer.disconnect()
+      window.removeEventListener('focus', observeAgain)
+      document.removeEventListener('visibilitychange', observeAgain)
+    }
+  }, [unreadCompletion, unreadReplyId, resolvedSessionId, virtualTranscriptWindow.items])
 
   useLayoutEffect(() => {
     const anchor = restoringScrollAnchorRef.current

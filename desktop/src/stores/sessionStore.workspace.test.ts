@@ -17,6 +17,8 @@ vi.mock('../lib/recentProjectsCache', () => ({ invalidateRecentProjectsCache: vi
 import { releaseWorkspaceSession } from '../lib/workspace/releaseSession'
 import { serializeWorkspace } from '../lib/workspace/persistence'
 import { useSessionStore } from './sessionStore'
+import { useChatStore } from './chatStore'
+import { createUnreadCompletion } from '../lib/unreadCompletion'
 import { useTabStore } from './tabStore'
 import { useWorkspaceStore } from './workspaceStore'
 
@@ -33,6 +35,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.remove.mockResolvedValue({})
   useWorkspaceStore.setState({ bySession: {} })
+  const reply = { type: 'assistant_text' as const, id: 'completion', content: 'Done', timestamp: 1 }
+  const marker = createUnreadCompletion([reply], reply)
+  useChatStore.setState({ unreadCompletions: new Map([[OLD, marker], [OTHER, marker]]) })
   useSessionStore.setState({ sessions: [], activeSessionId: OLD })
   useTabStore.setState({
     tabs: [{ sessionId: OLD, title: 'Empty task', type: 'session', status: 'idle' }],
@@ -47,6 +52,7 @@ describe('session deletion owns workspace resource release', () => {
     // The same public boundary used by ChatInput.replaceEmptySession after creation.
     useTabStore.getState().replaceTabSession(OLD, 'replacement-task')
     await useSessionStore.getState().deleteSession(OLD)
+    expect([...useChatStore.getState().unreadCompletions.keys()]).toEqual([OTHER])
 
     const workspace = useWorkspaceStore.getState()
     expect(workspace.bySession[OLD]).toBeUndefined()
@@ -65,6 +71,7 @@ describe('session deletion owns workspace resource release', () => {
     openResources(OLD)
     mocks.remove.mockRejectedValueOnce(new Error('delete failed'))
     await expect(useSessionStore.getState().deleteSession(OLD)).rejects.toThrow('delete failed')
+    expect([...useChatStore.getState().unreadCompletions.keys()]).toEqual([OLD, OTHER])
     expect(useWorkspaceStore.getState().bySession[OLD]?.tabs).toHaveLength(2)
     expect(useSessionStore.getState().activeSessionId).toBe(OLD)
     expect(mocks.destroy).not.toHaveBeenCalled()
@@ -79,6 +86,7 @@ describe('session deletion owns workspace resource release', () => {
       failures: [{ sessionId: OTHER, error: 'delete failed' }],
     })
     await useSessionStore.getState().deleteSessions([OLD, OTHER])
+    expect([...useChatStore.getState().unreadCompletions.keys()]).toEqual([OTHER])
     expect(useWorkspaceStore.getState().bySession[OLD]).toBeUndefined()
     expect(useWorkspaceStore.getState().bySession[OTHER]?.tabs).toHaveLength(2)
     expect(mocks.destroy).toHaveBeenCalledTimes(1)

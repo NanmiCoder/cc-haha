@@ -3023,6 +3023,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.general.preventSleepEnabled': 'タスク実行中のシステムスリープを防止',
   'settings.general.preventSleepDescription': 'cc-haha がタスクを実行中または承認待ちの間、コンピューターを起動した状態に保ちます。画面は自動でオフになります。タスク完了時またはアプリ終了時に通常のスリープ設定に戻ります。',
   'settings.general.preventSleepSaveFailed': 'スリープ防止設定を保存できませんでした。もう一度お試しください。',
+  'notifications.badgeDescription': '承認待ちまたは未読の返信がある会話（{count} 件）',
   'settings.general.notificationsDescription': '権限の確認、エージェントの応答、スケジュールタスクの結果に OS ネイティブの通知を使用します。',
   'settings.general.notificationsEnabled': 'システム通知を有効にする',
   'settings.general.notificationsHintOn': '有効にすると、アプリは通知権限を要求し、OS の通知センターを使用します。',

@@ -15,9 +15,11 @@ vi.mock('./lib/publicAccessRuntime', () => ({ isPublicAccessRuntime: () => false
 vi.mock('./stores/hiddenSessionRelease', () => ({ installHiddenSessionRelease }))
 
 import { App } from './App'
-import { useChatStore } from './stores/chatStore'
+import { createDefaultSessionState, useChatStore } from './stores/chatStore'
+import { useSettingsStore } from './stores/settingsStore'
 import { usePowerSettingsStore } from './stores/powerSettingsStore'
 import { browserHost } from './lib/desktopHost/browserHost'
+import { createUnreadCompletion } from './lib/unreadCompletion'
 
 describe('App', () => {
   afterEach(() => {
@@ -27,6 +29,53 @@ describe('App', () => {
     uninstallHiddenSessionRelease.mockClear()
     Reflect.deleteProperty(window, 'desktopHost')
     vi.restoreAllMocks()
+  })
+
+  it.each(['MacIntel', 'Win32'])('updates the %s badge for distinct waiting and unread sessions', platform => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    const invoke = vi.fn().mockResolvedValue(true)
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true, commands: { invoke } }
+    const idle = createDefaultSessionState()
+    const request = { requestId: 'r1', toolName: 'Bash', input: {} }
+    const waiting = { ...idle, pendingPermission: request }
+    const alsoWaiting = { ...waiting, pendingPermissions: {
+      r1: request, r2: { ...request, requestId: 'r2', toolName: 'AskUserQuestion' },
+    } }
+    const previousSessions = useChatStore.getState().sessions
+    const previousUnread = useChatStore.getState().unreadCompletions
+    const { desktopNotificationsEnabled, locale } = useSettingsStore.getState()
+    const reply = { id: 'reply', type: 'assistant_text', content: 'Done', timestamp: 1 } as const
+    const marker = createUnreadCompletion([reply], reply)
+    try {
+      useChatStore.setState({ sessions: { first: waiting }, unreadCompletions: new Map() })
+      useSettingsStore.setState({ desktopNotificationsEnabled: true, locale: 'en' })
+      const { unmount } = render(<App />)
+      act(() => useChatStore.setState({ sessions: { first: alsoWaiting } }))
+      act(() => useChatStore.setState({ sessions: { first: alsoWaiting, second: waiting } }))
+      act(() => useChatStore.setState({ unreadCompletions: new Map([['first', marker], ['closed-tab', marker]]) }))
+      act(() => useSettingsStore.setState({ desktopNotificationsEnabled: false }))
+      act(() => useChatStore.setState({ sessions: { second: waiting } }))
+      act(() => useSettingsStore.setState({ desktopNotificationsEnabled: true }))
+      act(() => useChatStore.getState().markSessionCompletionRead('first'))
+      act(() => useChatStore.getState().markSessionCompletionRead('closed-tab'))
+      act(() => useChatStore.setState({ sessions: { second: idle } }))
+      unmount()
+      useChatStore.setState({ sessions: { first: waiting } })
+      expect(invoke.mock.calls).toEqual([1, 2, 3, 0, 3, 2, 1, 0].map(count => [
+        'set_notification_badge', { count, description: count ? `Conversations with pending requests or unread replies (${count})` : '' },
+      ]))
+    } finally {
+      useChatStore.setState({ sessions: previousSessions, unreadCompletions: previousUnread })
+      useSettingsStore.setState({ desktopNotificationsEnabled, locale })
+    }
+  })
+
+  it('skips the badge command on Linux', () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Linux x86_64')
+    const invoke = vi.fn().mockResolvedValue(true)
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true, commands: { invoke } }
+    render(<App />)
+    expect(invoke).not.toHaveBeenCalledWith('set_notification_badge', expect.anything())
   })
 
   it('restores the power preference when the desktop app starts without opening settings', async () => {

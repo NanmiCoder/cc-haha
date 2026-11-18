@@ -406,14 +406,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   deleteSession: async (id: string) => {
     await sessionsApi.delete(id)
-    releaseWorkspaceSession(id)
-    useTabStore.getState().markSessionsDeleted([id])
-    pendingCreatedSessionIds.delete(id)
-    pendingSessionTitles.delete(id)
-    pendingSessionWorkDirs.delete(id)
-    invalidateRecentProjectsCache()
-    useSessionRuntimeStore.getState().clearSelection(id)
-    excludeDeletedProjectSessions([id])
+    await releaseDeletedSessions([id])
     set((s) => ({
       sessions: s.sessions.filter((session) => session.id !== id),
       historicalSessionIds: removeIdsFromSet(s.historicalSessionIds, [id]),
@@ -429,18 +422,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   deleteSessions: async (ids: string[]) => {
     const sessionIds = [...new Set(ids)].filter(Boolean)
     const result = await sessionsApi.batchDelete(sessionIds)
-    if (result.successes.length > 0) {
-      invalidateRecentProjectsCache()
-    }
-    for (const id of result.successes) {
-      releaseWorkspaceSession(id)
-      pendingCreatedSessionIds.delete(id)
-      pendingSessionTitles.delete(id)
-      pendingSessionWorkDirs.delete(id)
-      useSessionRuntimeStore.getState().clearSelection(id)
-    }
-    excludeDeletedProjectSessions(result.successes)
-    useTabStore.getState().markSessionsDeleted(result.successes)
+    await releaseDeletedSessions(result.successes)
     set((s) => ({
       sessions: s.sessions.filter((session) => !result.successes.includes(session.id)),
       historicalSessionIds: removeIdsFromSet(s.historicalSessionIds, result.successes),
@@ -648,6 +630,23 @@ function buildRecentProjectBoundaries(sessions: SessionListItem[]): Record<strin
     }
   }
   return boundaries
+}
+
+async function releaseDeletedSessions(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  // chatStore uses sessionStore to update titles during live turns.
+  const { useChatStore } = await import('./chatStore')
+  for (const id of ids) {
+    useChatStore.getState().markSessionCompletionRead(id)
+    releaseWorkspaceSession(id)
+    pendingCreatedSessionIds.delete(id)
+    pendingSessionTitles.delete(id)
+    pendingSessionWorkDirs.delete(id)
+    useSessionRuntimeStore.getState().clearSelection(id)
+  }
+  invalidateRecentProjectsCache()
+  useTabStore.getState().markSessionsDeleted(ids)
+  excludeDeletedProjectSessions(ids)
 }
 
 function excludeDeletedProjectSessions(ids: string[]): void {
