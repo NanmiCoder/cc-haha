@@ -6,6 +6,7 @@ import {
   TOOL_RESULT_IMAGE_MAX_COUNT,
   TOOL_RESULT_IMAGE_MEDIA_TYPES,
   extractToolResultImages,
+  hasToolResultImageBlock,
   toolResultImageToBlob,
   toolResultImagesFor,
 } from './toolResultContent'
@@ -34,6 +35,22 @@ function none() {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('hasToolResultImageBlock', () => {
+  it('recognizes image blocks for grouping without reading their payloads', () => {
+    const source = vi.fn(() => { throw new Error('unexpected image read') })
+    const blocks = [{ type: 'image', get source() { return source() } }]
+    expect(hasToolResultImageBlock(blocks)).toBe(true)
+    expect(hasToolResultImageBlock({ content: blocks })).toBe(true)
+    expect(source).not.toHaveBeenCalled()
+    expect(hasToolResultImageBlock([{ type: 'text', text: '/tmp/picture.png' }])).toBe(false)
+  })
+
+  it('leaves unreadable result content in the ordinary tool group', () => {
+    const unreadable = { get content() { throw new Error('unreadable content') } }
+    expect(hasToolResultImageBlock(unreadable)).toBe(false)
+  })
 })
 
 describe('extractToolResultImages · block shapes', () => {
