@@ -1145,7 +1145,8 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    if (!session.providerId || !session.providerAuth) return true
+    // ChatGPT's CLI reads OAuth credentials from its token file directly.
+    if (!session.providerId || !session.providerAuth || isOpenAIOfficialProviderId(session.providerId)) return true
     let env: Record<string, string>
     try {
       env = await this.providerService.getProviderRuntimeEnv(session.providerId)

@@ -6,8 +6,13 @@ import {
   OPENAI_DEFAULT_OPUS_MODEL,
   OPENAI_DEFAULT_SONNET_MODEL,
   getOpenAICodexContextWindowForModel,
+  type OpenAIModelCatalogEntry,
 } from '../../services/openaiAuth/models.js'
-import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  MODEL_CONTEXT_WINDOW_MAX,
+  MODEL_CONTEXT_WINDOW_MIN,
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+} from '../../utils/model/modelContextWindows.js'
 import {
   IMAGE_GENERATION_MODEL_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
@@ -62,15 +67,22 @@ export const OPENAI_OFFICIAL_PROVIDER: SavedProvider = {
 }
 
 /**
- * `windowOverrides` are the user's own per-model windows. They sit on top of
- * the built-in catalog values, so a model the user left alone keeps its default.
+ * Use the account's default windows when available. Saved overrides take precedence.
  */
 export function buildOpenAIOfficialRuntimeEnv(
   models: SavedProvider['models'] = OPENAI_OFFICIAL_PROVIDER.models,
   windowOverrides?: Record<string, number>,
+  catalog: readonly OpenAIModelCatalogEntry[] = [],
 ): Record<string, string> {
+  const catalogWindows = Object.fromEntries(catalog.flatMap(({ value, contextWindow }) =>
+    contextWindow !== undefined && Number.isInteger(contextWindow) &&
+    contextWindow >= MODEL_CONTEXT_WINDOW_MIN && contextWindow <= MODEL_CONTEXT_WINDOW_MAX
+      ? [[value, contextWindow] as const]
+      : [],
+  ))
   const modelContextWindows = {
     ...OPENAI_OFFICIAL_PROVIDER.modelContextWindows,
+    ...catalogWindows,
     ...windowOverrides,
   }
   return {

@@ -3,7 +3,13 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { handleSessionsApi } from '../api/sessions.js'
+import { handleModelsApi } from '../api/models.js'
+import { ProviderService } from '../services/providerService.js'
+import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { SessionService } from '../services/sessionService.js'
+import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
+import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
+import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
 import { sanitizePath } from '../../utils/sessionStoragePortable.js'
 import { roughTokenCountEstimationForMessage } from '../../services/tokenEstimation.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
@@ -95,6 +101,54 @@ describe('transcript context after switching providers', () => {
     expect(body.contextEstimate?.totalTokens).toBe(816_404)
     expect(body.contextEstimate?.model).toBe('deepseek-flash')
     expect(body.contextEstimate?.percentage).toBe(82)
+  })
+
+  it('recomputes an unchanged ChatGPT transcript after refreshing the account catalog', async () => {
+    clearOpenAICodexModelCatalogCache()
+    try {
+      const model = 'gpt-6.2-sol'
+      const providerId = 'openai-official'
+      await new ProviderService().activateProvider(providerId)
+      await hahaOpenAIOAuthService.saveTokens({ accessToken: 'fixture-token', refreshToken: null,
+        accountId: 'fixture-account', expiresAt: null, email: null })
+      await writeFile(filePath, [
+        { type: 'session-meta', workDir: join(configDir, 'project'), runtimeProviderId: providerId, runtimeModelId: model },
+        { type: 'assistant', uuid: 'fixture-reply', message: {
+          id: 'fixture-response', role: 'assistant', model,
+          content: [{ type: 'text', text: 'Fixture reply' }], usage: { input_tokens: 75_000, output_tokens: 418 },
+        } },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+
+      const url = new URL(`http://127.0.0.1/api/sessions/${sessionId}/inspection?contextOnly=1`)
+      const inspect = async () => {
+        const response = await handleSessionsApi(new Request(url), url, url.pathname.split('/').filter(Boolean))
+        expect(response.status).toBe(200)
+        return response.json()
+      }
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(200_000)
+      let catalogRequests = 0
+      globalThis.fetch = (async input => {
+        if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+          return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+        }
+        expect(new URL(String(input)).pathname).toBe('/backend-api/codex/models')
+        catalogRequests++
+        return Response.json({ models: [{ slug: model, visibility: 'list', context_window: 500_000 }] })
+      }) as typeof fetch
+      const refresh = new URL(`http://127.0.0.1/api/models/catalog?provider=${providerId}&refresh=true`)
+      expect((await handleModelsApi(new Request(refresh), refresh, refresh.pathname.split('/').filter(Boolean))).status).toBe(200)
+      const updated = await inspect()
+      expect(updated.contextEstimate.rawMaxTokens).toBe(475_000)
+      expect(updated.usage.models[0].contextWindow).toBe(475_000)
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(475_000)
+      expect(catalogRequests).toBe(1)
+
+      await hahaOpenAIOAuthService.deleteTokens()
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(200_000)
+      expect(catalogRequests).toBe(1)
+    } finally {
+      clearOpenAICodexModelCatalogCache()
+    }
   })
 
   it.each([0, 500])('retains the previous prompt anchor when the next response reports only %s output tokens', async outputTokens => {

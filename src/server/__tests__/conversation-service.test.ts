@@ -9,11 +9,13 @@ import {
 } from '../services/conversationService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
+import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
 import { updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
+import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
 
 describe('ConversationService', () => {
   let tmpDir: string
@@ -1077,6 +1079,28 @@ describe('ConversationService', () => {
     } finally {
       if (originalBridgeUrl === undefined) delete process.env.CC_HAHA_SYSTEM_PROXY_URL
       else process.env.CC_HAHA_SYSTEM_PROXY_URL = originalBridgeUrl
+    }
+  })
+
+  test('sendMessage dispatches to an existing ChatGPT CLI without fetching a cold catalog', async () => {
+    clearOpenAICodexModelCatalogCache()
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('catalog unavailable'))
+    try {
+      await hahaOpenAIOAuthService.saveTokens({ accessToken: 'rotated-fixture-token', refreshToken: null,
+        accountId: 'fixture-account', expiresAt: null, email: null })
+      const service = new ConversationService() as any
+      const sent: string[] = []
+      const session = installNetworkTestSession(service, 'openai-turn', sent)
+      Object.assign(session, {
+        providerId: 'openai-official',
+        providerAuth: { baseUrl: '', apiKey: '', authToken: '' },
+      })
+      expect(await service.sendMessage('openai-turn', 'continue')).toBe(true)
+      expect(sent.map(line => JSON.parse(line).type)).toEqual(['user'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      clearOpenAICodexModelCatalogCache()
     }
   })
 
