@@ -325,3 +325,18 @@ describe('logical project session history', () => {
     } finally { roots.mockRestore() }
   })
 })
+
+it('refreshes indexed history and resolves parent and child rows separately after project registration', async () => {
+  const child = path.join(projectRoot, 'projects', '输入法')
+  await fs.mkdir(path.join(projectRoot, '.git'), { recursive: true })
+  await fs.mkdir(child, { recursive: true })
+  const rows = [await seed(900), await seed(901, { root: child }), await seed(902, { root: child })]
+  for (const row of rows) row.repository = { requestedWorkDir: row.workDir!, repoRoot: projectRoot, branch: 'fixture', worktree: false, baseRef: 'main' }
+  const service = new SessionService(gateway(rows, 'on'))
+  expect((await service.listProjectHistory({ projectRoot })).sessions).toHaveLength(3)
+  const { DesktopUiPreferencesService } = await import('../services/desktopUiPreferencesService.js')
+  await new DesktopUiPreferencesService().updateProjectDirectories({ workDir: child, additionalDirectories: [], createProject: true })
+  expect((await service.listProjectHistory({ projectRoot })).sessions.map(session => session.id)).toEqual([idFor(900)])
+  expect((await service.listProjectHistory({ projectRoot: child })).sessions.map(session => session.id)).toEqual([idFor(901), idFor(902)])
+  expect((await service.listProjectPreviews()).projects).toEqual([{ projectRoot, total: 1 }, { projectRoot: child, total: 2 }])
+})

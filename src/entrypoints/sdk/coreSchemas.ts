@@ -1313,6 +1313,13 @@ const SDKUserMessageContentSchema = lazySchema(() =>
     parent_tool_use_id: z.string().nullable(),
     isSynthetic: z.boolean().optional(),
     tool_use_result: z.unknown().optional(),
+    durationMs: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe(
+        'Actual execution duration in milliseconds for a single-block tool_result message, excluding streaming and serial queue wait.',
+      ),
     priority: z.enum(['now', 'next', 'later']).optional(),
     timestamp: z
       .string()

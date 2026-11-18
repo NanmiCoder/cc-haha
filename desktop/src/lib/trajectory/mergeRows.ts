@@ -77,6 +77,7 @@ export function mergeRowPieces(a: TrajectoryRow, b: TrajectoryRow): TrajectoryRo
     inputSummary: a.inputSummary ?? b.inputSummary,
     resultPreview: a.resultPreview ?? b.resultPreview,
     resultTs: a.resultTs ?? b.resultTs,
+    durationMs: a.durationMs ?? b.durationMs,
     resultOmittedBytes: a.resultOmittedBytes ?? b.resultOmittedBytes,
     agentId: a.agentId ?? b.agentId,
     model: a.model ?? b.model,

@@ -81,7 +81,7 @@ export type ServerMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
   | { type: 'content_delta'; text?: string; toolInput?: string }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
-  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string; durationMs?: number }
   | {
       type: 'permission_request'
       requestId: string
@@ -163,7 +163,7 @@ export type AgentRunStreamMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
   | { type: 'content_delta'; text?: string; toolInput?: string }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
-  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string; durationMs?: number }
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean; compactProgress?: { outputChars: number } }
   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string; requestId?: string }

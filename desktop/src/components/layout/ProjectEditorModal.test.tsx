@@ -331,3 +331,21 @@ it('reports auxiliary directory load failures and does not submit an empty repla
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   expect(onSubmit).not.toHaveBeenCalled()
 })
+
+
+it('previews the selected independent project without inheriting parent auxiliary folders', async () => {
+  projectDirectoriesApi.getProjectDirectories.mockImplementation(async (workDir: string, options?: { createProject?: boolean }) => ({
+    projectKey: options?.createProject ? workDir : '/workspace',
+    mainDirectory: workDir,
+    additionalDirectories: options?.createProject ? [] : ['/workspace/parent-data'],
+  }))
+  const onSubmit = vi.fn()
+  render(<ProjectEditorModal open mode="create" sourceFolder="/workspace/child" initialName="Child" onSourceFolderChange={vi.fn()} onClose={vi.fn()} onSubmit={onSubmit} />)
+  const create = screen.getByRole('button', { name: 'Create project' })
+  await waitFor(() => expect(create).not.toBeDisabled())
+  fireEvent.click(create)
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+    name: 'Child', sourceFolder: '/workspace/child', logicalRoot: '/workspace/child', additionalDirectories: [],
+  }))
+  expect(screen.queryByText('/workspace/parent-data')).not.toBeInTheDocument()
+})

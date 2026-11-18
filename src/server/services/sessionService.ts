@@ -27,7 +27,7 @@ import { createInterface } from 'node:readline'
 import { ApiError } from '../middleware/errorHandler.js'
 import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
 import { migrateFileHistorySnapshot, type FileHistorySnapshot } from '../../utils/fileHistory.js'
-import { findCanonicalGitRoot } from '../../utils/git.js'
+import { findCanonicalGitRoot, findCanonicalGitRootPreservingPathIdentity } from '../../utils/git.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
@@ -68,6 +68,7 @@ import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
+import { findExplicitProjectRoot, readProjectIdentity } from './projectIdentity.js'
 import { readSessionArchives, withSessionArchiveLock, writeSessionArchive } from '../../utils/sessionArchiveStore.js'
 import {
   extractGoalCreationTitle,
@@ -276,6 +277,7 @@ export type MessageEntry = {
   businessErrorCode?: string
   bodyTruncated?: boolean
   toolUseResult?: unknown
+  durationMs?: number
   timestamp: string
   model?: string
   usage?: MessageUsage
@@ -512,6 +514,7 @@ type RawEntry = {
     }
   }
   timestamp?: string
+  durationMs?: number
   version?: string
   snapshot?: {
     messageId?: string
@@ -977,7 +980,8 @@ export class SessionService {
       now: this.now,
       scope: () => this.getConfigDir(),
       revision: () => this.projectHistoryRevision(),
-      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}:${readSessionArchives(this.getConfigDir()).revision}`,
+      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}:${readSessionArchives(this.getConfigDir()).revision}:${readProjectIdentity(this.getConfigDir()).revision}`,
+      identityRevision: () => readProjectIdentity(this.getConfigDir()).revision,
       load: () => this.loadProjectHistoryRows(),
       archiveIds: () => readSessionArchives(this.getConfigDir()).ids,
       hydrate: async (row, archived) => {
@@ -1009,6 +1013,7 @@ export class SessionService {
       offset: options?.offset ?? 0,
       archived: options?.archived ?? false,
       archiveRevision: readSessionArchives(scope).revision,
+      projectIdentityRevision: readProjectIdentity(scope).revision,
     })
   }
 
@@ -2089,6 +2094,17 @@ export class SessionService {
     workDir: string | null
     fallbackProjectDir?: string
   }): Promise<string | null> {
+    const sourceDirectory = worktreeSession?.originalCwd || repository?.requestedWorkDir || workDir
+    const identity = readProjectIdentity(this.getConfigDir())
+    if (sourceDirectory && identity.roots.length > 0) {
+      const nativeDirectory = await fs.realpath(sourceDirectory).catch(() => sourceDirectory)
+      const explicitRoot = findExplicitProjectRoot(nativeDirectory, identity.roots)
+      if (explicitRoot) {
+        const sourceGitRoot = findCanonicalGitRootPreservingPathIdentity(nativeDirectory)
+        if (!sourceGitRoot || findExplicitProjectRoot(explicitRoot, [sourceGitRoot])) return explicitRoot
+      }
+    }
+
     const candidate = worktreeSession?.originalCwd ||
       repository?.repoRoot ||
       workDir ||
@@ -2265,6 +2281,13 @@ export class SessionService {
         })
       }
     }
+    const durationMs =
+      type === 'tool_result' &&
+      typeof entry.durationMs === 'number' &&
+      Number.isFinite(entry.durationMs) &&
+      entry.durationMs >= 0
+        ? entry.durationMs
+        : undefined
     return {
       id: entry.uuid || crypto.randomUUID(),
       type,
@@ -2277,6 +2300,7 @@ export class SessionService {
       ...(scheduledTask ? { scheduledTask } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
       ...(usage ? { usage } : {}),
@@ -3834,7 +3858,7 @@ export class SessionService {
     const status = indexed ? this.localIndexGateway.getPublicStatus() : null
     const degradedPlan = indexed ? null : this.getDegradedListPlan()
     return JSON.stringify([scope, this.sessionListCacheGeneration,
-      readSessionArchives(scope).revision,
+      readSessionArchives(scope).revision, readProjectIdentity(scope).revision,
       indexed && (status?.state === 'ready' || status?.state === 'building')
         ? status.lastUpdatedAt
         : degradedPlan
@@ -3896,7 +3920,7 @@ export class SessionService {
       // Thousands of sessions normally share a handful of workspaces. Resolve
       // each candidate once, preserving the same worktree/git boundary as list.
       const candidate = row.worktreeSession?.originalCwd || row.repository?.repoRoot || row.workDir || this.desanitizePath(row.projectPath)
-      const key = JSON.stringify([candidate, Boolean(row.workDir)])
+      const key = JSON.stringify([candidate, row.workDir, row.repository?.requestedWorkDir])
       let root = roots.get(key)
       if (!roots.has(key)) {
         root = await this.resolveProjectRootFromSessionMetadata({
@@ -3967,12 +3991,13 @@ export class SessionService {
     const scope = this.getConfigDir()
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const archiveRevision = readSessionArchives(scope).revision
+      const identityRevision = readProjectIdentity(scope).revision
       const result = await this.listSessionsOnce(options)
       // A storage switch belongs to subsequent requests. Repeating this scan
       // after a switch would replace its original scope with another config's sessions.
-      if (scope !== this.getConfigDir() || archiveRevision === readSessionArchives(scope).revision) return result
+      if (scope !== this.getConfigDir() || (archiveRevision === readSessionArchives(scope).revision && identityRevision === readProjectIdentity(scope).revision)) return result
     }
-    throw new ApiError(409, 'Session archives changed during loading; retry', 'SESSION_LIST_CHANGED')
+    throw new ApiError(409, 'Session projects or archives changed during loading; retry', 'SESSION_LIST_CHANGED')
   }
 
   private async listSessionsOnce(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
@@ -5054,7 +5079,7 @@ export class SessionService {
       sessionId,
     )
     const absWorkDir = preparedWorkspace.workDir
-    const { additionalDirectories: configuredDirectories } = await new DesktopUiPreferencesService().getProjectDirectories(absWorkDir)
+    const { additionalDirectories: configuredDirectories } = await new DesktopUiPreferencesService().getProjectDirectories(preparedWorkspace.repository?.requestedWorkDir || absWorkDir)
     const additionalDirectories = await validateProjectAdditionalDirectories(absWorkDir, configuredDirectories)
     registerCanonicalFilesystemAccessRoot(absWorkDir)
     console.log(

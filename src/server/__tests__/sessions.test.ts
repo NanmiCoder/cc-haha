@@ -23,7 +23,11 @@ import { sanitizePath } from '../../utils/sessionStoragePortable.js'
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
 import { clearPluginCache } from '../../utils/plugins/pluginLoader.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
-import { updateSessionSlashCommands } from '../ws/handler.js'
+import {
+  __markActiveTurnForTests,
+  __resetWebSocketHandlerStateForTests,
+  updateSessionSlashCommands,
+} from '../ws/handler.js'
 import { reduceTranscript } from '../services/localIndex/transcriptReducer.js'
 import { openLocalIndexDatabase } from '../services/localIndex/database.js'
 import { readSessionEntriesByLocator } from '../services/localIndex/sessionEntries.js'
@@ -5102,7 +5106,7 @@ describe('Sessions API', () => {
     }
   })
 
-  it('GET /api/sessions/:id/git-info should keep the session launch branch stable', async () => {
+  it('GET /api/sessions/:id/git-info should report the live checked-out branch in a regular checkout', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
     const { sessionId } = await sessionService.createSession(
       workDir,
@@ -5118,7 +5122,185 @@ describe('Sessions API', () => {
 
       const body = (await res.json()) as { branch: string | null; workDir: string }
       expect(body.workDir).toBe(workDir)
-      expect(body.branch).toBe('feature/rail')
+      expect(body.branch).toBe('main')
+    } finally {
+      sessionsMap.delete(sessionId)
+    }
+  })
+
+  it('GET /api/sessions/:id/git-info should track master -> dev_xxxx, detached HEAD, and unborn branches in regular sessions', async () => {
+    const workDir = path.join(tmpDir, `repo-master-${Date.now()}`)
+    await fs.mkdir(workDir, { recursive: true })
+    git(workDir, 'init', '--initial-branch', 'master')
+    git(workDir, 'config', 'user.email', 'sessions-api@example.com')
+    git(workDir, 'config', 'user.name', 'Sessions API')
+
+    // Unborn branch before the first commit still reports its live symbolic branch.
+    const { sessionId: unbornSessionId } = await sessionService.createSession(workDir)
+    const unbornRes = await fetch(`${baseUrl}/api/sessions/${unbornSessionId}/git-info`)
+    expect(unbornRes.status).toBe(200)
+    expect(((await unbornRes.json()) as { branch: string | null }).branch).toBe('master')
+
+    await fs.writeFile(path.join(workDir, 'README.md'), 'master\n')
+    git(workDir, 'add', 'README.md')
+    git(workDir, 'commit', '-m', 'initial')
+    git(workDir, 'checkout', '-b', 'dev_xxxx')
+    git(workDir, 'checkout', 'master')
+
+    const { sessionId } = await sessionService.createSession(
+      workDir,
+      { branch: 'master', worktree: false },
+    )
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(launchInfo?.filePath).toBeTruthy()
+    await fs.appendFile(
+      launchInfo!.filePath,
+      `${JSON.stringify(makeUserEntry('Edit on master'))}\n`,
+      'utf-8',
+    )
+
+    git(workDir, 'switch', 'dev_xxxx')
+    const switchedRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+    expect(switchedRes.status).toBe(200)
+    expect(((await switchedRes.json()) as { branch: string | null }).branch).toBe('dev_xxxx')
+
+    git(workDir, 'switch', '--detach')
+    const detachedRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+    expect(detachedRes.status).toBe(200)
+    expect(((await detachedRes.json()) as { branch: string | null }).branch).toBeNull()
+
+    const nonGitDir = await fs.mkdtemp(path.join(tmpDir, 'plain-dir-'))
+    const { sessionId: nonGitSessionId } = await sessionService.createSession(nonGitDir)
+    const nonGitRes = await fetch(`${baseUrl}/api/sessions/${nonGitSessionId}/git-info`)
+    expect(nonGitRes.status).toBe(200)
+    expect(await nonGitRes.json()).toMatchObject({
+      branch: null,
+      workDir: await fs.realpath(nonGitDir),
+      worktree: null,
+    })
+  })
+
+  it('GET /api/sessions/:id/git-info should keep the planned launch branch before an isolated worktree materializes', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const { sessionId } = await sessionService.createSession(
+      workDir,
+      { branch: 'feature/rail', worktree: true },
+    )
+
+    // Source checkout remains on `main` until the first turn materializes the worktree.
+    expect(git(workDir, 'branch', '--show-current')).toBe('main\n')
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { branch: string | null; worktree: { enabled: boolean; path: string | null } | null }
+    expect(body.branch).toBe('feature/rail')
+    expect(body.worktree?.enabled).toBe(true)
+    expect(body.worktree?.path).toBeNull()
+  })
+
+  it('GET /api/sessions/:id/git-info should report a custom branch switched inside a materialized worktree and clear after ExitWorktree', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    const { sessionId } = await sessionService.createSession(
+      workDir,
+      { branch: 'feature/rail', worktree: true },
+    )
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    const repository = launchInfo?.repository
+    const activeWorktree = repository!.worktreePath!
+    git(workDir, 'worktree', 'add', '-b', repository!.worktreeBranch!, activeWorktree, 'feature/rail')
+
+    const sessionsMap = (conversationService as any).sessions as Map<string, { workDir: string }>
+    sessionsMap.set(sessionId, { workDir: activeWorktree })
+    try {
+      git(activeWorktree, 'switch', '-c', 'feat/custom')
+      const customRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+      expect(customRes.status).toBe(200)
+      const customBody = (await customRes.json()) as { branch: string | null; worktree: { enabled: boolean } | null }
+      expect(customBody.branch).toBe('feat/custom')
+      expect(customBody.worktree?.enabled).toBe(true)
+
+      await fs.appendFile(
+        launchInfo!.filePath,
+        [
+          JSON.stringify(makeUserEntry('Exited worktree')),
+          JSON.stringify({ type: 'worktree-state', sessionId, worktreeSession: null }),
+        ].join('\n') + '\n',
+        'utf-8',
+      )
+      const canonicalSource = await fs.realpath(workDir)
+      sessionsMap.set(sessionId, { workDir: canonicalSource })
+      git(workDir, 'switch', 'feature/rail')
+
+      const exitedRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+      expect(exitedRes.status).toBe(200)
+      const exitedBody = (await exitedRes.json()) as { branch: string | null; worktree: unknown }
+      expect(exitedBody.branch).toBe('feature/rail')
+      expect(exitedBody.worktree).toBeNull()
+    } finally {
+      sessionsMap.delete(sessionId)
+    }
+  })
+
+  it('GET /api/sessions/:id/git-info should prefer CLI originalBranch over stale regular-launch branch and distinguish detached HEAD from git failure inside a worktree', async () => {
+    const workDir = await createCleanGitRepo(tmpDir)
+    git(workDir, 'checkout', '-b', 'dev_xxxx')
+    git(workDir, 'checkout', 'main')
+
+    // Regular session launched on `main` (`worktree: false`), switched to `dev_xxxx`, then entered a CLI worktree.
+    const { sessionId } = await sessionService.createSession(
+      workDir,
+      { branch: 'main', worktree: false },
+    )
+    const initialLaunchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    const canonicalSource = await fs.realpath(workDir)
+    git(workDir, 'switch', 'dev_xxxx')
+
+    const enteredWorktree = path.join(canonicalSource, '.claude', 'worktrees', 'agent-dev-worktree')
+    git(workDir, 'worktree', 'add', '-b', 'worktree-agent-dev-worktree', enteredWorktree, 'dev_xxxx')
+    await fs.appendFile(
+      initialLaunchInfo!.filePath,
+      [
+        JSON.stringify(makeUserEntry('Switched to dev_xxxx and entering worktree')),
+        JSON.stringify(makeWorktreeStateEntry(sessionId, enteredWorktree, {
+          originalCwd: canonicalSource,
+          worktreeName: 'agent-dev-worktree',
+          worktreeBranch: 'worktree-agent-dev-worktree',
+          originalBranch: 'dev_xxxx',
+        })),
+      ].join('\n') + '\n',
+      'utf-8',
+    )
+
+    const sessionsMap = (conversationService as any).sessions as Map<string, { workDir: string }>
+    sessionsMap.set(sessionId, { workDir: enteredWorktree })
+    try {
+      const enteredRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+      expect(enteredRes.status).toBe(200)
+      const enteredBody = (await enteredRes.json()) as { branch: string | null; worktree: { enabled: boolean } | null }
+      expect(enteredBody.branch).toBe('dev_xxxx')
+      expect(enteredBody.worktree?.enabled).toBe(true)
+
+      // Detached HEAD inside a materialized worktree reports `branch: null` instead of falling back to `sessionBranch`.
+      git(enteredWorktree, 'switch', '--detach')
+      const detachedRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+      expect(detachedRes.status).toBe(200)
+      const detachedBody = (await detachedRes.json()) as { branch: string | null; worktree: { enabled: boolean } | null }
+      expect(detachedBody.branch).toBeNull()
+      expect(detachedBody.worktree?.enabled).toBe(true)
+
+      // Git command failure (`rawGitBranch === null`) still falls back to `sessionBranch` inside the materialized worktree.
+      const spawnSpy = spyOn(Bun, 'spawn').mockImplementation((() => {
+        throw new Error('git unavailable')
+      }) as unknown as typeof Bun.spawn)
+      try {
+        const fallbackRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/git-info`)
+        expect(fallbackRes.status).toBe(200)
+        const fallbackBody = (await fallbackRes.json()) as { branch: string | null; worktree: { enabled: boolean } | null }
+        expect(fallbackBody.branch).toBe('dev_xxxx')
+        expect(fallbackBody.worktree?.enabled).toBe(true)
+      } finally {
+        spawnSpy.mockRestore()
+      }
     } finally {
       sessionsMap.delete(sessionId)
     }
@@ -5790,6 +5972,126 @@ describe('Sessions API', () => {
         name: 'superpowers:brainstorming',
         description: 'Superpowers brainstorming skill',
         kind: 'skill',
+        source: 'plugin',
+      }),
+    )
+  })
+
+  it('GET /api/sessions/:id/slash-commands should include enabled plugin manifest commands before CLI init', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-fffffffffff0'
+    const workDir = path.join(tmpDir, 'workspace', 'app')
+    const marketplaceRoot = path.join(tmpDir, 'nexuskit-marketplace')
+    const cachedPluginRoot = path.join(tmpDir, 'plugins', 'cache', 'nexuskit-skills', 'nexuskit', '0.4.0')
+    const pluginsDir = path.join(tmpDir, 'plugins')
+    const marketplaceFile = path.join(
+      marketplaceRoot,
+      '.claude-plugin',
+      'marketplace.json',
+    )
+
+    await fs.mkdir(path.join(cachedPluginRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.join(cachedPluginRoot, '.claude', 'commands'), { recursive: true })
+    await fs.mkdir(path.dirname(marketplaceFile), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+    await fs.mkdir(workDir, { recursive: true })
+
+    await fs.writeFile(
+      path.join(cachedPluginRoot, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'nexuskit',
+        version: '0.4.0',
+        description: 'NexusKit commands',
+        commands: ['./.claude/commands'],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(cachedPluginRoot, '.claude', 'commands', 'nk-build.md'),
+      [
+        '---',
+        'description: Build with NexusKit',
+        'argument-hint: <app>',
+        '---',
+        '',
+        'Build the target app.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      marketplaceFile,
+      JSON.stringify({
+        name: 'nexuskit-skills',
+        owner: { name: 'NexusKit' },
+        plugins: [
+          {
+            name: 'nexuskit',
+            source: { source: 'github', repo: 'nexuskit/nexuskit-skills' },
+            version: '0.4.0',
+          },
+        ],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(pluginsDir, 'known_marketplaces.json'),
+      JSON.stringify({
+        'nexuskit-skills': {
+          source: { source: 'github', repo: 'nexuskit/nexuskit-skills' },
+          installLocation: marketplaceRoot,
+          lastUpdated: new Date(0).toISOString(),
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(pluginsDir, 'installed_plugins.json'),
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          'nexuskit@nexuskit-skills': [
+            {
+              scope: 'user',
+              installPath: cachedPluginRoot,
+              version: '0.4.0',
+              installedAt: new Date(0).toISOString(),
+              lastUpdated: new Date(0).toISOString(),
+            },
+          ],
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({
+        enabledPlugins: {
+          'nexuskit@nexuskit-skills': true,
+        },
+      }),
+      'utf-8',
+    )
+
+    resetSettingsCache()
+    clearPluginCache('sessions-api-plugin-commands')
+    clearCommandsCache()
+    await writeSessionFile('-tmp-api-test', sessionId, [
+      makeSnapshotEntry(),
+      makeSessionMetaEntry(workDir),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      commands: Array<{ name: string; description: string; argumentHint?: string; kind?: string; source?: string }>
+    }
+
+    expect(body.commands).toContainEqual(
+      expect.objectContaining({
+        name: 'nexuskit:nk-build',
+        description: 'Build with NexusKit',
+        argumentHint: '<app>',
+        kind: 'command',
         source: 'plugin',
       }),
     )
@@ -10289,6 +10591,31 @@ describe('Sessions API', () => {
     const status = (await statusRes.json()) as { state: string; activityState: string }
     expect(status.state).toBe('idle')
     expect(status.activityState).toBe('idle')
+  })
+
+  it('POST /api/sessions/:id/chat/stop interrupts a live CLI turn immediately without waiting for WebSocket handshake (#1917)', async () => {
+    const sessionId = 'bbbbbbbb-1917-cccc-dddd-eeeeeeeeeeee'
+    __markActiveTurnForTests(sessionId)
+    const hasSessionSpy = spyOn(conversationService, 'hasSession').mockImplementation((id) => id === sessionId)
+    const sendInterruptSpy = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+
+    try {
+      const beforeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
+      expect(((await beforeRes.json()) as { activityState: string }).activityState).toBe('running')
+
+      const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/stop`, {
+        method: 'POST',
+      })
+      expect(res.status).toBe(200)
+      expect(sendInterruptSpy).toHaveBeenCalledWith(sessionId)
+
+      const afterRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
+      expect(((await afterRes.json()) as { activityState: string }).activityState).toBe('idle')
+    } finally {
+      hasSessionSpy.mockRestore()
+      sendInterruptSpy.mockRestore()
+      __resetWebSocketHandlerStateForTests()
+    }
   })
 
   it('frozen review never uses current bytes for the latest legacy turn', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyH5Request,
+  isH5AccessControlPath,
   resolveTrustedRendererOrigin,
   isLocalCredentialOnlyPath,
   isLoopbackHost,
@@ -246,6 +247,48 @@ describe('h5AccessPolicy', () => {
     // and an unmanaged (tokenless) server must not lock itself out either.
     expect(requiresLocalAccessCredential('/api/h5-access/verify', unauthorizedContext)).toBe(false)
     expect(requiresLocalAccessCredential('/api/h5-access', { clientAddress: '127.0.0.1' })).toBe(false)
+  })
+
+  test('matches H5 control-plane slash variants the same way as the API router', () => {
+    for (const endpoint of ['', '/enable', '/disable', '/regenerate']) {
+      for (const pathname of [
+        `/api/h5-access${endpoint}`,
+        `/api//h5-access${endpoint}`,
+        `/api///h5-access/${endpoint}/`,
+        `//api//h5-access${endpoint}//`,
+      ]) {
+        expect(isH5AccessControlPath(pathname)).toBe(true)
+        expect(requiresLocalAccessCredential(pathname, {
+          ...remoteContext,
+          localAccessTokenConfigured: true,
+          localAccessAuthorized: false,
+        })).toBe(true)
+        expect(requiresLocalAccessCredential(pathname, {
+          ...localContext,
+          localAccessTokenConfigured: true,
+          localAccessAuthorized: true,
+        })).toBe(false)
+      }
+    }
+  })
+
+  test('keeps phone token verification outside the control plane after slash normalization', () => {
+    for (const pathname of [
+      '/api/h5-access/verify',
+      '/api/h5-access/verify/',
+      '/api//h5-access//verify//',
+    ]) {
+      expect(isH5AccessControlPath(pathname)).toBe(false)
+      expect(requiresLocalAccessCredential(pathname, {
+        ...remoteContext,
+        localAccessTokenConfigured: true,
+        localAccessAuthorized: false,
+      })).toBe(false)
+    }
+    for (const pathname of ['/api/h5-access/verify-extra', '/api//h5-access/verify/extra']) {
+      expect(isH5AccessControlPath(pathname)).toBe(true)
+    }
+    expect(isH5AccessControlPath('/api/status')).toBe(false)
   })
 
   test('keeps bulk session deletion off the H5 token', () => {

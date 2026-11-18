@@ -29,12 +29,21 @@ describe('bounded Team transcript projection', () => {
 
   test('preserves paired task results and Team lifecycle evidence across appends', async () => {
     const file = join(dir, 'session.jsonl')
-    await writeFile(file, tool('team', 'TeamCreate', { team_name: 'test' }) + tool('task', 'TaskCreate', { subject: 'Keep task' }))
+    await writeFile(file, tool('team', 'TeamCreate', { team_name: 'test' }) + tool('task', 'TaskCreate', { subject: 'Keep task' }) + tool('task-denied', 'TaskUpdate', { taskId: '1' }) + tool('task-bad', 'TaskList', {}))
     await readTeamTranscriptProjection(file)
-    await appendFile(file, JSON.stringify({ uuid: 'result', timestamp: '2026-01-01T00:00:01Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'task', content: '{"task":{"id":"1"}}' }] }, toolUseResult: { task: { id: '1' }, taskListMutationRevision: 2 } }) + '\n' + tool('delete', 'TeamDelete', {}))
+    await appendFile(
+      file,
+      JSON.stringify({ uuid: 'result', timestamp: '2026-01-01T00:00:01Z', durationMs: 185, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'task', content: '{"task":{"id":"1"}}' }] }, toolUseResult: { task: { id: '1' }, taskListMutationRevision: 2 } }) + '\n' +
+      JSON.stringify({ uuid: 'result-zero', timestamp: '2026-01-01T00:00:02Z', durationMs: 0, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'task-denied', content: 'denied', is_error: true }] } }) + '\n' +
+      JSON.stringify({ uuid: 'result-neg', timestamp: '2026-01-01T00:00:03Z', durationMs: -5, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'task-bad', content: 'ok' }] } }) + '\n' +
+      tool('delete', 'TeamDelete', {}),
+    )
     const projection = await readTeamTranscriptProjection(file)
-    expect(projection.messages).toHaveLength(4)
-    expect(projection.messages[2]?.toolUseResult).toEqual({ task: { id: '1' }, taskListMutationRevision: 2 })
+    expect(projection.messages).toHaveLength(8)
+    expect(projection.messages[4]?.toolUseResult).toEqual({ task: { id: '1' }, taskListMutationRevision: 2 })
+    expect(projection.messages[4]?.durationMs).toBe(185)
+    expect(projection.messages[5]?.durationMs).toBe(0)
+    expect('durationMs' in projection.messages[6]!).toBe(false)
   })
 
   test('rebuilds after truncation and retries a partial tail after completion', async () => {

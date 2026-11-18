@@ -126,6 +126,16 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">
+          <img src="docs/images/sponsors/dynadot-logo.png" width="180" alt="Dynadot">
+        </a>
+      </td>
+      <td valign="middle">
+        Dynadot is an ICANN-accredited domain registrar, ranks among the world's top five registrars by domains under management, and is a leading international domain marketplace. It offers quality domain-focused services, including domain registration, trading, management, business email, and website building. All users can access a variety of domain promotions and submit domain backorder requests for free. Visit the <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">Dynadot domain marketplace</a>, featuring a wide selection of domains, low commissions, installment payments, and no-reserve listings, to find your ideal domain.
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">

@@ -89,3 +89,99 @@ describe('translateCliMessage: result timing', () => {
     expect(complete?.timing?.decode_ms).toBe(2_000)
   })
 })
+
+describe('translateCliMessage: tool_result durationMs', () => {
+  it('forwards per-tool execution durationMs on user tool_result and background agent_tool_activity frames', () => {
+    const [direct] = translateCliMessage(
+      {
+        type: 'user',
+        durationMs: 220,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_edit_1', content: 'ok', is_error: false }],
+        },
+      },
+      'session-tool-timing',
+    ) as Array<Record<string, unknown>>
+
+    expect(direct).toEqual({
+      type: 'tool_result',
+      toolUseId: 'toolu_edit_1',
+      content: 'ok',
+      isError: false,
+      parentToolUseId: undefined,
+      durationMs: 220,
+    })
+
+    const [bgActivity] = translateCliMessage(
+      {
+        type: 'system',
+        subtype: 'agent_tool_activity',
+        tool_use_id: 'toolu_parent_agent',
+        activity: {
+          kind: 'tool_result',
+          tool_use_id: 'toolu_child_edit',
+          content: 'done',
+          is_error: false,
+          duration_ms: 145,
+        },
+      },
+      'session-tool-timing',
+    ) as Array<Record<string, unknown>>
+
+    expect(bgActivity).toEqual({
+      type: 'tool_result',
+      toolUseId: 'toolu_parent_agent/toolu_child_edit',
+      originalToolUseId: 'toolu_child_edit',
+      content: 'done',
+      isError: false,
+      parentToolUseId: 'toolu_parent_agent',
+      durationMs: 145,
+    })
+  })
+
+  it('omits durationMs when absent, invalid, or ambiguous across multiple tool_result blocks', () => {
+    const [legacy] = translateCliMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_legacy', content: 'ok', is_error: false }],
+        },
+      },
+      'session-tool-timing-legacy',
+    ) as Array<Record<string, unknown>>
+    expect('durationMs' in legacy!).toBe(false)
+
+    const [invalid] = translateCliMessage(
+      {
+        type: 'user',
+        durationMs: -5,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_neg', content: 'ok', is_error: false }],
+        },
+      },
+      'session-tool-timing-invalid',
+    ) as Array<Record<string, unknown>>
+    expect('durationMs' in invalid!).toBe(false)
+
+    const multi = translateCliMessage(
+      {
+        type: 'user',
+        durationMs: 200,
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_a', content: 'a', is_error: false },
+            { type: 'tool_result', tool_use_id: 'toolu_b', content: 'b', is_error: false },
+          ],
+        },
+      },
+      'session-tool-timing-multi',
+    ) as Array<Record<string, unknown>>
+    expect(multi).toHaveLength(2)
+    expect('durationMs' in multi[0]!).toBe(false)
+    expect('durationMs' in multi[1]!).toBe(false)
+  })
+})

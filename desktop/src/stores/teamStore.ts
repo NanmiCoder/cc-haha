@@ -809,7 +809,8 @@ function mergeDurableMemberMessage(durable: UIMessage, live: UIMessage): UIMessa
     return { ...durable, ...live }
   }
   if (durable.type === 'tool_result' && live.type === 'tool_result') {
-    return { ...durable, ...live }
+    const durationMs = durable.durationMs ?? live.durationMs
+    return { ...durable, ...live, ...(durationMs !== undefined ? { durationMs } : {}) }
   }
   if (durable.type === 'thinking' && live.type === 'thinking') return live
   return durable
@@ -1513,6 +1514,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
           // Structured tool output drives the richer result renderers; omitting
           // it here flattened every member tool call back to plain text.
           toolUseResult: msg.toolUseResult,
+          ...(typeof msg.durationMs === 'number' &&
+          Number.isFinite(msg.durationMs) &&
+          msg.durationMs >= 0
+            ? { durationMs: msg.durationMs }
+            : {}),
         }))
         const existingMessages = useChatStore.getState().sessions[sessionId]?.messages ?? []
         const hasIncrementalMetadata = typeof response.signature === 'string' &&

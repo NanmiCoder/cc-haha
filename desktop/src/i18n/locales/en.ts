@@ -3574,7 +3574,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'permission.planKeepPlanning': 'Keep planning',
   'permission.planFeedbackPlaceholder': 'Tell Claude what to change',
   'permission.planExecutionModel': 'Execution model',
-  'permission.planExecutionModelPending': 'applies on approve',
+  'permission.planExecutionModelPending': 'applies on submit',
   'permission.planEmpty': 'No plan content available.',
   'permission.planApproved': 'Plan approved',
   'permission.planRejected': 'Plan rejected',

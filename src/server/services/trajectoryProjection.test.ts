@@ -438,4 +438,33 @@ describe('projectTrajectoryRows review fixes', () => {
     // The result arriving on its own page still yields a mergeable tool piece.
     expect(projectTrajectoryRows([oversized], { turnBase: 0, skipSidechain: true })).toMatchObject([{ id: 't:toolu_big', partial: true, resultOmittedBytes: 9_900_000 }])
   })
+
+  it('projects per-tool execution durationMs for batched serial calls while keeping legacy records clean', () => {
+    // Issue #1915: 5 serial Edits + 1 Grep hold their tool_use timestamps in StreamAssistantCommitBuffer
+    // (~1.55s) and queue serially (+450ms each), while each tool's actual execution is ~220ms.
+    const entries = page([
+      user('u-01', 'refactor 5 files'),
+      assistant('a-01', 'msg_batch', [{ type: 'tool_use', id: 'edit_1', name: 'Edit', input: { file_path: 'a.ts' } }], { timestamp: '2026-11-16T04:00:00.000Z' }),
+      assistant('a-02', 'msg_batch', [{ type: 'tool_use', id: 'edit_2', name: 'Edit', input: { file_path: 'b.ts' } }], { timestamp: '2026-11-16T04:00:00.000Z' }),
+      assistant('a-03', 'msg_batch', [{ type: 'tool_use', id: 'grep_legacy', name: 'Grep', input: { pattern: 'foo' } }], { timestamp: '2026-11-16T04:00:00.000Z' }),
+      assistant('a-04', 'msg_batch', [
+        { type: 'tool_use', id: 'multi_1', name: 'Read', input: { file_path: 'c.ts' } },
+        { type: 'tool_use', id: 'multi_2', name: 'Read', input: { file_path: 'd.ts' } },
+      ], { timestamp: '2026-11-16T04:00:00.000Z' }),
+      user('u-02', [{ type: 'tool_result', tool_use_id: 'edit_1', content: 'updated a.ts' }], { timestamp: '2026-11-16T04:00:01.770Z', durationMs: 220 }),
+      user('u-03', [{ type: 'tool_result', tool_use_id: 'edit_2', content: 'updated b.ts' }], { timestamp: '2026-11-16T04:00:02.220Z', durationMs: 215 }),
+      user('u-04', [{ type: 'tool_result', tool_use_id: 'grep_legacy', content: '3 matches' }], { timestamp: '2026-11-16T04:00:02.490Z' }),
+      user('u-05', [
+        { type: 'tool_result', tool_use_id: 'multi_1', content: 'c' },
+        { type: 'tool_result', tool_use_id: 'multi_2', content: 'd' },
+      ], { timestamp: '2026-11-16T04:00:02.900Z', durationMs: 180 }),
+    ])
+    const rows = projectTrajectoryRows(entries, { turnBase: 0, skipSidechain: true })
+    expect(byId(rows, 't:edit_1').durationMs).toBe(220)
+    expect(byId(rows, 't:edit_2').durationMs).toBe(215)
+    expect('durationMs' in byId(rows, 't:grep_legacy')).toBe(false)
+    // A synthetic multi-result record cannot attribute one durationMs to multiple tool calls.
+    expect('durationMs' in byId(rows, 't:multi_1')).toBe(false)
+    expect('durationMs' in byId(rows, 't:multi_2')).toBe(false)
+  })
 })

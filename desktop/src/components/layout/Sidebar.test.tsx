@@ -190,7 +190,7 @@ vi.mock('./ProjectEditorModal', () => ({
     error?: string | null
     onClose: () => void
     onSourceFolderChange?: (path: string) => void
-    onSubmit: (submission: { name: string; sourceFolder: string; logicalRoot: string }) => void | Promise<void>
+    onSubmit: (submission: { name: string; sourceFolder: string; logicalRoot: string; additionalDirectories: string[] }) => void | Promise<void>
     onRestoreFolderName?: () => void | Promise<void>
     onRemoveFromSidebar?: () => void | Promise<void>
   }) => {
@@ -222,7 +222,7 @@ vi.mock('./ProjectEditorModal', () => ({
         )}
         <button
           type="button"
-          onClick={() => void props.onSubmit({ name, sourceFolder, logicalRoot })}
+          onClick={() => void props.onSubmit({ name, sourceFolder, logicalRoot, additionalDirectories: [] })}
         >
           Submit {props.mode} project
         </button>
@@ -233,6 +233,7 @@ vi.mock('./ProjectEditorModal', () => ({
               name: props.suggestedName!.trim().replace(/\s+/g, ' '),
               sourceFolder,
               logicalRoot,
+              additionalDirectories: [],
             })}
           >
             Submit folder project name
@@ -1462,69 +1463,46 @@ describe('Sidebar', () => {
     await waitFor(() => expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha'))
   })
 
-  it('creates a named project at its resolved root while launching the selected source folder', async () => {
+  it('creates a nested project at its selected root without renaming the parent repository', async () => {
     repositoryContextMock.mockResolvedValue({ repoRoot: '/workspace/repository' })
     createSession.mockResolvedValue('created-project-session')
 
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
-
-    const editor = screen.getByTestId('project-editor-modal')
-    expect(editor).toHaveAttribute('data-source-folder', '')
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
 
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalledWith('/workspace/repository/packages/app'))
-    await waitFor(() => {
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/repository/packages/app')
-      expect(editor).toHaveAttribute('data-logical-root', '/workspace/repository')
-      expect(editor).toHaveAttribute('data-suggested-name', 'repository')
-    })
-
+    const editor = screen.getByTestId('project-editor-modal')
+    expect(editor).toHaveAttribute('data-logical-root', '/workspace/repository/packages/app')
+    expect(editor).toHaveAttribute('data-suggested-name', 'app')
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
+
     await waitFor(() => {
+      expect(desktopUiPreferencesApiMock.updateProjectDirectories).toHaveBeenCalledWith(
+        '/workspace/repository/packages/app', [], { createProject: true },
+      )
       expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-        '/workspace/repository',
-        'Created project',
+        '/workspace/repository/packages/app', 'Created project',
       )
       expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
       expect(connectToSession).toHaveBeenCalledWith('created-project-session')
     })
-    expect(createSession.mock.invocationCallOrder[0]).toBeLessThan(
-      desktopUiPreferencesApiMock.updateProjectDisplayName.mock.invocationCallOrder[0]!,
+    expect(desktopUiPreferencesApiMock.updateProjectDirectories.mock.invocationCallOrder[0]).toBeLessThan(
+      createSession.mock.invocationCallOrder[0]!,
     )
-    expect(repositoryContextMock).toHaveBeenCalledTimes(1)
+    expect(repositoryContextMock).not.toHaveBeenCalled()
   })
 
-  it('opens the session before repository context resolves and falls back after lookup failure', async () => {
-    const repositoryContext = createDeferred<{ repoRoot: string | null; workDir?: string }>()
-    repositoryContextMock.mockReturnValueOnce(repositoryContext.promise)
+  it('keeps a hidden parent hidden when creating an independent child project', async () => {
+    window.localStorage.setItem(PROJECT_HIDDEN_STORAGE_KEY, JSON.stringify(['/workspace/repository']))
     createSession.mockResolvedValue('created-project-session')
-
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
-
-    await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
-      expect(connectToSession).toHaveBeenCalledWith('created-project-session')
-      expect(screen.queryByTestId('project-editor-modal')).not.toBeInTheDocument()
-    })
-    expect(desktopUiPreferencesApiMock.updateProjectDisplayName).not.toHaveBeenCalled()
-
-    await act(async () => {
-      repositoryContext.reject(new Error('repository context unavailable'))
-      await repositoryContext.promise.catch(() => undefined)
-    })
-
-    await waitFor(() => expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-      '/workspace/repository/packages/app',
-      'Created project',
-    ))
+    await waitFor(() => expect(connectToSession).toHaveBeenCalledWith('created-project-session'))
+    expect(JSON.parse(window.localStorage.getItem(PROJECT_HIDDEN_STORAGE_KEY)!)).toEqual(['/workspace/repository'])
   })
 
   it('resets instead of persisting a redundant alias when creating with the folder name', async () => {
@@ -1541,7 +1519,7 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     await waitFor(() => expect(screen.getByTestId('project-editor-modal')).toHaveAttribute(
       'data-suggested-name',
-      'repository',
+      'app',
     ))
     fireEvent.click(screen.getByRole('button', { name: 'Submit folder project name' }))
 
@@ -1550,7 +1528,7 @@ describe('Sidebar', () => {
       expect(screen.queryByTestId('project-editor-modal')).not.toBeInTheDocument()
     })
     expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-      '/workspace/repository',
+      '/workspace/repository/packages/app',
       null,
     )
   })
@@ -1572,7 +1550,6 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
 
     await waitFor(() => {
@@ -1607,7 +1584,6 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
 
     await waitFor(() => {
@@ -1618,69 +1594,36 @@ describe('Sidebar', () => {
     expect(connectToSession).not.toHaveBeenCalled()
   })
 
-  it('uses the resolved non-git workDir as the project display-name key', async () => {
-    repositoryContextMock.mockResolvedValue({
-      repoRoot: null,
-      workDir: '/real/workspace/project',
+  it('uses the server-validated project identity for the display name', async () => {
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockResolvedValueOnce({
+      ok: true, projectKey: '/real/workspace/project', mainDirectory: '/real/workspace/project', additionalDirectories: [],
     })
     createSession.mockResolvedValue('created-project-session')
-
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-
-    await waitFor(() => {
-      const editor = screen.getByTestId('project-editor-modal')
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/repository/packages/app')
-      expect(editor).toHaveAttribute('data-logical-root', '/real/workspace/project')
-      expect(editor).toHaveAttribute('data-suggested-name', 'project')
-    })
-
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
+
     await waitFor(() => {
       expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-        '/real/workspace/project',
-        'Created project',
+        '/real/workspace/project', 'Created project',
       )
       expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
     })
   })
 
-  it('keeps the latest logical root when an earlier lookup finishes late', async () => {
-    let resolveFirstLookup: (value: { repoRoot: string | null }) => void = () => undefined
-    const firstLookup = new Promise<{ repoRoot: string | null }>((resolve) => {
-      resolveFirstLookup = resolve
-    })
-    repositoryContextMock
-      .mockImplementationOnce(() => firstLookup)
-      .mockResolvedValueOnce({ repoRoot: '/workspace/other' })
-
+  it('keeps the latest selected folder as its independent project root', () => {
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose other project source' }))
-
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenNthCalledWith(2, '/workspace/other'))
-    await waitFor(() => {
-      const editor = screen.getByTestId('project-editor-modal')
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/other')
-      expect(editor).toHaveAttribute('data-logical-root', '/workspace/other')
-      expect(editor).toHaveAttribute('data-suggested-name', 'other')
-    })
-
-    await act(async () => {
-      resolveFirstLookup({ repoRoot: '/workspace/repository' })
-      await Promise.resolve()
-    })
-
     const editor = screen.getByTestId('project-editor-modal')
     expect(editor).toHaveAttribute('data-source-folder', '/workspace/other')
     expect(editor).toHaveAttribute('data-logical-root', '/workspace/other')
     expect(editor).toHaveAttribute('data-suggested-name', 'other')
+    expect(repositoryContextMock).not.toHaveBeenCalled()
   })
 
   it('edits, resets, and removes a project without changing its real path or sessions', async () => {

@@ -8,12 +8,15 @@ import {
   channelSummary,
   computerSettingsTitle,
   computersValue,
+  createPushTestFeedback,
+  deliveryCardNote,
   deliveryNote,
   deliveryStatus,
   liveActivityValue,
   permissionLabel,
   pushTestNote,
   readNotificationPermission,
+  reconcilePushTestFeedback,
   remindFootnote,
   runTestNotification,
   testNotificationContent,
@@ -450,8 +453,224 @@ describe('iPhone alerts the computer could not send through Expo', () => {
     expect(deliveryStatus(input()).state).toBe('ok')
   })
   test('the note names the cause and the proxy setting that fixes it', () => {
-    const note = deliveryNote(failing)
-    expect(note).toContain('电脑连不上 Expo 推送服务（exp.host）')
-    expect(note).toContain('「设置 → 通用」里配置网络代理')
+    for (const push of [
+      failing,
+      { status: 'registered', issue: 'relayFailing', error: 'Expo 推送服务拒绝了发送（407）' },
+      { status: 'registered', issue: 'relayFailing' },
+    ] as const) {
+      const note = deliveryNote(push)
+      expect(note).toContain('如果电脑要通过代理上网，请在电脑端「设置 → 通用」里配置网络代理，再点「测试通知」确认。')
+    }
+    expect(deliveryNote(failing)).toContain('电脑连不上 Expo 推送服务（exp.host）')
+    expect(deliveryNote({ status: 'registered', issue: 'relayFailing' })).toContain('电脑发送推送失败')
+  })
+
+  test('publisher push credential rejections do not blame computer proxy or phone permissions', () => {
+    for (const code of ['InvalidCredentials', 'MismatchSenderId'] as const) {
+      const note = deliveryNote({
+        status: 'registered',
+        issue: 'relayFailing',
+        error: `Expo 推送服务拒绝了发送（${code}）`,
+      })
+      expect(note).toContain(`Expo 推送服务拒绝了发送（${code}）`)
+      expect(note).toContain('应用发布侧的推送凭证')
+      expect(note).toContain('与手机通知权限和电脑网络无关')
+      expect(note).toContain('反馈问题')
+      expect(note).toContain('「测试通知」')
+      expect(note).not.toContain('代理')
+      expect(note).not.toContain('电脑推送设置')
+    }
+  })
+
+  test('rate-limited Expo rejections ask to retry later without proxy advice', () => {
+    for (const code of ['MessageRateExceeded', '429'] as const) {
+      const note = deliveryNote({
+        status: 'registered',
+        issue: 'relayFailing',
+        error: `Expo 推送服务拒绝了发送（${code}）`,
+      })
+      expect(note).toContain(`Expo 推送服务拒绝了发送（${code}）`)
+      expect(note).toContain('推送过于频繁')
+      expect(note).toContain('「测试通知」')
+      expect(note).not.toContain('代理')
+    }
+  })
+
+  test('payload size, ExpoError and upstream 5xx rejections give non-proxy guidance', () => {
+    const tooBig = deliveryNote({
+      status: 'registered',
+      issue: 'relayFailing',
+      error: 'Expo 推送服务拒绝了发送（MessageTooBig）',
+    })
+    expect(tooBig).toContain('Expo 推送服务拒绝了发送（MessageTooBig）')
+    expect(tooBig).toContain('通知内容超出长度限制')
+    expect(tooBig).toContain('「测试通知」')
+    expect(tooBig).toContain('反馈问题')
+    expect(tooBig).not.toContain('代理')
+
+    for (const code of ['503', 'ExpoError'] as const) {
+      const upstream = deliveryNote({
+        status: 'registered',
+        issue: 'relayFailing',
+        error: `Expo 推送服务拒绝了发送（${code}）`,
+      })
+      expect(upstream).toContain(`Expo 推送服务拒绝了发送（${code}）`)
+      expect(upstream).toContain('Expo 推送服务暂时异常')
+      expect(upstream).toContain('「测试通知」')
+      expect(upstream).not.toContain('代理')
+    }
+  })
+
+  test('failed test notification surfaces InvalidCredentials instead of blaming computer push settings', async () => {
+    const invalidCreds = {
+      status: 'registered',
+      provider: 'expo',
+      issue: 'relayFailing',
+      error: 'Expo 推送服务拒绝了发送（InvalidCredentials）',
+    } as const
+    const serverFailure = {
+      status: 'failed',
+      error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。',
+    } as const
+
+    const directNote = pushTestNote(serverFailure, invalidCreds)
+    expect(directNote).toContain('测试通知发送失败')
+    expect(directNote).toContain('InvalidCredentials')
+    expect(directNote).toContain('应用发布侧的推送凭证')
+    expect(directNote).not.toContain('请检查电脑推送设置后重试')
+    expect(directNote).not.toContain('代理')
+
+    const outcome = await runTestNotification({
+      hostId: 'host-1',
+      push: invalidCreds,
+      getToken: async () => 'ExponentPushToken[fixture]',
+      postTest: async () => serverFailure,
+      scheduleLocal: async () => {},
+    })
+    expect(outcome.via).toBe('remote')
+    expect(outcome.note).toBe(directNote)
+
+    // First-time test before retryPush() has populated relayFailing, followed by refresh:
+    const beforeRefresh = pushTestNote(serverFailure, { status: 'registered', provider: 'expo' })
+    expect(beforeRefresh).not.toContain('请检查电脑推送设置后重试')
+    expect(deliveryCardNote(beforeRefresh, invalidCreds)).toBe(directNote)
+    // Stale loading frame during retryPush() preserves the already-known InvalidCredentials note:
+    expect(deliveryCardNote(directNote, { status: 'loading' })).toBe(directNote)
+    // Once credentials are fixed and test succeeds, the success banner note wins:
+    const sentNote = pushTestNote({ status: 'sent' }, invalidCreds)
+    expect(deliveryCardNote(sentNote, invalidCreds)).toBe('电脑已发送测试通知，屏幕顶部应弹出横幅。')
+    // Non-Expo direct computer push keeps its computer push settings prompt:
+    const computerDirect = pushTestNote(serverFailure, { status: 'registered', provider: 'direct' })
+    expect(computerDirect).toBe('测试通知发送失败，请检查电脑推送设置后重试。')
+    expect(deliveryCardNote(computerDirect, { status: 'registered', provider: 'direct' })).toBe(computerDirect)
+  })
+
+  test('upgraded relayFailing test feedback persists across subsequent loading/error frames until recovery', async () => {
+    const initialExpo = { status: 'registered', provider: 'expo' } as const
+    const invalidCreds = {
+      status: 'registered',
+      provider: 'expo',
+      issue: 'relayFailing',
+      error: 'Expo 推送服务拒绝了发送（InvalidCredentials）',
+    } as const
+    const serverFailure = {
+      status: 'failed',
+      error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。',
+    } as const
+    const expectedUpgraded = pushTestNote(serverFailure, invalidCreds)
+
+    const outcome = await runTestNotification({
+      hostId: 'host-1',
+      push: initialExpo,
+      getToken: async () => 'ExponentPushToken[fixture]',
+      postTest: async () => serverFailure,
+      scheduleLocal: async () => {},
+    })
+    // Step 1: Test finishes before retryPush() has fetched relayErrors.expo
+    let feedback = createPushTestFeedback(outcome, 'host-1', initialExpo)
+    expect(feedback.sawRelayFailing).toBe(false)
+    expect(deliveryCardNote(feedback, initialExpo, undefined, 'host-1')).toBe(
+      '测试通知发送失败，请再点一次「测试通知」确认。'
+    )
+
+    // Step 2: retryPush() enters loading, then lands with InvalidCredentials
+    feedback = reconcilePushTestFeedback(feedback, { status: 'loading' }, 'host-1')!
+    const upgraded = reconcilePushTestFeedback(feedback, invalidCreds, 'host-1')!
+    expect(upgraded.sawRelayFailing).toBe(true)
+    expect(upgraded.note).toBe(expectedUpgraded)
+    // Strictly reference-idempotent once upgraded (no render loop)
+    expect(reconcilePushTestFeedback(upgraded, invalidCreds, 'host-1')).toBe(upgraded)
+
+    // Step 3 (Bug 1 regression): User opens「反馈问题」and returns to foreground -> loading / network blip
+    const afterForegroundLoading = reconcilePushTestFeedback(upgraded, { status: 'loading' }, 'host-1')
+    expect(afterForegroundLoading).toBe(upgraded)
+    expect(deliveryCardNote(afterForegroundLoading, { status: 'loading' }, undefined, 'host-1')).toBe(
+      expectedUpgraded
+    )
+    const afterTransientError = reconcilePushTestFeedback(
+      afterForegroundLoading,
+      { status: 'error', issue: 'network' },
+      'host-1'
+    )
+    expect(afterTransientError).toBe(upgraded)
+    expect(
+      deliveryCardNote(afterTransientError, { status: 'error', issue: 'network' }, undefined, 'host-1')
+    ).toBe(expectedUpgraded)
+
+    // Step 4 (Bug 2a regression): Publisher fixes EAS credentials and foreground refresh succeeds -> ok
+    const afterRecovery = reconcilePushTestFeedback(afterTransientError, initialExpo, 'host-1')
+    expect(afterRecovery).toBeNull()
+    expect(deliveryStatus(input({ push: initialExpo }))).toMatchObject({
+      state: 'ok',
+      title: '通知已就绪',
+    })
+    expect(deliveryCardNote(afterRecovery, initialExpo, undefined, 'host-1')).toBe('')
+  })
+
+  test('failed test feedback clears across host or provider switches while preserving DeviceNotRegistered retry prompt', () => {
+    const healthyExpo = { status: 'registered', provider: 'expo' } as const
+    const healthyDirect = { status: 'registered', provider: 'direct' } as const
+    const invalidCreds = {
+      status: 'registered',
+      provider: 'expo',
+      issue: 'relayFailing',
+      error: 'Expo 推送服务拒绝了发送（InvalidCredentials）',
+    } as const
+    const serverFailure = {
+      status: 'failed',
+      error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。',
+    } as const
+
+    // Starting directly from relayFailing also clears when host recovers, switches, or changes provider:
+    const fromRelayFailing = createPushTestFeedback(
+      { via: 'remote', note: pushTestNote(serverFailure, invalidCreds) },
+      'host-1',
+      invalidCreds
+    )
+    expect(fromRelayFailing.sawRelayFailing).toBe(true)
+    expect(reconcilePushTestFeedback(fromRelayFailing, healthyExpo, 'host-1')).toBeNull()
+    expect(reconcilePushTestFeedback(fromRelayFailing, invalidCreds, 'host-2')).toBeNull()
+    expect(reconcilePushTestFeedback(fromRelayFailing, undefined, undefined)).toBeNull()
+    expect(reconcilePushTestFeedback(fromRelayFailing, healthyDirect, 'host-1')).toBeNull()
+    expect(
+      reconcilePushTestFeedback(fromRelayFailing, { status: 'permissionRequired' }, 'host-1')
+    ).toBeNull()
+
+    // DeviceNotRegistered: sendTest failed without relayErrors.expo, then retryPush() re-registered cleanly:
+    const deviceNotRegistered = createPushTestFeedback(
+      { via: 'remote', note: pushTestNote(serverFailure, healthyExpo) },
+      'host-1',
+      healthyExpo
+    )
+    expect(deviceNotRegistered.sawRelayFailing).toBe(false)
+    const duringLoading = reconcilePushTestFeedback(deviceNotRegistered, { status: 'loading' }, 'host-1')
+    const afterReRegister = reconcilePushTestFeedback(duringLoading, healthyExpo, 'host-1')
+    expect(afterReRegister).toBe(deviceNotRegistered)
+    expect(deliveryCardNote(afterReRegister, healthyExpo, undefined, 'host-1')).toBe(
+      '测试通知发送失败，请再点一次「测试通知」确认。'
+    )
+    // Switching hosts or switching to direct still clears it:
+    expect(reconcilePushTestFeedback(afterReRegister, healthyExpo, 'host-2')).toBeNull()
+    expect(reconcilePushTestFeedback(afterReRegister, healthyDirect, 'host-1')).toBeNull()
   })
 })

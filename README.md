@@ -126,6 +126,16 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">
+          <img src="docs/images/sponsors/dynadot-logo.png" width="180" alt="Dynadot">
+        </a>
+      </td>
+      <td valign="middle">
+        Dynadot 是 ICANN 认证域名注册商，域名保有量全球前五，首屈一指的国际域名交易平台，提供优质的以域名为中心的域名注册，域名交易，域名管理，以及企业邮箱及建站服务。为所有用户提供多种域名优惠，并支持免费提交域名抢注需求。访问集合多种类，低佣金，可分期且无保留价格的 <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">Dynadot 域名市场</a>，找到与您最匹配的心仪域名。
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>中转站导航</b></a>
       </td>
       <td valign="middle">

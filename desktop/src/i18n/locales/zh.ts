@@ -3572,7 +3572,7 @@ export const zh: Record<TranslationKey, string> = {
   'permission.planKeepPlanning': '继续规划',
   'permission.planFeedbackPlaceholder': '告诉 Claude 需要修改什么',
   'permission.planExecutionModel': '执行模型',
-  'permission.planExecutionModelPending': '批准后生效',
+  'permission.planExecutionModelPending': '提交后生效',
   'permission.planEmpty': '暂无计划内容。',
   'permission.planApproved': '计划已批准',
   'permission.planRejected': '计划已拒绝',

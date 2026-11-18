@@ -2,7 +2,8 @@ import { c as _c } from "react/compiler-runtime";
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle';
 import { spawnSync } from 'child_process';
-import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
+import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens, getMainLoopModelOverride } from '../bootstrap/state.js';
+import { getMainLoopModel } from '../utils/model/model.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
@@ -2410,6 +2411,7 @@ export function REPL({
       if (!mainThreadAgentDefinition) return merged;
       return resolveAgentTools(mainThreadAgentDefinition, merged, false, true).resolvedTools;
     };
+    const initialModelOverride = getMainLoopModelOverride();
     return {
       abortController,
       options: {
@@ -2418,6 +2420,10 @@ export function REPL({
         debug,
         verbose: s.verbose,
         mainLoopModel,
+        refreshMainLoopModel: () =>
+          getMainLoopModelOverride() !== initialModelOverride
+            ? getMainLoopModel()
+            : mainLoopModel,
         thinkingConfig: s.thinkingEnabled !== false ? (
           thinkingConfig.type === 'disabled' ? { type: 'adaptive' } : thinkingConfig
         ) : {
