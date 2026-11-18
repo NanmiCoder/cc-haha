@@ -158,6 +158,15 @@ export function toolResultImageToBlob(image: ToolResultImage): Blob {
   return new Blob([bytes], { type: image.mediaType })
 }
 
+/** Group offscreen calls by block type without validating their image bytes. */
+export function hasToolResultImageBlock(content: unknown): boolean {
+  try {
+    return contentBlocks(content).some(isImageBlock)
+  } catch {
+    return false
+  }
+}
+
 function contentBlocks(content: unknown): readonly unknown[] {
   if (Array.isArray(content)) return content
   if (content && typeof content === 'object') {

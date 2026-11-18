@@ -5,6 +5,8 @@ import { parseScheduledTaskResult } from '@/lib/scheduledTask'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
 import { resolveConversationImages } from '@/components/chat/conversationImages'
+import { isImageGenerationToolName } from '@/components/chat/imageGenerationTools'
+import { hasToolResultImageBlock } from '@/lib/toolResultContent'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
 import { Component, useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
@@ -846,19 +848,23 @@ export function buildRenderModel(
       id: `group-${toolCalls[0]!.id}`,
     })
   }
-  const appendRootToolCall = (toolCall: ToolCall) => {
+  const appendRootToolCall = (toolCall: ToolCall, result: ToolResult | undefined) => {
     const nextIsAgent = toolCall.toolName === 'Agent'
+    // Keep returned pictures with their source row when surrounding activity folds.
+    const separateImageRow = !nextIsAgent && !isImageGenerationToolName(toolCall.toolName)
+      && hasToolResultImageBlock(result?.content)
     // Agent runs render as their own dispatch cards, so they never mix with
     // ordinary steps — including the thinking that preceded the dispatch.
     const pendingIsAgentGroup = pendingToolCount > 0 && pendingAgentCount === pendingToolCount
     const pendingBlocksAgent = nextIsAgent && pendingSteps.length > pendingAgentCount
 
-    if (pendingBlocksAgent || (pendingToolCount > 0 && pendingIsAgentGroup !== nextIsAgent)) {
+    if (separateImageRow || pendingBlocksAgent || (pendingToolCount > 0 && pendingIsAgentGroup !== nextIsAgent)) {
       flushGroup()
     }
     pendingSteps.push({ kind: 'tool', toolCall })
     pendingToolCount += 1
     if (nextIsAgent) pendingAgentCount += 1
+    if (separateImageRow) flushGroup()
   }
   const appendThinking = (message: Extract<UIMessage, { type: 'thinking' }>) => {
     if (pendingToolCount > 0 && pendingAgentCount === pendingToolCount) flushGroup()
@@ -1085,7 +1091,7 @@ export function buildRenderModel(
         flushGroup()
         items.push({ kind: 'message', message: msg })
       } else {
-        appendRootToolCall(msg)
+        appendRootToolCall(msg, toolResult)
       }
     } else if (msg.type === 'thinking') {
       appendThinking(msg)

@@ -24,6 +24,7 @@ import {
 import { setComposerText, stubRangeGeometry } from './composerTestUtils'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
 import { sessionsApi } from '../../api/sessions'
+import { wsManager } from '@/api/websocket'
 import { ApiError } from '../../api/client'
 import { subagentsApi, type SubagentRunResponse } from '../../api/subagents'
 import { teamsApi } from '../../api/teams'
@@ -463,6 +464,44 @@ describe('MessageList nested tool calls', () => {
     const className = screen.getByRole('img', { name: 'single.png' }).className
     expect(className).toContain('max-h-[340px]')
     expect(className).toContain('max-w-[360px]')
+  })
+
+  it.each(['stop', 'send queued message'])('keeps returned images with their tool rows after %s', (action) => {
+    vi.spyOn(wsManager, 'isConnected').mockReturnValue(true)
+    vi.spyOn(wsManager, 'send').mockImplementation(() => {})
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL() { return 'blob:test-picture' }
+      static revokeObjectURL() {}
+    })
+    const picture = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]
+    const messages: UIMessage[] = [
+      { type: 'tool_use', id: 'read-a', toolUseId: 'a', toolName: 'Read', input: { file_path: '/tmp/a.png' }, timestamp: 1 },
+      { type: 'tool_result', id: 'result-a', toolUseId: 'a', content: picture, isError: false, timestamp: 2 },
+      { type: 'tool_use', id: 'command', toolUseId: 'cmd', toolName: 'Bash', input: { command: 'pwd' }, timestamp: 3 },
+      { type: 'tool_result', id: 'result-cmd', toolUseId: 'cmd', content: '/tmp', isError: false, timestamp: 4 },
+      { type: 'tool_use', id: 'read-b', toolUseId: 'b', toolName: 'Read', input: { file_path: '/tmp/b.png' }, timestamp: 5 },
+      { type: 'tool_result', id: 'result-b', toolUseId: 'b', content: picture, isError: false, timestamp: 6 },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages, chatState: 'thinking' }) } })
+    const { container } = render(<MessageList sessionId={ACTIVE_TAB} />)
+    const rowOrder = () => Array.from(container.querySelectorAll('[data-tool-use-id]'), row => [
+      row.getAttribute('data-tool-use-id'), row.querySelectorAll('[data-tool-result-images] img').length,
+    ])
+    const expected = [['a', 1], ['cmd', 0], ['b', 1]]
+    expect(rowOrder()).toEqual(expected)
+
+    act(() => {
+      const store = useChatStore.getState()
+      if (action === 'stop') store.stopGeneration(ACTIVE_TAB)
+      else {
+        const id = store.queueUserMessage(ACTIVE_TAB, { content: 'Follow up', displayContent: 'Follow up' })
+        store.sendQueuedUserMessage(ACTIVE_TAB, id)
+      }
+    })
+
+    if (action === 'send queued message') expect(screen.getByText('Follow up')).toBeTruthy()
+    expect(rowOrder()).toEqual(expected)
+    expect(container.querySelectorAll('[data-tool-result-images]')).toHaveLength(2)
   })
 
   it('navigates from a user attachment through assistant and tool images in the same session', () => {
