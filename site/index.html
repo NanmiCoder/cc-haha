@@ -23,6 +23,13 @@
       // 首帧就把语言定下来：没有保存的选择时按浏览器首选语言。只认根路径，带语言前缀
       // 的地址是用户的明确意图。规则与 src/lib/locale.js 保持一致。
       (function () {
+        // 直接打开静态构建生成的 index.html 时，让路由器使用对应的目录地址。
+        var indexFile = '/index.html'
+        if (window.location.pathname.endsWith(indexFile)) {
+          var routeUrl = new URL(window.location.href)
+          routeUrl.pathname = routeUrl.pathname.slice(0, -indexFile.length) || '/'
+          window.history.replaceState(window.history.state, '', routeUrl)
+        }
         if (window.location.pathname.replace(/\/+$/, '') !== '') return
         var preferredLanguage = (navigator.languages && navigator.languages[0]) || navigator.language || ''
         var locale = /^zh(?:[-_]|$)/i.test(preferredLanguage) ? 'zh' : 'en'
