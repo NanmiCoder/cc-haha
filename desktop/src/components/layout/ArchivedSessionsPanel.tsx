@@ -9,8 +9,7 @@ import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
-import { copyTextToClipboard } from '@/lib/clipboard'
-import { buildSessionMarkdown, downloadTextFile, isCompleteSessionHistory, sanitizeSessionFilename } from '@/lib/sessionMarkdown'
+import { runSessionMarkdownAction, type SessionMarkdownActionMode } from '@/lib/sessionMarkdown'
 import { useChatStore } from '@/stores/chatStore'
 import { resolveProjectDisplayName } from '@/stores/projectDisplayNameStore'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -162,25 +161,15 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
     useChatStore.getState().connectToSession(session.id)
   }
 
-  const handleMarkdown = async (session: SessionListItem, mode: 'copy' | 'export') => {
+  const handleMarkdown = (session: SessionListItem, mode: SessionMarkdownActionMode) => {
     setMenu(null)
-    try {
-      const history = await sessionsApi.getFullHistory(session.id)
-      if (!isCompleteSessionHistory(history)) {
-        addToast({ type: 'error', message: t('sidebar.markdownHistoryIncomplete') })
-        return
-      }
-      const markdown = buildSessionMarkdown(session.title || t('tabs.untitled'), history)
-      if (mode === 'copy') {
-        if (!await copyTextToClipboard(markdown)) throw new Error('clipboard')
-        addToast({ type: 'success', message: t('sidebar.markdownCopied') })
-      } else {
-        downloadTextFile(markdown, sanitizeSessionFilename(session.title || t('tabs.untitled')))
-        addToast({ type: 'success', message: t('sidebar.markdownExported') })
-      }
-    } catch {
-      addToast({ type: 'error', message: t(mode === 'copy' ? 'sidebar.markdownCopyFailed' : 'sidebar.markdownExportFailed') })
-    }
+    void runSessionMarkdownAction({
+      sessionId: session.id,
+      title: session.title || t('tabs.untitled'),
+      mode,
+      addToast,
+      t,
+    })
   }
 
   // Across all projects, rows group under their project in server order.
@@ -336,13 +325,13 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
           </SidebarMenuItem>
           <SidebarMenuItem
             icon={<Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-            onClick={() => void handleMarkdown(menu.session, 'copy')}
+            onClick={() => handleMarkdown(menu.session, 'copy')}
           >
             {t('sidebar.copyMarkdown')}
           </SidebarMenuItem>
           <SidebarMenuItem
             icon={<Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-            onClick={() => void handleMarkdown(menu.session, 'export')}
+            onClick={() => handleMarkdown(menu.session, 'export')}
           >
             {t('sidebar.exportMarkdown')}
           </SidebarMenuItem>

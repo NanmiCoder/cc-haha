@@ -46,7 +46,7 @@ const repositoryContextMock = sessionsApiMock.getRepositoryContext
 vi.mock('../../api/sessions', () => ({
   sessionsApi: sessionsApiMock,
 }))
-vi.mock('../../lib/clipboard', () => clipboardMock)
+vi.mock('@/lib/clipboard', () => clipboardMock)
 
 const agentsApiMock = vi.hoisted(() => ({
   list: vi.fn(),
@@ -655,25 +655,49 @@ describe('Sidebar', () => {
     expect(setSessionsArchived).toHaveBeenCalledWith(['archive-target'], false)
   })
 
-  it('copies complete Markdown and reports incomplete ordinary history', async () => {
-    useSessionStore.setState({ sessions: [makeSession('markdown-target', 'Markdown target', '/workspace/alpha', '2026-01-01')] })
-    sessionsApiMock.getFullHistory.mockResolvedValue({
-      messages: [{ id: 'm1', type: 'user', content: 'Prompt body', timestamp: '2026-01-01T00:00:00.000Z' }],
-      page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 },
+  it('copies and exports complete Markdown and reports incomplete ordinary history', async () => {
+    const originalCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    const createObjectURL = vi.fn(() => 'blob:sidebar-markdown')
+    const revokeObjectURL = vi.fn()
+    const downloads: Array<{ href: string; download: string }> = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push({ href: this.href, download: this.download })
     })
-    clipboardMock.copyTextToClipboard.mockResolvedValue(true)
-    render(<Sidebar />)
-    fireEvent.contextMenu(screen.getByText('Markdown target'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
-    await waitFor(() => expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith(expect.stringContaining('Prompt body')))
-    expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown copied.' })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
 
-    sessionsApiMock.getFullHistory.mockResolvedValueOnce({
-      messages: [], page: { historyComplete: false, contentTruncated: false, omittedOversizedEntries: 0 },
-    })
-    fireEvent.contextMenu(screen.getByText('Markdown target'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
-    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'The session history is incomplete, so Markdown was not created.' }))
+    try {
+      useSessionStore.setState({ sessions: [makeSession('markdown-target', 'Markdown target', '/workspace/alpha', '2026-01-01')] })
+      sessionsApiMock.getFullHistory.mockResolvedValue({
+        messages: [{ id: 'm1', type: 'user', content: 'Prompt body', timestamp: '2026-01-01T00:00:00.000Z' }],
+        page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      clipboardMock.copyTextToClipboard.mockResolvedValue(true)
+      render(<Sidebar />)
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith(expect.stringContaining('Prompt body')))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown copied.' })
+
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Export Markdown' }))
+      await waitFor(() => expect(downloads).toEqual([{ href: 'blob:sidebar-markdown', download: 'Markdown target.md' }]))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown exported.' })
+
+      sessionsApiMock.getFullHistory.mockResolvedValueOnce({
+        messages: [], page: { historyComplete: false, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'The session history is incomplete, so Markdown was not created.' }))
+    } finally {
+      clickSpy.mockRestore()
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', originalCreateObjectURL)
+      else Reflect.deleteProperty(URL, 'createObjectURL')
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', originalRevokeObjectURL)
+      else Reflect.deleteProperty(URL, 'revokeObjectURL')
+    }
   })
 
   it('leaves a rejected session usable and without an undo', async () => {

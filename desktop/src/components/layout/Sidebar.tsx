@@ -69,8 +69,7 @@ import {
 } from './sidebarProjectPreferenceStorage'
 import { useSessionListAutoRefresh } from '../../hooks/useSessionListAutoRefresh'
 import { formatRelativeTime } from '../../lib/formatRelativeTime'
-import { copyTextToClipboard } from '../../lib/clipboard'
-import { buildSessionMarkdown, downloadTextFile, isCompleteSessionHistory, sanitizeSessionFilename } from '../../lib/sessionMarkdown'
+import { runSessionMarkdownAction, type SessionMarkdownActionMode } from '@/lib/sessionMarkdown'
 
 const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
@@ -801,27 +800,17 @@ export function Sidebar({
     setPendingDeleteSessionId(id)
   }, [])
 
-  const handleMarkdown = useCallback(async (id: string, mode: 'copy' | 'export') => {
+  const handleMarkdown = useCallback((id: string, mode: SessionMarkdownActionMode) => {
     setContextMenu(null)
     const session = sessions.find((item) => item.id === id)
     if (!session) return
-    try {
-      const history = await sessionsApi.getFullHistory(id)
-      if (!isCompleteSessionHistory(history)) {
-        addToast({ type: 'error', message: t('sidebar.markdownHistoryIncomplete') })
-        return
-      }
-      const markdown = buildSessionMarkdown(session.title || t('tabs.untitled'), history)
-      if (mode === 'copy') {
-        if (!await copyTextToClipboard(markdown)) throw new Error('clipboard')
-        addToast({ type: 'success', message: t('sidebar.markdownCopied') })
-      } else {
-        downloadTextFile(markdown, sanitizeSessionFilename(session.title || t('tabs.untitled')))
-        addToast({ type: 'success', message: t('sidebar.markdownExported') })
-      }
-    } catch {
-      addToast({ type: 'error', message: t(mode === 'copy' ? 'sidebar.markdownCopyFailed' : 'sidebar.markdownExportFailed') })
-    }
+    void runSessionMarkdownAction({
+      sessionId: session.id,
+      title: session.title || t('tabs.untitled'),
+      mode,
+      addToast,
+      t,
+    })
   }, [addToast, sessions, t])
 
   const restoreArchivedSessions = useCallback(async (ids: string[]) => {
@@ -1617,13 +1606,13 @@ export function Sidebar({
           </SidebarMenuItem>
           <SidebarMenuItem
             icon={<Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-            onClick={() => void handleMarkdown(contextMenu.id, 'copy')}
+            onClick={() => handleMarkdown(contextMenu.id, 'copy')}
           >
             {t('sidebar.copyMarkdown')}
           </SidebarMenuItem>
           <SidebarMenuItem
             icon={<Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
-            onClick={() => void handleMarkdown(contextMenu.id, 'export')}
+            onClick={() => handleMarkdown(contextMenu.id, 'export')}
           >
             {t('sidebar.exportMarkdown')}
           </SidebarMenuItem>
