@@ -63,6 +63,13 @@ export const kr: Record<TranslationKey, string> = {
   "sidebar.batchArchiveSucceeded": "세션 {count}개를 보관했습니다",
   "sidebar.batchArchiveFailed": "세션 {count}개를 보관할 수 없습니다. 실행 중이거나 입력을 기다리고 있을 수 있습니다.",
   "sidebar.projectAllArchived": "모든 세션이 보관됨",
+  "sidebar.copyMarkdown": "Markdown 복사",
+  "sidebar.exportMarkdown": "Markdown 내보내기",
+  "sidebar.markdownCopied": "Markdown을 복사했습니다.",
+  "sidebar.markdownExported": "Markdown을 내보냈습니다.",
+  "sidebar.markdownCopyFailed": "Markdown을 복사할 수 없습니다.",
+  "sidebar.markdownExportFailed": "Markdown을 내보낼 수 없습니다.",
+  "sidebar.markdownHistoryIncomplete": "세션 기록이 불완전하여 Markdown을 만들지 않았습니다.",
 
   "scheduledChat.workspaceRequired": "새 채팅에 사용할 작업 폴더를 선택하세요.",
   "scheduledChat.prompt": "작업 지침",

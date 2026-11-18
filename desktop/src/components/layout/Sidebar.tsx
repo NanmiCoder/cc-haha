@@ -1,6 +1,6 @@
 import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Archive, Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pencil, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, Trash2, X } from 'lucide-react'
+import { Archive, Bell, CalendarClock, Check, ChevronRight, Clock, Copy, Download, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pencil, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, Trash2, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -69,6 +69,7 @@ import {
 } from './sidebarProjectPreferenceStorage'
 import { useSessionListAutoRefresh } from '../../hooks/useSessionListAutoRefresh'
 import { formatRelativeTime } from '../../lib/formatRelativeTime'
+import { runSessionMarkdownAction, type SessionMarkdownActionMode } from '@/lib/sessionMarkdown'
 
 const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
@@ -798,6 +799,19 @@ export function Sidebar({
     setContextMenu(null)
     setPendingDeleteSessionId(id)
   }, [])
+
+  const handleMarkdown = useCallback((id: string, mode: SessionMarkdownActionMode) => {
+    setContextMenu(null)
+    const session = sessions.find((item) => item.id === id)
+    if (!session) return
+    void runSessionMarkdownAction({
+      sessionId: session.id,
+      title: session.title || t('tabs.untitled'),
+      mode,
+      addToast,
+      t,
+    })
+  }, [addToast, sessions, t])
 
   const restoreArchivedSessions = useCallback(async (ids: string[]) => {
     const { failures } = await setSessionsArchived(ids, false)
@@ -1589,6 +1603,18 @@ export function Sidebar({
             }}
           >
             {t('common.rename')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => handleMarkdown(contextMenu.id, 'copy')}
+          >
+            {t('sidebar.copyMarkdown')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => handleMarkdown(contextMenu.id, 'export')}
+          >
+            {t('sidebar.exportMarkdown')}
           </SidebarMenuItem>
           <SidebarMenuItem
             icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}

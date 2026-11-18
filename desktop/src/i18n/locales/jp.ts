@@ -63,6 +63,13 @@ export const jp: Record<TranslationKey, string> = {
   "sidebar.batchArchiveSucceeded": "{count} 件のセッションをアーカイブしました",
   "sidebar.batchArchiveFailed": "{count} 件のセッションをアーカイブできませんでした。実行中か入力待ちの可能性があります。",
   "sidebar.projectAllArchived": "すべてのセッションをアーカイブ済み",
+  "sidebar.copyMarkdown": "Markdownをコピー",
+  "sidebar.exportMarkdown": "Markdownをエクスポート",
+  "sidebar.markdownCopied": "Markdownをコピーしました。",
+  "sidebar.markdownExported": "Markdownをエクスポートしました。",
+  "sidebar.markdownCopyFailed": "Markdownをコピーできませんでした。",
+  "sidebar.markdownExportFailed": "Markdownをエクスポートできませんでした。",
+  "sidebar.markdownHistoryIncomplete": "セッション履歴が不完全なため、Markdownを作成しませんでした。",
 
   "scheduledChat.workspaceRequired": "新しいチャットの作業フォルダーを選択してください。",
   "scheduledChat.prompt": "タスクの指示",

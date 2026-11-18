@@ -32,17 +32,21 @@ const sessionsApiMock = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
   listProjectHistory: vi.fn(),
+  getFullHistory: vi.fn(),
   getGitInfo: vi.fn(),
   getRepositoryContext: vi.fn(),
   getRecentProjects: vi.fn(),
   createRepositoryBranch: vi.fn(),
 }))
 
+const clipboardMock = vi.hoisted(() => ({ copyTextToClipboard: vi.fn() }))
+
 const repositoryContextMock = sessionsApiMock.getRepositoryContext
 
 vi.mock('../../api/sessions', () => ({
   sessionsApi: sessionsApiMock,
 }))
+vi.mock('@/lib/clipboard', () => clipboardMock)
 
 const agentsApiMock = vi.hoisted(() => ({
   list: vi.fn(),
@@ -153,6 +157,13 @@ vi.mock('../../i18n', () => ({
       'sidebar.expand': 'Expand sidebar',
       'session.lastUpdated': 'last updated {time}',
       'sidebar.sessionStatus.attention': 'Needs you',
+      'sidebar.copyMarkdown': 'Copy Markdown',
+      'sidebar.exportMarkdown': 'Export Markdown',
+      'sidebar.markdownCopied': 'Markdown copied.',
+      'sidebar.markdownExported': 'Markdown exported.',
+      'sidebar.markdownCopyFailed': 'Could not copy Markdown.',
+      'sidebar.markdownExportFailed': 'Could not export Markdown.',
+      'sidebar.markdownHistoryIncomplete': 'The session history is incomplete, so Markdown was not created.',
       'session.timeJustNow': 'just now',
       'session.timeMinutes': '{n}m ago',
       'session.timeHours': '{n}h ago',
@@ -440,6 +451,7 @@ describe('Sidebar', () => {
     setSessionsArchived.mockReset()
     setSessionsArchived.mockResolvedValue({ successes: [], failures: [] })
     addToast.mockReset()
+    clipboardMock.copyTextToClipboard.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
     desktopUiPreferencesApiMock.getProjectDirectories.mockReset()
     desktopUiPreferencesApiMock.updateProjectDirectories.mockReset()
@@ -456,6 +468,8 @@ describe('Sidebar', () => {
     sessionsApiMock.create.mockReset()
     sessionsApiMock.list.mockReset()
     sessionsApiMock.listProjectHistory.mockReset()
+    sessionsApiMock.getFullHistory.mockReset()
+    sessionsApiMock.getFullHistory.mockResolvedValue({ messages: [], page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 } })
     sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [], nextCursor: null })
     sessionsApiMock.getGitInfo.mockReset()
     sessionsApiMock.getRecentProjects.mockReset()
@@ -623,7 +637,7 @@ describe('Sidebar', () => {
     fireEvent.contextMenu(screen.getByText('Archive target'))
     const menu = screen.getByRole('menu')
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Rename', 'sidebar.archiveSession', 'Delete',
+      'Rename', 'Copy Markdown', 'Export Markdown', 'sidebar.archiveSession', 'Delete',
     ])
     expect(within(menu).getByRole('separator')).toBeInTheDocument()
 
@@ -639,6 +653,51 @@ describe('Sidebar', () => {
 
     await act(async () => addToast.mock.calls[0]![0].action.onClick())
     expect(setSessionsArchived).toHaveBeenCalledWith(['archive-target'], false)
+  })
+
+  it('copies and exports complete Markdown and reports incomplete ordinary history', async () => {
+    const originalCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    const createObjectURL = vi.fn(() => 'blob:sidebar-markdown')
+    const revokeObjectURL = vi.fn()
+    const downloads: Array<{ href: string; download: string }> = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push({ href: this.href, download: this.download })
+    })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('markdown-target', 'Markdown target', '/workspace/alpha', '2026-01-01')] })
+      sessionsApiMock.getFullHistory.mockResolvedValue({
+        messages: [{ id: 'm1', type: 'user', content: 'Prompt body', timestamp: '2026-01-01T00:00:00.000Z' }],
+        page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      clipboardMock.copyTextToClipboard.mockResolvedValue(true)
+      render(<Sidebar />)
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith(expect.stringContaining('Prompt body')))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown copied.' })
+
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Export Markdown' }))
+      await waitFor(() => expect(downloads).toEqual([{ href: 'blob:sidebar-markdown', download: 'Markdown target.md' }]))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown exported.' })
+
+      sessionsApiMock.getFullHistory.mockResolvedValueOnce({
+        messages: [], page: { historyComplete: false, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'The session history is incomplete, so Markdown was not created.' }))
+    } finally {
+      clickSpy.mockRestore()
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', originalCreateObjectURL)
+      else Reflect.deleteProperty(URL, 'createObjectURL')
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', originalRevokeObjectURL)
+      else Reflect.deleteProperty(URL, 'revokeObjectURL')
+    }
   })
 
   it('leaves a rejected session usable and without an undo', async () => {
