@@ -23,6 +23,7 @@ export type WorkspaceMarkdownImageContext = {
 }
 
 export type AssistantMarkdownImageContext = {
+  aliases?: ReadonlyMap<string, string>
   /** Base URL of the local server (see `getServerBaseUrl`). */
   baseUrl: string
   sessionId: string
@@ -193,7 +194,7 @@ export function createAssistantMarkdownImageResolver(
       return null
     }
 
-    const path = parseLocalImagePath(decoded)
+    const path = parseLocalImagePath(context.aliases?.get(decoded) ?? decoded)
     if (!path) return null
     const local = localImagePathString(path)
 

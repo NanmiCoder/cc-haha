@@ -1,11 +1,19 @@
 import '@testing-library/jest-dom'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // getServerBaseUrl backs the relative-path src (/preview-fs/<sessionId>/...).
 vi.mock('../../lib/desktopRuntime', () => ({
   getServerBaseUrl: () => 'http://127.0.0.1:4321',
 }))
+
+import { sessionsApi } from '@/api/sessions'
+import { resetWorkspaceFileStatsForTests } from '@/lib/workspaceFileStats'
+const statWorkspaceFiles = vi.spyOn(sessionsApi, 'statWorkspaceFiles')
+afterEach(() => {
+  resetWorkspaceFileStatsForTests()
+  statWorkspaceFiles.mockReset()
+})
 
 // The router reports whether it could place the link; a card the router places opens.
 const openPreviewLink = vi.hoisted(() => vi.fn(() => true))
@@ -96,16 +104,34 @@ describe('InlineVideoGallery', () => {
   })
 
   it.each(['outputs/render.mp4', '/outside/render.mp4', 'outputs/literal%20render.mp4'])(
-    'keeps a failed preview available as an actionable file card (%s)', (path) => {
+    'keeps a failed preview available as an actionable file card (%s)', async (path) => {
     const { container } = render(
       <InlineVideoGallery text={`Saved to ${path}`} sessionId="s1" workDir="/w" />,
     )
+    statWorkspaceFiles.mockResolvedValue({ files: [{ path, state: 'file' }] })
     fireEvent.error(container.querySelector('video')!)
     expect(container.querySelector('video')).toBeNull()
-    expect(screen.getByText(path.split('/').pop()!)).toBeVisible()
+    expect(await screen.findByText(path.split('/').pop()!)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'assistantOutputs.openAria' }))
     expect(openPreviewLink).toHaveBeenCalledWith({ path }, 's1')
     expect(screen.getByRole('button', { name: 'openWith.title' })).toBeVisible()
+  })
+
+  it('hides a failed video once the workspace confirms the file is missing', async () => {
+    statWorkspaceFiles.mockResolvedValue({ files: [{ path: 'outputs/gone.mp4', state: 'missing' }] })
+    const { container } = render(<InlineVideoGallery text="已生成 `outputs/gone.mp4`" sessionId="s1" workDir="/w" />)
+    fireEvent.error(container.querySelector('video')!)
+    await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalledWith('s1', ['outputs/gone.mp4']))
+    expect(container.querySelector('video')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'assistantOutputs.openAria' })).toBeNull()
+  })
+
+  it('waits for a relative video to be located when the workspace status has not loaded', async () => {
+    const path = 'outputs/cold.mp4'
+    statWorkspaceFiles.mockResolvedValue({ files: [{ path, state: 'file' }] })
+    const { container } = render(<InlineVideoGallery sessionId="s1" text={path} />)
+    expect(container.querySelector('video')).toBeNull()
+    await waitFor(() => expect(videoSrcs(container)).toEqual(['http://127.0.0.1:4321/preview-fs/s1/' + path]))
   })
 
   it('uses preload="metadata" and never autoplays', () => {
