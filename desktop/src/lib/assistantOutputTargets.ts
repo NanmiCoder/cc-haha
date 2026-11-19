@@ -910,14 +910,14 @@ function extractDirectoryTreeFileMatchesFromBlock(block: FencedCodeBlock): Direc
       continue
     }
 
-    const entryMatch = line.match(/^(\s*)(?:[│|]\s*)*[├└]──\s+(.+?)\s*$/u)
+    const entryMatch = line.match(/^([ \t│|]*)[├└]──\s+(.+?)\s*$/u)
     if (!entryMatch) {
       offset += line.length
       continue
     }
 
     const rawPrefix = entryMatch[1] ?? ''
-    const level = Math.floor(rawPrefix.replace(/[│|]/g, ' ').length / 4)
+    const level = Math.floor(rawPrefix.length / 4)
     const entryName = stripTreeEntryComment(entryMatch[2] ?? '')
 
     if (!entryName || entryName === '.' || entryName === '..') {

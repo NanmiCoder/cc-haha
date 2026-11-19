@@ -256,6 +256,22 @@ describe('extractAssistantOutputTargets', () => {
     ])
   })
 
+  it('keeps tree continuation columns when resolving same-named files in different directories', () => {
+    const targets = extractAssistantOutputTargets([
+      '```text',
+      `${workDir}/`,
+      '├── docs/',
+      '│   └── intro/',
+      '│       └── guide.md',
+      '└── guide.md',
+      '```',
+    ].join('\n'), { workDir })
+
+    expect(targets.map((target) => target.href)).toEqual([
+      `${workDir}/docs/intro/guide.md`, `${workDir}/guide.md`,
+    ])
+  })
+
   it('ignores orphan preview file names inside code blocks', () => {
     const targets = extractAssistantOutputTargets(
       ['```', 'index.html', 'README.md', '```'].join('\n'),

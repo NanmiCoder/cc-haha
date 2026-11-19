@@ -603,6 +603,24 @@ describe('paged transcript normalization', () => {
     expect(current.messages).toHaveLength(1)
   })
 
+  test('loading an older page keeps the latest replay at its chronological position', () => {
+    const original = entry('reply', 'assistant', 'original')
+    const corrected = { ...original, content: 'corrected', model: 'updated-model' }
+    const between = entry('between', 'user', 'Question')
+    const earlier = entry('earlier', 'user', 'Start')
+    const current = page([between, corrected], 'cursor')
+    const merged = mergeHistoryPages(current, page([earlier, original], null))
+
+    expect(merged.messages).toEqual([earlier, between, corrected])
+  })
+
+  test.each(['', ' '])('retains both records when the ID is blank (%j)', (id) => {
+    const first = entry(id, 'assistant', 'First')
+    const second = entry(id, 'assistant', 'Second')
+    expect(mergeHistoryPages(page([second], 'cursor'), page([first], null)).messages)
+      .toEqual([first, second])
+  })
+
   test('truncated or omitted history is never marked complete', () => {
     const current = page([], 'cursor')
     const older = page([], null)
