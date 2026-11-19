@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import type { TranslationKey } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
+import { isExitPlanModeTool, isPlanRevisionResult } from './PlanModePreview'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -203,7 +204,10 @@ export function toolCallHasError(
   childToolCallsByParent: Map<string, ToolCall[]>,
 ): boolean {
   const result = resultMap.get(toolCall.toolUseId)
-  if (result?.isError) return true
+  // Keep planning is returned as a refusal so the model stays in plan mode.
+  if (result?.isError && !(isExitPlanModeTool(toolCall.toolName) && isPlanRevisionResult(result.content))) {
+    return true
+  }
 
   return (childToolCallsByParent.get(toolCall.toolUseId) ?? []).some((childToolCall) =>
     toolCallHasError(childToolCall, resultMap, childToolCallsByParent),

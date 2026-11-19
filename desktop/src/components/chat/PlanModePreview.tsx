@@ -1,6 +1,7 @@
 import { FileText, ShieldCheck } from 'lucide-react'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import type { PermissionUpdate } from '../../types/chat'
+import { PLAN_REJECTION_MESSAGE, PLAN_REJECTION_WITH_REASON_PREFIX } from '../../../../src/constants/messages'
 
 export const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
 export const ENTER_PLAN_MODE_TOOL_NAME = 'EnterPlanMode'
@@ -33,6 +34,11 @@ export function isExitPlanModeTool(toolName: string): boolean {
 
 export function isEnterPlanModeTool(toolName: string): boolean {
   return toolName === ENTER_PLAN_MODE_TOOL_NAME
+}
+
+export function isPlanRevisionResult(content: unknown): boolean {
+  const text = extractTextContent(content).trim()
+  return text === PLAN_REJECTION_MESSAGE || text.startsWith(PLAN_REJECTION_WITH_REASON_PREFIX)
 }
 
 export function PlanPreviewCard({
