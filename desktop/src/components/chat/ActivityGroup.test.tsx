@@ -6,6 +6,7 @@ import { buildActivitySegments, formatActivitySummary, type ActivityStep } from 
 import { useSettingsStore } from '../../stores/settingsStore'
 import { translate } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
+import { PLAN_REJECTION_MESSAGE, PLAN_REJECTION_WITH_REASON_PREFIX } from '../../../../src/constants/messages'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -220,6 +221,49 @@ describe('ActivityGroup', () => {
     )
 
     expect(screen.getByText(t('toolGroup.failedCount', { count: 1 }))).toBeTruthy()
+  })
+
+  it.each([
+    { content: PLAN_REJECTION_MESSAGE },
+    { content: [{ type: 'text', text: `${PLAN_REJECTION_WITH_REASON_PREFIX}Add a rollback step.` }] },
+  ])('keeps a returned plan visible without counting the user decision as a failure', ({ content }) => {
+    render(
+      <ActivityGroup
+        steps={[
+          { kind: 'tool', toolCall: toolCall({ id: 'plan-1', toolUseId: 'plan-1', toolName: 'ExitPlanMode' }) },
+          { kind: 'tool', toolCall: toolCall({ id: 'plan-2', toolUseId: 'plan-2', toolName: 'ExitPlanMode' }) },
+        ]}
+        resultMap={resultsOf([
+          toolResult({ id: 'result-1', toolUseId: 'plan-1', content, isError: true }),
+          toolResult({ id: 'result-2', toolUseId: 'plan-2' }),
+        ])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+
+    expect(screen.queryByText(t('toolGroup.failedCount', { count: 1 }))).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('activity-group').querySelector('[data-chat-disclosure="true"]')!)
+    expect(screen.getByRole('button', { name: t('permission.planRejected') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('permission.planApproved') })).toBeInTheDocument()
+  })
+
+  it('still counts an actual ExitPlanMode error as a failure', () => {
+    render(
+      <ActivityGroup
+        steps={[
+          { kind: 'tool', toolCall: readCall },
+          { kind: 'tool', toolCall: toolCall({ id: 'plan-1', toolUseId: 'plan-1', toolName: 'ExitPlanMode' }) },
+        ]}
+        resultMap={resultsOf([
+          toolResult({ id: 'res-read', toolUseId: 'read-1' }),
+          toolResult({ id: 'result-1', toolUseId: 'plan-1', content: 'Plan file unavailable', isError: true }),
+        ])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+
+    expect(screen.getByText(t('toolGroup.failedCount', { count: 1 }))).toBeInTheDocument()
   })
 
   it('reports the run as running while any step is still unresolved', () => {
