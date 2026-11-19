@@ -1709,9 +1709,9 @@ async function getGitInfo(sessionId: string): Promise<Response> {
       }
     : null
 
-  // Fast check: if workDir is not inside a git repo, skip spawning git commands.
-  // findGitRoot uses fs.stat traversal with LRU cache (<5ms), avoiding 3 slow git
-  // spawns on non-git directories (each can take seconds as git searches upward).
+  // A session can become a repository after launch. Refresh this directory's
+  // cached lookup before deciding whether to skip the git commands.
+  findGitRoot.cache.delete(workDir)
   const gitRoot = findGitRoot(workDir)
   if (!gitRoot) {
     const dirName = repoNameFromWorkDir(workDir)
