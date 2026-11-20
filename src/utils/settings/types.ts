@@ -355,6 +355,12 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           "Include built-in commit and PR workflow instructions in Claude's system prompt (default: true)",
         ),
+      includeCyberRiskInstruction: z
+        .boolean()
+        .optional()
+        .describe(
+          'Include the Anthropic cyber-risk safety instruction and the file-read malware reminder in the system prompt (default: true). Set to false when a third-party provider refuses work because of this text.',
+        ),
       permissions: PermissionsSchema()
         .optional()
         .describe('Tool usage permissions configuration'),
