@@ -156,6 +156,24 @@ export async function runPlanModeModelSwitchScenario(rootDir: string, artifactDi
           assert.ok(seenModelsA.length >= 1)
           assert.ok(seenModelsA.every((model) => model === PLAN_MODEL_A), `expected ${PLAN_MODEL_A}, got ${seenModelsA.join(',')}`)
 
+          // A rejected runtime leaves this same review pending for another decision.
+          socket.send({
+            type: 'permission_response',
+            requestId: firstPlanReq.requestId,
+            allowed: false,
+            runtimeOverride: { providerId: providerA, modelId: '' },
+          })
+          const rejectedSelection = await socket.waitFor(
+            (msg) => msg.type === 'error' && msg.code === 'RUNTIME_CONFIG_INVALID',
+            TIMEOUT_MS,
+            'correlated plan runtime rejection',
+            cursor,
+          )
+          assert.equal(rejectedSelection.permissionRequestId, firstPlanReq.requestId)
+          assert.equal(socket.messages.slice(cursor).some(msg =>
+            msg.type === 'permission_resolved' && msg.requestId === firstPlanReq.requestId), false)
+          cursor = socket.messages.indexOf(rejectedSelection) + 1
+
           // 1. Keep planning with a same-provider model switch: must switch in-process
           // and run the immediate plan revision request on PLAN_MODEL_B.
           const countBeforeKeepPlanning = seenModelsA.length

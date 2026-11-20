@@ -2189,14 +2189,14 @@ function handlePermissionResponse(
       EXIT_PLAN_MODE_TOOL_NAME
   ) {
     void handlePlanApprovalWithRuntimeOverride(ws, message).catch((err) => {
-      // The response was NOT sent: the CLI is still waiting on the permission
-      // and the user can retry. Note the desktop optimistically dismissed the
-      // approval bar on send — it reappears on the reconnect replay.
+      // The CLI still owns the pending review. Correlate its rejection so
+      // the desktop can keep that review open for another decision.
       console.error(`[WS] Plan permission response with runtime override failed for ${sessionId}:`, err)
       sendMessage(ws, {
         type: 'error',
         message: 'Failed to apply the execution model. The plan is still waiting for approval.',
         code: 'RUNTIME_CONFIG_INVALID',
+        permissionRequestId: message.requestId,
       })
     })
     return
@@ -2247,6 +2247,7 @@ function waitForTurnResultOrTimeout(sessionId: string, timeoutMs: number): Promi
 function rejectStartedSideChatProviderChange(
   ws: SessionConnection,
   requestedProviderId: string | null,
+  permissionRequestId?: string,
 ): boolean {
   const { sessionId } = ws.data
   const side = getSideChat(sessionId)
@@ -2257,6 +2258,7 @@ function rejectStartedSideChatProviderChange(
     type: 'error',
     code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE',
     message: 'Open a new side chat to change provider or reasoning effort.',
+    ...(permissionRequestId ? { permissionRequestId } : {}),
   })
   return true
 }
@@ -2266,7 +2268,7 @@ async function handlePlanApprovalWithRuntimeOverride(
   message: Extract<ClientMessage, { type: 'permission_response' }>,
 ): Promise<void> {
   const { sessionId } = ws.data
-  if (rejectStartedSideChatProviderChange(ws, message.runtimeOverride!.providerId)) return
+  if (rejectStartedSideChatProviderChange(ws, message.runtimeOverride!.providerId, message.requestId)) return
   const normalized = await normalizeRuntimeOverrideInput(message.runtimeOverride!)
   if (!normalized.ok) {
     sendMessage(ws, {
@@ -2276,6 +2278,7 @@ async function handlePlanApprovalWithRuntimeOverride(
           ? 'Runtime model selection is invalid.'
           : 'Runtime effort selection is invalid.',
       code: 'RUNTIME_CONFIG_INVALID',
+      permissionRequestId: message.requestId,
     })
     return
   }
@@ -2304,7 +2307,7 @@ async function handlePlanApprovalWithRuntimeOverride(
   }
 
   if (isSideChatId(sessionId) && (currentProviderId !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== currentEffort) || (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false))) {
-    sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'Open a new side chat to change provider or reasoning effort.' })
+    sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'Open a new side chat to change provider or reasoning effort.', permissionRequestId: message.requestId })
     return
   }
 
@@ -2321,7 +2324,7 @@ async function handlePlanApprovalWithRuntimeOverride(
     // On failure the transition rejects, the catch in handlePermissionResponse
     // reports it, and the permission stays pending (override untouched).
     await enqueueRuntimeTransition(sessionId, async () => {
-      await conversationService.setModel(sessionId, nextOverride.modelId)
+      if (!await conversationService.setModel(sessionId, nextOverride.modelId)) throw new Error('The planning runtime is no longer available.')
       const appliedOverride = nextOverride.effort === undefined && currentEffort
         ? { ...nextOverride, effort: currentEffort, requestedConfig: nextOverride.requestedConfig ?? message.runtimeOverride }
         : nextOverride
