@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -420,6 +420,58 @@ describe('plan mode permission UI', () => {
       id: 'session-1', runtimeProviderId: 'deepseek', runtimeModelId: 'deepseek-v4-flash',
     } as never])
     expect(useSessionRuntimeStore.getState().selections['session-1']?.modelId).toBe('deepseek-v4-flash')
+  })
+
+  it.each([
+    ['RUNTIME_CONFIG_INVALID', undefined],
+    ['RUNTIME_CONFIG_INVALID', 'perm-plan'],
+    ['SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', 'perm-plan'],
+  ])('keeps plan review retryable when its execution model is rejected (%s, %s)', async (code, permissionRequestId) => {
+    const previousSelection = { providerId: 'deepseek', modelId: 'deepseek-v4-pro' }
+    useSessionRuntimeStore.setState({ selections: { 'session-1': previousSelection } })
+    render(
+      <PermissionDialog sessionId="session-1" requestId="perm-plan" toolName="ExitPlanMode" input={{ plan: PLAN }} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await screen.findByTestId('model-selector-dropdown')
+    fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+    const store = useChatStore.getState()
+    act(() => store.handleServerMessage('session-1', {
+      type: 'error', code, message: 'The execution model is unavailable.', permissionRequestId,
+    }))
+
+    expect(screen.getByRole('alert').textContent).toContain('The execution model is unavailable.')
+    expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('permission_pending')
+    expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual(previousSelection)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+    expect(sendMock).toHaveBeenCalledTimes(2)
+    expect((screen.getByRole('button', { name: 'Approve plan' }) as HTMLButtonElement).disabled).toBe(true)
+    act(() => store.handleServerMessage('session-1', {
+      type: 'permission_resolved', requestId: 'perm-plan', permissionType: 'tool', allowed: true,
+    }))
+    act(() => store.handleServerMessage('session-1', {
+      type: 'error', code, message: 'Late execution model error', permissionRequestId: 'perm-plan',
+    }))
+    expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('tool_executing')
+    expect(screen.queryByRole('button', { name: 'Approve plan' })).toBeNull()
+  })
+
+  it('limits a running side-chat review to its existing provider', async () => {
+    const sessionId = 'side-plan-qa'
+    const session = useChatStore.getState().sessions['session-1']!
+    useChatStore.setState({ sessions: { [sessionId]: session } })
+    useSessionRuntimeStore.setState({ selections: { [sessionId]: { providerId: 'deepseek', modelId: 'deepseek-v4-pro' } } })
+    render(
+      <PermissionDialog sessionId={sessionId} requestId="perm-plan" toolName="ExitPlanMode" input={{ plan: PLAN }} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await screen.findByTestId('model-selector-dropdown')
+    expect(screen.queryByRole('button', { name: /^Sonnet 5(?![.\d])/ })).toBeNull()
+    expect(screen.getByTestId('model-selector-dropdown').textContent).toContain('deepseek-v4-pro')
   })
 
   it('sends runtimeOverride and denyMessage when switching model and clicking Keep planning', async () => {

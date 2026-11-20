@@ -57,7 +57,7 @@ export async function handleTeamsApi(
         const { members, tasks, ...identity } = parsed.data
         const plan = await teamPlanService.update(teamName, identity, {
           ...(members ? { members } : {}), ...(tasks ? { tasks } : {}),
-        })
+        }, req.signal)
         return Response.json({ plan })
       }
       const parsed = teamPlanActionSchema.safeParse(raw)
@@ -66,6 +66,7 @@ export async function handleTeamsApi(
       if (action === 'approve') {
         return Response.json({ plan: await teamPlanService.approve(teamName, parsed.data, {
           startLeader: sessionId => ensureCliSessionStartedForControl(sessionId, requestUrl),
+          signal: req.signal,
         }) })
       }
       if (action === 'return' || action === 'cancel' || action === 'retry' || action === 'end') return Response.json({ plan: await teamPlanService.action(teamName, action, parsed.data) })

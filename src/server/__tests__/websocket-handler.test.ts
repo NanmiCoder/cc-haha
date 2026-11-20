@@ -5019,7 +5019,7 @@ describe('WebSocket handler session isolation', () => {
     await flushMicrotasks()
 
     expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
-      type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE',
+      type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', permissionRequestId: 'side-plan-approval',
     }))
     expect(listProviders).not.toHaveBeenCalled()
     expect(setModel).not.toHaveBeenCalled()
@@ -5363,7 +5363,7 @@ describe('WebSocket handler session isolation', () => {
     )
   })
 
-  it('keeps the permission pending when the in-process model switch fails', async () => {
+  it.each(['rejects', 'loses the CLI'] as const)('keeps the permission pending when the in-process model switch %s', async (failure) => {
     mockSavedDeepSeekProvider()
     const sessionId = `plan-set-model-fail-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
@@ -5371,7 +5371,9 @@ describe('WebSocket handler session isolation', () => {
     spyOn(conversationService, 'hasSession').mockReturnValue(true)
     spyOn(conversationService, 'getPendingPermissionToolName').mockReturnValue('ExitPlanMode')
     spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
-    spyOn(conversationService, 'setModel').mockRejectedValue(new Error('model unavailable'))
+    const setModel = spyOn(conversationService, 'setModel')
+    if (failure === 'rejects') setModel.mockRejectedValue(new Error('model unavailable'))
+    else setModel.mockResolvedValue(false)
     spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
     spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
       filePath: '/tmp/plan-session.jsonl',
@@ -5403,6 +5405,7 @@ describe('WebSocket handler session isolation', () => {
       type: 'error',
       message: 'Failed to apply the execution model. The plan is still waiting for approval.',
       code: 'RUNTIME_CONFIG_INVALID',
+      permissionRequestId: 'perm-plan-3',
     })
   })
 

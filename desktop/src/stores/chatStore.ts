@@ -150,6 +150,11 @@ export type PendingPermission = {
   input: unknown
   description?: string
   displayName?: string
+  planRuntimeSubmission?: {
+    previousSelection?: RuntimeSelection
+    stagedSelection?: RuntimeSelection
+  }
+  planRuntimeError?: string
 }
 
 type PendingPermissions = Record<string, PendingPermission>
@@ -3811,6 +3816,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
+    const pending = getPendingPermission(get().sessions[sessionId], requestId)
+    if (pending?.planRuntimeSubmission) return
+    const submittingPlanRuntime = pending?.toolName === 'ExitPlanMode' && options?.runtimeOverride
+    if (submittingPlanRuntime) {
+      const runtime = useSessionRuntimeStore.getState()
+      const previousSelection = runtime.selections[sessionId]
+      runtime.setSelection(sessionId, submittingPlanRuntime)
+      const stagedSelection = useSessionRuntimeStore.getState().selections[sessionId]
+      const submitted = { ...pending, planRuntimeSubmission: { previousSelection, stagedSelection }, planRuntimeError: undefined }
+      set((s) => ({
+        sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+          pendingPermissions: { ...getPendingPermissionRecord(session), [requestId]: submitted },
+          pendingPermission: session.pendingPermission?.requestId === requestId ? submitted : session.pendingPermission,
+        })),
+      }))
+    }
     wsManager.send(sessionId, {
       type: 'permission_response',
       requestId,
@@ -3821,6 +3842,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       ...(options?.permissionUpdates?.length ? { permissionUpdates: options.permissionUpdates } : {}),
       ...(options?.runtimeOverride ? { runtimeOverride: options.runtimeOverride } : {}),
     })
+    if (submittingPlanRuntime) return
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, (session) => {
         const pendingPermissions = getPendingPermissionRecord(session)
@@ -6068,6 +6090,35 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'error': {
+        const session = get().sessions[sessionId]
+        if (session && (msg.permissionRequestId || msg.code === 'RUNTIME_CONFIG_INVALID' || msg.code === 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE')) {
+          const pendingPermissions = getPendingPermissionRecord(session)
+          // Older servers did not correlate runtime rejections with the plan
+          // review. A review awaiting a model change can still retry them.
+          const request = msg.permissionRequestId
+            ? pendingPermissions[msg.permissionRequestId]
+            : Object.values(pendingPermissions).find((pending) => pending.planRuntimeSubmission)
+          if (request?.planRuntimeSubmission) {
+            const runtime = useSessionRuntimeStore.getState()
+            const { previousSelection, stagedSelection } = request.planRuntimeSubmission
+            if (runtime.selections[sessionId] === stagedSelection) {
+              if (previousSelection) {
+                runtime.setSelection(sessionId, previousSelection)
+                runtime.settleSelection(sessionId)
+              } else {
+                runtime.clearSelection(sessionId)
+              }
+            }
+            const rejected = { ...request, planRuntimeSubmission: undefined, planRuntimeError: msg.message }
+            update((current) => ({
+              pendingPermissions: { ...getPendingPermissionRecord(current), [request.requestId]: rejected },
+              pendingPermission: current.pendingPermission?.requestId === request.requestId ? rejected : current.pendingPermission,
+              chatState: 'permission_pending',
+            }))
+            break
+          }
+          if (msg.permissionRequestId) break
+        }
         if (msg.code === 'RUNTIME_CONFIG_INVALID' || msg.code === 'CLI_RESTART_FAILED') {
           // Let a fresh server snapshot reconcile a rejected optimistic choice.
           useSessionRuntimeStore.getState().settleSelection(sessionId)

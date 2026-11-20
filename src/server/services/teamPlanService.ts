@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises'
+import { ApiError } from '../middleware/errorHandler.js'
 import { sessionService } from './sessionService.js'
 import { z } from 'zod/v4'
 import { teamPlanRuntimeSchema, type TeamPlanAction, type TeamPlanIdentity, type TeamPlanRecord } from '../../shared/teamPlan.js'
@@ -37,6 +39,21 @@ const defaultRuntime: TeamPlanRuntimeAdapter = {
   reclaimUnstarted: async plan => (await import('./teamPlanRuntime.js')).reclaimUnstartedLaunch(plan),
   notifyLeader: async (plan, kind) => { await (await import('./teamPlanRuntime.js')).notifyTeamPlanLeader(plan, kind) },
   stop: async id => { await (await import('./teamPlanRuntime.js')).stopTeamPlanRuntime(id) },
+}
+
+async function assertTeamPlanSessionSupported(sessionId: string, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  const info = await sessionService.getSessionLaunchInfo(sessionId).catch(async error => {
+    if (!(error instanceof ApiError) || error.code !== 'HISTORY_CHANGED') throw error
+    // A live leader can rewrite its transcript while a plan is under review.
+    // Retry this read once; do not repeat an edit/approval or infer a profile.
+    await delay(10, undefined, { signal })
+    const refreshed = await sessionService.getSessionLaunchInfo(sessionId)
+    if (!refreshed?.agentProfile) throw error
+    return refreshed
+  })
+  signal?.throwIfAborted()
+  if (info?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
 }
 
 /** Only trusted HTTP/UI actions call approve; model tools import the draft store only. */
@@ -82,10 +99,10 @@ export class TeamPlanService {
     }
     return plan
   }
-  async update(teamName: string, identity: TeamPlanIdentity, patch: { members?: Array<{ id: string; agentType?: string; runtime?: TeamPlanRecord['leaderRuntime'] }>; tasks?: Array<{ id: string; ownerId: string }> }): Promise<TeamPlanRecord> {
+  async update(teamName: string, identity: TeamPlanIdentity, patch: { members?: Array<{ id: string; agentType?: string; runtime?: TeamPlanRecord['leaderRuntime'] }>; tasks?: Array<{ id: string; ownerId: string }> }, signal?: AbortSignal): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
-    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
+    await assertTeamPlanSessionSupported(current.sessionId, signal)
     for (const member of patch.members ?? []) if (!current.members.some(item => item.id === member.id)) throw new TeamPlanError('Unknown member', 400)
     for (const task of patch.tasks ?? []) if (!current.tasks.some(item => item.id === task.id)) throw new TeamPlanError('Unknown task', 400)
     const members = current.members.map(member => {
@@ -123,10 +140,10 @@ export class TeamPlanService {
     this.launches.set(plan.planId, operation)
     void operation.catch(() => {})
   }
-  async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void> } = {}): Promise<TeamPlanRecord> {
+  async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void>; signal?: AbortSignal } = {}): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
-    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
+    await assertTeamPlanSessionSupported(current.sessionId, options.signal)
     // Idempotent replay still goes through store identity/incarnation checks.
     let validated = current
     if (current.approvedSnapshot?.requestId !== action.requestId) {
@@ -137,12 +154,14 @@ export class TeamPlanService {
       // process is gone until something starts it, and approving a reviewed
       // plan is that something: refusing left the plan unlaunchable.
       if (current.state === 'review_pending' && options.startLeader) {
+        options.signal?.throwIfAborted()
         try { await options.startLeader(current.sessionId) }
         catch (error) { throw new TeamPlanError(`Team leader could not start: ${error instanceof Error ? error.message : String(error)}`) }
       }
     }
     // The approval commits `launching` before this call can register the
     // launch; a plan read in between must not take it for an orphaned launch.
+    options.signal?.throwIfAborted()
     this.approving.add(current.planId)
     try {
       const result = await approveTeamPlan(teamName, action, action.requestId, validated)
