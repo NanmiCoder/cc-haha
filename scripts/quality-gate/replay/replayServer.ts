@@ -29,7 +29,7 @@ export type ReplayReport = {
   mismatches: ReplayMismatch[]
   /** Strict interactions the app never asked for: the run did less than the recording. */
   unused: Array<{ seq: number; queue: string; lastUserText: string }>
-  /** Best-effort side calls that had no recording and got a placeholder reply. */
+  /** Side calls and validated partial team mail that received a placeholder reply. */
   synthesized: Array<{ path: string; queue: string }>
   /** Prompt, schema, or budget differences that did not break the replay. */
   drift: string[]
@@ -65,10 +65,10 @@ function errorResponse(format: ApiFormat, message: string) {
   return Response.json(body, { status: 400 })
 }
 
-function placeholderReply(format: ApiFormat, model: string, stream: boolean) {
+function placeholderReply(format: ApiFormat, model: string, stream: boolean, messageId = 'msg_replay_placeholder') {
   const text = 'Replay placeholder'
   if (format === 'anthropic') {
-    const message = { id: 'msg_replay_placeholder', type: 'message', role: 'assistant', model, content: [{ type: 'text', text }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }
+    const message = { id: messageId, type: 'message', role: 'assistant', model, content: [{ type: 'text', text }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }
     if (!stream) return Response.json(message)
     const events = [
       { event: 'message_start', data: { type: 'message_start', message: { ...message, content: [], stop_reason: null } } },
@@ -109,6 +109,40 @@ export function compareRequest(expected: Interaction, actual: RequestFingerprint
   return null
 }
 
+/** The committed team cassette recorded three independent terminal envelopes in one poll. */
+function recordedTeamShutdownMail(cassette: Cassette, next: Interaction | undefined): string[] | undefined {
+  if (cassette.id !== 'replay-agent-team' || next?.seq !== 35 || next.request.toolResultIds.length !== 0) return
+  const blocks = next.request.lastUserText.split('\n\n')
+  if (blocks.length === 3 && new Set(blocks).size === 3 &&
+      blocks[0]?.startsWith('<teammate-message teammate_id="reporter">\n{"type":"idle_notification"') &&
+      blocks[1]?.startsWith('<teammate-message teammate_id="counter">\n{"type":"shutdown_approved"') &&
+      blocks[2]?.startsWith('<teammate-message teammate_id="reporter">\n{"type":"shutdown_approved"')) return blocks
+}
+
+function collectTeamShutdownMail(
+  expected: string[],
+  arrived: string,
+  previous: Set<string>,
+  values: Record<string, string>,
+): { seen: Set<string>; ids: Record<string, string> } | undefined {
+  const seen = new Set(previous)
+  const ids = Object.fromEntries(Object.entries(values).filter(([name]) => /^V\d+$/.test(name)))
+  for (const block of arrived.split('\n\n')) {
+    const expanded = expandString(block, ids)
+    const match = expected.find((recorded) => {
+      // Expand known IDs first so an altered value is rejected. The existing
+      // learner can fill only a still-unknown clock slot in the exact envelope.
+      const discovered = learnVolatileValues(expandString(recorded, ids), expanded)
+      if (!discovered) return false
+      Object.assign(ids, discovered)
+      return true
+    })
+    if (!match || seen.has(match)) return
+    seen.add(match)
+  }
+  return { seen, ids }
+}
+
 const STREAM_PACING_BUDGET_MS = 1_000
 const RECORDED_EVENT_DELAY_CAP_MS = 2_000
 const RECORDED_FIRST_BYTE_CAP_MS = 20_000
@@ -122,6 +156,7 @@ export function startReplayServer(options: { format: ApiFormat; maxEventDelayMs?
   let pacing: 'compressed' | 'recorded' = 'compressed'
   let used = new Set<number>()
   let lastToolUseIds = new Map<string, string[]>()
+  let teamShutdownMailSeen = new Set<string>()
   let report: ReplayReport = { cassette: '', served: 0, mismatches: [], unused: [], synthesized: [], drift: [] }
 
   const server = Bun.serve({
@@ -140,8 +175,9 @@ export function startReplayServer(options: { format: ApiFormat; maxEventDelayMs?
       if (!cassette) return errorResponse(format, 'replay_mismatch: no cassette loaded')
 
       const next = cassette.interactions.find((interaction) => !used.has(interaction.seq) && interaction.queue === queue && interaction.path === path)
+      const expectedShutdownMail = recordedTeamShutdownMail(cassette, next)
       // A clock-minted value first seen in this request: learn it from the recorded text.
-      if (next && isStrictQueue(queue)) {
+      if (next && isStrictQueue(queue) && !expectedShutdownMail) {
         let changed = false
         for (const field of ['firstUserText', 'lastUserText'] as const) {
           if (!/\{\{V\d+\}\}/.test(next.request[field]) || next.request[field] === actual[field]) continue
@@ -167,7 +203,25 @@ export function startReplayServer(options: { format: ApiFormat; maxEventDelayMs?
       }
 
       if (isStrictQueue(queue)) {
-        const problem = compareRequest(next, actual, lastToolUseIds.get(queue), format)
+        const comparable = expectedShutdownMail ? { ...actual, lastUserText: next.request.lastUserText } : actual
+        let problem = compareRequest(next, comparable, lastToolUseIds.get(queue), format)
+        if (!problem && expectedShutdownMail) {
+          const accepted = collectTeamShutdownMail(expectedShutdownMail, actual.lastUserText, teamShutdownMailSeen, values)
+          if (!accepted) {
+            problem = 'unexpected or repeated team shutdown mail'
+          } else {
+            teamShutdownMailSeen = accepted.seen
+            Object.assign(learned, accepted.ids)
+            Object.assign(values, accepted.ids)
+            if (teamShutdownMailSeen.size < expectedShutdownMail.length) {
+              // Let the CLI drain its next mailbox batch without consuming the
+              // recorded TeamDelete or inventing a tool action.
+              report.synthesized.push({ path, queue })
+              report.drift.push(`request ${next.seq}: team shutdown mail arrived across independent requests`)
+              return placeholderReply(format, actual.model, actual.stream, `msg_replay_team_mail_${teamShutdownMailSeen.size}`)
+            }
+          }
+        }
         if (problem) {
           const { systemSha: _s, toolsSha: _t, ...expected } = next.request
           report.mismatches.push({ seq: next.seq, path, queue, reason: problem, expected, actual })
@@ -239,6 +293,7 @@ export function startReplayServer(options: { format: ApiFormat; maxEventDelayMs?
       pacing = options?.pacing ?? 'compressed'
       used = new Set()
       lastToolUseIds = new Map()
+      teamShutdownMailSeen = new Set()
       report = { cassette: next.id, served: 0, mismatches: [], unused: [], synthesized: [], drift: [] }
     },
     finish() {
