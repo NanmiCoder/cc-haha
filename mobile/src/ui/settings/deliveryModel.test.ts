@@ -673,4 +673,28 @@ describe('iPhone alerts the computer could not send through Expo', () => {
     expect(reconcilePushTestFeedback(afterReRegister, healthyExpo, 'host-2')).toBeNull()
     expect(reconcilePushTestFeedback(afterReRegister, healthyDirect, 'host-1')).toBeNull()
   })
+
+  test('a successful test on another push provider cannot mask the current provider failure', async () => {
+    const previous = { status: 'registered', provider: 'direct' } as const
+    const current = {
+      status: 'registered',
+      provider: 'expo',
+      issue: 'relayFailing',
+      error: 'Expo 推送服务拒绝了发送（InvalidCredentials）',
+    } as const
+    const outcome = await runTestNotification({
+      hostId: 'host-1',
+      push: previous,
+      getToken: async () => 'fixture-direct-token',
+      postTest: async () => ({ status: 'sent' }),
+      scheduleLocal: async () => { throw new Error('Unexpected local test') },
+    })
+    const feedback = createPushTestFeedback(outcome, 'host-1', previous)
+    expect(deliveryCardNote(feedback, previous, undefined, 'host-1')).toBe(outcome.note)
+    expect(reconcilePushTestFeedback(feedback, { status: 'loading' }, 'host-1')).toBe(feedback)
+
+    const note = deliveryCardNote(feedback, current, undefined, 'host-1')
+    expect(note).toContain('应用发布侧的推送凭证')
+    expect(reconcilePushTestFeedback(feedback, current, 'host-1')).toBeNull()
+  })
 })
