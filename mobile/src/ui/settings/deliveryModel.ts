@@ -392,6 +392,7 @@ export function reconcilePushTestFeedback(
 ): PushTestFeedback | null {
   if (!prev) return null
   if (prev.hostId !== hostId) return null
+  if (prev.provider && push?.provider && prev.provider !== push.provider) return null
   if (!prev.failed) return prev
   if (
     push?.status === 'notConfigured' ||
@@ -399,7 +400,6 @@ export function reconcilePushTestFeedback(
     push?.status === 'unsupported'
   )
     return null
-  if (prev.provider && push?.provider && prev.provider !== push.provider) return null
   if (push?.status === 'registered') {
     if (push.issue === 'relayFailing') {
       const note = pushTestNote({ status: 'failed' }, push)
