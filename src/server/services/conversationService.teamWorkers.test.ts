@@ -139,6 +139,31 @@ test('worker permission identity remains available for replay after leader compl
   expect(output[0].request.agent_id).toBe('researcher@approved')
 })
 
+test('forwarded permission rights follow the live worker process, not a reused session or request id', () => {
+  const service = new ConversationService() as any
+  const output: Array<{ request_id?: unknown }> = []
+  const state = () => ({ pendingPermissionRequests: new Map(), sdkMessages: [], outputCallbacks: [] })
+  service.sessions.set('parent', { ...state(), outputCallbacks: [(message: { request_id?: unknown }) => output.push(message)] })
+  const original = { ...state(), teamWorker: worker, controlRevoked: false }
+  service.sessions.set('child', original)
+  const permission = JSON.stringify({ type: 'control_request', request_id: 'worker-request', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} } })
+  service.handleSdkPayload('child', permission)
+  const first = output[0]!
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(true)
+  expect(service.isLiveTeamWorkerPermission('other-parent', first)).toBe(false)
+  expect(service.isLiveTeamWorkerPermission('parent', { ...first })).toBe(false)
+  original.controlRevoked = true
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(false)
+  service.handleSdkPayload('child', permission)
+  expect(output).toEqual([first])
+
+  service.sessions.set('child', { ...state(), teamWorker: worker })
+  service.handleSdkPayload('child', permission)
+  expect(output).toHaveLength(2)
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(false)
+  expect(service.isLiveTeamWorkerPermission('parent', output[1]!)).toBe(true)
+})
+
 test('real independent CLI processes send their first request to the approved provider after the barrier', async () => {
   const calls: Array<{ provider: string; model: string; credential: string | null; subagentOverride?: string; omitClaudeMd?: string; presetType?: string; presetSource?: string }> = []
   const upstream = (provider: string) => Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {

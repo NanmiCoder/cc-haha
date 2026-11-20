@@ -413,6 +413,7 @@ export type ConversationServiceProcessDeps = {
 export class ConversationService {
   private sessionStopPromises = new Map<string, Promise<void>>()
   private sessions = new Map<string, SessionProcess>()
+  private readonly teamWorkerPermissionOrigins = new WeakMap<object, { sessionId: string; process: SessionProcess }>()
   private teamStopOperations = new Map<string, Promise<void>>()
   private teamRuntimeListeners = new Set<TeamRuntimeListener>()
   private deletedSessions = new Set<string>()
@@ -467,10 +468,32 @@ export class ConversationService {
       },
     }
     this.notifyOutputCallbacks(sessionId, session.outputCallbacks, message)
-    if (session.teamWorker) {
-      const parent = this.sessions.get(session.teamWorker.parentSessionId)
-      if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, message)
+    this.forwardTeamWorkerPermission(sessionId, session, message)
+  }
+
+  private forwardTeamWorkerPermission(
+    sessionId: string,
+    session: SessionProcess,
+    message: { request: object },
+  ): void {
+    if (!session.teamWorker) return
+    const { parentSessionId, name, teamName } = session.teamWorker
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent) return
+    const forwarded = {
+      ...message,
+      request: { ...message.request, agent_id: `${name}@${teamName}`, display_name: name },
     }
+    this.teamWorkerPermissionOrigins.set(forwarded, { sessionId, process: session })
+    this.notifyOutputCallbacks(parentSessionId, parent.outputCallbacks, forwarded)
+  }
+
+  /** Match the exact forwarded frame and its currently authorized worker process. */
+  isLiveTeamWorkerPermission(parentSessionId: string, message: { request_id?: unknown }): boolean {
+    const origin = this.teamWorkerPermissionOrigins.get(message)
+    return origin !== undefined && this.sessions.get(origin.sessionId) === origin.process &&
+      origin.process.teamWorker?.parentSessionId === parentSessionId && !origin.process.controlRevoked &&
+      typeof message.request_id === 'string' && origin.process.pendingPermissionRequests.has(message.request_id)
   }
 
   /** Apply setting changes to questions that are already waiting. */
@@ -1857,10 +1880,7 @@ export class ConversationService {
           if (session.pendingPermissionRequests.delete(msg.response.request_id)) powerActivityClock.changed()
         }
         if (session.teamWorker && msg?.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
-          const parent = this.sessions.get(session.teamWorker.parentSessionId)
-          if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, {
-            ...msg, request: { ...msg.request, agent_id: `${session.teamWorker.name}@${session.teamWorker.teamName}`, display_name: session.teamWorker.name },
-          })
+          this.forwardTeamWorkerPermission(sessionId, session, msg)
         }
         this.notifyOutputCallbacks(sessionId, session.outputCallbacks, msg)
       } catch {

@@ -17,6 +17,10 @@ const COMPLETED_MODEL = 'mock-runtime-completed-a'
 const HISTORY = 'TEAM_RUNTIME_READER_ORIGINAL_HISTORY'
 const REPORT = 'TEAM_RUNTIME_READER_FRESH_REPORT'
 const OLD_MAIL = 'TEAM_RUNTIME_OLD_MAIL_MUST_WAIT'
+const WARM_RESUMED_BASH = 'runtime-warm-resumed-bash'
+const RESUMED_BASH = 'runtime-resumed-bash'
+const RESUMED_BASH_MARKER = 'TEAM_RUNTIME_RESUMED_BASH_OK'
+const RESUMED_BASH_COMMAND = `sleep 1 && printf '%s\\n' '${RESUMED_BASH_MARKER}'`
 const CHILD = { reader: 'TEAM_RUNTIME_CHILD_READER', finished: 'TEAM_RUNTIME_CHILD_FINISHED' } as const
 type MemberName = keyof typeof CHILD
 type ToolBlock = { type?: string; id?: string; name?: string; input?: Record<string, unknown>; tool_use_id?: string; is_error?: boolean; content?: unknown }
@@ -125,6 +129,7 @@ export async function runTeamRuntimeControlsScenario(rootDir: string, artifactDi
   mkdirSync(artifactDir, { recursive: true })
   const startedAt = Date.now()
   let finishReader = false
+  let warmResume = false
   let scriptError: string | undefined
   let baseUrl = '', configDir = '', workRoot = '', teamName = ''
   let providerA = '', providerB = ''
@@ -140,7 +145,17 @@ export async function runTeamRuntimeControlsScenario(rootDir: string, artifactDi
         if (textContent(request.messages?.at(-1)?.content).includes(REPORT)) return textReply('TEAM_RUNTIME_LEAD_CONSUMED_FRESH_REPORT')
         return decideReply(request)
       }
-      if (name === 'reader' && !finishReader) return textReply(HISTORY)
+      if (name === 'reader') {
+        const toolId = finishReader ? RESUMED_BASH : warmResume ? WARM_RESUMED_BASH : undefined
+        if (toolId) {
+          if (!toolFinished(request, toolId)) return toolReply(request, toolId, 'Bash', {
+            command: RESUMED_BASH_COMMAND, description: 'Check resumed team tool approval',
+          })
+          const result = blocks(request).find(block => block.type === 'tool_result' && block.tool_use_id === toolId)
+          assert.ok(textContent(result?.content).includes(RESUMED_BASH_MARKER), 'resumed worker Bash did not return the expected output')
+        }
+        if (!finishReader) return textReply(HISTORY)
+      }
       const taskId = assignedTaskId(request)
       if (!toolFinished(request, `runtime-${name}-complete`)) return toolReply(request, `runtime-${name}-complete`, 'TaskUpdate', { taskId, status: 'completed' })
       if (!toolFinished(request, `runtime-${name}-report`)) return toolReply(request, `runtime-${name}-report`, 'SendMessage', {
@@ -297,6 +312,16 @@ export async function runTeamRuntimeControlsScenario(rootDir: string, artifactDi
           snapshots.push({ label: requestId, at: Date.now(), state: { control, durable } })
           return control
         }
+        const approveReaderBash = async (toolUseId: string, cursor: number, phase: 'warm' | 'cold') => {
+          const permission = await socket.waitFor(message => message.type === 'permission_request' &&
+            message.toolUseId === toolUseId && message.toolName === 'Bash' && message.displayName === 'reader',
+          TIMEOUT_MS, `${phase} resumed worker Bash permission on the already connected leader`, cursor)
+          const decisionCursor = socket.messages.length
+          socket.send({ type: 'permission_response', requestId: permission.requestId, allowed: true })
+          await socket.waitFor(message => message.type === 'permission_resolved' && message.requestId === permission.requestId && message.allowed === true,
+            TIMEOUT_MS, `${phase} resumed worker permission resolution on the leader`, decisionCursor)
+          evidence[`${phase}ResumedWorkerPermission`] = { toolName: permission.toolName, displayName: permission.displayName, allowed: true }
+        }
         const quiet = async (since: number, label: string) => { await Bun.sleep(1_200); assert.equal(requests.length, since, `${label} sent an upstream request`) }
         const seedOldMail = (recipient: string, from: string) => {
           const path = join(teamDir, 'inboxes', `${recipient}.json`)
@@ -317,9 +342,13 @@ export async function runTeamRuntimeControlsScenario(rootDir: string, artifactDi
           // lead-exit probe cannot be performed safely (notably Windows).
           await stop(['reader'], 'lead-present Main Stop')
           const beforeFirstResume = workerRequests('reader').length
+          const warmPermissionCursor = socket.messages.length
+          warmResume = true
           await resume('human-baseline-resume')
+          await approveReaderBash(WARM_RESUMED_BASH, warmPermissionCursor, 'warm')
           await poll(() => workerRequests('reader').length > beforeFirstResume, 'first explicit resume reached original provider')
           await waitIdle(['reader'])
+          warmResume = false
 
           const stagedResults = await runTool('Agent', { team_name: teamName, name: 'finished', subagent_type: 'general-purpose', description: 'Propose an additional member', prompt: `${CHILD.finished}: Complete the one original shared task and report.` })
           const stagedResult = stagedResults.find(result => textContent(result.content).includes('plan_id:'))
@@ -421,7 +450,9 @@ export async function runTeamRuntimeControlsScenario(rootDir: string, artifactDi
           const readerBefore = workerRequests('reader').length
           const finishedBefore = workerRequests('finished').length
           const finishedStarts = starts(finishedId)
+          const permissionCursor = socket.messages.length
           const resumed = await resume('human-resume-after-server-restart')
+          await approveReaderBash(RESUMED_BASH, permissionCursor, 'cold')
           await poll(() => workerRequests('reader').length > readerBefore, 'same worker made a real request through the new provider')
           const next = workerRequests('reader')[readerBefore]!
           assert.equal(next.endpoint, 'b')

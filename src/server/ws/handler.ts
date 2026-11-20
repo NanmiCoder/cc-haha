@@ -4309,6 +4309,9 @@ export async function ensureCliSessionStartedForControl(
       { ...runtimeSettings, resumeInterruptedTurn: false },
     )
     bindSessionTurnObserver(sessionId)
+    // Clients may already be watching a cold session. Attach them before
+    // resuming workers, whose tool permission requests arrive on the lead.
+    bindAllClientSessionOutputs(sessionId)
     runtimeExitStoppedSessions.delete(sessionId)
     runtimeExitFailedSessions.delete(sessionId)
   })()
@@ -5725,6 +5728,10 @@ function shouldSuppressCliOutputDuringStop(
   taskLifecycle: CliBackgroundTaskLifecycle | null,
 ): boolean {
   if (taskLifecycle !== null) return false
+  // Team workers have independent SDK tokens and Stop revokes their prompt
+  // rights before exit. A newly resumed worker can request approval while the
+  // lead's stopped-turn fence is still protecting the lead's own old output.
+  if (isAgentScopedPermissionRequest(cliMsg) && conversationService.isLiveTeamWorkerPermission(sessionId, cliMsg)) return false
   if (isAgentRunMessageFrame(cliMsg)) {
     return agentStopRequestedSessions.has(sessionId) && cliMsg.event_kind === 'message'
   }

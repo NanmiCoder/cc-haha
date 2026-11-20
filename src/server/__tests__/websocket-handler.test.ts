@@ -1014,6 +1014,39 @@ describe('WebSocket handler session isolation', () => {
     expect(sdkUrls[1]!.startsWith(`ws://127.0.0.1:4321/sdk/${sessionId}?token=`)).toBe(true)
   })
 
+  it('binds existing leader clients to a cold CLI started by team resume', async () => {
+    const sessionId = `team-control-cold-start-${crypto.randomUUID()}`
+    const clients = [makeClientSocket(sessionId), makeClientSocket(sessionId)]
+    const callbacks = new Set<(frame: unknown) => void>()
+    let started = false
+    spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(null)
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue('/fixture/team-control-cold-start')
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
+    spyOn(conversationService, 'hasSession').mockImplementation(() => started)
+    spyOn(conversationService, 'startSession').mockImplementation(async () => { started = true })
+    spyOn(conversationService, 'onOutput').mockImplementation((_id, callback) => { callbacks.add(callback) })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_id, callback) => { callbacks.delete(callback) })
+    for (const client of clients) handleWebSocket.open(client)
+
+    const url = new URL('http://127.0.0.1:3456/api/teams/taskboard/runtime-control/resume')
+    await Promise.all([ensureCliSessionStartedForControl(sessionId, url), ensureCliSessionStartedForControl(sessionId, url)])
+    await ensureCliSessionStartedForControl(sessionId, url)
+    const forwardedPermission = {
+      type: 'control_request', request_id: 'resumed-worker-permission',
+      request: { subtype: 'can_use_tool', tool_name: 'Bash', display_name: 'reader', agent_id: 'reader@taskboard' },
+    }
+    for (const callback of callbacks) callback(forwardedPermission)
+
+    for (const client of clients) {
+      const requests = client.sent.map(payload => JSON.parse(payload)).filter(message => message.type === 'permission_request')
+      expect(requests).toEqual([expect.objectContaining({
+        requestId: 'resumed-worker-permission', toolName: 'Bash', displayName: 'reader',
+      })])
+    }
+    expect(conversationService.startSession).toHaveBeenCalledTimes(1)
+  })
+
   it('gives pet clients only sanitized state and denies privileged client messages', () => {
     const sessionId = `pet-capability-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId, 'pet')
