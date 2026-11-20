@@ -19,6 +19,8 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
   const { writeTeamFileAsync } = await import('../../utils/swarm/teamHelpers.js')
   const { ensureTeamDraft, submitTeamPlan, readTeamPlan } = await import('../../utils/swarm/teamPlanStore.js')
   const { teamPlanService, TeamPlanService } = await import('../services/teamPlanService.js')
+  const { sessionService } = await import('../services/sessionService.js')
+  const { ApiError } = await import('../middleware/errorHandler.js')
   const oldHome = process.env.HOME, oldConfig = process.env.CLAUDE_CONFIG_DIR
   const root = await mkdtemp(join(tmpdir(), 'team-plan-http-'))
   process.env.HOME = root
@@ -27,7 +29,7 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
   const barrier = new Promise<void>(resolve => { release = resolve })
   const startedLeaders: string[] = []
   const runtime = new TeamPlanService({ validate: async plan => plan, launch: async () => { await barrier; return { memberIds: { worker: 'session-child' } } }, stop: async () => {} })
-  const spies = [
+  const spies: Array<{ mockRestore: () => void }> = [
     spyOn(teamPlanService, 'getForSession').mockImplementation(id => runtime.getForSession(id)),
     // The route must hand approval a way to start a disconnected lead; the
     // fixture records the start instead of spawning a CLI.
@@ -48,8 +50,17 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
     const route = { providerId: 'fixture', modelId: 'suggested' }
     const draft = await ensureTeamDraft('review', 'leader', route, { agentCatalog: { general: { systemPrompt: 'fixture preset' } }, members: [{ id: 'worker', name: 'worker', agentType: 'general', prompt: 'Original scoped work', runtime: route }], tasks: [{ id: 't1', subject: 'fixture work', ownerId: 'worker', dependencies: [] }] })
     const plan = await submitTeamPlan('review', identity(draft))
+    const profileRead = spyOn(sessionService, 'getSessionLaunchInfo')
+      .mockRejectedValueOnce(new ApiError(409, 'Session changed during recovery; retry', 'HISTORY_CHANGED'))
+      .mockResolvedValueOnce({
+        filePath: join(root, 'leader.jsonl'), projectDir: 'review', workDir: root, transcriptMessageCount: 1,
+        customTitle: null, agentProfile: 'standard',
+      })
+    spies.push(profileRead)
     const savedResponse = await request('PATCH', '/api/teams/review/plan', { ...identity(plan), members: [{ id: 'worker', runtime: { providerId: 'fixture', modelId: 'economy' } }], tasks: [{ id: 't1', ownerId: 'worker' }] })
     expect(savedResponse.status).toBe(200)
+    expect(profileRead).toHaveBeenCalledTimes(2)
+    profileRead.mockRestore()
     const { plan: saved } = await savedResponse.json()
     expect(saved.members[0].prompt).toBe('Original scoped work')
     expect(saved.members[0].runtime.modelId).toBe('economy')

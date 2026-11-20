@@ -3,6 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TeamPlanService } from './teamPlanService.js'
+import { sessionService } from './sessionService.js'
+import { ApiError } from '../middleware/errorHandler.js'
 import { approveTeamPlan, ensureTeamDraft, readTeamPlan, replaceTeamPlan, stageMember, submitTeamPlan } from '../../utils/swarm/teamPlanStore.js'
 import * as teamPlanStore from '../../utils/swarm/teamPlanStore.js'
 import { writeTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
@@ -55,6 +57,58 @@ test('approval launches once and returns frozen selected runtime to executor', a
   release()
   expect((await settle('running')).launch?.memberIds).toEqual({ worker: 'child-1' })
 })
+test.each(['lean', 'missing', 'changing', 'aborted'] as const)('profile read recovery cannot edit or approve if metadata is %s', async (condition) => {
+  const plan = await ready()
+  const validate = async (_plan: TeamPlanRecord) => { throw new Error('must not validate an unavailable plan') }
+  const service = new TeamPlanService({ validate, launch: async () => { throw new Error('must not launch') }, stop: async () => {} })
+  const conflict = new ApiError(409, 'Session changed during recovery; retry', 'HISTORY_CHANGED')
+  const retry = condition === 'lean' ? {
+    filePath: join(root, 'leader.jsonl'), projectDir: 'review', workDir: root, transcriptMessageCount: 1,
+    customTitle: null, agentProfile: 'lean' as const,
+  } : null
+
+  for (const operation of ['edit', 'approve'] as const) {
+    const controller = new AbortController()
+    const profileRead = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementationOnce(async () => {
+      if (condition === 'aborted') controller.abort()
+      throw conflict
+    })
+    if (condition === 'changing') profileRead.mockRejectedValueOnce(conflict)
+    else profileRead.mockResolvedValueOnce(retry)
+    try {
+      const change = operation === 'edit'
+        ? service.update('review', identity(plan), { members: [] }, controller.signal)
+        : service.approve('review', identity(plan), { signal: controller.signal })
+      if (condition === 'lean') await expect(change).rejects.toMatchObject({ status: 400, message: 'Agent teams are unavailable in lean sessions' })
+      else if (condition === 'aborted') await expect(change).rejects.toMatchObject({ name: 'AbortError' })
+      else await expect(change).rejects.toBe(conflict)
+      expect(profileRead).toHaveBeenCalledTimes(condition === 'aborted' ? 1 : 2)
+      expect(await readTeamPlan('review')).toMatchObject({ revision: plan.revision, state: 'review_pending' })
+    } finally { profileRead.mockRestore() }
+  }
+})
+
+test('approval recovers a transient metadata conflict and still rejects a canceled plan', async () => {
+  const plan = await ready()
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    launches++
+    return { memberIds: { worker: 'child-1' } }
+  }, stop: async () => {} })
+  const profileRead = spyOn(sessionService, 'getSessionLaunchInfo')
+    .mockRejectedValueOnce(new ApiError(409, 'Session changed during recovery; retry', 'HISTORY_CHANGED'))
+    .mockImplementationOnce(async () => {
+      await service.action('review', 'cancel', identity(plan))
+      return { filePath: join(root, 'leader.jsonl'), projectDir: 'review', workDir: root, transcriptMessageCount: 1,
+        customTitle: null, agentProfile: 'standard' }
+    })
+  try {
+    await expect(service.approve('review', identity(plan))).rejects.toMatchObject({ status: 409, message: 'Plan changed; review it again' })
+    expect((await readTeamPlan('review'))?.state).toBe('cancelled')
+    expect(launches).toBe(0)
+  } finally { profileRead.mockRestore() }
+})
+
 test('a plan read while the approval is committing does not orphan the launch', async () => {
   let launches = 0
   const service = new TeamPlanService({ validate: async item => item, launch: async () => {
