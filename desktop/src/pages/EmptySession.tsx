@@ -101,6 +101,7 @@ import type { SlashCommandOption } from '../components/chat/composerUtils'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
+import { useComposerPromptHistory } from '@/hooks/useComposerPromptHistory'
 
 type Attachment = ComposerAttachment
 
@@ -347,16 +348,42 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   // recording bar takes their row.
   const dictationLive = dictation.phase !== 'idle'
 
+  const promptHistory = useComposerPromptHistory({
+    sessionId: null,
+    projectPath: workDir || null,
+    includeProjectHistory: true,
+    getCurrentDraft: () => ({
+      text: draftComposerRef.current.input,
+      mentions: draftComposerRef.current.mentions,
+    }),
+    applyEntry: (entry, cursor) => {
+      const nextMentions = entry.mentions ?? []
+      composerRef.current?.replaceContent(entry.text, nextMentions, cursor)
+      draftComposerRef.current = {
+        ...draftComposerRef.current,
+        input: entry.text,
+        mentions: nextMentions,
+      }
+      setInput(entry.text)
+      setMentions(nextMentions)
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setAtFilter('')
+      setAtCursorPos(-1)
+    },
+  })
+
   useEffect(() => {
     if (visible) composerRef.current?.focus()
     else {
+      promptHistory.resetHistory()
       setPlusMenuOpen(false)
       setSlashMenuOpen(false)
       setFileSearchOpen(false)
       setReferenceDetail(null)
       setLocalSlashPanel(null)
     }
-  }, [visible])
+  }, [promptHistory.resetHistory, visible])
 
   useDismissable({
     // On a phone the + opens a sheet that closes itself; see ChatInput.
@@ -734,6 +761,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
 
     const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
     if (slashUiAction?.type === 'panel') {
+      promptHistory.recordSubmission({ text: input, mentions })
       setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
       setInput('')
       setMentions([])
@@ -744,6 +772,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
 
     if (slashUiAction?.type === 'settings') {
+      promptHistory.recordSubmission({ text: input, mentions })
       useUIStore.getState().setPendingSettingsTab(slashUiAction.tab)
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
       setInput('')
@@ -755,6 +784,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
 
     if (slashUiAction?.type === 'model') {
+      promptHistory.recordSubmission({ text: input, mentions })
       modelSelectorRef.current?.open()
       setInput('')
       setMentions([])
@@ -810,6 +840,19 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       connectToSession(sessionId)
       if (serializedText || attachmentPayload.length > 0) {
         sendMessage(sessionId, contentForModel, attachmentPayload, { displayContent: text })
+      }
+      if (text) {
+        const createdSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
+        promptHistory.recordSubmission(
+          { text: input, mentions },
+          {
+            sessionId,
+            projectPath: workDir || createdSession?.workDir || null,
+            projectRoot: createdSession?.projectRoot ?? null,
+          },
+        )
+      } else {
+        promptHistory.resetHistory()
       }
       recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
       if (sendAsTeam) capabilityMenu.disarmAgentTeam()
@@ -916,6 +959,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   ])
 
   const handleComposerChange = (value: string, nextMentions: ComposerMention[]) => {
+    promptHistory.resetHistory()
+    draftComposerRef.current = {
+      ...draftComposerRef.current,
+      input: value,
+      mentions: nextMentions,
+    }
     setInput(value)
     setMentions(nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? value.length
@@ -1016,6 +1065,31 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       }
     }
 
+    if (
+      !isSubmitting &&
+      !dictationLive &&
+      !localSlashPanel &&
+      !plusMenuOpen &&
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    ) {
+      if (event.key === 'ArrowUp' && composerRef.current?.isSelectionAtBoundary('up')) {
+        if (promptHistory.onHistoryUp()) {
+          event.preventDefault()
+          return true
+        }
+      }
+      if (
+        event.key === 'ArrowDown' &&
+        promptHistory.isNavigating() &&
+        composerRef.current?.isSelectionAtBoundary('down')
+      ) {
+        if (promptHistory.onHistoryDown()) {
+          event.preventDefault()
+          return true
+        }
+      }
+    }
+
     if (shouldSubmitOnEnter(event, chatSendBehavior)) {
       event.preventDefault()
       void handleSubmit()
@@ -1097,6 +1171,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const selectSlashCommand = (command: string) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
@@ -1125,6 +1200,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const insertSlashCommand = () => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const replacement = insertSlashTrigger(input, cursorPos)
     setInput(replacement.value)
@@ -1138,6 +1214,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const insertSelectedFileMention = (mention: NewComposerMention) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
     setInput(inserted.text)
@@ -1214,6 +1291,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       : undefined,
     handlers: {
       onInsertMention: (reference) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
         const mention = composerReferenceToMention(reference)
         const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
@@ -1225,6 +1303,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         })
       },
       onInsertSlashText: (command) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
         const replacement = replaceSlashToken(input, cursorPos, command)
         setInput(replacement.value)
@@ -1244,6 +1323,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const heroProject = workDir ? (resolveProjectDisplayName(workDir) ?? projectTitle(workDir)) : null
   // A draft already typed is kept: the suggestion goes on a new line.
   const insertSuggestion = (text: string) => {
+    promptHistory.resetHistory()
     const next = input.trim() ? `${input}\n${text}` : text
     setInput(next)
     requestAnimationFrame(() => {
@@ -1337,6 +1417,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   filter={atFilter}
                   onNavigate={(relativePath) => {
                     if (atCursorPos < 0) return
+                    promptHistory.resetHistory()
                     const replacement = `@${relativePath}`
                     const tokenEnd = atCursorPos + 1 + atFilter.length
                     const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
@@ -1350,6 +1431,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   }}
                   onSelect={(mention) => {
                     if (atCursorPos < 0) return
+                    promptHistory.resetHistory()
                     const tokenEnd = atCursorPos + 1 + atFilter.length
                     const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
                     setInput(inserted.text)
