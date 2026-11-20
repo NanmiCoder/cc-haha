@@ -11,21 +11,26 @@ export async function getDesktopOpenAICodexModelCatalog(options?: {
   waitForInitial?: boolean
   throwOnError?: boolean
 }) {
-  // If credentials change while launch waits on the catalog, resolve once
-  // more with the account the CLI's OAuth file now points to.
+  // A blocking lookup must follow a login change before returning account-specific
+  // models or reporting an upstream error from the previous login.
+  const verifyAccount = options?.forceRefresh || options?.waitForInitial
   for (let attempt = 0; attempt < 2; attempt++) {
     const tokenFile = hahaOpenAIOAuthService.getOAuthFilePath()
     const tokens = await hahaOpenAIOAuthService.ensureFreshTokens().catch(() => null)
-    const catalog = await getOpenAICodexModelCatalog({
+    const result = await getOpenAICodexModelCatalog({
       ...options,
       tokens,
       resolveProxyUrl: async () => getNetworkProxyUrl(await loadNetworkSettings()),
-    })
-    if (!options?.waitForInitial || !tokens) return catalog
-    const current = await hahaOpenAIOAuthService.loadTokens().catch(() => null)
-    if (tokenFile === hahaOpenAIOAuthService.getOAuthFilePath() &&
-      oauthTokenIdentity(tokens) === oauthTokenIdentity(current)) return catalog
+    }).then(models => ({ models }), (error: unknown) => ({ error }))
+    if (verifyAccount && tokens) {
+      const current = await hahaOpenAIOAuthService.loadTokens().catch(() => null)
+      if (tokenFile !== hahaOpenAIOAuthService.getOAuthFilePath() ||
+        oauthTokenIdentity(tokens) !== oauthTokenIdentity(current)) continue
+    }
+    if ('models' in result) return result.models
+    throw result.error
   }
+  if (options?.throwOnError) throw new Error('ChatGPT login changed during model catalog refresh')
   return OPENAI_CODEX_MODEL_CATALOG
 }
 
