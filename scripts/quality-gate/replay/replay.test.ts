@@ -265,6 +265,75 @@ describe('replay server', () => {
   })
 })
 
+describe('recorded team shutdown mail', () => {
+  const recorded = loadCassette('replay-agent-team')!
+  const deleting = recorded.interactions.find(entry => entry.seq === 35)!
+  const deleted = recorded.interactions.find(entry => entry.seq === 36)!
+  const focused = { ...recorded, interactions: [deleting, deleted] }
+  const ids = { V1: '1795153001001', V2: '1795153001002' }
+  const [idle, counter, reporter] = deleting.request.lastUserText.split('\n\n')
+    .map(block => expandString(block, { ...ids, TIMESTAMP: '2026-11-20T05:36:41.662Z' }))
+  const request = (text: string, toolResultIds: string[] = []) => ({
+    model: deleting.request.model, stream: deleting.request.stream, max_tokens: deleting.request.maxTokens,
+    tools: deleting.request.toolNames.map(name => ({ name, input_schema: {} })),
+    messages: [
+      { role: 'user', content: deleting.request.firstUserText },
+      { role: 'assistant', content: 'Waiting for the team to shut down.' },
+      { role: 'user', content: [
+        ...toolResultIds.map(tool_use_id => ({ type: 'tool_result', tool_use_id, content: 'ok' })),
+        ...(text ? [{ type: 'text', text }] : []),
+      ] },
+    ],
+  })
+
+  test('serves the recorded TeamDelete only after all three exact messages arrive across independent polls', async () => {
+    const server = await startServer()
+    server.load(focused, [])
+    for (const partial of [idle!, reporter!]) {
+      const reply = await post(server, request(partial))
+      expect(reply.status).toBe(200)
+      expect(reply.text).not.toContain('TeamDelete')
+      expect(server.finish().served).toBe(0)
+      expect(server.finish().unused.map(entry => entry.seq)).toEqual([35, 36])
+    }
+
+    const complete = await post(server, request(counter!))
+    expect(complete.status).toBe(200)
+    expect(complete.text).toContain('TeamDelete')
+    expect((await post(server, request('', deleted.request.toolResultIds))).status).toBe(200)
+    expect(server.finish()).toMatchObject({ served: 2, mismatches: [], unused: [] })
+    expect(server.finish().synthesized).toHaveLength(2)
+  })
+
+  test('a duplicate fails even when the second request otherwise matches the entire recording', async () => {
+    const server = await startServer()
+    server.load(focused, [])
+    expect((await post(server, request(idle!))).status).toBe(200)
+    expect((await post(server, request([idle, counter, reporter].join('\n\n')))).status).toBe(400)
+    expect(server.finish()).toMatchObject({ served: 0, mismatches: [{ seq: 35 }] })
+    expect(server.finish().unused.map(entry => entry.seq)).toEqual([35, 36])
+  })
+
+  test.each(['foreign sender', 'wrong known request id', 'tool result', 'different model'] as const)
+  ('keeps rejecting a partial request with a %s', async (change) => {
+    const server = await startServer()
+    server.load(focused, [{ name: 'V1', values: [ids.V1] }])
+    const submitted = change === 'foreign sender' ? request(reporter!.replaceAll('reporter', 'foreign'))
+      : change === 'wrong known request id' ? request(reporter!.replace(ids.V1, '1795153001009'))
+      : change === 'tool result' ? request(idle!, ['unexpected-result'])
+      : { ...request(idle!), model: 'wrong-model' }
+    expect((await post(server, submitted)).status).toBe(400)
+    expect(server.finish()).toMatchObject({ served: 0, mismatches: [{ seq: 35 }], synthesized: [] })
+  })
+
+  test('other cassettes still require exact message text', async () => {
+    const server = await startServer()
+    server.load({ ...focused, id: 'other-cassette' }, [])
+    expect((await post(server, request(idle!))).status).toBe(400)
+    expect(server.finish()).toMatchObject({ served: 0, mismatches: [{ seq: 35 }], synthesized: [] })
+  })
+})
+
 describe('recorder', () => {
   test('settles after the client hangs up mid-stream, keeping what arrived', async () => {
     const upstream = Bun.serve({
