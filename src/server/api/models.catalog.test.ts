@@ -244,4 +244,54 @@ describe('official model catalog API refresh', () => {
     expect(JSON.parse((await launch)[MODEL_CONTEXT_WINDOWS_ENV_KEY]!)[model]).toBe(285_000)
     expect(catalogAccounts).toEqual(['fake-account', 'new-account'])
   })
+
+  test.each(['old reply', 'old rejection', 'logout'] as const)(
+    'explicit refresh follows a changed ChatGPT login after %s',
+    async outcome => {
+      const oldRequestStarted = Promise.withResolvers<void>()
+      const oldReply = Promise.withResolvers<Response>()
+      const model = 'gpt-6.2-sol'
+      const reply = (window: number) => Response.json({ models: [
+        { slug: model, visibility: 'list', context_window: window },
+      ] })
+      const catalogAccounts: Array<string | null> = []
+      fetchSpy.mockImplementation((async (input, init) => {
+        if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+          return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+        }
+        const account = new Headers(init?.headers).get('ChatGPT-Account-Id')
+        catalogAccounts.push(account)
+        if (account === 'fake-account') {
+          oldRequestStarted.resolve()
+          return oldReply.promise
+        }
+        expect(account).toBe('new-account')
+        return reply(300_000)
+      }) as typeof fetch)
+
+      const path = '/api/models/catalog?provider=openai-official'
+      const refresh = handleModelsApi(...request(`${path}&refresh=true`))
+      await oldRequestStarted.promise
+      if (outcome === 'logout') {
+        await hahaOpenAIOAuthService.deleteTokens()
+      } else {
+        await hahaOpenAIOAuthService.saveTokens({ accessToken: 'fake-new-token', refreshToken: null, expiresAt: null,
+          accountId: 'new-account', email: null })
+      }
+      oldReply.resolve(outcome === 'old rejection' ? new Response(null, { status: 401 }) : reply(500_000))
+
+      const response = await refresh
+      if (outcome === 'logout') {
+        expect(response.status).toBe(502)
+        expect(await response.json()).toMatchObject({ error: 'MODEL_CATALOG_REFRESH_FAILED' })
+        expect(catalogAccounts).toEqual(['fake-account'])
+      } else {
+        expect(response.status).toBe(200)
+        const { models } = await response.json()
+        expect(models).toEqual([expect.objectContaining({ id: model, context: '285000' })])
+        expect(await (await handleModelsApi(...request(path))).json()).toEqual({ models })
+        expect(catalogAccounts).toEqual(['fake-account', 'new-account'])
+      }
+    },
+  )
 })
