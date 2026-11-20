@@ -318,6 +318,7 @@ test('transient turn failures are continued automatically and only exhausted ret
   setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [40, 40] })
   const h = await startHarness(['reader'])
   try {
+    await waitForInitialReports(h)
     const truncated = 'FIXTURE_ERROR:API Error: {"type":"error","error":{"type":"stream_truncated","message":"OpenAI Chat upstream stream ended without finish_reason"}}'
     h.replies.push(truncated, truncated, truncated)
     const before = h.requests.length
@@ -332,6 +333,67 @@ test('transient turn failures are continued automatically and only exhausted ret
     // The member stayed alive throughout: a message still reaches it directly.
     expect(h.service.hasSession(h.memberIds.reader!)).toBe(true)
   } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test.each([false, true])('handles a retry due during a roster write (newer message: %s)', async newerMessage => {
+  const { getTeamRuntimeLaunches, setTeamRuntimeTimingForTests } = await import('./teamPlanRuntime.js')
+  const { getTeamFilePath } = await import('../../utils/swarm/teamHelpers.js')
+  const { lock } = await import('../../utils/lockfile.js')
+  const { readUnreadMessages } = await import('../../utils/teammateMailbox.js')
+  const retryDelay = 40
+  setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [retryDelay] })
+  const h = await startHarness(['reader'])
+  let releaseReply: (() => void) | undefined
+  const send = h.service.sendMessage.bind(h.service)
+  let retryDueAt: number | undefined
+  const sendSpy = spyOn(h.service, 'sendMessage').mockImplementation(async (...args: Parameters<typeof send>) => {
+    if (String(args[1]).includes('[Team runtime notice]')) retryDueAt = (await h.teamMember('reader'))?.autoRetry?.nextAt
+    return send(...args)
+  })
+  try {
+    await waitForInitialReports(h)
+    const worker = getTeamRuntimeLaunches(h.parentId, h.teamName)[0]!.workers.get('reader')!
+    const before = h.memberRequests('reader').length
+    releaseReply = h.holdReplies()
+    h.replies.push('FIXTURE_ERROR:API Error: 502 Bad Gateway', 'Follow-up completed')
+    await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'follow-up model call')
+    await h.waitFor(async () => (await readUnreadMessages('reader', h.teamName)).length === 0, 'follow-up acknowledged')
+    const teamFile = getTeamFilePath(h.teamName)
+    const unlock = await lock(teamFile, { realpath: false, lockfilePath: teamFile + '.lock' })
+    let unlockedAt: number
+    try {
+      releaseReply()
+      await h.waitFor(() => worker.autoContinueAttempts === 1, 'transient result handled')
+      // Let the retry deadline pass with the prior active row still on disk.
+      await Bun.sleep(retryDelay * 2)
+      await h.waitFor(() => worker.powerOperations === 1, 'only the blocked roster update remains')
+      expect((await h.teamMember('reader'))?.isActive).toBe(true)
+      expect(h.memberRequests('reader')).toHaveLength(before + 1)
+      if (newerMessage) {
+        await messageMember(h, 'reader', 'team-lead', 'Handle this newer instruction instead')
+        await h.waitFor(() => worker.autoContinueAttempts === 0, 'newer message supersedes the retry')
+      }
+    } finally {
+      unlockedAt = Date.now()
+      await unlock()
+    }
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.result === 'Follow-up completed'), 'follow-up result after releasing the roster lock')
+    const requests = h.memberRequests('reader').slice(before + 1)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.prompt).toContain(newerMessage ? 'Handle this newer instruction instead' : '[Team runtime notice]')
+    if (newerMessage) expect(retryDueAt).toBeUndefined()
+    else {
+      expect(retryDueAt).toBeDefined()
+      expect(retryDueAt!).toBeLessThan(unlockedAt)
+    }
+    expect((await h.teamMember('reader'))?.autoRetry).toBeUndefined()
+    expect((await h.leadNotifications()).filter(item => item.idleReason === 'failed')).toHaveLength(0)
+  } finally {
+    releaseReply?.()
+    sendSpy.mockRestore()
     await h.cleanup()
   }
 }, 30_000)
