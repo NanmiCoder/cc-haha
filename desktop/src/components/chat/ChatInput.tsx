@@ -102,6 +102,10 @@ import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
 import { useSessionStopOffer } from '../../hooks/useSessionStopOffer'
 import { useSessionGitInfo } from '../../hooks/useSessionGitInfo'
+import {
+  extractSessionPromptHistory,
+  useComposerPromptHistory,
+} from '@/hooks/useComposerPromptHistory'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
@@ -453,6 +457,27 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const fitsAtLeast = (minWidth: number) => shellWidth === null ? !compact : shellWidth >= minWidth
   const useCompactControls = isMobileComposer || !fitsAtLeast(TOOLBAR_LOCATION_MIN_WIDTH)
   const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
+  const sessionPromptHistoryEntries = useMemo(
+    () => extractSessionPromptHistory(sessionState?.messages),
+    [sessionState?.messages],
+  )
+  const promptHistory = useComposerPromptHistory({
+    sessionId: activeTabId,
+    projectPath: activeLaunchWorkDir || resolvedWorkDir || null,
+    projectRoot: activeSession?.projectRoot ?? null,
+    sessionEntries: sessionPromptHistoryEntries,
+    includeProjectHistory: !isMemberSession,
+    getCurrentDraft: () => ({ text: inputRef.current, mentions: mentionsRef.current }),
+    applyEntry: (entry, cursor) => {
+      const nextMentions = entry.mentions ?? []
+      composerRef.current?.replaceContent(entry.text, nextMentions, cursor)
+      setComposerInput(entry.text, nextMentions)
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setAtFilter('')
+      setAtCursorPos(-1)
+    },
+  })
   const referenceCwd = activeLaunchWorkDir || resolvedWorkDir || ''
   const referenceProviderId = mentionProviderId(runtimeSelection)
   const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}\0${referenceProviderId ?? ''}\0${isLean ? 'lean' : 'standard'}`
@@ -639,6 +664,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashFilter('')
     setAtFilter('')
     setAtCursorPos(-1)
+    promptHistory.resetHistory()
 
     requestAnimationFrame(() => {
       if (visible) composerRef.current?.focus()
@@ -653,6 +679,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     clearComposerPrefill,
     clearWorkspaceReferences,
     composerPrefill,
+    promptHistory.resetHistory,
     setComposerAttachments,
     setComposerInput,
     visible,
@@ -675,6 +702,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashMenuOpen(false)
     setAtFilter('')
     setAtCursorPos(-1)
+    promptHistory.resetHistory()
     clearComposerInsertion(activeTabId, composerInsertion.nonce)
 
     requestAnimationFrame(() => {
@@ -688,6 +716,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     composerInsertion,
     visible,
     isMemberSession,
+    promptHistory.resetHistory,
     setComposerInput,
   ])
 
@@ -933,6 +962,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [])
 
   const handleComposerChange = (text: string, nextMentions: ComposerMention[]) => {
+    promptHistory.resetHistory()
     setComposerInput(text, nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? text.length
     if (isMemberSession) {
@@ -946,6 +976,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }
 
   const selectSlashCommand = useCallback((command: string) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
@@ -968,7 +999,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       composerRef.current?.focus()
       composerRef.current?.setSelectionOffsets(nextCursor)
     })
-  }, [input, mentions, allSlashCommands, composerReferences, setComposerInput])
+  }, [input, mentions, allSlashCommands, composerReferences, promptHistory.resetHistory, setComposerInput])
 
   const replaceEmptySession = useCallback(async (
     workDir: string,
@@ -1065,6 +1096,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // Immediate local command: never enter the main turn, launch flow or queue.
     const sideQuestion = !isMemberSession ? parseSideQuestionCommand(text) : null
     if (sideQuestion !== null && activeTabId) {
+      promptHistory.recordSubmission({ text: input, mentions })
       void openSideChat(sideChat?.parentSessionId ?? activeTabId, { question: sideQuestion || undefined, submit: true })
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1074,6 +1106,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'panel') {
+      promptHistory.recordSubmission({ text: input, mentions })
       setLocalSlashPanel(pendingSlashUiAction.command as LocalSlashCommandName)
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1083,6 +1116,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'settings') {
+      promptHistory.recordSubmission({ text: input, mentions })
       useUIStore.getState().setPendingSettingsTab(pendingSlashUiAction.tab)
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
       setComposerInput('', [])
@@ -1093,6 +1127,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'model') {
+      promptHistory.recordSubmission({ text: input, mentions })
       modelSelectorRef.current?.open()
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1262,6 +1297,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         displayAttachments: visibleAttachmentPayload,
       })
     }
+    if (text) {
+      promptHistory.recordSubmission(
+        { text: input, mentions },
+        {
+          sessionId: targetSessionId,
+          projectPath: activeLaunchWorkDir || resolvedWorkDir || null,
+          projectRoot: activeSession?.projectRoot ?? null,
+        },
+      )
+    } else {
+      promptHistory.resetHistory()
+    }
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
     // The send can wait for the launch branch to be read again. If the user moved
@@ -1380,6 +1427,31 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       }
     }
 
+    if (
+      !composerDisabled &&
+      !dictationLive &&
+      !localSlashPanel &&
+      !plusMenuOpen &&
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    ) {
+      if (event.key === 'ArrowUp' && composerRef.current?.isSelectionAtBoundary('up')) {
+        if (promptHistory.onHistoryUp()) {
+          event.preventDefault()
+          return true
+        }
+      }
+      if (
+        event.key === 'ArrowDown' &&
+        promptHistory.isNavigating() &&
+        composerRef.current?.isSelectionAtBoundary('down')
+      ) {
+        if (promptHistory.onHistoryDown()) {
+          event.preventDefault()
+          return true
+        }
+      }
+    }
+
     if (shouldSubmitOnEnter(event, chatSendBehavior)) {
       event.preventDefault()
       void handleSubmit()
@@ -1492,6 +1564,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const insertSlashCommand = () => {
     if (isMemberSession) return
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const replacement = replaceSlashToken(input, cursorPos, '', { trailingSpace: false })
     setComposerInput(replacement.value)
@@ -1508,6 +1581,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // actions; these handlers are only the composer-local edits (mention badge,
   // slash text, prompt seed) plus the surfaces this composer already opens.
   const insertSelectedFileMention = (mention: NewComposerMention) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
     const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
     setComposerInput(inserted.text, inserted.mentions)
@@ -1616,6 +1690,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     agentProfile: isLean && !isMobileComposer ? { value: 'lean' } : undefined,
     handlers: {
       onInsertMention: (reference) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
         const mention = composerReferenceToMention(reference)
         const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
@@ -1626,6 +1701,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         })
       },
       onInsertSlashText: (command) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
         const replacement = replaceSlashToken(inputRef.current, cursorPos, command)
         setComposerInput(replacement.value)
@@ -1738,6 +1814,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               compact={isMobileComposer}
               onNavigate={(relativePath) => {
                 if (atCursorPos < 0) return
+                promptHistory.resetHistory()
                 const replacement = `@${relativePath}`
                 const tokenEnd = atCursorPos + 1 + atFilter.length
                 const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
@@ -1751,6 +1828,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               }}
               onSelect={(mention) => {
                 if (atCursorPos < 0) return
+                promptHistory.resetHistory()
                 const tokenEnd = atCursorPos + 1 + atFilter.length
                 const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
                 setComposerInput(inserted.text, inserted.mentions)

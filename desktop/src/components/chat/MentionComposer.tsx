@@ -46,6 +46,19 @@ export type MentionComposerHandle = {
   /** Whether the editable element currently holds keyboard focus. */
   hasFocus: () => boolean
   /**
+   * Whether the collapsed caret is on the first visual/logical line (`'up'`)
+   * or last visual/logical line (`'down'`), so ArrowUp/ArrowDown cannot move
+   * further inside the document. Returns false for range selections.
+   */
+  isSelectionAtBoundary: (direction: 'up' | 'down') => boolean
+  /**
+   * Synchronously replaces the document content and places the caret at the
+   * requested boundary/offset without firing `onChange`. Used by prompt
+   * history navigation so rapid ArrowUp/ArrowDown presses see the updated
+   * caret position immediately.
+   */
+  replaceContent: (text: string, mentions: ComposerMention[], cursor: 'start' | 'end' | number) => void
+  /**
    * Replaces the projected-text range with plain text as one editor
    * transaction, so a single undo removes it (unlike a `value` rewrite, which
    * resets history). The caret lands after the inserted text.
@@ -482,6 +495,51 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
         view.dispatch(view.state.tr.setSelection(selection))
       },
       hasFocus: () => viewRef.current?.hasFocus() ?? false,
+      isSelectionAtBoundary: (direction) => {
+        const view = viewRef.current
+        if (!view) return false
+        const { empty, $from, $to } = view.state.selection
+        if (!empty) return false
+        if (isEmptyComposerDoc(view.state.doc)) return true
+        if ($from.depth < 1 || $to.depth < 1) return false
+        const blockIndex = direction === 'up' ? $from.index(0) : $to.index(0)
+        const expectedBlockIndex = direction === 'up' ? 0 : view.state.doc.childCount - 1
+        if (blockIndex !== expectedBlockIndex) return false
+        const projectedText = projectComposerDoc(view.state.doc).text
+        const offset = pmPosToTextOffset(view.state.doc, $from.pos)
+        if (direction === 'up' && projectedText.lastIndexOf('\n', offset - 1) !== -1 && offset > 0) {
+          return false
+        }
+        if (direction === 'down' && projectedText.indexOf('\n', offset) !== -1) {
+          return false
+        }
+        try {
+          return view.endOfTextblock(direction)
+        } catch {
+          return true
+        }
+      },
+      replaceContent: (text, nextMentions, cursor) => {
+        const view = viewRef.current
+        if (!view) return
+        const doc = buildComposerDoc(text, nextMentions)
+        const docLength = projectedDocLength(doc)
+        const targetOffset = cursor === 'start'
+          ? 0
+          : cursor === 'end'
+            ? docLength
+            : Math.max(0, Math.min(cursor, docLength))
+        const pmPos = textOffsetToPmPos(doc, targetOffset)
+        lastProjectedRef.current = { text, mentions: nextMentions }
+        view.updateState(EditorState.create({
+          schema: composerSchema,
+          doc,
+          plugins: view.state.plugins,
+          selection: TextSelection.near(doc.resolve(pmPos)),
+        }))
+        view.dispatch(view.state.tr.scrollIntoView().setMeta('addToHistory', false))
+        syncEmptyState(view, propsRef.current.placeholder, ghostRef.current)
+      },
       insertTextAtOffsets: (start, end, text, options) => {
         const view = viewRef.current
         if (!view || !text) return
