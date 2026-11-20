@@ -1048,6 +1048,21 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
 
   addPresenceCheck(report, rootDir, 'macOS Info.plist', join(contentsDir, 'Info.plist'))
   addPresenceCheck(report, rootDir, 'macOS app executable', hostExecutable)
+  // The host links Electron Framework, which in turn links the updater frameworks.
+  for (const name of ['Electron Framework', 'Squirrel', 'ReactiveObjC', 'Mantle']) {
+    const target = join(contentsDir, 'Frameworks', `${name}.framework`, name)
+    const record = { label: `macOS ${name} binary`, path: toRelative(rootDir, target) }
+    try {
+      const binary = statSync(target, { throwIfNoEntry: false })
+      if (binary?.isFile() && binary.size > 0) {
+        report.passedChecks.push(record)
+        continue
+      }
+    } catch (error) {
+      report.notes.push(`${record.label} could not be inspected: ${String(error)}`)
+    }
+    report.missingChecks.push(record)
+  }
   addPresenceCheck(report, rootDir, 'macOS app.asar', join(resourcesDir, 'app.asar'))
   addPresenceCheck(report, rootDir, 'macOS unpacked H5 shell', join(unpackedDir, 'dist', 'index.html'))
   // Phones get the phone app the desktop build exports into dist/m (mobile/scripts/export-h5.ts).

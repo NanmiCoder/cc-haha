@@ -222,15 +222,22 @@ fi
 echo "[build-macos-arm64] Packaging Electron app..."
 (cd "${DESKTOP_DIR}" && "${BUILDER_ARGS[@]}")
 
-mkdir -p "${CANONICAL_OUTPUT_DIR}"
-find "${CANONICAL_OUTPUT_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+# Copy into a sibling directory so failed copies and smoke checks leave no
+# incomplete canonical output. On APFS the clone avoids a second full copy.
+STAGED_OUTPUT_DIR="$(mktemp -d "${CANONICAL_OUTPUT_DIR}.XXXXXX")"
+trap 'rm -rf "${STAGED_OUTPUT_DIR}"' EXIT
+shopt -s nullglob
+for app in "${ELECTRON_OUTPUT_DIR}"/mac-arm64/*.app; do
+  [[ -d "${app}" && ! -L "${app}" ]] || continue
+  cp -cR "${app}" "${STAGED_OUTPUT_DIR}/"
+done
+for artifact in "${ELECTRON_OUTPUT_DIR}"/*.{dmg,zip,blockmap} "${ELECTRON_OUTPUT_DIR}"/latest-mac.yml; do
+  [[ -f "${artifact}" && ! -L "${artifact}" ]] || continue
+  cp -cf "${artifact}" "${STAGED_OUTPUT_DIR}/"
+done
+shopt -u nullglob
 
-if [[ -d "${ELECTRON_OUTPUT_DIR}/mac-arm64" ]]; then
-  find "${ELECTRON_OUTPUT_DIR}/mac-arm64" -maxdepth 1 -type d -name '*.app' -exec cp -R {} "${CANONICAL_OUTPUT_DIR}/" \;
-fi
-find "${ELECTRON_OUTPUT_DIR}" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' -o -name 'latest-mac.yml' \) -exec cp -f {} "${CANONICAL_OUTPUT_DIR}/" \;
-
-cat > "${CANONICAL_OUTPUT_DIR}/BUILD_INFO.txt" <<EOF
+cat > "${STAGED_OUTPUT_DIR}/BUILD_INFO.txt" <<EOF
 Target triple: ${TARGET_TRIPLE}
 Builder output: ${ELECTRON_OUTPUT_DIR}
 Canonical output: ${CANONICAL_OUTPUT_DIR}
@@ -238,13 +245,20 @@ Built at: $(date '+%Y-%m-%d %H:%M:%S %z')
 EOF
 
 if [[ "${SKIP_PACKAGE_SMOKE:-0}" != "1" ]]; then
-  PACKAGE_SMOKE_ARGS=(bun run test:package-smoke --platform macos --arch arm64 --package-kind release --artifacts-dir desktop/build-artifacts/macos-arm64)
+  PACKAGE_KIND=release
+  if [[ "${#MAC_TARGET_ARRAY[@]}" -eq 1 && "${MAC_TARGET_ARRAY[0]}" == "dir" ]]; then
+    PACKAGE_KIND=dir
+  fi
+  PACKAGE_SMOKE_ARGS=(bun run test:package-smoke --platform macos --arch arm64 --package-kind "${PACKAGE_KIND}" --artifacts-dir "${STAGED_OUTPUT_DIR}")
   if [[ "${REQUIRE_MACOS_GATEKEEPER_SMOKE:-0}" == "1" ]]; then
     PACKAGE_SMOKE_ARGS+=(--require-macos-gatekeeper)
   fi
   echo "[build-macos-arm64] Running package smoke..."
   (cd "${REPO_ROOT}" && "${PACKAGE_SMOKE_ARGS[@]}")
 fi
+
+mv "${STAGED_OUTPUT_DIR}" "${CANONICAL_OUTPUT_DIR}"
+trap - EXIT
 
 echo
 echo "[build-macos-arm64] Build finished."
