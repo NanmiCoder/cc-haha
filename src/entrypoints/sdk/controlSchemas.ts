@@ -188,6 +188,17 @@ export const SDKControlSetPromptSuggestionsRequestSchema = lazySchema(() =>
     ),
 )
 
+export const SDKControlSetFastModeRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('set_fast_mode'),
+      enabled: z.boolean(),
+    })
+    .describe(
+      'Enables or disables Claude fast mode for subsequent turns in this session.',
+    ),
+)
+
 export const SDKControlMcpStatusRequestSchema = lazySchema(() =>
   z
     .object({
@@ -683,6 +694,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSetModelRequestSchema(),
     SDKControlSetMaxThinkingTokensRequestSchema(),
     SDKControlSetPromptSuggestionsRequestSchema(),
+    SDKControlSetFastModeRequestSchema(),
     SDKControlMcpStatusRequestSchema(),
     SDKControlGetContextUsageRequestSchema(),
     SDKControlGetSessionUsageRequestSchema(),
@@ -784,9 +796,29 @@ export const SDKSessionMessageReceiptSchema = lazySchema(() =>
   }),
 )
 
+export const SDKFastModeStatusMessageSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('system'),
+    subtype: z.literal('fast_mode_status'),
+    fast_mode_state: FastModeStateSchema(),
+    reason: z.enum([
+      'org_disabled',
+      'overage_rejected',
+      'rate_limit',
+      'overloaded',
+      'cooldown_expired',
+    ]),
+    message: z.string().optional(),
+    reset_at: z.number().optional(),
+    session_id: z.string(),
+    uuid: z.string(),
+  }),
+)
+
 export const StdoutMessageSchema = lazySchema(() =>
   z.union([
     SDKSessionMessageReceiptSchema(),
+    SDKFastModeStatusMessageSchema(),
     SDKMessageSchema(),
     SDKStreamlinedTextMessageSchema(),
     SDKStreamlinedToolUseSummaryMessageSchema(),

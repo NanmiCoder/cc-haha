@@ -24,7 +24,7 @@ import {
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { teamRuntimeControlKey, teamRuntimeScope, useTeamRuntimeControlStore } from '@/stores/teamRuntimeControlStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -82,6 +82,7 @@ import {
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { executeFastSlashCommand } from '../../lib/fastModeCommand'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
@@ -1172,6 +1173,20 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       setSlashMenuOpen(false)
       setFileSearchOpen(false)
       setPlusMenuOpen(false)
+      return
+    }
+
+    if (pendingSlashUiAction?.type === 'fast') {
+      promptHistory.recordSubmission({ text: input, mentions })
+      setComposerInput('', [])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      await executeFastSlashCommand({
+        mode: pendingSlashUiAction.mode,
+        runtimeKey: activeTabId ?? DRAFT_RUNTIME_SELECTION_KEY,
+        t,
+      })
       return
     }
 

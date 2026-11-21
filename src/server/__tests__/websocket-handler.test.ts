@@ -3425,6 +3425,39 @@ describe('WebSocket handler session isolation', () => {
     }
   })
 
+  it('forwards fast_mode_status CLI system events to desktop clients as system_notification', async () => {
+    const sessionId = `fast-mode-status-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    let outputCallback: ((cliMsg: any) => void) | null = null
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallback = callback
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    expect(outputCallback).not.toBeNull()
+
+    outputCallback!({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: 'off',
+      reason: 'org_disabled',
+      message: 'Fast mode has been disabled by your organization',
+    })
+    await Promise.resolve()
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'system_notification',
+      subtype: 'fast_mode_status',
+      message: 'Fast mode has been disabled by your organization',
+      data: {
+        fastModeState: 'off',
+        reason: 'org_disabled',
+      },
+    })
+  })
+
   it('keeps the Agent stop latch when a replacement user message is rejected', async () => {
     const sessionId = `stop-agent-invalid-message-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)

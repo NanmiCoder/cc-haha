@@ -67,6 +67,7 @@ type SettingsStore = {
   currentModel: ModelInfo | null
   effortLevel: EffortLevel
   thinkingEnabled: boolean
+  fastMode: boolean
   workflowKeywordTriggerEnabled: boolean
   nextPromptSuggestionsEnabled: boolean
   maxOutputTokensEscalationMode: 'auto' | 'enabled' | 'disabled'
@@ -118,6 +119,7 @@ type SettingsStore = {
   setModel: (modelId: string) => Promise<void>
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
+  setFastMode: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
   setMaxOutputTokensEscalationMode: (mode: 'auto' | 'enabled' | 'disabled') => Promise<void>
@@ -224,6 +226,10 @@ let outputEscalationSaveVersion = 0
 let outputEscalationPendingSaves = 0
 let outputEscalationSaveQueue: Promise<void> = Promise.resolve()
 let lastPersistedOutputEscalationMode: SettingsStore['maxOutputTokensEscalationMode'] = 'auto'
+let fastModeSaveVersion = 0
+let fastModePendingSaves = 0
+let fastModeSaveQueue: Promise<void> = Promise.resolve()
+let lastPersistedFastMode = false
 let autoQuestionUpdateQueue: Promise<unknown> = Promise.resolve()
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -231,6 +237,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   currentModel: null,
   effortLevel: 'low',
   thinkingEnabled: true,
+  fastMode: false,
   workflowKeywordTriggerEnabled: true,
   nextPromptSuggestionsEnabled: false,
   maxOutputTokensEscalationMode: 'auto',
@@ -288,6 +295,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const outputEscalationPendingAtStart = outputEscalationPendingSaves > 0
     const autoUpdateVersionAtStart = autoUpdateSaveVersion
     const autoUpdateSavePendingAtStart = autoUpdatePendingSaves > 0
+    const fastModeVersionAtStart = fastModeSaveVersion
+    const fastModePendingAtStart = fastModePendingSaves > 0
     set({ isLoading: true, error: null })
     try {
       const previousH5Access = get().h5Access
@@ -323,6 +332,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             ? userSettings.maxOutputTokensEscalationMode
             : 'auto'
       }
+      const hydrateFastMode = !fastModePendingAtStart && fastModePendingSaves === 0 &&
+        fastModeVersionAtStart === fastModeSaveVersion
+      if (hydrateFastMode) {
+        lastPersistedFastMode = userSettings.fastMode === true
+      }
       // Nothing to do for the theme here: uiStore already applied it at
       // startup, and re-applying would re-persist and re-report it on every
       // provider switch.
@@ -334,6 +348,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         currentModel: model,
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
+        fastMode: hydrateFastMode ? lastPersistedFastMode : get().fastMode,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         // Opt-in: every suggestion is an extra model request.
         nextPromptSuggestionsEnabled: userSettings.nextPromptSuggestionsEnabled === true,
@@ -420,6 +435,34 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ alwaysThinkingEnabled: enabled })
     } catch {
       set({ thinkingEnabled: prev })
+    }
+  },
+
+  setFastMode: async (enabled) => {
+    if (fastModePendingSaves === 0) {
+      lastPersistedFastMode = get().fastMode
+    }
+    const saveVersion = ++fastModeSaveVersion
+    fastModePendingSaves += 1
+    set({ fastMode: enabled })
+    const save = fastModeSaveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await settingsApi.updateUser({ fastMode: enabled ? true : null })
+          lastPersistedFastMode = enabled
+        } catch (error) {
+          if (saveVersion === fastModeSaveVersion) {
+            set({ fastMode: lastPersistedFastMode })
+          }
+          throw error
+        }
+      })
+    fastModeSaveQueue = save
+    try {
+      await save
+    } finally {
+      fastModePendingSaves -= 1
     }
   },
 
