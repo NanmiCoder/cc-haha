@@ -306,6 +306,7 @@ export function RuntimeSheet({
   busy,
   defaultScope,
   warning,
+  inline,
 }: {
   visible: boolean
   onClose(): void
@@ -316,6 +317,7 @@ export function RuntimeSheet({
   busy?: boolean
   defaultScope?: boolean
   warning?: string
+  inline?: boolean
 }) {
   // Each opening re-reads sources and starts from `initial`; closing discards the draft.
   const [shown, setShown] = useState(visible)
@@ -333,6 +335,7 @@ export function RuntimeSheet({
   })
   return (
     <Sheet
+      inline={inline}
       visible={visible}
       onClose={onClose}
       title={title}
