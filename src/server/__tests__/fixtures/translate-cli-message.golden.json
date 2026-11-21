@@ -614,5 +614,36 @@
       "in": "system/hook_response",
       "out": []
     }
+  ],
+  "fast-mode-status": [
+    {
+      "in": "system/fast_mode_status",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "fast_mode_status",
+          "message": "Fast mode has been disabled by your organization",
+          "data": {
+            "fastModeState": "off",
+            "reason": "org_disabled"
+          }
+        }
+      ]
+    },
+    {
+      "in": "system/fast_mode_status",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "fast_mode_status",
+          "message": "Fast mode rate limited (resuming in ~30s)",
+          "data": {
+            "fastModeState": "cooldown",
+            "reason": "rate_limit",
+            "resetAt": 1800000000000
+          }
+        }
+      ]
+    }
   ]
 }
