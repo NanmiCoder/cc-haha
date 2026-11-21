@@ -298,6 +298,7 @@ type SessionProcess = {
   permissionMode: string
   teamWorker?: TeamWorkerStart
   providerId?: string | null
+  claudeFastModeEligible?: boolean
   providerConfigFingerprint?: string
   providerAuth?: { baseUrl: string; apiKey: string; authToken: string }
   networkRoutingFingerprint: string
@@ -942,6 +943,7 @@ export class ConversationService {
       workDir: launchWorkDir,
       permissionMode: options?.permissionMode || 'default',
       providerId: options?.providerId,
+      claudeFastModeEligible: childEnv.CLAUDE_CODE_DISABLE_FAST_MODE !== '1',
       runtimeSelection: options?.model ? {
         providerId: options.providerId ?? null, modelId: options.model,
         ...(options.effort ? { effortLevel: options.effort } : {}),
@@ -1252,6 +1254,30 @@ export class ConversationService {
     return sent
   }
 
+  async materializePermissionAttachments(
+    sessionId: string,
+    attachments?: AttachmentRef[],
+  ): Promise<UserContentBlock[]> {
+    if (!attachments || attachments.length === 0) return []
+    const materialized = await this.materializeAttachments(sessionId, attachments)
+    const blocks: UserContentBlock[] = []
+    blocks.push(...materialized.imageBlocks)
+    for (const metadataText of materialized.imageMetadataTexts) {
+      blocks.push({ type: 'text', text: metadataText })
+    }
+    const fallbackMatches = [...materialized.pathPrefix.matchAll(/@"([^"]+)"/g)]
+    for (const match of fallbackMatches) {
+      const fallbackPath = match[1]?.trim()
+      if (fallbackPath) {
+        blocks.push({ type: 'text', text: `[Image source: ${fallbackPath}]` })
+      }
+    }
+    if (blocks.length === 0) {
+      throw new Error('Failed to materialize attached images')
+    }
+    return blocks
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,
@@ -1261,9 +1287,10 @@ export class ConversationService {
     denyMessage?: string,
     permissionUpdates?: unknown[],
     automaticQuestionAnswer = false,
+    contentBlocks?: UserContentBlock[],
   ): boolean {
     const child = [...this.sessions.entries()].find(([, entry]) => entry.teamWorker?.parentSessionId === sessionId && entry.pendingPermissionRequests.has(requestId))
-    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer)
+    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer, contentBlocks)
     const session = this.sessions.get(sessionId)
     if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
@@ -1271,6 +1298,10 @@ export class ConversationService {
     if (session) {
       if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
     }
+
+    const extraBlocks = Array.isArray(contentBlocks) && contentBlocks.length > 0
+      ? { contentBlocks }
+      : {}
 
     return this.sendSdkMessage(sessionId, {
       type: 'control_response',
@@ -1283,6 +1314,7 @@ export class ConversationService {
               updatedInput: pendingRequest?.toolName === 'AskUserQuestion' && !automaticQuestionAnswer
                 ? stripAutomaticQuestionMarker(updatedInput ?? {})
                 : updatedInput ?? {},
+              ...extraBlocks,
               ...(Array.isArray(permissionUpdates) && permissionUpdates.length > 0
                 ? { updatedPermissions: permissionUpdates }
                 : rule === 'always' && pendingRequest
@@ -1308,6 +1340,7 @@ export class ConversationService {
               // ExitPlanMode is the exception — rejecting it means "keep
               // planning", so the model is told to revise rather than stop.
               message: buildDenyMessage(pendingRequest?.toolName, denyMessage),
+              ...extraBlocks,
             },
       },
     })
@@ -1466,6 +1499,29 @@ export class ConversationService {
     let sent = 0
     for (const sessionId of this.getActiveSessions()) {
       if (this.setMaxThinkingTokens(sessionId, maxThinkingTokens)) {
+        sent += 1
+      }
+    }
+    return sent
+  }
+
+  setFastMode(sessionId: string, enabled: boolean): boolean {
+    return this.sendSdkMessage(sessionId, {
+      type: 'control_request',
+      request_id: crypto.randomUUID(),
+      request: {
+        subtype: 'set_fast_mode',
+        enabled,
+      },
+    })
+  }
+
+  setFastModeForActiveSessions(enabled: boolean): number {
+    let sent = 0
+    for (const sessionId of this.getActiveSessions()) {
+      const session = this.sessions.get(sessionId)
+      if (session?.claudeFastModeEligible === false) continue
+      if (this.setFastMode(sessionId, enabled)) {
         sent += 1
       }
     }
@@ -2456,6 +2512,7 @@ export class ConversationService {
       OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
       OPENAI_CODEX_REASONING_EFFORT_ENV_KEY,
       'CC_HAHA_OPENAI_FAST_MODE',
+      'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK',
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
       GROK_MODEL_CATALOG_ENV_KEY,
@@ -2659,6 +2716,19 @@ export class ConversationService {
       ...(explicitProviderEnv
         ? { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' }
         : {}),
+      ...(explicitProvider &&
+      (explicitProvider.apiFormat ?? 'anthropic') === 'anthropic' &&
+      explicitProvider.disableExperimentalBetas !== true
+        ? { CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1' }
+        : {}),
+      ...(
+        (options?.providerId !== undefined && options?.providerId !== null && !explicitProvider) ||
+        (explicitProvider &&
+          ((explicitProvider.apiFormat ?? 'anthropic') !== 'anthropic' ||
+            explicitProvider.disableExperimentalBetas === true))
+          ? { CLAUDE_CODE_DISABLE_FAST_MODE: '1' }
+          : {}
+      ),
       // "官方" 模式 (cc-haha/settings.json 没 provider env) 下,把 CLI 标记为
       // managed-OAuth,让它忽略外部 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
       // 残留、只走用户 /login 的 OAuth token。自定义 provider 模式绝不能设,
@@ -2705,6 +2775,10 @@ export class ConversationService {
   private async buildOfficialOAuthEnv(): Promise<Record<string, string>> {
     const env: Record<string, string> = {
       CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+      // Desktop injects CLAUDE_CODE_OAUTH_TOKEN without user:profile scope, so
+      // the pre-flight /api/claude_code_penguin_mode org probe would fail and
+      // falsely block fast mode; the Messages API still enforces org/billing.
+      CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1',
     }
     try {
       // deferred import: avoids instantiating the OAuth singleton on every

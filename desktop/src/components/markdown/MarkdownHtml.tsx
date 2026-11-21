@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { HTMLAttributes, ImgHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { AuthedImage } from '@/components/chat/AuthedImage'
+import { MarkdownAudioPlayer, type MarkdownAudioProps } from '@/components/markdown/MarkdownAudioPlayer'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { useTranslation } from '@/i18n'
@@ -87,16 +88,19 @@ function MarkdownImage(props: ImageProps) {
   )
 }
 
-/** Mount existing image components in sanitized HTML without reparsing its layout. */
+/** Mount existing image and audio components in sanitized HTML without reparsing its layout. */
 function MarkdownHtmlContent({ html, ...props }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [mounts, setMounts] = useState<HTMLElement[]>([])
+  const [imageMounts, setImageMounts] = useState<HTMLElement[]>([])
+  const [audioMounts, setAudioMounts] = useState<HTMLElement[]>([])
   const prepared = useMemo(() => {
     const template = document.createElement('template')
     template.innerHTML = html
     const images: ImageProps[] = []
-    // Raw HTML cannot claim a portal slot; only images surviving the resolver get one.
+    const audios: MarkdownAudioProps[] = []
+    // Raw HTML cannot claim a portal slot; only media surviving the resolver get one.
     template.content.querySelectorAll('[data-md-image]').forEach((node) => node.removeAttribute('data-md-image'))
+    template.content.querySelectorAll('[data-md-audio]').forEach((node) => node.removeAttribute('data-md-audio'))
     template.content.querySelectorAll('img').forEach((image) => {
       images.push({
         src: image.getAttribute('src') ?? undefined,
@@ -110,31 +114,44 @@ function MarkdownHtmlContent({ html, ...props }: Props) {
       mount.setAttribute('data-md-image', '')
       image.replaceWith(mount)
     })
-    return { html: template.innerHTML, images }
+    template.content.querySelectorAll('audio').forEach((audio) => {
+      audios.push({
+        src: audio.getAttribute('src') ?? undefined,
+        label: audio.getAttribute('aria-label') ?? undefined,
+        title: audio.getAttribute('title') ?? undefined,
+      })
+      const mount = document.createElement('span')
+      mount.setAttribute('data-md-audio', '')
+      mount.className = 'block'
+      audio.replaceWith(mount)
+    })
+    return { html: template.innerHTML, images, audios }
   }, [html])
 
   useLayoutEffect(() => {
-    const imageMounts = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-md-image]') ?? [])
-    imageMounts.forEach((mount, index) => {
+    const nextImageMounts = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-md-image]') ?? [])
+    nextImageMounts.forEach((mount, index) => {
       const src = prepared.images[index]?.src
       if (src) originalImageSources.set(mount, src)
     })
-    setMounts(imageMounts)
+    setImageMounts(nextImageMounts)
+    setAudioMounts(Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-md-audio]') ?? []))
   }, [prepared])
 
   return (
     <div {...props} ref={containerRef}>
       <div dangerouslySetInnerHTML={{ __html: prepared.html }} />
-      {mounts.map((mount, index) => createPortal(<MarkdownImage {...prepared.images[index]} />, mount, String(index)))}
+      {imageMounts.map((mount, index) => createPortal(<MarkdownImage {...prepared.images[index]} />, mount, `img-${index}`))}
+      {audioMounts.map((mount, index) => createPortal(<MarkdownAudioPlayer {...prepared.audios[index]} />, mount, `audio-${index}`))}
     </div>
   )
 }
 
 export function MarkdownHtml(props: Props) {
-  if (!/<img\b/i.test(props.html)) {
+  if (!/<(?:img|audio)\b/i.test(props.html)) {
     const { html, ...rest } = props
     return <div {...rest} dangerouslySetInnerHTML={{ __html: html }} />
   }
-  // HTML changes discard the previous image instances, including pending retries.
+  // HTML changes discard the previous media instances, including pending retries.
   return <MarkdownHtmlContent key={props.html} {...props} />
 }

@@ -18,6 +18,9 @@ type Props<T extends string> = {
   onChange: (value: T) => void
   fastMode?: boolean
   onFastModeChange?: (enabled: boolean) => void
+  fastModeLabel?: string
+  fastModeDescription?: string
+  fastModeDisabled?: boolean
   onClose: () => void
   ariaLabel?: string
 }
@@ -41,6 +44,9 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
   onChange,
   fastMode = false,
   onFastModeChange,
+  fastModeLabel,
+  fastModeDescription,
+  fastModeDisabled = false,
   onClose,
   ariaLabel,
 }: Props<T>) {
@@ -207,9 +213,10 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
           <Switch
             size="sm"
             checked={fastMode}
+            disabled={fastModeDisabled}
             onChange={onFastModeChange}
-            label={t('model.openAIFastMode')}
-            description={t('model.openAIFastModeDescription')}
+            label={fastModeLabel ?? t('model.openAIFastMode')}
+            description={fastModeDescription ?? t('model.openAIFastModeDescription')}
           />
         </div>
       )}

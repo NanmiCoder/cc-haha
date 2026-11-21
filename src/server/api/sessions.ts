@@ -8,6 +8,8 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
  * Routes:
  *   GET    /api/sessions            — 列出会话
  *   GET    /api/sessions/project-history — 按逻辑项目分批浏览历史会话
+ *   GET    /api/sessions/prompt-history — 按项目/会话读取输入框历史（共享 CLI history.jsonl）
+ *   POST   /api/sessions/prompt-history — 追加桌面端输入框历史（共享 CLI history.jsonl）
  *   GET    /api/sessions/:id        — 获取会话详情
  *   GET    /api/sessions/:id/summary — 获取不含消息的会话元数据
  *   GET    /api/sessions/:id/messages — 获取会话消息
@@ -33,6 +35,7 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 
 import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
+import { handlePromptOptimizeRoute } from './promptOptimize.js'
 import { sessionService } from '../services/sessionService.js'
 import { loadRenderedToolImage } from '../services/toolImageMedia.js'
 import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
@@ -90,6 +93,7 @@ import { localIndexCoordinator } from '../services/localIndex/coordinator.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { isPetAccessAuthorized } from '../localAccessAuth.js'
 import { PET_SESSION_LIMIT } from '../petAccessPolicy.js'
+import { appendPromptHistory, listPromptHistory } from '../services/promptHistoryService.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
 
@@ -202,6 +206,50 @@ export async function handleSessionsApi(
         ...(url.searchParams.has('beforeModifiedAt') ? { beforeModifiedAt: url.searchParams.get('beforeModifiedAt')! } : {}),
         ...(url.searchParams.has('beforeId') ? { beforeId: url.searchParams.get('beforeId')! } : {}),
       }))
+    }
+
+    if (sessionId === 'prompt-history') {
+      if (segments.length !== 3) throw ApiError.notFound('Prompt history route not found')
+      if (req.method === 'GET') {
+        const limit = url.searchParams.get('limit')
+        if (limit !== null && !/^\d+$/.test(limit)) throw ApiError.badRequest('Invalid limit parameter')
+        const sessionOnlyParam = url.searchParams.get('sessionOnly')
+        const entries = await listPromptHistory({
+          project: url.searchParams.get('project') ?? undefined,
+          projectRoot: url.searchParams.get('projectRoot') ?? undefined,
+          sessionId: url.searchParams.get('sessionId') ?? undefined,
+          ...(limit !== null ? { limit: Number(limit) } : {}),
+          sessionOnly: sessionOnlyParam === '1' || sessionOnlyParam === 'true',
+        })
+        return Response.json({ entries }, { headers: { 'Cache-Control': 'no-store' } })
+      }
+      if (req.method === 'POST') {
+        let body: unknown
+        try { body = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw ApiError.badRequest('Object body is required')
+        }
+        const { display, project, sessionId: entrySessionId } = body as Record<string, unknown>
+        if (typeof display !== 'string' || display.trim().length === 0) {
+          throw ApiError.badRequest('Non-empty display string is required')
+        }
+        if (project !== undefined && typeof project !== 'string') {
+          throw ApiError.badRequest('project must be a string when provided')
+        }
+        if (entrySessionId !== undefined && typeof entrySessionId !== 'string') {
+          throw ApiError.badRequest('sessionId must be a string when provided')
+        }
+        await appendPromptHistory({
+          display,
+          project,
+          sessionId: entrySessionId,
+        })
+        return Response.json({ ok: true })
+      }
+      return Response.json(
+        { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+        { status: 405 },
+      )
     }
 
     // Special collection route: /api/sessions/repository-context
@@ -343,6 +391,11 @@ export async function handleSessionsApi(
     if (subResource === 'side-question') {
       if (segments.length > 5) throw ApiError.notFound('Side question route not found')
       return await handleSideQuestionRoute(req, url, sessionId, segments[4])
+    }
+
+    if (subResource === 'optimize-prompt') {
+      if (segments.length > 5) throw ApiError.notFound('Prompt optimization route not found')
+      return await handlePromptOptimizeRoute(req, url, sessionId, segments[4])
     }
 
     if (subResource === 'turn-checkpoints') {

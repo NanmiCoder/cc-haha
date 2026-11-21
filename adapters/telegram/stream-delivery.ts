@@ -145,13 +145,15 @@ export class TelegramStreamDelivery {
   private getBuffer(chatId: string): MessageBuffer {
     let buffer = this.buffers.get(chatId)
     if (!buffer) {
-      buffer = new MessageBuffer(
+      const created = new MessageBuffer(
         async (text, isComplete) => {
+          if (this.buffers.get(chatId) !== created) return
           await this.acceptBufferedText(chatId, text, isComplete)
         },
         this.options.bufferIntervalMs,
         this.options.bufferCharThreshold,
       )
+      buffer = created
       this.buffers.set(chatId, buffer)
     }
     return buffer
@@ -178,7 +180,7 @@ export class TelegramStreamDelivery {
   private async deliverStreaming(chatId: string, state: DeliveryState): Promise<void> {
     const numericChatId = Number(chatId)
 
-    while (true) {
+    while (this.states.get(chatId) === state) {
       const remaining = state.fullText.slice(state.immutableOffset)
       if (formatTelegramOutboundText(remaining).length <= TELEGRAM_STREAMING_TEXT_LIMIT) {
         const messageText = formatTelegramStreamingText(remaining)

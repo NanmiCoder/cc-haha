@@ -22,7 +22,12 @@ import {
 } from '@/lib/markdownAutolink'
 import { useFileLinkVerification } from '@/hooks/useFileLinkVerification'
 import { classifyPreviewLink, type PreviewLinkTarget } from '@/lib/previewLinkRouter'
-import { isSafeMarkdownImageSource, normalizeMarkdownImageDestination } from '@/lib/markdownImages'
+import {
+  isMarkdownAudioDestination,
+  isSafeMarkdownAudioSource,
+  isSafeMarkdownImageSource,
+  normalizeMarkdownImageDestination,
+} from '@/lib/markdownImages'
 import { CodeViewer } from '../chat/CodeViewer'
 import { MermaidRenderer } from '../chat/MermaidRenderer'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -44,6 +49,13 @@ type Props = {
    * sources survive.
    */
   resolveImageSrc?: (src: string) => string | null
+  /**
+   * Resolve every audio source (Markdown `![label](clip.wav)` embeds and raw
+   * `<audio>`/`<source>` tags) through a policy owned by the calling surface.
+   * Returning null strips the audio player. Without a resolver, only safe
+   * in-memory `blob:`/`data:audio/...` sources survive.
+   */
+  resolveAudioSrc?: (src: string) => string | null
   /**
    * Called when an image is clicked (not one inside a link, which belongs to the
    * link), with every image in the text in reading order — sources as they load,
@@ -166,13 +178,36 @@ renderer.link = function (token: Tokens.Link) {
   return renderDefaultLink.call(this, token)
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 // `file:///C:/x.png` and `C:\x.png` lose their source in sanitization as written
 // (see normalizeMarkdownImageDestination), and this is the last place the author's
 // destination is still separate from the markup around it — and, in `raw`, still
 // as written, where the parser has taken the backslashes out of a Windows path.
+// Destinations with an audio extension (or inline `data:audio/...`) branch to an
+// `<audio>` element here so they render as inline players instead of broken images.
 const renderDefaultImage = renderer.image
 renderer.image = function (token: Tokens.Image) {
   const href = normalizeMarkdownImageDestination(token.href, token.raw)
+  if (isMarkdownAudioDestination(href)) {
+    const label = token.tokens?.length
+      ? this.parser.parseInline(token.tokens, this.parser.textRenderer)
+      : token.text
+    const attrs = [
+      'controls',
+      'preload="metadata"',
+      `src="${escapeHtmlAttribute(href)}"`,
+      label ? `aria-label="${escapeHtmlAttribute(label)}"` : '',
+      token.title ? `title="${escapeHtmlAttribute(token.title)}"` : '',
+    ].filter(Boolean).join(' ')
+    return `<audio ${attrs}></audio>`
+  }
   return renderDefaultImage.call(this, href === token.href ? token : { ...token, href })
 }
 
@@ -368,13 +403,38 @@ const REFERENCE_HINT_RE = /\.[A-Za-z0-9]{1,10}(?![A-Za-z0-9])|\/[\w.-]+#\d/
  */
 type ReferenceLinking = { bare: boolean; inlineCode: boolean }
 
+/**
+ * Rewrite `file://` and Windows drive `src` attributes on `<audio>` and its
+ * `<source>` children before DOMPurify runs, so raw `<audio controls src="file:///N:/...">`
+ * and `<audio controls src="N:\...">` survive sanitization just like Markdown embeds.
+ * Leaves `<img>` untouched so raw HTML image policy stays unchanged.
+ */
+function normalizeLocalAudioHtmlSources(html: string): string {
+  if (!/<(?:audio|source)\b/i.test(html) || typeof document === 'undefined') return html
+  const template = document.createElement('template')
+  template.innerHTML = html
+  let changed = false
+  template.content.querySelectorAll<HTMLAudioElement | HTMLSourceElement>('audio[src], source[src]').forEach((node) => {
+    if (node.tagName === 'SOURCE' && !node.closest('audio')) return
+    const src = node.getAttribute('src')
+    if (!src) return
+    const normalized = normalizeMarkdownImageDestination(src)
+    if (normalized !== src) {
+      node.setAttribute('src', normalized)
+      changed = true
+    }
+  })
+  return changed ? template.innerHTML : html
+}
+
 function enhanceMarkdownHtml(
   html: string,
   mathBlocks: MathBlock[],
   references: ReferenceLinking,
   resolveImageSrc?: (src: string) => string | null,
+  resolveAudioSrc?: (src: string) => string | null,
 ): HtmlPart {
-  const cleanHtml = DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG)
+  const cleanHtml = DOMPurify.sanitize(normalizeLocalAudioHtmlSources(html), MARKDOWN_SANITIZE_CONFIG)
 
   const wantsFilePathLinks = references.bare && REFERENCE_HINT_RE.test(cleanHtml)
   // renderCodespan runs on marked's shared renderer and cannot know whether this
@@ -383,7 +443,7 @@ function enhanceMarkdownHtml(
   const needsDomEnhancement = mathBlocks.length > 0
     || wantsFilePathLinks
     || wantsFileLinkStripping
-    || /<(?:a|table|img|source)\b/i.test(cleanHtml)
+    || /<(?:a|table|img|source|audio)\b/i.test(cleanHtml)
   if (!needsDomEnhancement) {
     return { type: 'html', content: cleanHtml, guessedFilePaths: [] }
   }
@@ -400,6 +460,31 @@ function enhanceMarkdownHtml(
   template.innerHTML = cleanHtml
   const container = template.content
   const mathById = new Map(mathBlocks.map((block) => [block.id, block]))
+
+  const resolveAudio = (src: string | null): string | null => {
+    if (!src) return null
+    if (resolveAudioSrc) return resolveAudioSrc(src)
+    return isSafeMarkdownAudioSource(src) ? src : null
+  }
+
+  container.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
+    let resolved = resolveAudio(audio.getAttribute('src'))
+    if (!resolved) {
+      for (const source of Array.from(audio.querySelectorAll<HTMLSourceElement>('source'))) {
+        resolved = resolveAudio(source.getAttribute('src'))
+        if (resolved) break
+      }
+    }
+    if (!resolved) {
+      audio.remove()
+      return
+    }
+    audio.setAttribute('src', resolved)
+    audio.setAttribute('controls', '')
+    audio.setAttribute('preload', 'metadata')
+    audio.removeAttribute('autoplay')
+    audio.querySelectorAll('source').forEach((source) => source.remove())
+  })
 
   container.querySelectorAll<HTMLImageElement | HTMLSourceElement>('img, source').forEach((image) => {
     const src = image.getAttribute('src')
@@ -676,7 +761,7 @@ function reportImageClick(
   })
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick, resolveImageSrc, onImageClick, fileLinkVerifier }: Props) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick, resolveImageSrc, resolveAudioSrc, onImageClick, fileLinkVerifier }: Props) {
   const { html, codeBlocks, mathBlocks } = useMemo(
     () => cache ? getCachedMarkdownParse(content, streaming) : parseMarkdown(content),
     [cache, content, streaming],
@@ -706,7 +791,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
     }
 
     if (codeBlocks.length === 0) {
-      return [enhanceMarkdownHtml(html, mathBlocks, references, resolveImageSrc)]
+      return [enhanceMarkdownHtml(html, mathBlocks, references, resolveImageSrc, resolveAudioSrc)]
     }
 
     const result: MarkdownPart[] = []
@@ -719,18 +804,18 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
 
       const before = remaining.slice(0, idx)
       if (before) {
-        result.push(enhanceMarkdownHtml(before, mathBlocks, references, resolveImageSrc))
+        result.push(enhanceMarkdownHtml(before, mathBlocks, references, resolveImageSrc, resolveAudioSrc))
       }
       result.push({ type: 'code', block })
       remaining = remaining.slice(idx + marker.length)
     }
 
     if (remaining) {
-      result.push(enhanceMarkdownHtml(remaining, mathBlocks, references, resolveImageSrc))
+      result.push(enhanceMarkdownHtml(remaining, mathBlocks, references, resolveImageSrc, resolveAudioSrc))
     }
 
     return result
-  }, [html, codeBlocks, mathBlocks, streaming, onLinkClick, resolveImageSrc])
+  }, [html, codeBlocks, mathBlocks, streaming, onLinkClick, resolveImageSrc, resolveAudioSrc])
 
   // A guessed link is a promise the file is there. Ask once the markup is final;
   // the guesses look like plain code until then, and stay so if the file is not.

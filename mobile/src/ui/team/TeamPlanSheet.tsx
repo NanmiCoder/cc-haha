@@ -315,6 +315,11 @@ export function TeamPlanSheet({
   >(null)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [wasVisible, setWasVisible] = useState(visible)
+  if (visible !== wasVisible) {
+    setWasVisible(visible)
+    if (!visible && picker) setPicker(null)
+  }
   const review = teamPlanReview(plan)
   const locked = !ready || team.pending !== null
   const leader = leaderRuntime ?? plan.leaderRuntime
@@ -376,14 +381,100 @@ export function TeamPlanSheet({
     </View>
   )
 
+  const closeTeamSheet = () => {
+    setPicker(null)
+    onClose()
+  }
+
   return (
     <DetentSheet
       visible={visible}
-      onClose={onClose}
+      onClose={closeTeamSheet}
       title={addition ? '追加成员' : 'Agent 团队'}
-      left={<TextButton title="稍后" onPress={onClose} />}
+      left={<TextButton title="稍后" onPress={closeTeamSheet} />}
       initialDetent="full"
       footer={footer}
+      overlayOpen={picker !== null}
+      onOverlayClose={() => setPicker(null)}
+      overlay={
+        <>
+          <RuntimeSheet
+            inline
+            visible={picker?.kind === 'model' || picker?.kind === 'all'}
+            onClose={() => setPicker(null)}
+            title={picker?.kind === 'model' ? `${picker.member.name} 的模型` : '所有成员的模型'}
+            client={client}
+            initial={
+              picker?.kind === 'model'
+                ? teamRuntimeConfig(picker.member.runtime)
+                : teamRuntimeConfig(plan.members[0]?.runtime ?? leader)
+            }
+            busy={locked}
+            onApply={(value) => {
+              const runtime = teamRuntime(value)
+              const target = picker
+              setPicker(null)
+              if (target?.kind === 'model') setRuntime(target.member, runtime)
+              else void team.edit({ members: plan.members.map((member) => ({ id: member.id, runtime })) })
+            }}
+          />
+          <Sheet
+            inline
+            visible={picker?.kind === 'agent'}
+            onClose={() => setPicker(null)}
+            title="Agent 预设"
+          >
+            <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
+              {agents.map(([agentType, snapshot], index) => (
+                <View key={agentType}>
+                  {index > 0 ? <Hair /> : null}
+                  <ChoiceRow
+                    title={agentType}
+                    detail={snapshot.description?.trim() || undefined}
+                    selected={picker?.kind === 'agent' && picker.member.agentType === agentType}
+                    disabled={locked}
+                    onPress={() => {
+                      const target = picker
+                      setPicker(null)
+                      if (target?.kind === 'agent' && target.member.agentType !== agentType)
+                        void team.edit({ members: [{ id: target.member.id, agentType }] })
+                    }}
+                  />
+                </View>
+              ))}
+            </View>
+            <Text style={{ paddingHorizontal: 4, fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
+              换预设后，没手动改过模型的成员会改用该预设建议的模型。
+            </Text>
+          </Sheet>
+          <Sheet inline visible={picker?.kind === 'owner'} onClose={() => setPicker(null)} title="负责人">
+            {picker?.kind === 'owner' ? (
+              <Text numberOfLines={2} style={{ paddingHorizontal: 4, fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
+                {picker.task.subject}
+              </Text>
+            ) : null}
+            <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
+              {plan.members.map((member, index) => (
+                <View key={member.id}>
+                  {index > 0 ? <Hair /> : null}
+                  <ChoiceRow
+                    title={member.name}
+                    detail={member.agentType}
+                    selected={picker?.kind === 'owner' && picker.task.ownerId === member.id}
+                    disabled={locked}
+                    onPress={() => {
+                      const target = picker
+                      setPicker(null)
+                      if (target?.kind === 'owner' && target.task.ownerId !== member.id)
+                        void team.edit({ tasks: [{ id: target.task.id, ownerId: member.id }] })
+                    }}
+                  />
+                </View>
+              ))}
+            </View>
+          </Sheet>
+        </>
+      }
     >
       <View style={{ gap: 4, paddingHorizontal: 4 }}>
         <Mono numberOfLines={1} style={{ fontSize: 13, color: colors.ink3 }}>{plan.teamName}</Mono>
@@ -429,80 +520,6 @@ export function TeamPlanSheet({
         locked={locked}
         onOwner={(task) => setPicker({ kind: 'owner', task })}
       />
-
-      <RuntimeSheet
-        visible={picker?.kind === 'model' || picker?.kind === 'all'}
-        onClose={() => setPicker(null)}
-        title={picker?.kind === 'model' ? `${picker.member.name} 的模型` : '所有成员的模型'}
-        client={client}
-        initial={
-          picker?.kind === 'model'
-            ? teamRuntimeConfig(picker.member.runtime)
-            : teamRuntimeConfig(plan.members[0]?.runtime ?? leader)
-        }
-        busy={locked}
-        onApply={(value) => {
-          const runtime = teamRuntime(value)
-          const target = picker
-          setPicker(null)
-          if (target?.kind === 'model') setRuntime(target.member, runtime)
-          else void team.edit({ members: plan.members.map((member) => ({ id: member.id, runtime })) })
-        }}
-      />
-      <Sheet
-        visible={picker?.kind === 'agent'}
-        onClose={() => setPicker(null)}
-        title="Agent 预设"
-      >
-        <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
-          {agents.map(([agentType, snapshot], index) => (
-            <View key={agentType}>
-              {index > 0 ? <Hair /> : null}
-              <ChoiceRow
-                title={agentType}
-                detail={snapshot.description?.trim() || undefined}
-                selected={picker?.kind === 'agent' && picker.member.agentType === agentType}
-                disabled={locked}
-                onPress={() => {
-                  const target = picker
-                  setPicker(null)
-                  if (target?.kind === 'agent' && target.member.agentType !== agentType)
-                    void team.edit({ members: [{ id: target.member.id, agentType }] })
-                }}
-              />
-            </View>
-          ))}
-        </View>
-        <Text style={{ paddingHorizontal: 4, fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
-          换预设后，没手动改过模型的成员会改用该预设建议的模型。
-        </Text>
-      </Sheet>
-      <Sheet visible={picker?.kind === 'owner'} onClose={() => setPicker(null)} title="负责人">
-        {picker?.kind === 'owner' ? (
-          <Text numberOfLines={2} style={{ paddingHorizontal: 4, fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
-            {picker.task.subject}
-          </Text>
-        ) : null}
-        <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
-          {plan.members.map((member, index) => (
-            <View key={member.id}>
-              {index > 0 ? <Hair /> : null}
-              <ChoiceRow
-                title={member.name}
-                detail={member.agentType}
-                selected={picker?.kind === 'owner' && picker.task.ownerId === member.id}
-                disabled={locked}
-                onPress={() => {
-                  const target = picker
-                  setPicker(null)
-                  if (target?.kind === 'owner' && target.task.ownerId !== member.id)
-                    void team.edit({ tasks: [{ id: target.task.id, ownerId: member.id }] })
-                }}
-              />
-            </View>
-          ))}
-        </View>
-      </Sheet>
     </DetentSheet>
   )
 }

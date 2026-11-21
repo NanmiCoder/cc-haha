@@ -149,10 +149,13 @@ export function RunSheet({
     if (visible) {
       setEpoch(epoch + 1)
       setEffortDraft(undefined)
+    } else if (modelOpen) {
+      setModelOpen(false)
     }
   }
   const reasons = runSheetReasons({ lean, teams: 'on', disabled })
   function close() {
+    setModelOpen(false)
     const next = effortToCommit({ runtime, draft: effortDraft, blocked: reasons.runtime })
     if (next) onRuntime(next)
     onClose()
@@ -204,6 +207,24 @@ export function RunSheet({
       title="运行方式"
       initialDetent="full"
       footer={<Button title="完成" size="lg" onPress={close} />}
+      overlayOpen={modelOpen}
+      onOverlayClose={() => setModelOpen(false)}
+      overlay={
+        <RuntimeSheet
+          inline
+          visible={modelOpen}
+          onClose={() => setModelOpen(false)}
+          client={client}
+          initial={runtime}
+          warning={warning}
+          onApply={(value, model) => {
+            setModelOpen(false)
+            // 换了模型就以新模型的强度为准，之前滑的草稿作废。
+            setEffortDraft(undefined)
+            onRuntime(value, model)
+          }}
+        />
+      }
     >
       <Section title="权限">
         <View accessibilityRole="radiogroup" accessibilityLabel="权限" style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
@@ -292,20 +313,6 @@ export function RunSheet({
       ) : null}
 
       <InlineError text={error} />
-
-      <RuntimeSheet
-        visible={modelOpen}
-        onClose={() => setModelOpen(false)}
-        client={client}
-        initial={runtime}
-        warning={warning}
-        onApply={(value, model) => {
-          setModelOpen(false)
-          // 换了模型就以新模型的强度为准，之前滑的草稿作废。
-          setEffortDraft(undefined)
-          onRuntime(value, model)
-        }}
-      />
     </DetentSheet>
   )
 }

@@ -20,7 +20,7 @@ describe('Telegram entrypoint session routing', () => {
   let server: ReturnType<typeof Bun.serve<{ sessionId: string }>>
   let store: SessionStore
   let nextId = 100
-  const apiCalls: Array<{ method: string; payload: any }> = []
+  const apiCalls: Array<{ method: string; payload: any; messageId?: number }> = []
   const requests: string[] = []
   const messages: Array<{ sessionId: string; message: any }> = []
   const sockets = new Map<string, Set<ServerWebSocket<{ sessionId: string }>>>()
@@ -146,7 +146,8 @@ describe('Telegram entrypoint session routing', () => {
     entry = await import('../index.js')
     entry.bot.botInfo = { id: 12345, is_bot: true, first_name: 'Fixture', username: 'fixture_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false, can_manage_bots: false, can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: false, allows_users_to_create_topics: false }
     entry.bot.api.config.use(async (_previous, method, payload) => {
-      apiCalls.push({ method, payload })
+      const call: { method: string; payload: any; messageId?: number } = { method, payload }
+      apiCalls.push(call)
       if (method === 'sendMessage' && permissionDelivery &&
         String((payload as any).text).includes(permissionDelivery.requestId) && (payload as any).reply_markup) {
         await permissionDelivery.gate
@@ -157,7 +158,12 @@ describe('Telegram entrypoint session routing', () => {
         protectedDownloads.push(activeLeases.size > 0)
         throw new Error('Fixture download rejected before network')
       }
-      return { ok: true, result: ['answerCallbackQuery', 'deleteMessage'].includes(method) ? true : { message_id: nextId++, date: 1, chat: { id: (payload as any).chat_id, type: 'private' }, text: (payload as any).text } } as any
+      if (['answerCallbackQuery', 'deleteMessage'].includes(method)) {
+        return { ok: true, result: true } as any
+      }
+      const messageId = nextId++
+      call.messageId = messageId
+      return { ok: true, result: { message_id: messageId, date: 1, chat: { id: (payload as any).chat_id, type: 'private' }, text: (payload as any).text } } as any
     })
   })
 
@@ -432,6 +438,91 @@ describe('Telegram entrypoint session routing', () => {
     await eventually(() => expect(texts(708).some((value) => value.includes('Fixture turn failed'))).toBe(true))
     expect(texts(708).some((value) => value.includes('Result from the restored session.'))).toBe(true)
     expect(texts(708).some((value) => value.includes('Checking the previous context'))).toBe(true)
+  })
+
+  it('clears buffered and streamed output state after a mid-turn non-signature error before the next turn', async () => {
+    const chatId = 731
+    const sessionId = 'error-cleanup'
+    sessionPaths.set(sessionId, project)
+    store.set(String(chatId), sessionId, project)
+
+    // Turn 1 (streamed text already flushed across the 200-char threshold, then mid-turn error)
+    await text(chatId, 'First task')
+    await eventually(() => expect(messages.some((item) => item.sessionId === sessionId && item.message.content === 'First task')).toBe(true))
+    const streamedPrefix = `Stale streamed prefix ${'x'.repeat(210)}`
+    broadcast(sessionId, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    broadcast(sessionId, { type: 'content_start', blockType: 'text' })
+    broadcast(sessionId, { type: 'content_delta', text: streamedPrefix })
+    await eventually(() => expect(apiCalls.some((call) => call.payload.chat_id === chatId && call.method === 'editMessageText' && String(call.payload.text).includes('Stale streamed prefix'))).toBe(true))
+    const turn1PlaceholderId = apiCalls.find((call) => call.payload.chat_id === chatId && call.method === 'sendMessage' && call.payload.text === '💭 思考中...')?.messageId
+    expect(turn1PlaceholderId).toBeDefined()
+
+    broadcast(sessionId, { type: 'error', message: 'Upstream API failed mid-turn' })
+    await eventually(() => expect(texts(chatId).some((value) => value.includes('Upstream API failed mid-turn'))).toBe(true))
+    const callsAfterTurn1Error = apiCalls.length
+
+    // Turn 2 (clean succeeding turn directly after Turn 1's streamed mid-turn error)
+    await text(chatId, 'Second task')
+    await eventually(() => expect(messages.some((item) => item.sessionId === sessionId && item.message.content === 'Second task')).toBe(true))
+    broadcast(sessionId, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    broadcast(sessionId, { type: 'content_start', blockType: 'text' })
+    broadcast(sessionId, { type: 'content_delta', text: 'Fresh answer after streamed error.' })
+    broadcast(sessionId, { type: 'message_complete' })
+    await eventually(() => expect(apiCalls.slice(callsAfterTurn1Error).some((call) => call.payload.chat_id === chatId && call.method === 'editMessageText' && call.payload.text === 'Fresh answer after streamed error.')).toBe(true))
+
+    const turn2Calls = apiCalls.slice(callsAfterTurn1Error).filter((call) => call.payload.chat_id === chatId)
+    const turn2PlaceholderId = turn2Calls.find((call) => call.method === 'sendMessage' && call.payload.text === '💭 思考中...')?.messageId
+    expect(turn2PlaceholderId).toBeDefined()
+    expect(turn2PlaceholderId).not.toBe(turn1PlaceholderId)
+    expect(turn2Calls.filter((call) => call.method === 'editMessageText').every((call) => call.payload.message_id === turn2PlaceholderId)).toBe(true)
+    expect(turn2Calls.some((call) => String(call.payload.text ?? '').includes('Stale streamed prefix'))).toBe(false)
+
+    // Turn 3 (short buffered text + mid-turn error followed by message_complete must not flush stale text)
+    const callsBeforeTurn3 = apiCalls.length
+    await text(chatId, 'Third task')
+    await eventually(() => expect(messages.some((item) => item.sessionId === sessionId && item.message.content === 'Third task')).toBe(true))
+    broadcast(sessionId, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    broadcast(sessionId, { type: 'content_start', blockType: 'text' })
+    broadcast(sessionId, { type: 'content_delta', text: 'Unflushed stale fragment' })
+    broadcast(sessionId, { type: 'error', message: 'Second upstream failure' })
+    broadcast(sessionId, { type: 'message_complete' })
+    await eventually(() => expect(texts(chatId).some((value) => value.includes('Second upstream failure'))).toBe(true))
+    const turn3PlaceholderId = apiCalls.slice(callsBeforeTurn3).find((call) => call.payload.chat_id === chatId && call.method === 'sendMessage' && call.payload.text === '💭 思考中...')?.messageId
+    expect(turn3PlaceholderId).toBeDefined()
+    expect(turn3PlaceholderId).not.toBe(turn2PlaceholderId)
+    const callsAfterTurn3Error = apiCalls.length
+
+    // Turn 4 (clean succeeding turn after buffered error must not inherit Turn 3 text or placeholder)
+    await text(chatId, 'Fourth task')
+    await eventually(() => expect(messages.some((item) => item.sessionId === sessionId && item.message.content === 'Fourth task')).toBe(true))
+    broadcast(sessionId, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    broadcast(sessionId, { type: 'content_start', blockType: 'text' })
+    broadcast(sessionId, { type: 'content_delta', text: 'Fresh answer after buffered error.' })
+    broadcast(sessionId, { type: 'message_complete' })
+    await eventually(() => expect(apiCalls.slice(callsAfterTurn3Error).some((call) => call.payload.chat_id === chatId && call.method === 'editMessageText' && call.payload.text === 'Fresh answer after buffered error.')).toBe(true))
+
+    const turn4Calls = apiCalls.slice(callsAfterTurn3Error).filter((call) => call.payload.chat_id === chatId)
+    const turn4PlaceholderId = turn4Calls.find((call) => call.method === 'sendMessage' && call.payload.text === '💭 思考中...')?.messageId
+    expect(turn4PlaceholderId).toBeDefined()
+    expect(turn4PlaceholderId).not.toBe(turn1PlaceholderId)
+    expect(turn4PlaceholderId).not.toBe(turn2PlaceholderId)
+    expect(turn4PlaceholderId).not.toBe(turn3PlaceholderId)
+
+    const turn4Edits = turn4Calls.filter((call) => call.method === 'editMessageText')
+    expect(turn4Edits.every((call) => call.payload.message_id === turn4PlaceholderId)).toBe(true)
+    expect(turn4Calls.some((call) => String(call.payload.text ?? '').includes('Stale streamed prefix'))).toBe(false)
+    expect(turn4Calls.some((call) => String(call.payload.text ?? '').includes('Unflushed stale fragment'))).toBe(false)
+
+    // Verify neither Turn 1's nor Turn 3's errored placeholder was ever edited after their respective errors
+    const postTurn1EditsToOldPlaceholder = apiCalls
+      .slice(callsAfterTurn1Error)
+      .filter((call) => call.payload.chat_id === chatId && call.method === 'editMessageText' && call.payload.message_id === turn1PlaceholderId)
+    expect(postTurn1EditsToOldPlaceholder).toEqual([])
+    const postTurn3EditsToOldPlaceholder = apiCalls
+      .slice(callsAfterTurn3Error)
+      .filter((call) => call.payload.chat_id === chatId && call.method === 'editMessageText' && call.payload.message_id === turn3PlaceholderId)
+    expect(postTurn3EditsToOldPlaceholder).toEqual([])
+    expect(apiCalls.slice(callsBeforeTurn3).some((call) => call.payload.chat_id === chatId && String(call.payload.text ?? '').includes('Unflushed stale fragment'))).toBe(false)
   })
 
   it('starts the registered bot and publishes its menu without external access', async () => {
