@@ -7,10 +7,13 @@ import {
   buildGeminiImageRequestBody,
   buildGeminiImageUrl,
   buildImagesProtocolUrl,
+  buildMiniMaxImageRequestBody,
+  buildMiniMaxImageUrl,
   buildProtocolImageRequests,
   buildXaiEditRequestBody,
   buildXaiRequestBody,
   parseGeminiImageResponse,
+  parseMiniMaxImageResponse,
 } from './providerProtocols.js'
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -31,6 +34,16 @@ const nativeConfig: ImageGenerationRuntimeConfig = {
 }
 
 describe('image provider protocols', () => {
+  test('builds MiniMax image generation requests and parses image_urls', () => {
+    const input = { model: 'image-01', prompt: 'A ceramic robot', count: 2, aspect_ratio: '16:9' }
+    expect(buildMiniMaxImageUrl('https://api.minimax.io/v1')).toBe('https://api.minimax.io/v1/image_generation')
+    expect(buildProtocolImageRequests(input, { ...nativeConfig, protocol: 'minimax_image', baseUrl: 'https://api.minimax.io/v1' }, [])).toEqual([
+      { url: 'https://api.minimax.io/v1/image_generation', body: { model: 'image-01', prompt: 'A ceramic robot', aspect_ratio: '16:9', response_format: 'url', n: 1 } },
+      { url: 'https://api.minimax.io/v1/image_generation', body: { model: 'image-01', prompt: 'A ceramic robot', aspect_ratio: '16:9', response_format: 'url', n: 1 } },
+    ])
+    expect(buildMiniMaxImageRequestBody(input)).toEqual({ model: 'image-01', prompt: 'A ceramic robot', aspect_ratio: '16:9', response_format: 'url', n: 2 })
+    expect(parseMiniMaxImageResponse({ data: { image_urls: ['https://example.test/a.png', ''] } })).toEqual([{ url: 'https://example.test/a.png' }])
+  })
   test.each(['gemini-3.1-flash-lite-image', 'models/gemini-3.1-flash-lite-image'])(
     'checks the known native Lite model %s resolution before generating or editing',
     (model) => {
