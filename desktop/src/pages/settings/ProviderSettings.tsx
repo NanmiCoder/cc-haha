@@ -58,7 +58,7 @@ import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
 import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCompactWindowErrorKey, getModelContextWindowErrorKey, MODEL_SLOTS, parseAutoCompactWindowInput, parseModelContextWindowsInput, type ModelContextInputs, type ModelSlot } from '../../lib/providerModelContext'
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
-import { isValidHttpProxyUrl } from './shared'
+import { findBlockedUpstreamHeader, formatUpstreamHeaders, isValidHttpProxyUrl, parseUpstreamHeadersInput } from './shared'
 import {
   highlightSegments,
   initialProviderTab,
@@ -1493,6 +1493,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const keepRemoteProxy = browserMode && mode === 'edit' &&
     proxyMode === (provider?.proxy?.mode ?? 'follow_global') && proxyUrl === (provider?.proxy?.url ?? '')
   const proxyUrlInvalid = proxyMode === 'manual' && proxyUrl.trim() !== '' && !isValidHttpProxyUrl(proxyUrl.trim())
+  const [upstreamHeadersText, setUpstreamHeadersText] = useState(() => formatUpstreamHeaders(provider?.upstreamHeaders ?? {}))
+  const parsedUpstreamHeaders = parseUpstreamHeadersInput(upstreamHeadersText)
+  const upstreamHeaders = parsedUpstreamHeaders.headers
+  const upstreamHeadersInvalid = parsedUpstreamHeaders.error
+  const upstreamHeadersBlocked = upstreamHeaders ? findBlockedUpstreamHeader(upstreamHeaders) : undefined
   const [notes, setNotes] = useState(provider?.notes ?? '')
   const [compatibility, setCompatibility] = useState(() => compatibilityForm(provider?.requestCompatibility))
   const [models, setModels] = useState<ModelMapping>(initialModels)
@@ -1684,7 +1689,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
     || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
-  const canSubmit = !compatibilityInvalid && !(!keepRemoteProxy && proxyMode === 'manual' && !isValidHttpProxyUrl(proxyUrl.trim())) && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const canSubmit = !compatibilityInvalid && !(!keepRemoteProxy && proxyMode === 'manual' && !isValidHttpProxyUrl(proxyUrl.trim())) && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !upstreamHeadersInvalid && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -2072,6 +2077,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           supportsNestedToolResultMedia,
           ...(storedImageGeneration !== undefined && { imageGeneration: storedImageGeneration }),
           ...(storedProxy && { proxy: storedProxy }),
+          ...(upstreamHeaders && { upstreamHeaders }),
           notes: notes.trim() || undefined,
         })
       } else if (provider) {
@@ -2092,6 +2098,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           supportsNestedToolResultMedia,
           imageGeneration: storedImageGeneration ?? null,
           ...(!keepRemoteProxy && { proxy: storedProxy }),
+          upstreamHeaders: upstreamHeaders ?? null,
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
@@ -2738,6 +2745,30 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               )}
             </div>
           )}
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
+          <label htmlFor="upstream-headers" className={FORM_FIELD_LABEL}>{t('settings.providers.upstreamHeaders')}</label>
+          <textarea
+            id="upstream-headers"
+            aria-label={t('settings.providers.upstreamHeaders')}
+            value={upstreamHeadersText}
+            onChange={(e) => setUpstreamHeadersText(e.target.value)}
+            placeholder={t('settings.providers.upstreamHeadersPlaceholder')}
+            rows={3}
+            className={`w-full text-xs px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] border font-mono leading-relaxed resize-y text-[var(--color-text-secondary)] outline-none ${
+              upstreamHeadersInvalid
+                ? 'border-[var(--color-error)] focus:border-[var(--color-error)]'
+                : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)]'
+            }`}
+          />
+          {upstreamHeadersInvalid && (
+            <p role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{t('settings.providers.upstreamHeadersError', { line: upstreamHeadersInvalid })}</p>
+          )}
+          {!upstreamHeadersInvalid && upstreamHeadersBlocked && (
+            <p role="alert" className="text-[11px] text-[var(--color-warning)] mt-1">{t('settings.providers.upstreamHeadersBlocked', { name: upstreamHeadersBlocked })}</p>
+          )}
+          <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.upstreamHeadersDesc')}</p>
         </div>
       </div>
       </Modal>

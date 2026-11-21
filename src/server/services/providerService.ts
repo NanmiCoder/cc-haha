@@ -162,6 +162,19 @@ function mergeSavedOrderIntoDisplayOrder(providerOrder: string[], savedOrder: st
   })
 }
 
+/**
+ * A saved provider's outbound headers: the headers its preset declares, with
+ * the provider's own `upstreamHeaders` overlaid per header name. A provider
+ * that sets none keeps exactly the preset's headers, so existing providers are
+ * unchanged; one that needs to reach its own downstream gateway — a session-
+ * sticky scheduler, say — can add headers no built-in preset sends.
+ */
+function resolveProviderUpstreamHeaders(provider: SavedProvider): Record<string, string> {
+  const presetHeaders = getPresetUpstreamHeaders(provider.presetId)
+  if (!provider.upstreamHeaders) return presetHeaders
+  return { ...presetHeaders, ...provider.upstreamHeaders }
+}
+
 function buildSavedProvider(input: ImportProviderInput): SavedProvider {
   const imageGeneration = normalizeImageGeneration(input.imageGeneration)
   return {
@@ -184,6 +197,7 @@ function buildSavedProvider(input: ImportProviderInput): SavedProvider {
     ...(input.requestCompatibility !== undefined && { requestCompatibility: input.requestCompatibility }),
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.proxy !== undefined && { proxy: input.proxy }),
+    ...(input.upstreamHeaders !== undefined && { upstreamHeaders: input.upstreamHeaders }),
     ...(input.notes !== undefined && { notes: input.notes }),
     ...(input.usageScript !== undefined && { usageScript: input.usageScript }),
   }
@@ -533,10 +547,14 @@ export class ProviderService {
         ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
         ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
         ...(input.proxy !== undefined && input.proxy !== null && { proxy: input.proxy }),
+        ...(input.upstreamHeaders !== undefined && input.upstreamHeaders !== null && { upstreamHeaders: input.upstreamHeaders }),
         ...(input.notes !== undefined && { notes: input.notes }),
       }
       if (input.proxy === null) {
         delete updated.proxy
+      }
+      if (input.upstreamHeaders === null) {
+        delete updated.upstreamHeaders
       }
       if (input.model1mSupport === null) {
         delete updated.model1mSupport
@@ -963,7 +981,7 @@ export class ProviderService {
         supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia ?? true,
         authStrategy: provider.authStrategy ?? getPresetAuthStrategy(provider.presetId),
         modelApiFormats: getPresetModelApiFormats(provider.presetId),
-        upstreamHeaders: getPresetUpstreamHeaders(provider.presetId),
+        upstreamHeaders: resolveProviderUpstreamHeaders(provider),
         ...(provider.requestCompatibility !== undefined && { requestCompatibility: provider.requestCompatibility }),
         ...(provider.proxy !== undefined && { proxy: provider.proxy }),
       }
@@ -1034,10 +1052,13 @@ export class ProviderService {
       proxy: provider.proxy,
       supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia,
       requestCompatibility: provider.requestCompatibility,
-    })
+    }, { upstreamHeaders: resolveProviderUpstreamHeaders(provider) })
   }
 
-  async testProviderConfig(input: TestProviderInput): Promise<ProviderTestResult> {
+  async testProviderConfig(
+    input: TestProviderInput,
+    options?: { upstreamHeaders?: Record<string, string> },
+  ): Promise<ProviderTestResult> {
     const modelId = normalizeModelStringForAPI(input.modelId)
     const authStrategy = input.authStrategy ?? 'api_key'
     const base = input.baseUrl.replace(/\/+$/, '')
@@ -1049,7 +1070,7 @@ export class ProviderService {
     const presetId = input.presetId ?? ''
     const modelApiFormats = presetId ? getPresetModelApiFormats(presetId) : []
     const upstreamHeaders = resolveUpstreamHeaders(
-      presetId ? getPresetUpstreamHeaders(presetId) : {},
+      options?.upstreamHeaders ?? (presetId ? getPresetUpstreamHeaders(presetId) : {}),
       { sessionId: connectivityProbeSessionId() },
     )
     // Same resolution the proxy performs, so the probe reaches what production

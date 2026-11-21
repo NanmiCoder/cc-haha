@@ -80,6 +80,7 @@ export type SavedProvider = {
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
   proxy?: ProviderProxyConfig
+  upstreamHeaders?: Record<string, string>
   notes?: string
 }
 
@@ -102,6 +103,7 @@ export type CreateProviderInput = {
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
   proxy?: ProviderProxyConfig
+  upstreamHeaders?: Record<string, string>
   notes?: string
 }
 
@@ -123,6 +125,7 @@ export type UpdateProviderInput = {
   requestCompatibility?: RequestCompatibility | null
   imageGeneration?: ImageGenerationConfig | null
   proxy?: ProviderProxyConfig | null
+  upstreamHeaders?: Record<string, string> | null
   notes?: string
 }
 

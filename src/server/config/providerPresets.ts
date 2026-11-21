@@ -4,7 +4,7 @@
 import { z } from 'zod'
 
 import providerPresetsJson from './providerPresets.json'
-import { ApiFormatSchema, ImageGenerationConfigSchema, ModelApiFormatSchema, ProviderAuthStrategySchema } from '../types/provider.js'
+import { ApiFormatSchema, ImageGenerationConfigSchema, ModelApiFormatSchema, ProviderAuthStrategySchema, UpstreamHeadersSchema } from '../types/provider.js'
 import type { ModelReasoningProviderKind } from '../../shared/modelReasoning.js'
 
 const ModelMappingSchema = z.object({
@@ -19,13 +19,6 @@ const ProviderRegionalEndpointSchema = z.object({
   region: z.string().min(1),
   baseUrl: z.string().url(),
 })
-
-/**
- * RFC 9110 field-name token. A preset that spells a header name wrong — a stray
- * space, an embedded newline — would otherwise only surface as a `fetch`
- * TypeError on every request at runtime, so it fails at module load instead.
- */
-const UPSTREAM_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 /**
  * Ordered first-match-wins rules for gateways that bind the wire format to the
@@ -82,10 +75,7 @@ export const ProviderPresetSchema = z.object({
    * (inbound conversation id) and `$VERSION` placeholders. Credentials and
    * framing headers are rejected by the resolver.
    */
-  upstreamHeaders: z.record(
-    z.string().regex(UPSTREAM_HEADER_NAME_RE, 'must be a valid HTTP header name'),
-    z.string(),
-  ).optional(),
+  upstreamHeaders: UpstreamHeadersSchema.optional(),
 })
 
 const ProviderPresetsSchema = z.array(ProviderPresetSchema)

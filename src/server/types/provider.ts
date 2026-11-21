@@ -150,6 +150,27 @@ export const ProviderProxyConfigSchema = z.object({
 export type ProviderProxyConfig = z.infer<typeof ProviderProxyConfigSchema>
 
 /**
+ * RFC 9110 field-name token. A template that spells a header name wrong — a
+ * stray space, an embedded newline — would otherwise only surface as a `fetch`
+ * TypeError on every request at runtime, so it fails when the provider is
+ * saved instead.
+ */
+export const UPSTREAM_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
+/**
+ * Per-provider outbound headers, supporting the `$SESSION_ID` / `$VERSION`
+ * placeholders the proxy resolver expands. A saved provider can add or
+ * override the headers its preset declares — a self-hosted gateway that
+ * schedules by conversation, for example, needs `x-claude-code-session-id:
+ * $SESSION_ID`, which no built-in preset sends.
+ */
+export const UpstreamHeadersSchema = z.record(
+  z.string().regex(UPSTREAM_HEADER_NAME_RE, 'must be a valid HTTP header name'),
+  z.string(),
+)
+export type UpstreamHeaders = z.infer<typeof UpstreamHeadersSchema>
+
+/**
  * A provider's balance/quota query, as cc-switch stores it in a provider's
  * `meta.usage_script`. It is kept exactly as cc-switch wrote it, field names
  * included, so the same scripts and template settings can run once cc-haha has
@@ -191,6 +212,7 @@ export const SavedProviderSchema = z.object({
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   proxy: ProviderProxyConfigSchema.optional(),
+  upstreamHeaders: UpstreamHeadersSchema.optional(),
   notes: z.string().optional(),
   usageScript: ProviderUsageScriptSchema.optional(),
 })
@@ -233,6 +255,7 @@ export const CreateProviderSchema = z.object({
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
   proxy: ProviderProxyConfigSchema.optional(),
+  upstreamHeaders: UpstreamHeadersSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -254,6 +277,7 @@ export const UpdateProviderSchema = z.object({
   requestCompatibility: RequestCompatibilitySchema.nullable().optional(),
   imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
   proxy: ProviderProxyConfigSchema.nullable().optional(),
+  upstreamHeaders: UpstreamHeadersSchema.nullable().optional(),
   notes: z.string().optional(),
 })
 
