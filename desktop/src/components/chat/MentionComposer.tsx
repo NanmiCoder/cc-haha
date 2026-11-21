@@ -68,6 +68,11 @@ export type MentionComposerHandle = {
    */
   insertTextAtOffsets: (start: number, end: number, text: string, options?: { flash?: boolean }) => void
   /**
+   * Replaces the whole document as a single editor transaction so Cmd/Ctrl+Z
+   * restores the previous draft (including mention pills) in one step.
+   */
+  replaceContentWithHistory: (text: string, mentions: ComposerMention[], options?: { flash?: boolean }) => void
+  /**
    * Content for the model: text with each mention pill serialized to
    * file paths or explicit skill/plugin requests. Read from the live document, so literal text that
    * merely looks like a pill's token is never rewritten.
@@ -549,6 +554,27 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
         const tr = view.state.tr.insertText(text, from, to)
         tr.setSelection(TextSelection.near(tr.doc.resolve(from + text.length)))
         if (options?.flash) tr.setMeta(insertionFlashPluginKey, { from, to: from + text.length })
+        view.dispatch(tr.scrollIntoView())
+        if (!options?.flash) return
+        if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+        flashTimerRef.current = setTimeout(() => {
+          flashTimerRef.current = null
+          const current = viewRef.current
+          if (!current || insertionFlashPluginKey.getState(current.state) === DecorationSet.empty) return
+          current.dispatch(current.state.tr
+            .setMeta(insertionFlashPluginKey, null)
+            .setMeta('addToHistory', false))
+        }, INSERTION_FLASH_MS)
+      },
+      replaceContentWithHistory: (text, nextMentions, options) => {
+        const view = viewRef.current
+        if (!view) return
+        const nextDoc = buildComposerDoc(text, nextMentions)
+        const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, nextDoc.content)
+        tr.setSelection(TextSelection.atEnd(tr.doc))
+        if (options?.flash && tr.doc.content.size > 2) {
+          tr.setMeta(insertionFlashPluginKey, { from: 1, to: tr.doc.content.size - 1 })
+        }
         view.dispatch(tr.scrollIntoView())
         if (!options?.flash) return
         if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
