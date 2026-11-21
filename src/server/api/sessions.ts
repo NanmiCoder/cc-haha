@@ -35,6 +35,7 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 
 import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
+import { handlePromptOptimizeRoute } from './promptOptimize.js'
 import { sessionService } from '../services/sessionService.js'
 import { loadRenderedToolImage } from '../services/toolImageMedia.js'
 import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
@@ -390,6 +391,11 @@ export async function handleSessionsApi(
     if (subResource === 'side-question') {
       if (segments.length > 5) throw ApiError.notFound('Side question route not found')
       return await handleSideQuestionRoute(req, url, sessionId, segments[4])
+    }
+
+    if (subResource === 'optimize-prompt') {
+      if (segments.length > 5) throw ApiError.notFound('Prompt optimization route not found')
+      return await handlePromptOptimizeRoute(req, url, sessionId, segments[4])
     }
 
     if (subResource === 'turn-checkpoints') {
