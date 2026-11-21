@@ -350,6 +350,13 @@ describe('composerUtils', () => {
     expect(resolveSlashUiAction('model')).toEqual({ type: 'model' })
   })
 
+  it('routes /fast and its arguments to the local fast mode action', () => {
+    expect(resolveSlashUiAction('fast')).toEqual({ type: 'fast', mode: 'toggle' })
+    expect(resolveSlashUiAction('fast on')).toEqual({ type: 'fast', mode: 'on' })
+    expect(resolveSlashUiAction('fast OFF')).toEqual({ type: 'fast', mode: 'off' })
+    expect(resolveSlashUiAction('fast invalid')).toEqual({ type: 'fast', mode: 'invalid' })
+  })
+
   it('falls back to the static English description when a translation key is missing', () => {
     // Simulate an i18n t() function that returns the raw key for missing entries
     // (this is what the real translate() does via zh[key] ?? en[key] ?? key).
@@ -397,7 +404,7 @@ it('orders plugin mentions between commands and skills without changing their ca
 
 it('keeps a team member menu to commands its own CLI runs', () => {
   // The server refuses these for a member; the model picker is the way to swap models.
-  for (const name of ['clear', 'reset', 'new', 'model', 'Model']) expect(isTeamMemberSlashCommand(name)).toBe(false)
+  for (const name of ['clear', 'reset', 'new', 'model', 'Model', 'fast', 'Fast']) expect(isTeamMemberSlashCommand(name)).toBe(false)
   // Handled by this desktop against the chat on screen, so a member never sees them.
   for (const name of ['btw', 'goal', 'context', 'status', 'cost', 'help', 'mcp', 'skills', 'save-workflow', 'config', 'settings', 'plugin', 'plugins', 'memory', 'doctor']) {
     expect(isTeamMemberSlashCommand(name)).toBe(false)

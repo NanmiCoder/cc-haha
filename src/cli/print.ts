@@ -176,10 +176,16 @@ import {
 import { settingsChangeDetector } from 'src/utils/settings/changeDetector.js'
 import { applySettingsChange } from 'src/utils/settings/applySettingsChange.js'
 import {
+  clearFastModeCooldown,
+  getFastModeState,
+  getFastModeUnavailableReason,
   isFastModeAvailable,
   isFastModeEnabled,
   isFastModeSupportedByModel,
-  getFastModeState,
+  onCooldownExpired,
+  onCooldownTriggered,
+  onFastModeOverageRejection,
+  onOrgFastModeChanged,
 } from 'src/utils/fastMode.js'
 import {
   isAutoModeGateEnabled,
@@ -1453,6 +1459,97 @@ function runHeadlessStreaming(
     }
   }
   statusListeners.add(rateLimitListener)
+
+  let explicitFastModeOverride: boolean | undefined
+  const syncFastModeForModel = (model: string) => {
+    if (!isFastModeEnabled()) {
+      return
+    }
+    setAppState(prev => {
+      const s = prev.settings as Record<string, unknown>
+      const desiredFastMode =
+        explicitFastModeOverride ??
+        (s.fastMode === true && !s.fastModePerSessionOptIn)
+      const nextFastMode =
+        desiredFastMode &&
+        isFastModeAvailable() &&
+        isFastModeSupportedByModel(model)
+      return prev.fastMode === nextFastMode
+        ? prev
+        : { ...prev, fastMode: nextFastMode }
+    })
+  }
+
+  const unsubscribeOrgFastMode = onOrgFastModeChanged(orgEnabled => {
+    if (orgEnabled || disposed) {
+      return
+    }
+    explicitFastModeOverride = false
+    setAppState(prev => (prev.fastMode ? { ...prev, fastMode: false } : prev))
+    output.enqueue({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: 'off',
+      reason: 'org_disabled',
+      message:
+        getFastModeUnavailableReason() ??
+        'Fast mode has been disabled by your organization',
+      uuid: randomUUID(),
+      session_id: getSessionId(),
+    })
+  })
+  const unsubscribeFastModeOverage = onFastModeOverageRejection(message => {
+    if (disposed) {
+      return
+    }
+    explicitFastModeOverride = false
+    setAppState(prev => (prev.fastMode ? { ...prev, fastMode: false } : prev))
+    output.enqueue({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: 'off',
+      reason: 'overage_rejected',
+      message,
+      uuid: randomUUID(),
+      session_id: getSessionId(),
+    })
+  })
+  const unsubscribeFastModeCooldown = onCooldownTriggered((resetAt, reason) => {
+    if (disposed) {
+      return
+    }
+    const remainingSec = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000))
+    const message =
+      reason === 'overloaded'
+        ? `Fast mode temporarily paused due to high load (resuming in ~${remainingSec}s)`
+        : `Fast mode rate limited (resuming in ~${remainingSec}s)`
+    output.enqueue({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: 'cooldown',
+      reason,
+      reset_at: resetAt,
+      message,
+      uuid: randomUUID(),
+      session_id: getSessionId(),
+    })
+  })
+  const unsubscribeFastModeCooldownExpired = onCooldownExpired(() => {
+    if (disposed) {
+      return
+    }
+    output.enqueue({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: getFastModeState(
+        getMainLoopModel(),
+        getAppState().fastMode,
+      ),
+      reason: 'cooldown_expired',
+      uuid: randomUUID(),
+      session_id: getSessionId(),
+    })
+  })
 
   // Messages for internal tracking, directly mutated by ask(). These messages
   // include Assistant, User, Attachment, and Progress messages.
@@ -3007,6 +3104,10 @@ function runHeadlessStreaming(
         unsubscribeSkillChanges()
         unsubscribeAuthStatus?.()
         statusListeners.delete(rateLimitListener)
+        unsubscribeOrgFastMode()
+        unsubscribeFastModeOverage()
+        unsubscribeFastModeCooldown()
+        unsubscribeFastModeCooldownExpired()
         unsubscribeTaskNotifications()
         removeAgentRunMessageSink()
         sessionMessageInbox.dispose()
@@ -3329,6 +3430,7 @@ function runHeadlessStreaming(
               : requestedModel
           activeUserSpecifiedModel = model
           setMainLoopModelOverride(model)
+          syncFastModeForModel(model)
           notifySessionMetadataChanged({ model })
           injectModelSwitchBreadcrumbs(requestedModel, model)
 
@@ -3337,6 +3439,23 @@ function runHeadlessStreaming(
           options.promptSuggestions = message.request.enabled
           setSdkPromptSuggestions(suggestionState, message.request.enabled, setAppState)
           sendControlResponseSuccess(message)
+        } else if (message.request.subtype === 'set_fast_mode') {
+          explicitFastModeOverride = message.request.enabled
+          if (message.request.enabled) {
+            clearFastModeCooldown()
+          }
+          const currentModel = getMainLoopModel()
+          const nextFastMode =
+            message.request.enabled &&
+            isFastModeAvailable() &&
+            isFastModeSupportedByModel(currentModel)
+          setAppState(prev => ({
+            ...prev,
+            fastMode: nextFastMode,
+          }))
+          sendControlResponseSuccess(message, {
+            fast_mode_state: getFastModeState(currentModel, nextFastMode),
+          })
         } else if (message.request.subtype === 'set_max_thinking_tokens') {
           if (message.request.max_thinking_tokens === null) {
             options.thinkingConfig = undefined
@@ -4275,6 +4394,7 @@ function runHeadlessStreaming(
           const newModel = getMainLoopModel()
           if (newModel !== prevModel) {
             activeUserSpecifiedModel = newModel
+            syncFastModeForModel(newModel)
             const modelArg = incoming.model ? String(incoming.model) : 'default'
             notifySessionMetadataChanged({ model: newModel })
             injectModelSwitchBreadcrumbs(modelArg, newModel)
@@ -4575,6 +4695,7 @@ function runHeadlessStreaming(
                       model === 'default' ? getDefaultMainLoopModel() : model
                     activeUserSpecifiedModel = resolved
                     setMainLoopModelOverride(resolved)
+                    syncFastModeForModel(resolved)
                   },
                   onSetMaxThinkingTokens(maxTokens) {
                     if (maxTokens === null) {
@@ -4774,6 +4895,10 @@ function runHeadlessStreaming(
       unsubscribeSkillChanges()
       unsubscribeAuthStatus?.()
       statusListeners.delete(rateLimitListener)
+      unsubscribeOrgFastMode()
+      unsubscribeFastModeOverage()
+      unsubscribeFastModeCooldown()
+      unsubscribeFastModeCooldownExpired()
       unsubscribeTaskNotifications()
       removeAgentRunMessageSink()
       output.done()

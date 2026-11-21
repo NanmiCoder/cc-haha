@@ -2,6 +2,7 @@ import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messag
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/index.js'
 import { logEvent } from 'src/services/analytics/index.js'
 import { setHasUnknownModelCost } from '../bootstrap/state.js'
+import { normalizeClaudeFastModeModelId } from '../shared/claudeFastMode.js'
 import { isFastModeEnabled } from './fastMode.js'
 import {
   CLAUDE_3_5_HAIKU_CONFIG,
@@ -123,7 +124,19 @@ export const COST_OPUS_55_FAST = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
-// Fast mode pricing for Opus 4.7: $30 input / $150 output per Mtok
+// Fable 5.2 fast mode: 2x standard pricing ($16 input / $80 output per Mtok)
+export const COST_FABLE_52_FAST = {
+  inputTokens: 16,
+  outputTokens: 80,
+  promptCacheWriteTokens: 20,
+  promptCacheReadTokens: 0.4,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
+// Opus 4.8 / Opus 5 fast mode: 2x standard pricing ($10 input / $50 output per Mtok)
+export const COST_OPUS_5_FAST = COST_TIER_10_50
+
+// Fast mode pricing for Opus 4.6 / 4.7: $30 input / $150 output per Mtok
 export const COST_TIER_30_150 = {
   inputTokens: 30,
   outputTokens: 150,
@@ -183,13 +196,51 @@ export function getPromptLengthCosts(
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
- * Get the cost tier for Opus 4.7 based on fast mode.
+ * Get the cost tier for Opus 4.6 / 4.7 based on fast mode.
  */
 export function getOpus46CostTier(fastMode: boolean): ModelCosts {
   if (isFastModeEnabled() && fastMode) {
     return COST_TIER_30_150
   }
   return COST_TIER_5_25
+}
+
+/**
+ * Get the fast-mode cost tier for a supported Claude model, mirroring
+ * Claude Code CLI's model pricing table:
+ * - Opus 5.5: $8/$40 (2x)
+ * - Opus 5 / Opus 4.8: $10/$50 (2x)
+ * - Fable 5.2 / Mythos 5.2: $16/$80 (2x)
+ * - Opus 4.6 / 4.7: $30/$150 (6x)
+ */
+export function getFastModeCostTierForModel(model: string): ModelCosts | undefined {
+  const normalized = normalizeClaudeFastModeModelId(model)
+  const shortName = getCanonicalName(model)
+  if (
+    normalized === 'claude-opus-5-5' ||
+    shortName === firstPartyNameToCanonical(CLAUDE_OPUS_5_5_CONFIG.firstParty)
+  ) {
+    return COST_OPUS_55_FAST
+  }
+  if (
+    normalized === 'claude-opus-5' ||
+    normalized === 'claude-opus-4-8' ||
+    shortName === firstPartyNameToCanonical(CLAUDE_OPUS_5_CONFIG.firstParty) ||
+    shortName === firstPartyNameToCanonical(CLAUDE_OPUS_4_8_CONFIG.firstParty)
+  ) {
+    return COST_OPUS_5_FAST
+  }
+  if (
+    normalized === 'claude-fable-5-2' ||
+    normalized === 'claude-mythos-5-2' ||
+    shortName === firstPartyNameToCanonical(CLAUDE_FABLE_5_2_CONFIG.firstParty)
+  ) {
+    return COST_FABLE_52_FAST
+  }
+  if (normalized === 'claude-opus-4-6') {
+    return COST_TIER_30_150
+  }
+  return undefined
 }
 
 // @[MODEL LAUNCH]: Add a pricing entry for the new model below.
@@ -254,12 +305,12 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
 export function getModelCosts(model: string, usage: Usage): ModelCosts {
   const shortName = getCanonicalName(model)
 
-  // Check if this is an Opus 4.7 model with fast mode active.
-  if (
-    shortName === firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)
-  ) {
-    const isFastMode = usage.speed === 'fast'
-    return getOpus46CostTier(isFastMode)
+  // Apply fast-mode pricing tier for any supported model when usage reports fast speed.
+  if (isFastModeEnabled() && usage.speed === 'fast') {
+    const fastCosts = getFastModeCostTierForModel(model)
+    if (fastCosts) {
+      return fastCosts
+    }
   }
 
   const costs = MODEL_COSTS[shortName]

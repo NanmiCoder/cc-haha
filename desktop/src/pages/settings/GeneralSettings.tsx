@@ -91,6 +91,8 @@ export function GeneralSettings() {
     setEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    fastMode,
+    setFastMode,
     workflowKeywordTriggerEnabled,
     setWorkflowKeywordTriggerEnabled,
     nextPromptSuggestionsEnabled,
@@ -1087,6 +1089,16 @@ export function GeneralSettings() {
             help={<SettingsHelpTopic topic="thinking" />}
             checked={thinkingEnabled}
             onChange={(enabled) => void setThinkingEnabled(enabled)}
+          />
+          <SettingsSwitchRow
+            title={t('settings.general.fastModeTitle')}
+            description={t('settings.general.fastModeDescription')}
+            checked={fastMode}
+            onChange={(enabled) => {
+              void setFastMode(enabled).catch(() => {
+                addToast({ type: 'error', message: t('slashCmd.fast.saveFailed') })
+              })
+            }}
           />
           <SettingsRow
             title={t('settings.general.outputStyleTitle')}

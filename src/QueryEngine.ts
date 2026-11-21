@@ -824,7 +824,7 @@ export class QueryEngine {
         permission_denials: this.permissionDenials,
         fast_mode_state: getFastModeState(
           mainLoopModel,
-          initialAppState.fastMode,
+          getAppState().fastMode,
         ),
         uuid: randomUUID(),
       }
@@ -1094,7 +1094,7 @@ export class QueryEngine {
               permission_denials: this.permissionDenials,
               fast_mode_state: getFastModeState(
                 mainLoopModel,
-                initialAppState.fastMode,
+                getAppState().fastMode,
               ),
               uuid: randomUUID(),
               errors: [
@@ -1245,7 +1245,7 @@ export class QueryEngine {
           permission_denials: this.permissionDenials,
           fast_mode_state: getFastModeState(
             mainLoopModel,
-            initialAppState.fastMode,
+            getAppState().fastMode,
           ),
           uuid: randomUUID(),
           errors: [`Reached maximum budget ($${maxBudgetUsd})`],
@@ -1289,7 +1289,7 @@ export class QueryEngine {
             permission_denials: this.permissionDenials,
             fast_mode_state: getFastModeState(
               mainLoopModel,
-              initialAppState.fastMode,
+              getAppState().fastMode,
             ),
             uuid: randomUUID(),
             errors: [
@@ -1352,7 +1352,7 @@ export class QueryEngine {
         permission_denials: this.permissionDenials,
         fast_mode_state: getFastModeState(
           mainLoopModel,
-          initialAppState.fastMode,
+          getAppState().fastMode,
         ),
         uuid: randomUUID(),
         // Diagnostic prefix: these are what isResultSuccessful() checks — if
@@ -1408,7 +1408,7 @@ export class QueryEngine {
       structured_output: structuredOutputFromTool,
       fast_mode_state: getFastModeState(
         mainLoopModel,
-        initialAppState.fastMode,
+        getAppState().fastMode,
       ),
       uuid: randomUUID(),
     }

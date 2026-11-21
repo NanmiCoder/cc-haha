@@ -320,4 +320,25 @@ export const goldenScenarios: GoldenScenario[] = [
       { type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse', decision: 'allow' },
     ],
   },
+  {
+    id: 'fast-mode-status',
+    description: 'Fast mode runtime rejections and cooldown notices forward to clients as system notifications.',
+    messages: [
+      {
+        type: 'system',
+        subtype: 'fast_mode_status',
+        fast_mode_state: 'off',
+        reason: 'org_disabled',
+        message: 'Fast mode has been disabled by your organization',
+      },
+      {
+        type: 'system',
+        subtype: 'fast_mode_status',
+        fast_mode_state: 'cooldown',
+        reason: 'rate_limit',
+        reset_at: 1800000000000,
+        message: 'Fast mode rate limited (resuming in ~30s)',
+      },
+    ],
+  },
 ]
