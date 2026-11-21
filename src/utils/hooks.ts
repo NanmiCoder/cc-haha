@@ -2245,12 +2245,15 @@ async function* executeHooks({
             'ToolUseContext is required for prompt hooks. This is a bug.',
           )
         }
+        // execPromptHook manages its own timeout internally via hook.timeout or
+        // its 30s default, so pass the parent signal directly to avoid
+        // double-stacking timeouts with abortSignal.
         const promptResult = await execPromptHook(
           hook,
           hookName,
           hookEvent,
           jsonInput,
-          abortSignal,
+          signal,
           toolUseContext,
           messages,
           toolUseID,

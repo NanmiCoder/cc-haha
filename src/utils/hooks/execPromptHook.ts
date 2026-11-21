@@ -43,7 +43,7 @@ export async function execPromptHook(
   hookName: string,
   hookEvent: HookEvent,
   jsonInput: string,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
   toolUseContext: ToolUseContext,
   messages?: Message[],
   toolUseID?: string,
@@ -216,7 +216,7 @@ Your response must be a JSON object matching one of the following schemas:
       cleanupSignal()
 
       if (combinedSignal.aborted) {
-        const goalFailure = signal.aborted
+        const goalFailure = signal?.aborted
           ? null
           : goalHookFailureResult(hook, 'evaluation timed out')
         if (goalFailure) return goalFailure
