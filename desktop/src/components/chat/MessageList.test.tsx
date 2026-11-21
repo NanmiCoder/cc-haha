@@ -7391,6 +7391,185 @@ describe('MessageList nested tool calls', () => {
     expect(within(unrelatedReply).queryByRole('region', { name: 'Turn changed files' })).toBeNull()
   })
 
+  it.each(['history refresh', 'background work'] as const)('keeps an expanded file card mounted during %s without allowing undo', async (phase) => {
+    const messages: UIMessage[] = [
+      { id: 'user-edit', type: 'user_text', content: 'Update the docs', timestamp: 1 },
+      { id: 'assistant-edit', type: 'assistant_text', content: 'Updated.', timestamp: 2 },
+    ]
+    const checkpoint = {
+      target: { targetUserMessageId: 'user-edit', userMessageIndex: 0, userMessageCount: 1 },
+      code: { available: true, filesChanged: Array.from({ length: 41 }, (_, i) => `docs/page-${i}.md`), insertions: 41, deletions: 0 },
+    }
+    const response = { checkpoints: [checkpoint] }
+    const getTurnCheckpoints = vi.mocked(sessionsApi.getTurnCheckpoints).mockResolvedValueOnce(response)
+    let resolveRefresh!: (value: typeof response) => void
+    getTurnCheckpoints.mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve }))
+    const setSession = (overrides: Partial<PerSessionState> = {}) => {
+      useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages, ...overrides }) } })
+    }
+    setSession()
+    render(<MessageList />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show 41 changed files' }))
+    const card = screen.getByRole('region', { name: 'Turn changed files' })
+    const file = within(card).getByRole('button', { name: 'Open docs/page-0.md in workspace' })
+    const undo = within(card).getByRole('button', { name: 'Undo current turn changes' }) as HTMLButtonElement
+    expect(undo.disabled).toBe(false)
+
+    act(() => setSession(phase === 'history refresh' ? { historyStatus: 'loading' } : {
+      backgroundAgentTasks: {
+        review: { taskId: 'review', taskType: 'local_agent', status: 'running', startedAt: 3, updatedAt: 3 },
+      },
+    }))
+    expect(getTurnCheckpoints).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('region', { name: 'Turn changed files' })).toBe(card)
+    expect(within(card).getByRole('button', { name: 'Open docs/page-0.md in workspace' })).toBe(file)
+    expect(undo.disabled).toBe(true)
+    fireEvent.click(undo)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    act(() => setSession())
+    expect(getTurnCheckpoints).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('region', { name: 'Turn changed files' })).toBe(card)
+    expect(undo.disabled).toBe(true)
+    await act(async () => resolveRefresh(response))
+    expect(screen.getByRole('region', { name: 'Turn changed files' })).toBe(card)
+    expect(within(card).getByRole('button', { name: 'Open docs/page-0.md in workspace' })).toBe(file)
+    expect(undo.disabled).toBe(false)
+    fireEvent.click(undo)
+    expect(screen.getByRole('dialog', { name: 'Undo current turn?' })).toBeTruthy()
+  })
+
+  it('blocks both undo modes until a running reconnect settles and its checkpoints are refreshed', async () => {
+    const messages: UIMessage[] = [
+      { id: 'prompt-a', transcriptMessageId: 'prompt-a', type: 'user_text', content: 'Edit tracked docs', timestamp: 1 },
+      { id: 'answer-a', type: 'assistant_text', content: 'Edited the docs.', timestamp: 2 },
+    ]
+    const response = { checkpoints: [{
+      target: { targetUserMessageId: 'prompt-a', userMessageIndex: 0, userMessageCount: 1 },
+      code: { available: true, filesChanged: ['docs/page.md'], insertions: 1, deletions: 0 },
+    }] }
+    let resolveCheckpoints!: (value: typeof response) => void
+    const getCheckpoints = vi.mocked(sessionsApi.getTurnCheckpoints)
+      .mockResolvedValueOnce(response)
+      .mockReturnValueOnce(new Promise(resolve => { resolveCheckpoints = resolve }))
+    const history: { messages: MessageEntry[] } = { messages: [
+      { id: 'prompt-a', type: 'user', content: 'Edit tracked docs', timestamp: new Date(1).toISOString() },
+      { id: 'answer-a', type: 'assistant', content: 'Edited the docs.', timestamp: new Date(2).toISOString() },
+      { id: 'prompt-b', type: 'user', content: 'Continue the review', timestamp: new Date(3).toISOString() },
+    ] }
+    let resolveHistory!: (value: typeof history) => void
+    const loadHistory = vi.spyOn(sessionsApi, 'getFullHistory')
+      .mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve }))
+    const rewind = vi.spyOn(sessionsApi, 'rewind').mockImplementation(() => new Promise(() => {}))
+    const stop = vi.spyOn(useChatStore.getState(), 'stopGeneration').mockImplementation(() => {})
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    render(<MessageList />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo current turn changes' }))
+    const assertUndoDisabled = () => {
+      const dialog = screen.getByRole('dialog', { name: 'Undo current turn?' })
+      for (const name of ['Undo current turn', 'Roll back conversation only']) {
+        const button = within(dialog).getByRole<HTMLButtonElement>('button', { name })
+        expect(button.disabled).toBe(true)
+        fireEvent.click(button)
+      }
+      expect(rewind).not.toHaveBeenCalled()
+      expect(stop).not.toHaveBeenCalled()
+    }
+
+    try {
+      act(() => {
+        useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+          messages: [...messages, { id: 'prompt-b', type: 'user_text', content: 'Continue the review', timestamp: 3 }],
+          chatState: 'thinking', awaitingReconnectSync: true, streamAttemptStartIndex: 3,
+        }) } })
+        useChatStore.getState().handleServerMessage(ACTIVE_TAB, { type: 'session_state', turnState: 'running', activeBackgroundTaskIds: [] })
+      })
+      expect(loadHistory).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().sessions[ACTIVE_TAB]?.historyStatus).toBe('loading')
+      assertUndoDisabled()
+      await act(async () => resolveHistory(history))
+      expect(useChatStore.getState().sessions[ACTIVE_TAB]).toMatchObject({ historyStatus: 'ready', chatState: 'thinking' })
+      expect(getCheckpoints).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Undo current turn changes' }).disabled).toBe(true)
+      assertUndoDisabled()
+
+      act(() => useChatStore.getState().handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' }))
+      expect(getCheckpoints).toHaveBeenCalledTimes(2)
+      assertUndoDisabled()
+      await act(async () => resolveCheckpoints(response))
+      const dialog = screen.getByRole('dialog', { name: 'Undo current turn?' })
+      const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Undo current turn' })
+      expect(confirm.disabled).toBe(false)
+      fireEvent.click(confirm)
+      expect(rewind).toHaveBeenCalledExactlyOnceWith(ACTIVE_TAB, {
+        targetUserMessageId: 'prompt-a', userMessageIndex: 0, expectedContent: 'Edit tracked docs', mode: 'both',
+      })
+      expect(stop).not.toHaveBeenCalled()
+    } finally {
+      act(() => useChatStore.getState().handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' }))
+    }
+  })
+
+  it('keeps all 41 files expanded when an idle reconnect replaces local message ids', async () => {
+    clearDisclosureMemory()
+    const messages: UIMessage[] = [
+      { id: 'live-prompt', type: 'user_text', content: 'Update the docs', timestamp: 1 },
+      { id: 'live-answer', type: 'assistant_text', content: 'Updated the docs.', timestamp: 2 },
+    ]
+    const history: { messages: MessageEntry[] } = { messages: [
+      { id: 'recorded-prompt', type: 'user', content: 'Update the docs', timestamp: new Date(1).toISOString() },
+      { id: 'recorded-answer', type: 'assistant', content: 'Updated the docs.', timestamp: new Date(2).toISOString() },
+    ] }
+    const response = { checkpoints: [{
+      target: { targetUserMessageId: 'recorded-prompt', userMessageIndex: 0, userMessageCount: 1 },
+      code: { available: true, filesChanged: Array.from({ length: 41 }, (_, i) => `docs/page-${i}.md`), insertions: 41, deletions: 0 },
+    }] }
+    let resolveCheckpoints!: (value: typeof response) => void
+    const getCheckpoints = vi.mocked(sessionsApi.getTurnCheckpoints)
+      .mockResolvedValueOnce(response)
+      .mockReturnValueOnce(new Promise(resolve => { resolveCheckpoints = resolve }))
+    let resolveHistory!: (value: typeof history) => void
+    vi.spyOn(sessionsApi, 'getFullHistory').mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve }))
+    vi.spyOn(wsManager, 'connect').mockImplementation(() => {})
+    const stateHandler = vi.spyOn(wsManager, 'onConnectionState').mockReturnValue(() => {})
+    const messageHandler = vi.spyOn(wsManager, 'onMessage').mockReturnValue(() => {})
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ connectionState: 'disconnected' }) } })
+    useChatStore.getInitialState().connectToSession(ACTIVE_TAB, { minimalBootstrap: true, prewarm: false, applyRuntimeSelection: false })
+    const onConnectionState = stateHandler.mock.lastCall![1]
+    const onMessage = messageHandler.mock.lastCall![1]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    render(<MessageList />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Show 41 changed files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show 36 more files' }))
+    const mountedCard = screen.getByRole('region', { name: 'Turn changed files' })
+    const assertExpanded = (rowId: string) => {
+      const card = screen.getByRole('region', { name: 'Turn changed files' })
+      // 废弃旧 DOM 会让浏览器失去滚动锚点，即便新卡片仍然展开。
+      expect(card === mountedCard).toBe(true)
+      expect(card.closest('[data-chat-render-item-key]')?.getAttribute('data-chat-render-item-key')).toBe(rowId)
+      expect(within(card).getByRole('button', { name: 'Hide changed files' }).getAttribute('aria-expanded')).toBe('true')
+      expect(within(card).getAllByRole('button', { name: /Open docs\/page-\d+\.md in workspace/ })).toHaveLength(41)
+      return within(card).getByRole<HTMLButtonElement>('button', { name: 'Undo current turn changes' })
+    }
+    expect(assertExpanded('live-answer').disabled).toBe(false)
+
+    act(() => onConnectionState('reconnecting'))
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]).toMatchObject({ historyHydrated: false, awaitingReconnectSync: true })
+    expect(assertExpanded('live-answer').disabled).toBe(true)
+    act(() => onConnectionState('connected'))
+    expect(assertExpanded('live-answer').disabled).toBe(true)
+    act(() => onMessage({ type: 'session_state', turnState: 'idle', activeBackgroundTaskIds: [] }))
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.historyStatus).toBe('loading')
+    expect(assertExpanded('live-answer').disabled).toBe(true)
+    await act(async () => resolveHistory(history))
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages.map(message => message.id)).toEqual(['recorded-prompt', 'recorded-answer'])
+    // 已经切换到落盘行，但新的检查点请求尚未返回。
+    expect(assertExpanded('recorded-answer').disabled).toBe(true)
+    expect(getCheckpoints).toHaveBeenCalledTimes(2)
+    await act(async () => resolveCheckpoints(response))
+    expect(assertExpanded('recorded-answer').disabled).toBe(false)
+  })
+
   it('returns focus to the change summary when its file list was collapsed with the diff open', async () => {
     vi.mocked(sessionsApi.getTurnCheckpoints).mockResolvedValue({ checkpoints: [{
       target: { targetUserMessageId: 'user-origin-file', userMessageIndex: 0, userMessageCount: 1 },
@@ -7963,7 +8142,7 @@ describe('MessageList nested tool calls', () => {
     expect(await screen.findByText('blank-response.ts')).toBeTruthy()
   })
 
-  it('keeps checkpoint evidence while hiding change cards for a running background task', async () => {
+  it('keeps checkpoint evidence and change cards visible when background work runs and settles', async () => {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
         {
@@ -8006,7 +8185,7 @@ describe('MessageList nested tool calls', () => {
     render(<MessageList />)
 
     await expandChangedFileCards()
-    expect(await screen.findByText('first.ts')).toBeTruthy()
+    const fileRow = await screen.findByText('first.ts')
     expect(screen.queryByText('Markdown')).toBeNull()
 
     act(() => {
@@ -8030,9 +8209,7 @@ describe('MessageList nested tool calls', () => {
       })
     })
 
-    await waitFor(() => {
-      expect(screen.queryByText('first.ts')).toBeNull()
-    })
+    expect(screen.getByText('first.ts')).toBe(fileRow)
     expect(screen.queryByText('Markdown')).toBeNull()
 
     act(() => {
@@ -8056,9 +8233,7 @@ describe('MessageList nested tool calls', () => {
       })
     })
 
-    await waitFor(() => {
-      expect(screen.getByText('first.ts')).toBeTruthy()
-    })
+    expect(screen.getByText('first.ts')).toBe(fileRow)
     expect(screen.queryByText('Markdown')).toBeNull()
   })
 
@@ -8551,8 +8726,7 @@ describe('MessageList nested tool calls', () => {
       'This will rewind the conversation to before this turn. Files on disk will not be changed.',
     )).toBeTruthy()
     expect(within(dialog).queryByRole('button', { name: 'Undo current turn' })).toBeNull()
-    // History renders before its checkpoint cards reload. Hold that request so
-    // the assertion cannot accidentally pass on a stale card from the old turn.
+    // 历史先于检查点刷新；检查删掉的回合已不可撤销，保留的回合仍可阅读。
     let resolveCheckpointReload!: (response: Awaited<ReturnType<typeof sessionsApi.getTurnCheckpoints>>) => void
     const checkpointReload = new Promise<Awaited<ReturnType<typeof sessionsApi.getTurnCheckpoints>>>((resolve) => {
       resolveCheckpointReload = resolve
@@ -8574,7 +8748,10 @@ describe('MessageList nested tool calls', () => {
       expect(messages.some((message) => message.type === 'error')).toBe(false)
     })
     expect(screen.getByRole('link', { name: 'src/kept.ts' }).getAttribute('data-file-path')).toBe('src/kept.ts')
-    expect(screen.queryByText('kept.ts')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open src/kept.ts in workspace' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Roll back conversation' })).toBeNull()
+    const retainedCard = screen.getByRole('region', { name: 'Turn changed files' })
+    expect(within(retainedCard).getByRole<HTMLButtonElement>('button', { name: 'Rewind to before this turn' }).disabled).toBe(true)
     await act(async () => {
       resolveCheckpointReload({
         checkpoints: [
@@ -8594,8 +8771,8 @@ describe('MessageList nested tool calls', () => {
         ],
       })
     })
-    await expandChangedFileCards()
-    expect(await screen.findByText('kept.ts')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open src/kept.ts in workspace' })).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Undo current turn changes' }).disabled).toBe(false)
     expect(useChatStore.getState().sessions[ACTIVE_TAB]?.composerPrefill).toMatchObject({
       text: 'continue',
     })
@@ -10927,16 +11104,30 @@ describe('MessageList edit and resend', () => {
     expect(editButtonIn('Build a page').disabled).toBe(true)
   })
 
-  it('still edits a prompt past the checkpoint preview budget, rolling back the conversation only', async () => {
-    const { sendMessage } = setup(oneTurn, [])
-    vi.mocked(sessionsApi.getTurnCheckpoints).mockRejectedValue(new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' }))
+  it.each(['initial load', 'refresh with undo confirmation open'] as const)('still edits a prompt after the checkpoint preview exceeds budget on %s', async (phase) => {
+    const { sendMessage } = setup(oneTurn, [checkpoint('user-1', 0, 1, {
+      code: { available: true, filesChanged: ['app.ts'], insertions: 1, deletions: 0 },
+    })])
+    const getCheckpoints = vi.mocked(sessionsApi.getTurnCheckpoints)
+    const overBudget = new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' })
+    if (phase === 'initial load') getCheckpoints.mockRejectedValue(overBudget)
     // The dry run finds changed files; this mode has told the user file undo
     // is unavailable, so they must not be offered back.
     const rewind = vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(rewindResult({
       code: { available: true, filesChanged: ['app.ts'], insertions: 1, deletions: 0 },
     }))
     render(<MessageList />)
+    if (phase === 'refresh with undo confirmation open') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Undo current turn changes' }))
+      expect(screen.getByRole('dialog', { name: 'Undo current turn?' })).toBeTruthy()
+      getCheckpoints.mockRejectedValue(overBudget)
+      act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+        messages: oneTurn, historyMutationEpoch: 1,
+      }) } }))
+    }
     await screen.findByRole('region', { name: 'Workspace changed files' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(rewind).not.toHaveBeenCalled()
 
     typeAndSend(await openEditorFor('Build a page'), 'Build a landing page')
 
