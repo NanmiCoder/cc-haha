@@ -18,6 +18,13 @@ const mocks = vi.hoisted(() => ({
   wsSend: vi.fn(),
 }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../../api/sessions', () => ({
   sessionsApi: {
     getSlashCommands: mocks.getSlashCommands,
@@ -82,6 +89,7 @@ vi.mock('../../hooks/useMobileViewport', () => ({ useMobileViewport: () => false
 
 import { ApiError } from '../../api/client'
 import { ChatInput } from './ChatInput'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, getComposerText, setComposerText, stubRangeGeometry } from './composerTestUtils'
 import { useChatStore } from '../../stores/chatStore'
 import { useContextUsageStore } from '../../stores/contextUsageStore'
@@ -189,6 +197,7 @@ async function renderMemberComposer(member: TeamMember = baseMember) {
 describe('ChatInput in a team member conversation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     restoreRangeGeometry = stubRangeGeometry()
     useSettingsStore.setState({ locale: 'en', effortLevel: 'low' })
     useChatStore.setState(useChatStore.getInitialState(), true)

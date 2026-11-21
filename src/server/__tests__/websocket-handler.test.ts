@@ -3425,6 +3425,39 @@ describe('WebSocket handler session isolation', () => {
     }
   })
 
+  it('forwards fast_mode_status CLI system events to desktop clients as system_notification', async () => {
+    const sessionId = `fast-mode-status-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    let outputCallback: ((cliMsg: any) => void) | null = null
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallback = callback
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    expect(outputCallback).not.toBeNull()
+
+    outputCallback!({
+      type: 'system',
+      subtype: 'fast_mode_status',
+      fast_mode_state: 'off',
+      reason: 'org_disabled',
+      message: 'Fast mode has been disabled by your organization',
+    })
+    await Promise.resolve()
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'system_notification',
+      subtype: 'fast_mode_status',
+      message: 'Fast mode has been disabled by your organization',
+      data: {
+        fastModeState: 'off',
+        reason: 'org_disabled',
+      },
+    })
+  })
+
   it('keeps the Agent stop latch when a replacement user message is rejected', async () => {
     const sessionId = `stop-agent-invalid-message-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
@@ -4739,6 +4772,90 @@ describe('WebSocket handler session isolation', () => {
     }))
 
     expect(cancel).toHaveBeenCalledWith('question-activity', 'question-1')
+  })
+
+  it('cancels auto-answer and forwards materialized image contentBlocks on permission_response attachments', async () => {
+    const ws = makeClientSocket('question-attachments')
+    const cancel = spyOn(conversationService, 'cancelAutoQuestionAnswer').mockImplementation(() => {})
+    const contentBlocks = [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+      { type: 'text', text: '[Image source: /tmp/uploads/question-attachments/screen.png]' },
+    ]
+    const materialize = spyOn(conversationService, 'materializePermissionAttachments')
+      .mockResolvedValue(contentBlocks)
+    const respond = spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+
+    const attachments = [{ type: 'image' as const, name: 'screen.png', data: 'data:image/png;base64,aGVsbG8=' }]
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'question-img-1',
+      allowed: true,
+      updatedInput: { answers: { 'Which layout?': 'Compact' }, annotations: { 'Which layout?': { notes: 'See screenshot' } } },
+      attachments,
+    }))
+    await flushMicrotasks()
+
+    expect(cancel).toHaveBeenCalledWith('question-attachments', 'question-img-1')
+    expect(materialize).toHaveBeenCalledWith('question-attachments', attachments)
+    expect(respond).toHaveBeenCalledWith(
+      'question-attachments',
+      'question-img-1',
+      true,
+      undefined,
+      { answers: { 'Which layout?': 'Compact' }, annotations: { 'Which layout?': { notes: 'See screenshot' } } },
+      undefined,
+      undefined,
+      false,
+      contentBlocks,
+    )
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'question-img-2',
+      allowed: false,
+      denyMessage: '- "Which layout?"\n  Answer: Compact\n  Notes: Let us discuss',
+      attachments,
+    }))
+    await flushMicrotasks()
+
+    expect(respond).toHaveBeenCalledWith(
+      'question-attachments',
+      'question-img-2',
+      false,
+      undefined,
+      undefined,
+      '- "Which layout?"\n  Answer: Compact\n  Notes: Let us discuss',
+      undefined,
+      false,
+      contentBlocks,
+    )
+  })
+
+  it('sends ATTACHMENT_PROCESSING_FAILED and skips respondToPermission when permission attachment materialization fails', async () => {
+    const ws = makeClientSocket('question-attachments-fail')
+    const cancel = spyOn(conversationService, 'cancelAutoQuestionAnswer').mockImplementation(() => {})
+    spyOn(conversationService, 'materializePermissionAttachments').mockRejectedValue(
+      new Error('Failed to process attached images'),
+    )
+    const respond = spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response',
+      requestId: 'question-img-fail',
+      allowed: true,
+      updatedInput: { answers: { 'Which layout?': 'Compact' } },
+      attachments: [{ type: 'image', name: 'broken.png', data: 'data:image/png;base64,aGVsbG8=' }],
+    }))
+    await flushMicrotasks()
+
+    expect(cancel).toHaveBeenCalledWith('question-attachments-fail', 'question-img-fail')
+    expect(respond).not.toHaveBeenCalled()
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'error',
+      code: 'ATTACHMENT_PROCESSING_FAILED',
+      message: expect.stringContaining('Failed to process attached images'),
+      permissionRequestId: 'question-img-fail',
+    })
   })
 
   it('reports an unavailable session reference without starting or reopening its inbox', async () => {

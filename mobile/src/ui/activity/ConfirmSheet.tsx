@@ -15,6 +15,7 @@ export function ConfirmSheet({
   error,
   onConfirm,
   onClose,
+  inline,
 }: {
   visible: boolean
   title: string
@@ -27,10 +28,11 @@ export function ConfirmSheet({
   error?: string
   onConfirm(): void
   onClose(): void
+  inline?: boolean
 }) {
   const colors = useColors()
   return (
-    <Sheet visible={visible} onClose={onClose} title={title} dismissable={!busy}>
+    <Sheet inline={inline} visible={visible} onClose={onClose} title={title} dismissable={!busy}>
       <View style={{ gap: 6, paddingHorizontal: 4 }}>
         {subject ? (
           <Text style={{ fontSize: 16, lineHeight: 23, fontWeight: '500', color: colors.ink }}>

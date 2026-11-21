@@ -2177,17 +2177,30 @@ const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
 function finalizePermissionResponse(
   ws: SessionConnection,
   message: Extract<ClientMessage, { type: 'permission_response' }>,
+  contentBlocks?: Record<string, unknown>[],
 ): void {
   const { sessionId } = ws.data
-  const resolved = conversationService.respondToPermission(
-    sessionId,
-    message.requestId,
-    message.allowed,
-    message.rule,
-    message.updatedInput,
-    message.denyMessage,
-    message.permissionUpdates,
-  )
+  const resolved = contentBlocks && contentBlocks.length > 0
+    ? conversationService.respondToPermission(
+        sessionId,
+        message.requestId,
+        message.allowed,
+        message.rule,
+        message.updatedInput,
+        message.denyMessage,
+        message.permissionUpdates,
+        false,
+        contentBlocks,
+      )
+    : conversationService.respondToPermission(
+        sessionId,
+        message.requestId,
+        message.allowed,
+        message.rule,
+        message.updatedInput,
+        message.denyMessage,
+        message.permissionUpdates,
+      )
   if (resolved) {
     emitSessionTurnEvent({ type: 'output', sessionId, message: { type: 'control_response', request_id: message.requestId } })
     sendToSession(sessionId, {
@@ -2204,6 +2217,21 @@ function finalizePermissionResponse(
     })
   }
   console.log(`[WS] Permission response for ${message.requestId}: ${message.allowed}`)
+}
+
+async function handlePermissionResponseWithAttachments(
+  ws: SessionConnection,
+  message: Extract<ClientMessage, { type: 'permission_response' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  // Cancel any pending auto-answer timer before async image resizing/staging so
+  // the server cannot race ahead and auto-resolve the question while images load.
+  conversationService.cancelAutoQuestionAnswer(sessionId, message.requestId)
+  const contentBlocks = await conversationService.materializePermissionAttachments(
+    sessionId,
+    message.attachments,
+  )
+  finalizePermissionResponse(ws, message, contentBlocks)
 }
 
 function handlePermissionResponse(
@@ -2228,6 +2256,18 @@ function handlePermissionResponse(
         type: 'error',
         message: 'Failed to apply the execution model. The plan is still waiting for approval.',
         code: 'RUNTIME_CONFIG_INVALID',
+        permissionRequestId: message.requestId,
+      })
+    })
+    return
+  }
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    void handlePermissionResponseWithAttachments(ws, message).catch((err) => {
+      console.error(`[WS] Failed to process permission response attachments for ${sessionId}:`, err)
+      sendMessage(ws, {
+        type: 'error',
+        message: 'Failed to process attached images. The question is still waiting for your answer.',
+        code: 'ATTACHMENT_PROCESSING_FAILED',
         permissionRequestId: message.requestId,
       })
     })
@@ -4581,7 +4621,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               type: 'tool_result',
               toolUseId: scopedToolUseId(parentToolUseId, block.tool_use_id),
               ...(parentToolUseId ? { originalToolUseId: block.tool_use_id } : {}),
-              content: normalizeAskUserQuestionToolResult(block.content, cliMsg.toolUseResult),
+              content: normalizeAskUserQuestionToolResult(
+                block.content,
+                cliMsg.toolUseResult,
+                toolResultBlocks.length === 1 ? cliMsg.message.content : undefined,
+              ),
               isError: !!block.is_error,
               parentToolUseId,
               ...(singleToolDurationMs !== undefined ? { durationMs: singleToolDurationMs } : {}),
@@ -4898,7 +4942,16 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         cacheSessionInitMetadata(sessionId, cliMsg)
         const messages: ServerMessage[] = [
           // Send model info as a system notification, not a status change
-          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model, cwd: cliMsg.cwd } },
+          {
+            type: 'system_notification',
+            subtype: 'init',
+            message: `Model: ${cliMsg.model || 'unknown'}`,
+            data: {
+              model: cliMsg.model,
+              cwd: cliMsg.cwd,
+              ...(cliMsg.fast_mode_state !== undefined ? { fastModeState: cliMsg.fast_mode_state } : {}),
+            },
+          },
         ]
         // Send slash commands to frontend
         const cmds = sessionSlashCommands.get(sessionId)
@@ -4910,6 +4963,18 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           })
         }
         return messages
+      }
+      if (subtype === 'fast_mode_status') {
+        return [{
+          type: 'system_notification',
+          subtype: 'fast_mode_status',
+          message: typeof cliMsg.message === 'string' ? cliMsg.message : '',
+          data: {
+            fastModeState: cliMsg.fast_mode_state,
+            reason: cliMsg.reason,
+            ...(typeof cliMsg.reset_at === 'number' ? { resetAt: cliMsg.reset_at } : {}),
+          },
+        }]
       }
       if (subtype === 'memory_saved') {
         return [{

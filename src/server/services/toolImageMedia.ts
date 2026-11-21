@@ -101,20 +101,62 @@ export function stripToolUseResultImageData(value: unknown): unknown {
   return { ...record, file: rest }
 }
 
+function findLastToolResultUseId(content: unknown[]): string | null {
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i]
+    if (!block || typeof block !== 'object') continue
+    const value = block as Record<string, unknown>
+    if (value.type === 'tool_result' && typeof value.tool_use_id === 'string') {
+      return value.tool_use_id
+    }
+  }
+  return null
+}
+
+function parseDataUrlImage(dataUrl: string, fallbackMediaType?: string): ToolImage | null {
+  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i)
+  if (match) {
+    return { mediaType: match[1]!.toLowerCase(), data: match[2]! }
+  }
+  if (fallbackMediaType && fallbackMediaType.startsWith('image/') && dataUrl.length > 0) {
+    return { mediaType: fallbackMediaType.toLowerCase(), data: dataUrl }
+  }
+  return null
+}
+
 /** History message projection for `media=ref` readers. */
 export function projectMessageMedia<T extends { content?: unknown; toolUseResult?: unknown }>(message: T, sessionId: string): T {
   let next = message
   if (Array.isArray(message.content)) {
+    const siblingAnchorToolUseId = findLastToolResultUseId(message.content)
+    let anchorImageCount = 0
     let changed = false
-    const content = message.content.map((block: unknown) => {
+    const projectedBlocks = message.content.map((block: unknown) => {
       if (!block || typeof block !== 'object') return block
       const value = block as Record<string, unknown>
-      if (value.type !== 'tool_result' || typeof value.tool_use_id !== 'string') return block
-      const projected = projectToolResultContent(value.content, sessionId, value.tool_use_id)
-      if (projected === value.content) return block
-      changed = true
-      return { ...value, content: projected }
+      if (value.type === 'tool_result' && typeof value.tool_use_id === 'string') {
+        if (value.tool_use_id === siblingAnchorToolUseId) {
+          anchorImageCount = toolResultImages(value.content).length
+        }
+        const projected = projectToolResultContent(value.content, sessionId, value.tool_use_id)
+        if (projected === value.content) return block
+        changed = true
+        return { ...value, content: projected }
+      }
+      return block
     })
+    let siblingIndex = anchorImageCount
+    const content = siblingAnchorToolUseId
+      ? projectedBlocks.map((block: unknown) => {
+          const image = base64Image(block)
+          if (!image) return block
+          changed = true
+          return {
+            ...(block as Record<string, unknown>),
+            source: imageRef(image, toolImageUrl(sessionId, siblingAnchorToolUseId, siblingIndex++)),
+          }
+        })
+      : projectedBlocks
     if (changed) next = { ...next, content }
   }
   if ('toolUseResult' in message) {
@@ -133,9 +175,16 @@ export function measureEntryWithMediaRefs(entry: Record<string, unknown>): numbe
   let bytes = Buffer.byteLength(JSON.stringify(entry))
   const content = (entry.message as { content?: unknown } | undefined)?.content
   if (Array.isArray(content)) {
+    const hasToolResult = findLastToolResultUseId(content) !== null
     for (const block of content) {
-      if (!block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_result') continue
-      for (const image of toolResultImages((block as { content?: unknown }).content)) bytes -= image.data.length - REF_BYTES
+      if (!block || typeof block !== 'object') continue
+      const typed = block as { type?: unknown; content?: unknown }
+      if (typed.type === 'tool_result') {
+        for (const image of toolResultImages(typed.content)) bytes -= image.data.length - REF_BYTES
+      } else if (hasToolResult) {
+        const siblingImage = base64Image(block)
+        if (siblingImage) bytes -= siblingImage.data.length - REF_BYTES
+      }
     }
   }
   const file = (entry.toolUseResult as { file?: { base64?: unknown } } | undefined)?.file
@@ -157,18 +206,18 @@ const liveKey = (sessionId: string, toolUseId: string) => `${sessionId}\n${toolU
  * A live reference can be fetched before the CLI's transcript line is flushed,
  * and subagent results never reach the root transcript; keep recent ones.
  */
-export function rememberToolResultImages(sessionId: string, toolUseId: string, content: unknown): void {
-  const images = toolResultImages(content).slice(0, MAX_IMAGES_PER_RESULT)
-  if (!images.length) return
+function cacheLiveImages(sessionId: string, toolUseId: string, images: ToolImage[]): void {
+  const limited = images.slice(0, MAX_IMAGES_PER_RESULT)
+  if (!limited.length) return
   const key = liveKey(sessionId, toolUseId)
   const previous = liveImages.get(key)
   if (previous) {
     liveImages.delete(key)
     liveBytes -= previous.bytes
   }
-  const bytes = images.reduce((sum, image) => sum + image.data.length, 0)
+  const bytes = limited.reduce((sum, image) => sum + image.data.length, 0)
   if (bytes > LIVE_CACHE_BYTES) return
-  liveImages.set(key, { images, bytes })
+  liveImages.set(key, { images: limited, bytes })
   liveBytes += bytes
   for (const [oldest, entry] of liveImages) {
     if (liveBytes <= LIVE_CACHE_BYTES) break
@@ -177,12 +226,43 @@ export function rememberToolResultImages(sessionId: string, toolUseId: string, c
   }
 }
 
+export function rememberToolResultImages(sessionId: string, toolUseId: string, content: unknown): void {
+  cacheLiveImages(sessionId, toolUseId, toolResultImages(content))
+}
+
 /** Project a live `tool_result` event for a `media=ref` client. */
 export function projectLiveToolResult<T extends { toolUseId: string; content: unknown }>(message: T, sessionId: string): T {
   const content = projectToolResultContent(message.content, sessionId, message.toolUseId)
-  if (content === message.content) return message
-  rememberToolResultImages(sessionId, message.toolUseId, message.content)
-  return { ...message, content }
+  if (content !== message.content) {
+    rememberToolResultImages(sessionId, message.toolUseId, message.content)
+    return { ...message, content }
+  }
+  // Structured AskUserQuestion results can carry inline base64 fallback images
+  // when no staged path exists; project those to refs as well.
+  if (message.content && typeof message.content === 'object' && !Array.isArray(message.content)) {
+    const record = message.content as Record<string, unknown>
+    if (Array.isArray(record.attachments) && record.attachments.length > 0) {
+      const collected: ToolImage[] = []
+      let changed = false
+      const projectedAttachments = record.attachments.map((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+        const att = entry as Record<string, unknown>
+        if (att.type !== 'image' || typeof att.data !== 'string') return entry
+        const parsed = parseDataUrlImage(att.data, typeof att.mimeType === 'string' ? att.mimeType : undefined)
+        if (!parsed) return entry
+        const url = toolImageUrl(sessionId, message.toolUseId, collected.length)
+        collected.push(parsed)
+        changed = true
+        const { data: _omitted, ...rest } = att
+        return { ...rest, previewUrl: url }
+      })
+      if (changed) {
+        cacheLiveImages(sessionId, message.toolUseId, collected)
+        return { ...message, content: { ...record, attachments: projectedAttachments } }
+      }
+    }
+  }
+  return message
 }
 
 async function readTranscriptToolImages(filePath: string, toolUseId: string): Promise<ToolImage[] | null> {
@@ -197,9 +277,18 @@ async function readTranscriptToolImages(filePath: string, toolUseId: string): Pr
       try { entry = JSON.parse(line) } catch { continue }
       const content = entry.message?.content
       if (!Array.isArray(content)) continue
+      const siblingAnchorToolUseId = findLastToolResultUseId(content)
       for (const block of content) {
         const value = block as Record<string, unknown> | null
-        if (value?.type === 'tool_result' && value.tool_use_id === toolUseId) return toolResultImages(value.content)
+        if (value?.type === 'tool_result' && value.tool_use_id === toolUseId) {
+          const inner = toolResultImages(value.content)
+          if (siblingAnchorToolUseId !== toolUseId) return inner
+          const siblings = content.flatMap((sibling) => {
+            const image = base64Image(sibling)
+            return image ? [image] : []
+          })
+          return siblings.length > 0 ? [...inner, ...siblings] : inner
+        }
       }
     }
     return null

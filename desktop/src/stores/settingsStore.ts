@@ -67,10 +67,12 @@ type SettingsStore = {
   currentModel: ModelInfo | null
   effortLevel: EffortLevel
   thinkingEnabled: boolean
+  fastMode: boolean
   workflowKeywordTriggerEnabled: boolean
   nextPromptSuggestionsEnabled: boolean
   maxOutputTokensEscalationMode: 'auto' | 'enabled' | 'disabled'
   leanModeEnabled: boolean
+  includeCyberRiskInstruction: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
   autoDreamEnabled: boolean
@@ -118,10 +120,12 @@ type SettingsStore = {
   setModel: (modelId: string) => Promise<void>
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
+  setFastMode: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
   setMaxOutputTokensEscalationMode: (mode: 'auto' | 'enabled' | 'disabled') => Promise<void>
   setLeanModeEnabled: (enabled: boolean) => Promise<void>
+  setIncludeCyberRiskInstruction: (included: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
@@ -220,10 +224,17 @@ applyDocumentLocale(initialLocale)
 let leanModeSaveVersion = 0
 let leanModePendingSaves = 0
 let leanModeSaveQueue: Promise<void> = Promise.resolve()
+let cyberRiskSaveVersion = 0
+let cyberRiskPendingSaves = 0
+let cyberRiskSaveQueue: Promise<void> = Promise.resolve()
 let outputEscalationSaveVersion = 0
 let outputEscalationPendingSaves = 0
 let outputEscalationSaveQueue: Promise<void> = Promise.resolve()
 let lastPersistedOutputEscalationMode: SettingsStore['maxOutputTokensEscalationMode'] = 'auto'
+let fastModeSaveVersion = 0
+let fastModePendingSaves = 0
+let fastModeSaveQueue: Promise<void> = Promise.resolve()
+let lastPersistedFastMode = false
 let autoQuestionUpdateQueue: Promise<unknown> = Promise.resolve()
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -231,10 +242,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   currentModel: null,
   effortLevel: 'low',
   thinkingEnabled: true,
+  fastMode: false,
   workflowKeywordTriggerEnabled: true,
   nextPromptSuggestionsEnabled: false,
   maxOutputTokensEscalationMode: 'auto',
   leanModeEnabled: false,
+  includeCyberRiskInstruction: true,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
   autoDreamEnabled: false,
@@ -284,10 +297,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   fetchAll: async () => {
     const leanModeVersionAtStart = leanModeSaveVersion
     const leanModePendingAtStart = leanModePendingSaves > 0
+    const cyberRiskVersionAtStart = cyberRiskSaveVersion
+    const cyberRiskPendingAtStart = cyberRiskPendingSaves > 0
     const outputEscalationVersionAtStart = outputEscalationSaveVersion
     const outputEscalationPendingAtStart = outputEscalationPendingSaves > 0
     const autoUpdateVersionAtStart = autoUpdateSaveVersion
     const autoUpdateSavePendingAtStart = autoUpdatePendingSaves > 0
+    const fastModeVersionAtStart = fastModeSaveVersion
+    const fastModePendingAtStart = fastModePendingSaves > 0
     set({ isLoading: true, error: null })
     try {
       const previousH5Access = get().h5Access
@@ -323,6 +340,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             ? userSettings.maxOutputTokensEscalationMode
             : 'auto'
       }
+      const hydrateFastMode = !fastModePendingAtStart && fastModePendingSaves === 0 &&
+        fastModeVersionAtStart === fastModeSaveVersion
+      if (hydrateFastMode) {
+        lastPersistedFastMode = userSettings.fastMode === true
+      }
       // Nothing to do for the theme here: uiStore already applied it at
       // startup, and re-applying would re-persist and re-report it on every
       // provider switch.
@@ -334,6 +356,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         currentModel: model,
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
+        fastMode: hydrateFastMode ? lastPersistedFastMode : get().fastMode,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         // Opt-in: every suggestion is an extra model request.
         nextPromptSuggestionsEnabled: userSettings.nextPromptSuggestionsEnabled === true,
@@ -343,6 +366,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         // Forward read migration: older settings leave the experiment disabled.
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
+        // Forward read migration: older settings keep built-in cyber-risk instructions enabled.
+        includeCyberRiskInstruction: !cyberRiskPendingAtStart && cyberRiskPendingSaves === 0 && cyberRiskVersionAtStart === cyberRiskSaveVersion
+          ? userSettings.includeCyberRiskInstruction !== false : get().includeCyberRiskInstruction,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
         // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
         maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
@@ -423,6 +449,34 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
+  setFastMode: async (enabled) => {
+    if (fastModePendingSaves === 0) {
+      lastPersistedFastMode = get().fastMode
+    }
+    const saveVersion = ++fastModeSaveVersion
+    fastModePendingSaves += 1
+    set({ fastMode: enabled })
+    const save = fastModeSaveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await settingsApi.updateUser({ fastMode: enabled ? true : null })
+          lastPersistedFastMode = enabled
+        } catch (error) {
+          if (saveVersion === fastModeSaveVersion) {
+            set({ fastMode: lastPersistedFastMode })
+          }
+          throw error
+        }
+      })
+    fastModeSaveQueue = save
+    try {
+      await save
+    } finally {
+      fastModePendingSaves -= 1
+    }
+  },
+
   setWorkflowKeywordTriggerEnabled: async (enabled) => {
     const prev = get().workflowKeywordTriggerEnabled
     set({ workflowKeywordTriggerEnabled: enabled })
@@ -482,6 +536,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await save
     } finally {
       leanModePendingSaves -= 1
+    }
+  },
+
+  setIncludeCyberRiskInstruction: async (included) => {
+    cyberRiskSaveVersion += 1
+    cyberRiskPendingSaves += 1
+    const save = cyberRiskSaveQueue.then(async () => {
+      await settingsApi.updateUser({ includeCyberRiskInstruction: included })
+      set({ includeCyberRiskInstruction: included })
+    })
+    cyberRiskSaveQueue = save.catch(() => {})
+    try {
+      await save
+    } finally {
+      cyberRiskPendingSaves -= 1
     }
   },
 

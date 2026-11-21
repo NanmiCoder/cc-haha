@@ -1,7 +1,7 @@
 import { MODEL_SLOTS, type ModelSlot } from '@/lib/providerModelContext'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Check, ChevronDown } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Zap } from 'lucide-react'
 import {
   COMPOSER_MENU_ITEM,
   COMPOSER_MENU_ITEM_ACTIVE,
@@ -57,6 +57,10 @@ import {
   normalizeModelReasoningEffort,
   resolveModelReasoningProfile,
 } from '../../../../src/shared/modelReasoning'
+import {
+  isClaudeFamilyModelId,
+  isClaudeFastModeSupportedModel,
+} from '../../../../src/shared/claudeFastMode'
 
 export type ModelProviderChoice = {
   providerId: string | null
@@ -347,8 +351,10 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     currentModel: storeModel,
     availableModels,
     effortLevel,
+    fastMode,
     activeProviderName,
     setModel,
+    setFastMode,
   } = useSettingsStore()
   const {
     providers,
@@ -698,6 +704,24 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     : EFFORT_OPTIONS.filter((option) => supportedRuntimeEfforts.includes(option.value))
   const showEffortPill = canEditRuntimeEffort && !!selectedRuntimeEffort && runtimeEffortOptions.length > 0
   const showOpenAIFastMode = activeRuntimeSelection?.providerId === OPENAI_OFFICIAL_PROVIDER_ID && lockedProviderId === undefined
+  const isClaudeOfficialSelection = activeRuntimeSelection?.providerId === null
+  const isAnthropicSavedProvider =
+    selectedRuntimeProvider !== null &&
+    (selectedRuntimeProvider.apiFormat ?? 'anthropic') === 'anthropic' &&
+    selectedRuntimeProvider.disableExperimentalBetas !== true
+  const claudeModelSupportsFast = isClaudeFastModeSupportedModel(activeRuntimeSelection?.modelId)
+  const isClaudeFamilySelection = isClaudeFamilyModelId(activeRuntimeSelection?.modelId)
+  // Gate on `runtimeKey !== undefined` so global fastMode shows in session/draft/side-chat
+  // composers (including Side Chat where provider is locked) while staying out of controlled
+  // pickers (Team Member, Agent Manager, Delegation).
+  const showClaudeFastMode =
+    runtimeKey !== undefined &&
+    !showOpenAIFastMode &&
+    activeRuntimeSelection !== null &&
+    (isClaudeOfficialSelection ||
+      (isAnthropicSavedProvider && (claudeModelSupportsFast || isClaudeFamilySelection)))
+  const claudeFastModeSupported = showClaudeFastMode && claudeModelSupportsFast
+  const claudeFastModeActive = claudeFastModeSupported && fastMode
 
   const navigateToProviderSettings = useCallback(() => {
     setOpen(false)
@@ -829,6 +853,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     handleRuntimeSelect({ ...activeRuntimeSelection, openAIFastMode: enabled })
   }
 
+  const handleClaudeFastModeChange = (enabled: boolean) => {
+    if (!claudeFastModeSupported) return
+    void setFastMode(enabled).catch(() => {
+      useUIStore.getState().addToast({ type: 'error', message: t('slashCmd.fast.saveFailed') })
+    })
+  }
+
   const hasMatchingModels = isRuntimeScoped
     ? filteredProviderChoices.length > 0
     : filteredAvailableModels.length > 0
@@ -930,6 +961,20 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                                   ? effortLevel
                                   : model.defaultReasoningEffort ?? supportedEfforts[0])
                               : undefined
+                          const wasClaudeFastSupported = claudeFastModeSupported
+                          const nextProviderIsAnthropicEligible =
+                            choice.providerId === null ||
+                            (selectedProvider !== undefined &&
+                              (selectedProvider.apiFormat ?? 'anthropic') === 'anthropic' &&
+                              selectedProvider.disableExperimentalBetas !== true)
+                          const nextClaudeFastSupported =
+                            nextProviderIsAnthropicEligible && isClaudeFastModeSupportedModel(model.id)
+                          if (fastMode && wasClaudeFastSupported && !nextClaudeFastSupported) {
+                            useUIStore.getState().addToast({
+                              type: 'info',
+                              message: t('model.claudeFastModeAutoDegraded', { model: model.name }),
+                            })
+                          }
                           handleRuntimeSelect({
                             providerId: choice.providerId,
                             modelId: model.id,
@@ -1130,6 +1175,40 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="flex-shrink-0" />
           </button>
         )}
+
+        {appearance === 'toolbar' && showClaudeFastMode && (
+          <button
+            type="button"
+            data-testid="claude-fast-mode-toggle"
+            disabled={disabled || !claudeFastModeSupported}
+            aria-pressed={claudeFastModeActive}
+            aria-label={
+              claudeFastModeSupported
+                ? claudeFastModeActive
+                  ? t('model.claudeFastModeActiveTitle')
+                  : t('model.claudeFastModeInactiveTitle')
+                : t('model.claudeFastModeUnsupported')
+            }
+            title={
+              claudeFastModeSupported
+                ? claudeFastModeActive
+                  ? t('model.claudeFastModeActiveTitle')
+                  : t('model.claudeFastModeInactiveTitle')
+                : t('model.claudeFastModeUnsupported')
+            }
+            onClick={() => handleClaudeFastModeChange(!fastMode)}
+            className={`mr-1 my-auto inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] text-[11px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-45 ${
+              isMobileBrowser ? 'min-h-11 px-2.5' : 'h-[20px] px-1.5'
+            } ${
+              claudeFastModeActive
+                ? 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
+                : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-text-primary)]'
+            }`}
+          >
+            <Zap size={11} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+            {!compact && <span>{t('model.claudeFastModeShort')}</span>}
+          </button>
+        )}
       </div>
       {dropdown}
       {canEditRuntimeEffort && selectedRuntimeEffort && (
@@ -1144,6 +1223,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           {...(showOpenAIFastMode ? {
             fastMode: activeRuntimeSelection?.openAIFastMode === true,
             onFastModeChange: handleOpenAIFastModeChange,
+          } : showClaudeFastMode ? {
+            fastMode: claudeFastModeActive,
+            onFastModeChange: handleClaudeFastModeChange,
+            fastModeLabel: t('model.claudeFastMode'),
+            fastModeDescription: claudeFastModeSupported
+              ? t('model.claudeFastModeDescription')
+              : t('model.claudeFastModeUnsupported'),
+            fastModeDisabled: !claudeFastModeSupported,
           } : {})}
           onClose={() => setEffortOpen(false)}
         />

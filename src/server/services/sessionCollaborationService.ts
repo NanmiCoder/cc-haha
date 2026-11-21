@@ -578,24 +578,24 @@ export class SessionCollaborationService {
     }
   }
 
-  async list(options: { query?: string; limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<unknown> {
+  async list(options: { query?: string; limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<{ sessions: Array<Record<string, unknown> & { state: CollaborationState }> }> {
     options.signal?.throwIfAborted()
-    const result = await this.deps.sessions.list({ ...options, limit: Math.min(100, Math.max(1, options.limit ?? 30)), offset: Math.max(0, options.offset ?? 0) })
+    const page = await this.deps.sessions.list({ ...options, limit: Math.min(100, Math.max(1, options.limit ?? 30)), offset: Math.max(0, options.offset ?? 0) }) as { sessions: Array<Record<string, unknown>> }
+    await this.ready
+    await this.tail
     options.signal?.throwIfAborted()
-    return result
+    return { ...page, sessions: page.sessions.map(session => ({
+      ...session, state: this.store.members[String(session.sessionId ?? session.id)]?.state ?? 'idle',
+    })) }
   }
 
   async candidates(query?: string, signal?: AbortSignal): Promise<{ sessions: Array<{ sessionId: string; title: string; cwd: string; status: string; updatedAt: string }> }> {
-    const result = await this.list({ query, signal }) as { sessions?: Array<Record<string, unknown>> }
-    await this.ready
-    await this.tail
+    const { sessions } = await this.list({ query, signal })
     signal?.throwIfAborted()
-    // Suggestions need only a status lookup for the returned page, not a clone
-    // of every collaboration message and member in the application.
-    return { sessions: (result.sessions ?? []).map(session => ({
+    return { sessions: sessions.map(session => ({
       sessionId: String(session.sessionId ?? session.id), title: String(session.title ?? ''),
       cwd: String(session.cwd ?? session.workDir ?? session.projectPath ?? ''),
-      status: this.store.members[String(session.sessionId ?? session.id)]?.state ?? 'idle',
+      status: session.state,
       updatedAt: String(session.updatedAt ?? session.modifiedAt ?? ''),
     })) }
   }
@@ -742,7 +742,7 @@ export class SessionCollaborationService {
     return this.describeCreation({ ...created, messageId: message.id, title: collaborationSessionTitle(input) })
   }
 
-  async send(callerSessionId: string, targetSessionId: string, content: string, messageId?: string): Promise<CollaborationMessage> {
+  async send(callerSessionId: string, targetSessionId: string, content: string, messageId?: string): Promise<CollaborationMessage & { targetState: CollaborationState }> {
     if (!content?.trim()) throw ApiError.badRequest('content is required')
     if (callerSessionId === targetSessionId) throw ApiError.badRequest('A session cannot send a message to itself')
     if (!await this.deps.sessions.exists(targetSessionId)) throw ApiError.notFound('Target session not found')
@@ -754,7 +754,11 @@ export class SessionCollaborationService {
       return message
     })
     await this.pump()
-    return (await this.status()).messages.find(item => item.id === message.id)!
+    await this.tail
+    return structuredClone({
+      ...this.store.messages.find(item => item.id === message.id)!,
+      targetState: this.store.members[targetSessionId]!.state,
+    })
   }
 
   async status(sessionIds?: string[]): Promise<CollaborationSnapshot> {

@@ -8,6 +8,11 @@ import {
   splitTextByFilePaths,
 } from './filePathBoundary'
 import { isGeneratedArtifactFile, isOutputResourceFile, isShellProducedDeliverable } from './fileCapabilities'
+import {
+  isLocalAudioName,
+  isMarkdownAudioDestination,
+  normalizeMarkdownImageDestination,
+} from './markdownImages'
 import { classifyPreviewLink } from './previewLinkRouter'
 
 export type AssistantOutputTargetKind =
@@ -185,7 +190,10 @@ export function collectAssistantOutputMentions(
       continue
     }
 
-    if (!authoredTitle && !(match.isImage && fileTarget?.kind === 'image')) {
+    // Keep audio embeds in mentions so useWorkspacePathAliases can probe and
+    // repair workspace-prefixed paths (e.g. `project/outputs/clip.wav`); the
+    // message component suppresses duplicate output cards for inline players.
+    if (!authoredTitle && !(match.isImage && (fileTarget?.kind === 'image' || isLocalAudioName(filePath)))) {
       continue
     }
 
@@ -436,6 +444,57 @@ export function extractMarkdownImageSources(content: string): string[] {
   return extractMarkdownLinks(content)
     .filter((match) => match.isImage && !isInCodeBlock(match.start, codeBlocks))
     .map((match) => match.href)
+}
+
+const HTML_AUDIO_BLOCK_RE = /<audio\b[^>]*>[\s\S]*?<\/audio>|<audio\b[^>]*>/gi
+const HTML_TAG_SRC_RE = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i
+const HTML_SOURCE_TAG_RE = /<source\b[^>]*>/gi
+
+/**
+ * Local audio sources rendered inline by MarkdownRenderer — both `![label](clip.wav)`
+ * embeds and raw `<audio>` / `<audio><source>` tags outside code blocks/spans — so
+ * callers can suppress duplicate output cards without hiding audio mentions from
+ * workspace-alias resolution.
+ */
+export function extractMarkdownAudioSources(content: string): string[] {
+  const codeBlocks = extractFencedCodeBlocks(content)
+  const codeSpans = extractInlineCodeSpans(content, codeBlocks)
+  const sources: string[] = []
+
+  for (const match of extractMarkdownLinks(content)) {
+    if (!match.isImage || isInCodeBlock(match.start, codeBlocks)) continue
+    const normalized = normalizeMarkdownImageDestination(match.href)
+    if (isMarkdownAudioDestination(normalized)) {
+      sources.push(match.href)
+    }
+  }
+
+  if (/<audio\b/i.test(content)) {
+    for (const match of content.matchAll(HTML_AUDIO_BLOCK_RE)) {
+      const start = match.index ?? 0
+      if (isInCodeBlock(start, codeBlocks)) continue
+      if (codeSpans.some((span) => start >= span.start && start < span.end)) continue
+      const block = match[0]
+      const openEnd = block.indexOf('>')
+      const openTag = openEnd === -1 ? block : block.slice(0, openEnd + 1)
+      const directSrc = HTML_TAG_SRC_RE.exec(openTag)
+      const audioSrc = directSrc?.[1] ?? directSrc?.[2] ?? directSrc?.[3]
+      if (audioSrc && isMarkdownAudioDestination(normalizeMarkdownImageDestination(audioSrc))) {
+        sources.push(audioSrc)
+        continue
+      }
+      for (const sourceTag of block.matchAll(HTML_SOURCE_TAG_RE)) {
+        const nestedSrc = HTML_TAG_SRC_RE.exec(sourceTag[0])
+        const candidate = nestedSrc?.[1] ?? nestedSrc?.[2] ?? nestedSrc?.[3]
+        if (candidate && isMarkdownAudioDestination(normalizeMarkdownImageDestination(candidate))) {
+          sources.push(candidate)
+          break
+        }
+      }
+    }
+  }
+
+  return sources
 }
 
 /**

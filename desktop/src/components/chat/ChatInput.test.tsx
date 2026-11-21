@@ -56,6 +56,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/workspace/openSideChat', () => ({ openSideChat: mocks.sideOpen }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../../api/sessions', () => ({
   sessionsApi: {
     create: mocks.create,
@@ -155,6 +162,7 @@ vi.mock('../controls/ModelSelector', async () => {
 })
 
 import { ChatInput } from './ChatInput'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, getComposerText, getComposerView, setComposerSelection, setComposerText } from './composerTestUtils'
 import { useVoiceInputStore } from '../../stores/voiceInputStore'
 import { useChatStore, type RepositoryLaunchDraftState } from '../../stores/chatStore'
@@ -257,6 +265,7 @@ describe('ChatInput file mentions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     localStorage.removeItem(RECENT_SKILLS_STORAGE_KEY)
     localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
     useSideChatStore.setState({ entries: {} })

@@ -1774,7 +1774,13 @@ export function DiffView({
 
 /* ───────────── 弹层 ───────────── */
 
-/** 底部弹层：抓手、圆角 28、点遮罩关闭；内容超高时滚动。 */
+/**
+ * 底部弹层：抓手、圆角 28、点遮罩关闭；内容超高时滚动。
+ * 已处于全屏 Modal 内部时传 `inline`，用绝对定位覆盖层代替嵌套原生 Modal，
+ * 避免 iOS 在父子 Modal 同帧关闭或卸载时丢弃父 Modal 的收起、留下黑屏。
+ * 约定：`inline` 必须挂在外层 `<KeyboardViewport>` 与 `<SafeAreaView>` 之外（作为兄弟节点，
+ * 避免双倍键盘避让与遮罩被安全区裁切），并由外层 `<Modal onRequestClose>` 先收起覆盖层（遵守 `dismissable`）。
+ */
 export function Sheet({
   visible,
   onClose,
@@ -1786,6 +1792,7 @@ export function Sheet({
   dismissable = true,
   footer,
   background,
+  inline = false,
 }: React.PropsWithChildren<{
   visible: boolean
   onClose(): void
@@ -1796,67 +1803,101 @@ export function Sheet({
   dismissable?: boolean
   footer?: React.ReactNode
   background?: string
+  inline?: boolean
 }>) {
   const colors = useColors()
   const insets = useSafeAreaInsets()
   const close = () => {
     if (dismissable) onClose()
   }
+  const latestClose = React.useRef(close)
+  useEffect(() => {
+    latestClose.current = close
+  })
+  useEffect(() => {
+    if (!inline || !visible || Platform.OS !== 'web' || typeof document === 'undefined') return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      latestClose.current()
+    }
+    document.addEventListener('keyup', onKeyUp, true)
+    return () => {
+      document.removeEventListener('keyup', onKeyUp, true)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [inline, visible])
+  const content = (
+    <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="关闭"
+        onPress={close}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
+      />
+      <View
+        accessibilityViewIsModal
+        role="dialog"
+        aria-modal
+        aria-label={title}
+        // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
+        onAccessibilityEscape={close}
+        style={{
+          maxHeight: '92%',
+          flexShrink: 1,
+          backgroundColor: background ?? colors.sheet,
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          boxShadow: '0 -8px 30px rgba(0,0,0,0.12)',
+          paddingBottom: footer ? 0 : Math.max(insets.bottom, 16),
+        }}
+      >
+        <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: title || left || right ? 2 : 8 }}>
+          <View style={{ width: 36, height: 5, borderRadius: 3, backgroundColor: colors.chevron, opacity: 0.6 }} />
+        </View>
+        {(title || left || right) && (
+          <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
+            <View style={{ flex: 1, alignItems: 'flex-start' }}>{left}</View>
+            {title ? (
+              <Text numberOfLines={1} style={[type.nav, { color: colors.ink, flexShrink: 1, textAlign: 'center' }]}>
+                {title}
+              </Text>
+            ) : null}
+            <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
+          </View>
+        )}
+        {scroll ? (
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0, flexShrink: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 12 }}
+          >
+            {children}
+          </ScrollView>
+        ) : (
+          <View style={{ paddingHorizontal: 16, gap: 12, flexShrink: 1, minHeight: 0 }}>{children}</View>
+        )}
+        {footer ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) }}>
+            {footer}
+          </View>
+        ) : null}
+      </View>
+    </KeyboardViewport>
+  )
+  if (inline) {
+    if (!visible) return null
+    return (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
+        {content}
+      </View>
+    )
+  }
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
-      <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="关闭"
-          onPress={close}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
-        />
-        <View
-          accessibilityViewIsModal
-          // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
-          onAccessibilityEscape={close}
-          style={{
-            maxHeight: '92%',
-            flexShrink: 1,
-            backgroundColor: background ?? colors.sheet,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            boxShadow: '0 -8px 30px rgba(0,0,0,0.12)',
-            paddingBottom: footer ? 0 : Math.max(insets.bottom, 16),
-          }}
-        >
-          <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: title || left || right ? 2 : 8 }}>
-            <View style={{ width: 36, height: 5, borderRadius: 3, backgroundColor: colors.chevron, opacity: 0.6 }} />
-          </View>
-          {(title || left || right) && (
-            <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
-              <View style={{ flex: 1, alignItems: 'flex-start' }}>{left}</View>
-              {title ? (
-                <Text numberOfLines={1} style={[type.nav, { color: colors.ink, flexShrink: 1, textAlign: 'center' }]}>
-                  {title}
-                </Text>
-              ) : null}
-              <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
-            </View>
-          )}
-          {scroll ? (
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              style={{ flexGrow: 0, flexShrink: 1 }}
-              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 12 }}
-            >
-              {children}
-            </ScrollView>
-          ) : (
-            <View style={{ paddingHorizontal: 16, gap: 12, flexShrink: 1, minHeight: 0 }}>{children}</View>
-          )}
-          {footer ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) }}>
-              {footer}
-            </View>
-          ) : null}
-        </View>
-      </KeyboardViewport>
+      {content}
     </Modal>
   )
 }
@@ -1901,6 +1942,9 @@ export function PageSheet({
   right,
   children,
   background,
+  overlay,
+  overlayOpen = false,
+  onOverlayClose,
 }: React.PropsWithChildren<{
   visible: boolean
   onClose(): void
@@ -1908,31 +1952,48 @@ export function PageSheet({
   left?: React.ReactNode
   right?: React.ReactNode
   background?: string
+  /** 叠在本页之上的内联子弹层（`<Sheet inline>`），避免嵌套原生 Modal。 */
+  overlay?: React.ReactNode
+  overlayOpen?: boolean
+  onOverlayClose?(): void
 }>) {
   const colors = useColors()
+  const surface = background ?? colors.bg
+  const webInert = (Platform.OS === 'web' && overlayOpen ? { inert: true } : {}) as object
   return (
     <Modal
       visible={visible}
       animationType="slide"
+      backdropColor={surface}
       presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (overlayOpen && onOverlayClose) onOverlayClose()
+        else onClose()
+      }}
     >
-      <SafeAreaView
-        edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
-        style={[
-          { flex: 1, backgroundColor: background ?? colors.bg },
-          simulatedPhoneChrome && { paddingTop: 54 },
-        ]}
-      >
-        <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
-          <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="取消" onPress={onClose} />}</View>
-          <Text numberOfLines={1} style={[type.nav, { color: colors.ink }]}>
-            {title}
-          </Text>
-          <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
-        </View>
-        {children}
-      </SafeAreaView>
+      <View style={{ flex: 1, backgroundColor: surface }}>
+        <SafeAreaView
+          edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
+          accessibilityElementsHidden={overlayOpen}
+          importantForAccessibility={overlayOpen ? 'no-hide-descendants' : 'auto'}
+          aria-hidden={overlayOpen}
+          {...webInert}
+          style={[
+            { flex: 1, backgroundColor: surface },
+            simulatedPhoneChrome && { paddingTop: 54 },
+          ]}
+        >
+          <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
+            <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="取消" onPress={onClose} />}</View>
+            <Text numberOfLines={1} style={[type.nav, { color: colors.ink }]}>
+              {title}
+            </Text>
+            <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
+          </View>
+          {children}
+        </SafeAreaView>
+        {overlay}
+      </View>
     </Modal>
   )
 }

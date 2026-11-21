@@ -46,6 +46,19 @@ export type MentionComposerHandle = {
   /** Whether the editable element currently holds keyboard focus. */
   hasFocus: () => boolean
   /**
+   * Whether the collapsed caret is on the first visual/logical line (`'up'`)
+   * or last visual/logical line (`'down'`), so ArrowUp/ArrowDown cannot move
+   * further inside the document. Returns false for range selections.
+   */
+  isSelectionAtBoundary: (direction: 'up' | 'down') => boolean
+  /**
+   * Synchronously replaces the document content and places the caret at the
+   * requested boundary/offset without firing `onChange`. Used by prompt
+   * history navigation so rapid ArrowUp/ArrowDown presses see the updated
+   * caret position immediately.
+   */
+  replaceContent: (text: string, mentions: ComposerMention[], cursor: 'start' | 'end' | number) => void
+  /**
    * Replaces the projected-text range with plain text as one editor
    * transaction, so a single undo removes it (unlike a `value` rewrite, which
    * resets history). The caret lands after the inserted text.
@@ -54,6 +67,11 @@ export type MentionComposerHandle = {
    * (dictation) and so has to find in the draft.
    */
   insertTextAtOffsets: (start: number, end: number, text: string, options?: { flash?: boolean }) => void
+  /**
+   * Replaces the whole document as a single editor transaction so Cmd/Ctrl+Z
+   * restores the previous draft (including mention pills) in one step.
+   */
+  replaceContentWithHistory: (text: string, mentions: ComposerMention[], options?: { flash?: boolean }) => void
   /**
    * Content for the model: text with each mention pill serialized to
    * file paths or explicit skill/plugin requests. Read from the live document, so literal text that
@@ -482,6 +500,51 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
         view.dispatch(view.state.tr.setSelection(selection))
       },
       hasFocus: () => viewRef.current?.hasFocus() ?? false,
+      isSelectionAtBoundary: (direction) => {
+        const view = viewRef.current
+        if (!view) return false
+        const { empty, $from, $to } = view.state.selection
+        if (!empty) return false
+        if (isEmptyComposerDoc(view.state.doc)) return true
+        if ($from.depth < 1 || $to.depth < 1) return false
+        const blockIndex = direction === 'up' ? $from.index(0) : $to.index(0)
+        const expectedBlockIndex = direction === 'up' ? 0 : view.state.doc.childCount - 1
+        if (blockIndex !== expectedBlockIndex) return false
+        const projectedText = projectComposerDoc(view.state.doc).text
+        const offset = pmPosToTextOffset(view.state.doc, $from.pos)
+        if (direction === 'up' && projectedText.lastIndexOf('\n', offset - 1) !== -1 && offset > 0) {
+          return false
+        }
+        if (direction === 'down' && projectedText.indexOf('\n', offset) !== -1) {
+          return false
+        }
+        try {
+          return view.endOfTextblock(direction)
+        } catch {
+          return true
+        }
+      },
+      replaceContent: (text, nextMentions, cursor) => {
+        const view = viewRef.current
+        if (!view) return
+        const doc = buildComposerDoc(text, nextMentions)
+        const docLength = projectedDocLength(doc)
+        const targetOffset = cursor === 'start'
+          ? 0
+          : cursor === 'end'
+            ? docLength
+            : Math.max(0, Math.min(cursor, docLength))
+        const pmPos = textOffsetToPmPos(doc, targetOffset)
+        lastProjectedRef.current = { text, mentions: nextMentions }
+        view.updateState(EditorState.create({
+          schema: composerSchema,
+          doc,
+          plugins: view.state.plugins,
+          selection: TextSelection.near(doc.resolve(pmPos)),
+        }))
+        view.dispatch(view.state.tr.scrollIntoView().setMeta('addToHistory', false))
+        syncEmptyState(view, propsRef.current.placeholder, ghostRef.current)
+      },
       insertTextAtOffsets: (start, end, text, options) => {
         const view = viewRef.current
         if (!view || !text) return
@@ -491,6 +554,27 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
         const tr = view.state.tr.insertText(text, from, to)
         tr.setSelection(TextSelection.near(tr.doc.resolve(from + text.length)))
         if (options?.flash) tr.setMeta(insertionFlashPluginKey, { from, to: from + text.length })
+        view.dispatch(tr.scrollIntoView())
+        if (!options?.flash) return
+        if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+        flashTimerRef.current = setTimeout(() => {
+          flashTimerRef.current = null
+          const current = viewRef.current
+          if (!current || insertionFlashPluginKey.getState(current.state) === DecorationSet.empty) return
+          current.dispatch(current.state.tr
+            .setMeta(insertionFlashPluginKey, null)
+            .setMeta('addToHistory', false))
+        }, INSERTION_FLASH_MS)
+      },
+      replaceContentWithHistory: (text, nextMentions, options) => {
+        const view = viewRef.current
+        if (!view) return
+        const nextDoc = buildComposerDoc(text, nextMentions)
+        const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, nextDoc.content)
+        tr.setSelection(TextSelection.atEnd(tr.doc))
+        if (options?.flash && tr.doc.content.size > 2) {
+          tr.setMeta(insertionFlashPluginKey, { from: 1, to: tr.doc.content.size - 1 })
+        }
         view.dispatch(tr.scrollIntoView())
         if (!options?.flash) return
         if (flashTimerRef.current) clearTimeout(flashTimerRef.current)

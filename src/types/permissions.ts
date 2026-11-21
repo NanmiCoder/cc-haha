@@ -233,6 +233,11 @@ export type PermissionDenyDecision = {
   message: string
   decisionReason: PermissionDecisionReason
   toolUseID?: string
+  /**
+   * Optional content blocks (e.g., images) to include alongside the denial
+   * tool_result. Used when users attach images with a question handoff or feedback.
+   */
+  contentBlocks?: ContentBlockParam[]
 }
 
 /**
