@@ -34,6 +34,13 @@ describe('downloadGalleryImage', () => {
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:row-thumbnail')
   })
 
+  it('downloads full referenced pixels with credentials rather than the thumbnail', async () => {
+    const src = '/api/sessions/s/tool-images/t/0?variant=full'
+    await downloadGalleryImage({ src, name: 'capture.png', captured: true })
+    expect(fetchServerImageBlobUrl).toHaveBeenCalledWith(src)
+    expect(downloads).toEqual([{ href: 'blob:download-server', name: 'capture.png' }])
+  })
+
   it('uses the authenticated image fetch for server files and their original filename', async () => {
     const src = 'http://127.0.0.1:3456/api/filesystem/image?path=chart.webp'
     await downloadGalleryImage({ src, name: 'Chart', path: 'C:\\Pictures\\chart.webp' })

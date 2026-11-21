@@ -13,9 +13,9 @@
  * tests, and an image is not text.
  *
  * The payload is whatever the tool (and, for MCP, a third-party server) wrote, so
- * nothing is rendered on trust: only base64 sources, only the four raster types the
- * model API itself accepts, only well-formed base64, and only within fixed limits.
- * Every check runs before the data is decoded.
+ * nothing is rendered on trust: only validated base64 or local tool-image references,
+ * only the four raster types the model API accepts, and only within fixed limits.
+ * Every check runs before the data is decoded or fetched.
  */
 
 /** Exactly what the model API accepts. `image/svg+xml` in particular stays out. */
@@ -32,10 +32,18 @@ export const TOOL_RESULT_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 /** Largest sum of decoded bytes across the images of one tool result. */
 export const TOOL_RESULT_IMAGES_MAX_TOTAL_BYTES = 24 * 1024 * 1024
 
-export type ToolResultImage = {
+export type InlineToolResultImage = {
   mediaType: ToolResultImageMediaType
   /** Base64 with all whitespace removed. */
   data: string
+  url?: never
+}
+
+export type ToolResultImage = InlineToolResultImage | {
+  mediaType: ToolResultImageMediaType
+  /** A validated relative tool-image endpoint, never an arbitrary remote URL. */
+  url: string
+  data?: never
 }
 
 export type ToolResultImageExtraction = {
@@ -149,7 +157,7 @@ function readImages(content: object): ToolResultImageExtraction {
  * Throws when `atob` rejects the data. Callers own the resulting object URL and
  * must revoke it.
  */
-export function toolResultImageToBlob(image: ToolResultImage): Blob {
+export function toolResultImageToBlob(image: InlineToolResultImage): Blob {
   const binary = atob(image.data)
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) {
@@ -183,11 +191,19 @@ function isImageBlock(block: unknown): block is Record<string, unknown> {
 function readImageBlock(block: Record<string, unknown>): { image: ToolResultImage; bytes: number } | null {
   const source = block.source
   if (!source || typeof source !== 'object') return null
-  const { type, media_type: rawMediaType, data } = source as Record<string, unknown>
-  if (type !== 'base64' || typeof data !== 'string') return null
-
+  const { type, media_type: rawMediaType, data, url, bytes: refBytes } = source as Record<string, unknown>
   const mediaType = normalizeMediaType(rawMediaType)
   if (!mediaType) return null
+  if (type === 'ref') {
+    if (typeof url !== 'string' || !/^\/api\/sessions\/(?:[A-Za-z0-9_-]|%[0-9a-f]{2})+\/tool-images\/(?:[A-Za-z0-9_-]|%[0-9a-f]{2})+\/\d+$/i.test(url)) return null
+    if (typeof refBytes !== 'number' || !Number.isSafeInteger(refBytes) || refBytes < 0 || refBytes > TOOL_RESULT_IMAGE_MAX_BYTES) return null
+    try {
+      const target = new URL(url, 'http://localhost')
+      if (target.pathname !== url) return null
+    } catch { return null }
+    return { image: { mediaType, url }, bytes: refBytes }
+  }
+  if (type !== 'base64' || typeof data !== 'string') return null
 
   if (data.length > MAX_RAW_BASE64_LENGTH) return null
   const base64 = data.replace(BASE64_WHITESPACE, '')

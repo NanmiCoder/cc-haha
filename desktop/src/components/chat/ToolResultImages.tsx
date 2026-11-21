@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from '@/i18n'
 import { isRootedLocalPath } from '@/lib/handlePreviewLink'
 import { toolResultImageToBlob, type ToolResultImage } from '@/lib/toolResultContent'
+import { getApiUrl } from '@/api/client'
+import { AuthedImage } from './AuthedImage'
 import { ImageGalleryModal } from './ImageGalleryModal'
 
 type Props = {
@@ -43,6 +45,7 @@ export function ToolResultImages({ images, omitted = 0, originalPath, toolName, 
     if (sources.length === 0) return
     const created: string[] = []
     const urls = sources.map((image) => {
+      if (image.url !== undefined) return getApiUrl(image.url)
       try {
         const url = URL.createObjectURL(toolResultImageToBlob(image))
         created.push(url)
@@ -69,13 +72,15 @@ export function ToolResultImages({ images, omitted = 0, originalPath, toolName, 
 
   const galleryPath = originalPath && isRootedLocalPath(originalPath) ? originalPath : undefined
   const originalName = originalPath ? fileNameOf(originalPath) : ''
-  const galleryImages = shown.map(({ index, url }) => ({
-    src: url,
-    name: originalName || t('chat.toolResultImage.alt', { index: index + 1, count }),
-    ...(galleryPath ? { path: galleryPath } : {}),
-    inline: sources[index],
-  }))
-  const activeIndex = activeUrl === null ? -1 : galleryImages.findIndex((image) => image.src === activeUrl)
+  const galleryImages = shown.map(({ index, url }) => {
+    const image = sources[index]!
+    return {
+      ...(image.url !== undefined ? { src: `${image.url}?variant=full`, captured: true } : { src: url, inline: image }),
+      name: originalName || t('chat.toolResultImage.alt', { index: index + 1, count }),
+      ...(galleryPath ? { path: galleryPath } : {}),
+    }
+  })
+  const activeIndex = activeUrl === null ? -1 : shown.findIndex((image) => image.url === activeUrl)
 
   if (slots.length === 0 && omitted <= 0) return null
 
@@ -101,12 +106,22 @@ export function ToolResultImages({ images, omitted = 0, originalPath, toolName, 
             onClick={() => setActiveUrl(url)}
             className="flex h-24 shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] transition-colors hover:border-[var(--color-primary-fixed-dim)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] motion-reduce:transition-none"
           >
-            <img
-              src={url}
-              alt={t('chat.toolResultImage.alt', { index: index + 1, count })}
-              onError={() => setBrokenUrls((previous) => new Set(previous).add(url))}
-              className="block h-full w-auto min-w-[64px] max-w-[240px] object-cover"
-            />
+            {sources[index]?.url !== undefined ? (
+              <AuthedImage
+                src={url}
+                loading="lazy"
+                alt={t('chat.toolResultImage.alt', { index: index + 1, count })}
+                onFailure={() => setBrokenUrls((previous) => new Set(previous).add(url))}
+                className="block h-full w-auto min-w-[64px] max-w-[240px] object-cover"
+              />
+            ) : (
+              <img
+                src={url}
+                alt={t('chat.toolResultImage.alt', { index: index + 1, count })}
+                onError={() => setBrokenUrls((previous) => new Set(previous).add(url))}
+                className="block h-full w-auto min-w-[64px] max-w-[240px] object-cover"
+              />
+            )}
           </button>
         )))}
         {omitted > 0 ? (
@@ -122,7 +137,7 @@ export function ToolResultImages({ images, omitted = 0, originalPath, toolName, 
           images={galleryImages}
           activeIndex={activeIndex}
           onClose={() => setActiveUrl(null)}
-          onSelect={(next) => setActiveUrl(galleryImages[next]?.src ?? null)}
+          onSelect={(next) => setActiveUrl(shown[next]?.url ?? null)}
         />
       ) : null}
     </>
@@ -145,7 +160,7 @@ function useStableImages(images: ToolResultImage[]): ToolResultImage[] {
 
 function sameImages(a: ToolResultImage[], b: ToolResultImage[]): boolean {
   return a.length === b.length && a.every((image, index) => (
-    image.mediaType === b[index]!.mediaType && image.data === b[index]!.data
+    image.mediaType === b[index]!.mediaType && image.data === b[index]!.data && image.url === b[index]!.url
   ))
 }
 

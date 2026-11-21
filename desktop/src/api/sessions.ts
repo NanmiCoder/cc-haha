@@ -595,9 +595,10 @@ export const sessionsApi = {
     }
   },
 
-  getHistoryPage(sessionId: string, page?: { cursor?: string }, options?: ApiRequestOptions) {
+  getHistoryPage(sessionId: string, page?: { cursor?: string; mediaRefs?: boolean }, options?: ApiRequestOptions) {
     const query = new URLSearchParams()
     if (page?.cursor) query.set('cursor', page.cursor)
+    if (page?.mediaRefs) query.set('media', 'ref')
     return api.get<SessionHistoryPage>(`/api/sessions/${sessionId}/messages${query.size ? `?${query}` : ''}`, options)
   },
 

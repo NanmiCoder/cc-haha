@@ -112,6 +112,9 @@ export function projectMessageMedia<T extends { content?: unknown; toolUseResult
       if (value.type !== 'tool_result' || typeof value.tool_use_id !== 'string') return block
       const projected = projectToolResultContent(value.content, sessionId, value.tool_use_id)
       if (projected === value.content) return block
+      // Reuse pixels already read for this visible page instead of rescanning
+      // the transcript for each thumbnail immediately after history hydration.
+      rememberToolResultImages(sessionId, value.tool_use_id, value.content)
       changed = true
       return { ...value, content: projected }
     })

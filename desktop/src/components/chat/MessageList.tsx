@@ -2981,6 +2981,18 @@ export function MessageList({
     scrollToBottom()
   }, [scrollToBottom])
 
+  const handleLoadOlderHistory = useCallback(() => {
+    if (!resolvedSessionId) return
+    const container = scrollContainerRef.current
+    if (container) {
+      releaseBottomRestoration()
+      shouldAutoScrollRef.current = false
+      rememberSessionScroll(resolvedSessionId, container, false)
+      restoringScrollAnchorRef.current = sessionScrollSnapshots.get(resolvedSessionId)?.anchor ?? null
+    }
+    void loadOlderHistory(resolvedSessionId)
+  }, [loadOlderHistory, releaseBottomRestoration, resolvedSessionId])
+
   useEffect(() => {
     const content = scrollContentRef.current
     if (!content || typeof ResizeObserver === 'undefined') return
@@ -4194,10 +4206,10 @@ export function MessageList({
               ) : sessionState.historyError ? (
                 <>
                   <span role="alert" className="text-[var(--color-text-secondary)]">{t('chat.history.loadFailed')}</span>
-                  <Button variant="ghost" size="xs" onClick={() => resolvedSessionId && void loadOlderHistory(resolvedSessionId)}>{t('chat.history.retry')}</Button>
+                  <Button variant="ghost" size="xs" onClick={handleLoadOlderHistory}>{t('chat.history.retry')}</Button>
                 </>
               ) : (
-                <Button variant="ghost" size="xs" onClick={() => resolvedSessionId && void loadOlderHistory(resolvedSessionId)}>{t('chat.history.loadMore')}</Button>
+                <Button variant="ghost" size="xs" onClick={handleLoadOlderHistory}>{t('chat.history.loadMore')}</Button>
               )}
             </div>
           ) : null}

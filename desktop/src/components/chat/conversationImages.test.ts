@@ -53,6 +53,20 @@ describe('collectConversationImages', () => {
     expect(images.slice(1).map((image) => image.inline?.data)).toEqual([inline.data, nextBlock.source.data])
   })
 
+  it('keeps reference captures distinct from the current file and uses full image URLs', () => {
+    const ref = (tool: string) => ({ type: 'image', source: { type: 'ref', media_type: 'image/png', url: `/api/sessions/gallery-session/tool-images/${tool}/0`, bytes: 1024 } })
+    const images = collectConversationImages([
+      user([{ type: 'image', name: 'capture.png', path: '/tmp/capture.png' }]),
+      call('first', 'Read', { file_path: '/tmp/capture.png' }), result('first', [ref('first')]),
+      call('second', 'Read', { file_path: '/tmp/capture.png' }), result('second', [ref('second'), ref('first')]),
+    ], context)
+    expect(images).toHaveLength(3)
+    expect(images.slice(1)).toEqual(['first', 'second'].map((tool) => ({
+      src: `/api/sessions/gallery-session/tool-images/${tool}/0?variant=full`,
+      name: 'capture.png', path: '/tmp/capture.png', captured: true,
+    })))
+  })
+
   it('keeps assistant image URL restrictions and excludes non-images and malformed tool blocks', () => {
     const images = collectConversationImages([
       user([{ type: 'file', name: 'notes.md', path: '/tmp/notes.md' }, { type: 'image', name: 'missing.png' }]),

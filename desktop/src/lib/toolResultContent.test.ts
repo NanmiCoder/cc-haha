@@ -164,6 +164,35 @@ describe('extractToolResultImages · source', () => {
   })
 })
 
+describe('extractToolResultImages · history references', () => {
+  const source = { type: 'ref', media_type: 'image/png', url: '/api/sessions/session-1/tool-images/parent%2Ftoolu_1/0', bytes: 1024 }
+
+  it('accepts bounded tool-image references without decoding image bytes', () => {
+    expect(extractToolResultImages([{ type: 'image', source }])).toEqual({
+      images: [{ mediaType: 'image/png', url: source.url }], dropped: 0,
+    })
+  })
+
+  it.each([
+    'https://evil.invalid/a.png', '//evil.invalid/a.png', '/api/files?path=secret',
+    '/api/sessions/s/tool-images/../0', '/api/sessions/s/tool-images/%2e%2e/0',
+    '/api/sessions/s/tool-images/t/0?variant=full', '/api/sessions/s/tool-images/t/0#fragment',
+    '/api/sessions/s/tool-images/t/0\\extra',
+  ])('refuses a reference outside the tool-image route: %s', (url) => {
+    expect(extractToolResultImages([{ type: 'image', source: { ...source, url } }])).toEqual({ images: [], dropped: 1 })
+  })
+
+  it.each([undefined, -1, NaN, Infinity, 1.5, TOOL_RESULT_IMAGE_MAX_BYTES + 1])('refuses an invalid image byte count: %s', (bytes) => {
+    expect(extractToolResultImages([{ type: 'image', source: { ...source, bytes } }])).toEqual({ images: [], dropped: 1 })
+  })
+
+  it('shares the count and total-byte budgets with inline images', () => {
+    const content = Array.from({ length: 4 }, (_, index) => ({ type: 'image', source: { ...source, url: source.url.replace('/0', `/${index}`), bytes: TOOL_RESULT_IMAGE_MAX_BYTES } }))
+    expect(extractToolResultImages(content).images).toHaveLength(3)
+    expect(extractToolResultImages(content).dropped).toBe(1)
+  })
+})
+
 describe('extractToolResultImages · base64 validation', () => {
   it.each([
     ['padded, one byte', 'QQ=='],
@@ -251,7 +280,7 @@ describe('extractToolResultImages · limits', () => {
     const result = extractToolResultImages(blocks)
 
     expect(result.images).toHaveLength(TOOL_RESULT_IMAGE_MAX_COUNT)
-    expect(result.images.map((image) => Buffer.from(image.data, 'base64').toString())).toEqual(
+    expect(result.images.map((image) => image.data !== undefined ? Buffer.from(image.data, 'base64').toString() : undefined)).toEqual(
       Array.from({ length: TOOL_RESULT_IMAGE_MAX_COUNT }, (_, index) => `image-${index}`),
     )
     expect(result.dropped).toBe(3)
@@ -311,7 +340,7 @@ describe('extractToolResultImages · limits', () => {
     const result = extractToolResultImages(blocks)
 
     // Which images, not just how many: the trailing byte must be the one left out.
-    expect(result.images.map((image) => image.data.length)).toEqual(Array(fitting).fill(full.length))
+    expect(result.images.map((image) => image.data?.length)).toEqual(Array(fitting).fill(full.length))
     expect(result.dropped).toBe(1)
   })
 
@@ -327,7 +356,7 @@ describe('extractToolResultImages · limits', () => {
       imageBlock(one), // 22 MiB: fits
     ])
 
-    expect(result.images.map((image) => image.data.length)).toEqual([seven.length, seven.length, seven.length, one.length])
+    expect(result.images.map((image) => image.data?.length)).toEqual([seven.length, seven.length, seven.length, one.length])
     expect(result.dropped).toBe(1)
   })
 
