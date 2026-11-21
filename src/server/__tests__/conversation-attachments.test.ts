@@ -196,6 +196,120 @@ describe('ConversationService attachment materialization', () => {
     expect(imageBlocks[0]?.source?.media_type).toBe('image/png')
     expect(imageBlocks[0]?.source?.data).toBe(original.toString('base64'))
   })
+
+  test('materializes permission attachments and forwards contentBlocks on allow and deny control responses', async () => {
+    const svc = new ConversationService()
+    const sent: unknown[] = []
+    const sessionId = 'session-permission-images'
+    const original = Buffer.from('ask-image-bytes')
+
+    ;(svc as any).sessions.set(sessionId, {
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      pendingPermissionRequests: new Map([
+        ['req-allow', { toolName: 'AskUserQuestion', input: { questions: [] }, permissionSuggestions: [] }],
+        ['req-deny', { toolName: 'AskUserQuestion', input: { questions: [] }, permissionSuggestions: [] }],
+      ]),
+    })
+
+    const contentBlocks = await svc.materializePermissionAttachments(sessionId, [
+      {
+        type: 'image',
+        name: 'ui-reference.png',
+        mimeType: 'image/png',
+        data: `data:image/png;base64,${original.toString('base64')}`,
+      },
+    ])
+
+    expect(contentBlocks.some((block) => block.type === 'image')).toBe(true)
+    expect(contentBlocks.some((block) => block.type === 'text' && String(block.text).includes('source:'))).toBe(true)
+
+    expect(svc.respondToPermission(
+      sessionId,
+      'req-allow',
+      true,
+      undefined,
+      { answers: { 'Pick one?': 'Option A' }, annotations: { 'Pick one?': { notes: 'Match screenshot' } } },
+      undefined,
+      undefined,
+      false,
+      contentBlocks,
+    )).toBe(true)
+
+    expect(svc.respondToPermission(
+      sessionId,
+      'req-deny',
+      false,
+      undefined,
+      undefined,
+      '- "Pick one?"\n  Answer: Option A\n  Notes: Clarify spacing',
+      undefined,
+      false,
+      contentBlocks,
+    )).toBe(true)
+
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatchObject({
+      type: 'control_response',
+      response: {
+        request_id: 'req-allow',
+        response: {
+          behavior: 'allow',
+          updatedInput: {
+            answers: { 'Pick one?': 'Option A' },
+            annotations: { 'Pick one?': { notes: 'Match screenshot' } },
+          },
+          contentBlocks,
+        },
+      },
+    })
+    expect(sent[1]).toMatchObject({
+      type: 'control_response',
+      response: {
+        request_id: 'req-deny',
+        response: {
+          behavior: 'deny',
+          message: expect.stringContaining('Notes: Clarify spacing'),
+          contentBlocks,
+        },
+      },
+    })
+  })
+
+  test('emits [Image source: ...] metadata on permission path fallback and throws when no blocks materialize', async () => {
+    const svc = new ConversationService()
+    const sessionId = 'session-permission-fallback'
+    const original = createOversizedPngHeader()
+    imageProcessorShouldThrow = true
+
+    const fallbackBlocks = await svc.materializePermissionAttachments(sessionId, [
+      {
+        type: 'image',
+        name: 'oversized-ask.png',
+        mimeType: 'image/png',
+        data: `data:image/png;base64,${original.toString('base64')}`,
+      },
+    ])
+
+    expect(fallbackBlocks).toHaveLength(1)
+    expect(fallbackBlocks[0]?.type).toBe('text')
+    const fallbackText = String((fallbackBlocks[0] as { text?: string }).text ?? '')
+    expect(fallbackText).not.toContain('@"')
+    const stagedPath = fallbackText.match(/^\[Image source: (.+)\]$/)?.[1]
+    expect(stagedPath).toBeTruthy()
+    expect(await fs.readFile(stagedPath!)).toEqual(original)
+
+    await expect(svc.materializePermissionAttachments(sessionId, [
+      {
+        type: 'image',
+        name: 'empty.png',
+      },
+    ])).rejects.toThrow(/Failed to materialize/)
+  })
 })
 
 function createOversizedPngHeader(): Buffer {

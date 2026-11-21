@@ -314,6 +314,23 @@ export const PermissionDecisionClassificationSchema = lazySchema(() =>
     ),
 )
 
+const PermissionContentBlockSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      type: z.literal('text'),
+      text: z.string(),
+    }),
+    z.object({
+      type: z.literal('image'),
+      source: z.object({
+        type: z.literal('base64'),
+        media_type: z.enum(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
+        data: z.string(),
+      }),
+    }),
+  ]),
+)
+
 export const PermissionResultSchema = lazySchema(() =>
   z.union([
     z.object({
@@ -321,6 +338,7 @@ export const PermissionResultSchema = lazySchema(() =>
       // Optional - may not be provided if hook sets permission without input modification
       updatedInput: z.record(z.string(), z.unknown()).optional(),
       updatedPermissions: z.array(PermissionUpdateSchema()).optional(),
+      contentBlocks: z.array(PermissionContentBlockSchema()).optional(),
       toolUseID: z.string().optional(),
       decisionClassification:
         PermissionDecisionClassificationSchema().optional(),
@@ -329,6 +347,7 @@ export const PermissionResultSchema = lazySchema(() =>
       behavior: z.literal('deny'),
       message: z.string(),
       interrupt: z.boolean().optional(),
+      contentBlocks: z.array(PermissionContentBlockSchema()).optional(),
       toolUseID: z.string().optional(),
       decisionClassification:
         PermissionDecisionClassificationSchema().optional(),

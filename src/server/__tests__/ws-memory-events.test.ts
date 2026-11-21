@@ -7,6 +7,7 @@ import {
   translateCliMessage,
 } from '../ws/handler.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../constants/messages.js'
 
 afterEach(() => {
   __resetWebSocketHandlerStateForTests()
@@ -233,6 +234,138 @@ describe('WebSocket AskUserQuestion events', () => {
           answers: { 'Pick one?': 'A' },
         },
         isError: false,
+        parentToolUseId: undefined,
+      },
+    ])
+  })
+
+  it('forwards AskUserQuestion annotations and sibling image attachments from CLI tool_result messages', () => {
+    expect(translateCliMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-2',
+            content: 'User has answered your questions: "Pick one?"="A" user notes: Prefer dark mode.',
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/uuid-mockup.png]',
+          },
+        ],
+      },
+      toolUseResult: {
+        questions: [{ question: 'Pick one?', options: [{ label: 'A' }] }],
+        answers: { 'Pick one?': 'A' },
+        annotations: { 'Pick one?': { notes: 'Prefer dark mode.' } },
+      },
+    }, 'session-1')).toEqual([
+      {
+        type: 'tool_result',
+        toolUseId: 'ask-2',
+        content: {
+          questions: [{ question: 'Pick one?', options: [{ label: 'A' }] }],
+          answers: { 'Pick one?': 'A' },
+          annotations: { 'Pick one?': { notes: 'Prefer dark mode.' } },
+          attachments: [
+            {
+              type: 'image',
+              name: 'uuid-mockup.png',
+              path: '/tmp/uploads/session-1/uuid-mockup.png',
+              mimeType: 'image/png',
+            },
+          ],
+        },
+        isError: false,
+        parentToolUseId: undefined,
+      },
+    ])
+  })
+
+  it('normalizes denied AskUserQuestion clarify handoffs with sibling image attachments and path-only fallbacks', () => {
+    const clarifyText = `${ASK_USER_QUESTION_CLARIFY_MESSAGE}\n\n    Questions asked:\n- "Pick one?"\n  Answer: A\n  Attached images: ref.png`
+
+    expect(translateCliMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-deny-1',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/ref.png]',
+          },
+        ],
+      },
+    }, 'session-1')).toEqual([
+      {
+        type: 'tool_result',
+        toolUseId: 'ask-deny-1',
+        content: {
+          handedOff: true,
+          message: clarifyText,
+          attachments: [
+            {
+              type: 'image',
+              name: 'ref.png',
+              path: '/tmp/uploads/session-1/ref.png',
+              mimeType: 'image/png',
+            },
+          ],
+        },
+        isError: true,
+        parentToolUseId: undefined,
+      },
+    ])
+
+    expect(translateCliMessage({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-path-only',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/fallback-shot.png]',
+          },
+        ],
+      },
+    }, 'session-1')).toEqual([
+      {
+        type: 'tool_result',
+        toolUseId: 'ask-path-only',
+        content: {
+          handedOff: true,
+          message: clarifyText,
+          attachments: [
+            {
+              type: 'image',
+              name: 'fallback-shot.png',
+              path: '/tmp/uploads/session-1/fallback-shot.png',
+            },
+          ],
+        },
+        isError: true,
         parentToolUseId: undefined,
       },
     ])

@@ -71,6 +71,19 @@ export async function dataTransferToComposerAttachments(dataTransfer: DataTransf
   return filesToComposerAttachments(getDataTransferFiles(dataTransfer))
 }
 
+const SUPPORTED_INLINE_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+])
+
+export function isSupportedImageFile(file: Pick<File, 'type' | 'name'>): boolean {
+  const mime = file.type.trim().toLowerCase()
+  if (mime) return SUPPORTED_INLINE_IMAGE_MIME_TYPES.has(mime)
+  return isInlineImagePath(file.name)
+}
+
 export async function selectNativeFileAttachments(): Promise<ComposerAttachment[] | null> {
   const host = getDesktopHost()
   if (!host.isDesktop || !host.capabilities.dialogs) return null
@@ -84,6 +97,24 @@ export async function selectNativeFileAttachments(): Promise<ComposerAttachment[
     return pathsToComposerAttachments(paths)
   } catch (error) {
     console.warn('[attachments] Native file picker failed; falling back to browser file input', error)
+    return null
+  }
+}
+
+export async function selectNativeImageAttachments(): Promise<ComposerAttachment[] | null> {
+  const host = getDesktopHost()
+  if (!host.isDesktop || !host.capabilities.dialogs) return null
+
+  try {
+    const selected = await host.dialogs.open({
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+    })
+    const paths = normalizeDialogSelection(selected)
+    return pathsToComposerAttachments(paths).filter((attachment) => attachment.type === 'image')
+  } catch (error) {
+    console.warn('[attachments] Native image picker failed; falling back to browser file input', error)
     return null
   }
 }

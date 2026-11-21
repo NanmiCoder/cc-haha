@@ -41,6 +41,36 @@ const decisionClassificationField = lazySchema(() =>
     .catch(undefined),
 )
 
+const permissionContentBlockSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      type: z.literal('text'),
+      text: z.string(),
+    }),
+    z.object({
+      type: z.literal('image'),
+      source: z.object({
+        type: z.literal('base64'),
+        media_type: z.enum(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
+        data: z.string(),
+      }),
+    }),
+  ]),
+)
+
+const contentBlocksField = lazySchema(() =>
+  z
+    .array(permissionContentBlockSchema())
+    .optional()
+    .catch(ctx => {
+      logForDebugging(
+        `Malformed contentBlocks from SDK host ignored: ${ctx.error.issues[0]?.message ?? 'unknown'}`,
+        { level: 'warn' },
+      )
+      return undefined
+    }),
+)
+
 const PermissionAllowResultSchema = lazySchema(() =>
   z.object({
     behavior: z.literal('allow'),
@@ -57,6 +87,7 @@ const PermissionAllowResultSchema = lazySchema(() =>
         )
         return undefined
       }),
+    contentBlocks: contentBlocksField(),
     toolUseID: z.string().optional(),
     decisionClassification: decisionClassificationField(),
   }),
@@ -67,6 +98,7 @@ const PermissionDenyResultSchema = lazySchema(() =>
     behavior: z.literal('deny'),
     message: z.string(),
     interrupt: z.boolean().optional(),
+    contentBlocks: contentBlocksField(),
     toolUseID: z.string().optional(),
     decisionClassification: decisionClassificationField(),
   }),

@@ -10,6 +10,8 @@ import {
   hasVisibleSessionActivity,
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { useUIStore } from './uiStore'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
@@ -17196,6 +17198,216 @@ describe('chatStore AskUserQuestion drafts', () => {
     store.disconnectSession(TEST_SESSION_ID)
 
     expect(useChatStore.getState().askUserQuestionDrafts[TEST_SESSION_ID]).toBeUndefined()
+  })
+
+  it('retains image-only AskUserQuestion drafts and restores AskUserQuestion annotations and sibling images from history', () => {
+    const store = useChatStore.getState()
+    store.setAskUserQuestionDraft('session-drafts', 'tool-img', {
+      activeTab: 0,
+      selections: {},
+      freeTexts: {},
+      images: {
+        0: [{ id: 'img-1', type: 'image', name: 'shot.png', data: 'data:image/png;base64,aGVsbG8=' }],
+      },
+    })
+    expect(useChatStore.getState().askUserQuestionDrafts['session-drafts']?.['tool-img']?.images?.[0]).toHaveLength(1)
+
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-1',
+        type: 'user',
+        timestamp: '2026-11-21T00:00:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-tool-1',
+            content: 'User has answered your questions: "Which layout?"="Compact" user notes: Match screenshot.',
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/shot.png]',
+          },
+        ],
+        toolUseResult: {
+          questions: [{ question: 'Which layout?', options: [{ label: 'Compact' }] }],
+          answers: { 'Which layout?': 'Compact' },
+          annotations: { 'Which layout?': { notes: 'Match screenshot.' } },
+        },
+      },
+    ])
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-tool-1',
+      content: {
+        questions: [{ question: 'Which layout?', options: [{ label: 'Compact' }] }],
+        answers: { 'Which layout?': 'Compact' },
+        annotations: { 'Which layout?': { notes: 'Match screenshot.' } },
+        attachments: [
+          {
+            type: 'image',
+            name: 'shot.png',
+            path: '/tmp/uploads/session-1/shot.png',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    })
+  })
+
+  it('absorbs sibling images and path-only fallbacks onto denied AskUserQuestion clarify tool_results without emitting user_text bubbles', () => {
+    const clarifyText = `${ASK_USER_QUESTION_CLARIFY_MESSAGE}\n\n    Questions asked:\n- "Which layout?"\n  Answer: Compact`
+
+    const mappedWithImage = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-deny-1',
+        type: 'user',
+        timestamp: '2026-11-21T00:01:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-deny-tool-1',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/clarify-shot.png]',
+          },
+        ],
+      },
+    ])
+
+    expect(mappedWithImage).toHaveLength(1)
+    expect(mappedWithImage[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-deny-tool-1',
+      isError: true,
+      content: {
+        handedOff: true,
+        message: clarifyText,
+        attachments: [
+          {
+            type: 'image',
+            name: 'clarify-shot.png',
+            path: '/tmp/uploads/session-1/clarify-shot.png',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    })
+
+    const mappedPathOnly = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-deny-path',
+        type: 'user',
+        timestamp: '2026-11-21T00:02:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-deny-tool-2',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/oversized-fallback.png]',
+          },
+        ],
+      },
+    ])
+
+    expect(mappedPathOnly).toHaveLength(1)
+    expect(mappedPathOnly[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-deny-tool-2',
+      isError: true,
+      content: {
+        handedOff: true,
+        message: clarifyText,
+        attachments: [
+          {
+            type: 'image',
+            name: 'oversized-fallback.png',
+            path: '/tmp/uploads/session-1/oversized-fallback.png',
+          },
+        ],
+      },
+    })
+  })
+
+  it('restores pendingPermission and clears submitted/handedOff flags on ATTACHMENT_PROCESSING_FAILED', async () => {
+    const request = {
+      requestId: 'perm-img-fail',
+      toolName: 'AskUserQuestion',
+      toolUseId: 'tool-img-fail',
+      input: { questions: [{ question: 'Pick one?', options: [{ label: 'A' }] }] },
+    }
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'permission_pending',
+          pendingPermission: request,
+          pendingPermissions: { [request.requestId]: request },
+        }),
+      },
+      askUserQuestionDrafts: {
+        [TEST_SESSION_ID]: {
+          'tool-img-fail': {
+            activeTab: 0,
+            selections: { 0: ['A'] },
+            freeTexts: { 0: 'Keep this note' },
+            images: {
+              0: [{ id: 'img-1', type: 'image', name: 'shot.png', data: 'data:image/png;base64,aGVsbG8=' }],
+            },
+            submitted: true,
+          },
+        },
+      },
+    })
+    useUIStore.setState({ toasts: [] })
+
+    const accepted = useChatStore.getState().respondToPermission(
+      TEST_SESSION_ID,
+      request.requestId,
+      true,
+      {
+        updatedInput: { answers: { 'Pick one?': 'A' } },
+        attachments: [{ type: 'image', name: 'shot.png', mimeType: 'image/png', data: 'data:image/png;base64,aGVsbG8=' }],
+      },
+    )
+    expect(accepted).toBe(true)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.pendingPermission).toBeNull()
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      code: 'ATTACHMENT_PROCESSING_FAILED',
+      message: 'Failed to process attached images',
+      permissionRequestId: request.requestId,
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(session.pendingPermission).toEqual(request)
+    expect(session.pendingPermissions?.[request.requestId]).toEqual(request)
+    expect(session.chatState).toBe('permission_pending')
+    const draft = useChatStore.getState().askUserQuestionDrafts[TEST_SESSION_ID]?.['tool-img-fail']
+    expect(draft?.submitted).toBeUndefined()
+    expect(draft?.handedOff).toBeUndefined()
+    expect(draft?.freeTexts[0]).toBe('Keep this note')
+    await vi.waitFor(() => {
+      expect(useUIStore.getState().toasts.some((toast) =>
+        toast.type === 'error' && toast.message.includes('Failed to process attached images'),
+      )).toBe(true)
+    })
   })
 })
 

@@ -1,4 +1,5 @@
 import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../constants/messages.js'
 /**
  * Pure parsing of raw CLI payloads into the shapes the session handler works with.
  *
@@ -93,15 +94,107 @@ function readObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
-export function normalizeAskUserQuestionToolResult(content: unknown, toolUseResult: unknown): unknown {
+const IMAGE_SOURCE_METADATA_RE = /^\[Image source: (.+)\]$/
+const DETAILED_IMAGE_SOURCE_METADATA_RE = /^\[Image: source: (.+?)(?:, original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.)?\]$/
+
+function extractImageSourcePathFromText(text: string): string | undefined {
+  const trimmed = text.trim()
+  const simple = trimmed.match(IMAGE_SOURCE_METADATA_RE)?.[1]?.trim()
+  if (simple) return simple
+  const detailed = trimmed.match(DETAILED_IMAGE_SOURCE_METADATA_RE)?.[1]?.trim()
+  return detailed || undefined
+}
+
+function fileNameFromPath(filePath: string): string {
+  const normalized = filePath.replace(/[\\/]+$/g, '')
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || filePath
+}
+
+type AskUserQuestionResultAttachment = {
+  type: 'image'
+  name: string
+  path?: string
+  data?: string
+  mimeType?: string
+}
+
+function extractSiblingImageAttachments(
+  messageContent: unknown,
+): AskUserQuestionResultAttachment[] {
+  if (!Array.isArray(messageContent)) return []
+  const attachments: AskUserQuestionResultAttachment[] = []
+  const sourcePaths: string[] = []
+  for (const block of messageContent) {
+    const obj = readObject(block)
+    if (!obj) continue
+    if (obj.type === 'image') {
+      const source = readObject(obj.source)
+      const rawData = typeof source?.data === 'string' ? source.data : undefined
+      const rawMediaType = typeof source?.media_type === 'string' && source.media_type.startsWith('image/')
+        ? source.media_type
+        : 'image/png'
+      const dataUrl = rawData
+        ? (/^data:image\//i.test(rawData) ? rawData : `data:${rawMediaType};base64,${rawData}`)
+        : undefined
+      attachments.push({
+        type: 'image',
+        name: typeof obj.name === 'string' && obj.name.trim() ? obj.name.trim() : 'image',
+        ...(dataUrl ? { data: dataUrl } : {}),
+        mimeType: rawMediaType,
+      })
+    } else if (obj.type === 'text' && typeof obj.text === 'string') {
+      const sourcePath = extractImageSourcePathFromText(obj.text)
+      if (sourcePath) sourcePaths.push(sourcePath)
+    }
+  }
+  for (let i = 0; i < sourcePaths.length && i < attachments.length; i++) {
+    const sourcePath = sourcePaths[i]!
+    const attachment = attachments[i]!
+    attachment.path = sourcePath
+    if (attachment.name === 'image') {
+      attachment.name = fileNameFromPath(sourcePath)
+    }
+    // Prefer path-backed local serving over echoing multi-megabyte base64 back over WS.
+    delete attachment.data
+  }
+  for (let i = attachments.length; i < sourcePaths.length; i++) {
+    const sourcePath = sourcePaths[i]!
+    attachments.push({
+      type: 'image',
+      name: fileNameFromPath(sourcePath),
+      path: sourcePath,
+    })
+  }
+  return attachments
+}
+
+export function normalizeAskUserQuestionToolResult(
+  content: unknown,
+  toolUseResult: unknown,
+  messageContent?: unknown,
+): unknown {
   const result = readObject(toolUseResult)
   const answers = readObject(result?.answers)
-  if (!result || !answers || !Array.isArray(result.questions)) return content
-  return {
-    questions: result.questions,
-    answers,
-    ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+  if (result && answers && Array.isArray(result.questions)) {
+    const annotations = readObject(result.annotations)
+    const attachments = extractSiblingImageAttachments(messageContent)
+    return {
+      questions: result.questions,
+      answers,
+      ...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {}),
+      ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    }
   }
+  if (typeof content === 'string' && content.startsWith(ASK_USER_QUESTION_CLARIFY_MESSAGE)) {
+    const attachments = extractSiblingImageAttachments(messageContent)
+    return {
+      handedOff: true,
+      message: content,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    }
+  }
+  return content
 }
 
 export function classifyRuntimeErrorCode(message: string, fallbackCode: string): string {
