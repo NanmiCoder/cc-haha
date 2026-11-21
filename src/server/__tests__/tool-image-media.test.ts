@@ -126,6 +126,19 @@ describe('history with media=ref', () => {
     expect((await api(`/api/sessions/${sessionId}/messages?media=ref&mode=full`)).status).toBe(400)
   })
 
+  it('warms references from the visible history page without changing its source transcript', async () => {
+    const sessionId = 'a1b2c3d4-0000-4000-8000-000000000003'
+    await writeScreenshotTurn(sessionId, png)
+    const file = path.join(tmpDir, 'projects', '-tmp-shots', `${sessionId}.jsonl`)
+    const before = await fs.readFile(file)
+    await api(`/api/sessions/${sessionId}/messages?media=ref`)
+    const transcriptPath = mock(async () => null)
+    const image = await media.findToolImage(sessionId, 'toolu_shot_2', 0, transcriptPath)
+    expect(image?.data === png.toString('base64')).toBe(true)
+    expect(transcriptPath).not.toHaveBeenCalled()
+    expect((await fs.readFile(file)).equals(before)).toBe(true)
+  })
+
   it('serves a referenced image as a thumbnail or as the original bytes', async () => {
     const sessionId = 'a1b2c3d4-0000-4000-8000-000000000002'
     await writeScreenshotTurn(sessionId, png)

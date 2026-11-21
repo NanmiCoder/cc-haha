@@ -1,11 +1,12 @@
 import '@testing-library/jest-dom'
 import { StrictMode } from 'react'
 import { renderToString } from 'react-dom/server'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ToolResultImage } from '@/lib/toolResultContent'
 import type { GalleryImage } from '@/components/chat/conversationImageGallery'
+import * as authedImage from '@/lib/authedImage'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { ToolResultImages } from './ToolResultImages'
 
@@ -108,6 +109,19 @@ function readBytes(blob: Blob): Promise<number[]> {
 }
 
 describe('ToolResultImages · thumbnails', () => {
+  it('uses a history reference for the thumbnail and full pixels for the gallery', () => {
+    const url = '/api/sessions/s/tool-images/t/0'
+    const { container } = render(<ToolResultImages images={[{ mediaType: 'image/png', url }]} originalPath="/tmp/capture.png" />)
+    const image = container.querySelector('img')!
+    expect(image.getAttribute('src')).toContain(url)
+    expect(image.getAttribute('src')).not.toContain('variant=full')
+    expect(image).toHaveAttribute('loading', 'lazy')
+    expect(createObjectURL).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Open image 1 of 1' }))
+    expect(lightbox.latest?.images[0]?.src).toContain(`${url}?variant=full`)
+    expect(lightbox.latest?.images[0]?.inline).toBeUndefined()
+  })
+
   it('renders one named thumbnail button per image, showing the object URL', () => {
     const { container } = render(<ToolResultImages images={[FIRST, SECOND]} toolName="Read" />)
 
@@ -117,6 +131,20 @@ describe('ToolResultImages · thumbnails', () => {
     expect(within(first).getByRole('img', { name: 'Image 1 of 2' })).toHaveAttribute('src', 'blob:test-1')
     expect(within(second).getByRole('img', { name: 'Image 2 of 2' })).toHaveAttribute('src', 'blob:test-2')
     expect(thumbnailSources(container)).toEqual(['blob:test-1', 'blob:test-2'])
+  })
+
+  it('retries a referenced thumbnail with credentials and keeps its gallery source unchanged', async () => {
+    const url = '/api/sessions/s/tool-images/t/0'
+    const fetchImage = vi.spyOn(authedImage, 'fetchServerImageBlobUrl').mockResolvedValue('blob:credential-image')
+    const { container, unmount } = render(<ToolResultImages images={[{ mediaType: 'image/png', url }]} />)
+    fireEvent.error(container.querySelector('img')!)
+    await waitFor(() => expect(container.querySelector('img')).toHaveAttribute('src', 'blob:credential-image'))
+    expect(fetchImage).toHaveBeenCalledWith(expect.stringContaining(url))
+    fireEvent.click(screen.getByRole('button', { name: 'Open image 1 of 1' }))
+    expect(lightbox.latest?.images[0]?.src).toBe(`${url}?variant=full`)
+    unmount()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:credential-image')
+    expect(revokeObjectURL).not.toHaveBeenCalledWith(expect.stringContaining('/api/sessions'))
   })
 
   it('names the strip after the tool, or generically when there is none', () => {

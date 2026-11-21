@@ -207,6 +207,13 @@ import {
 const TEST_SESSION_ID = 'test-session-1'
 const initialState = useChatStore.getState()
 
+beforeEach(() => {
+  // Existing mapping fixtures are shared by full reloads and single-page opens.
+  // The transport regression below installs the real API implementations instead.
+  vi.mocked(sessionsApi.getHistoryPage).mockReset().mockImplementation((id, _page, options) => sessionsApi.getFullHistory(id, options))
+  vi.mocked(sessionsApi.getHistoryRecovery).mockReset().mockResolvedValue({ status: 'incomplete', sourceVersion: '', omittedRecords: 0, tokenUsage: null, messages: [] })
+})
+
 function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState {
   return {
     messages: [],
@@ -16444,8 +16451,7 @@ describe('chatStore activity state survival across reload paths', () => {
     markCompletedAndDismissedMock.mockReset()
     updateTabStatusMock.mockReset()
     connectionStateHandlers.clear()
-    vi.mocked(sessionsApi.getHistoryPage).mockReset()
-    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({ messages: [] })
+    vi.mocked(sessionsApi.getHistoryPage).mockReset().mockImplementation((id, _page, options) => sessionsApi.getFullHistory(id, options))
     vi.mocked(sessionsApi.getFullHistory).mockReset()
     vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [] })
     vi.mocked(sessionsApi.getSlashCommands).mockReset()
@@ -16624,6 +16630,40 @@ describe('chatStore activity state survival across reload paths', () => {
     ])
   })
 
+  it('hydrates the latest API page without waiting for older pages or recovery', async () => {
+    const actual = await vi.importActual<typeof import('../api/sessions')>('../api/sessions')
+    const { api } = await import('../api/client')
+    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: '1:2:1000:1', scannedBytes: 1024, omittedOversizedEntries: 0 }
+    let releaseOlder!: (value: SessionHistoryPage) => void
+    let releaseRecovery!: (value: Awaited<ReturnType<typeof sessionsApi.getHistoryRecovery>>) => void
+    const older = new Promise<SessionHistoryPage>((resolve) => { releaseOlder = resolve })
+    const recovery = new Promise<Awaited<ReturnType<typeof sessionsApi.getHistoryRecovery>>>((resolve) => { releaseRecovery = resolve })
+    const transport = vi.spyOn(api, 'get').mockImplementation((url) => {
+      if (url.includes('history-recovery')) return recovery as never
+      if (url.includes('cursor=')) return older as never
+      return Promise.resolve({ messages: [{ id: 'tail', type: 'assistant', content: 'recent' }], page }) as never
+    })
+    vi.mocked(sessionsApi.getFullHistory).mockImplementationOnce(actual.sessionsApi.getFullHistory)
+    vi.mocked(sessionsApi.getHistoryPage).mockImplementationOnce(actual.sessionsApi.getHistoryPage)
+    vi.mocked(sessionsApi.getHistoryRecovery).mockImplementationOnce(actual.sessionsApi.getHistoryRecovery)
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession() } })
+    const load = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    try {
+      await vi.waitFor(() => expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready'), { timeout: 250 })
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: 'recent' })]))
+      expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyRecoveryStatus).toBe('loading')
+      const historyCalls = transport.mock.calls.filter(([url]) => url.includes('/messages'))
+      expect(historyCalls).toHaveLength(1)
+      expect(historyCalls[0]?.[0]).not.toContain('mode=full')
+      expect(historyCalls[0]?.[0]).toContain('media=ref')
+    } finally {
+      releaseOlder({ messages: [], page: { ...page, nextCursor: null, hasMore: false } })
+      releaseRecovery({ status: 'incomplete', sourceVersion: page.sourceVersion, messages: [], tokenUsage: null, omittedRecords: 0 })
+      await load
+      transport.mockRestore()
+    }
+  })
+
   it('shows a bounded page immediately and restores state independently without treating the tail as authoritative', async () => {
     const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
     vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({ messages: [{ id: 'tail', type: 'assistant', content: 'recent', timestamp: '2026-01-01T00:00:00Z' }], page })
@@ -16683,7 +16723,7 @@ describe('chatStore activity state survival across reload paths', () => {
     useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ messages: live, chatState: 'thinking', historyPage: page }) } })
     vi.mocked(sessionsApi.getHistoryPage).mockResolvedValueOnce({
       messages: [{ id: 'old', type: 'user', content: 'old page', timestamp: '2020-01-01T00:00:00Z' }],
-      page: { nextCursor: null, previousCursor: null, hasMore: false, historyComplete: true, sourceVersion: 'v1', scannedBytes: 2048, omittedOversizedEntries: 0 },
+      page: { nextCursor: null, previousCursor: 'newer', hasMore: false, historyComplete: false, sourceVersion: 'v1', scannedBytes: 2048, omittedOversizedEntries: 0 },
     })
     await useChatStore.getState().loadOlderHistory(TEST_SESSION_ID)
     const current = useChatStore.getState().sessions[TEST_SESSION_ID]
@@ -16705,6 +16745,51 @@ describe('chatStore activity state survival across reload paths', () => {
     await useChatStore.getState().loadOlderHistory(TEST_SESSION_ID)
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyWindowed).toBe(true)
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyPage?.nextCursor).toBe('older-2')
+  })
+
+  it.each([
+    { initial: { omittedOversizedEntries: 1 }, older: {} },
+    { initial: {}, older: { omittedOversizedEntries: 1 } },
+    { initial: { contentTruncated: true }, older: {} },
+    { initial: {}, older: { contentTruncated: true } },
+  ])('keeps accumulated omissions and truncation after reaching the history head: %j', async ({ initial, older }) => {
+    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0, ...initial }
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ historyPage: page }) } })
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValueOnce({ messages: [], page: { ...page, ...older, nextCursor: null, previousCursor: 'newer', hasMore: false } })
+    await useChatStore.getState().loadOlderHistory(TEST_SESSION_ID)
+    const current = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(current.historyPage?.nextCursor).toBeNull()
+    expect(current.historyPage?.historyComplete).toBe(false)
+    expect(current.historyWindowed).toBe(true)
+    if ('contentTruncated' in initial || 'contentTruncated' in older) expect(current.historyPage?.contentTruncated).toBe(true)
+  })
+
+  it('rejects an older page from a different transcript snapshot', async () => {
+    const messages: UIMessage[] = [{ id: 'latest', type: 'assistant_text', content: 'keep', timestamp: 1 }]
+    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ messages, historyPage: page }) } })
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValueOnce({ messages: [{ id: 'foreign', type: 'user', content: 'do not merge', timestamp: '2026-01-01T00:00:00Z' }], page: { ...page, sourceVersion: 'v2', nextCursor: null } })
+    await useChatStore.getState().loadOlderHistory(TEST_SESSION_ID)
+    const current = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(current.messages).toBe(messages)
+    expect(current.historyPage).toBe(page)
+    expect(current.historyError).toContain('changed')
+    expect(current.historyPageLoading).toBe(false)
+  })
+
+  it('ignores an older page when its requested window was replaced in flight', async () => {
+    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ historyPage: page }) } })
+    let resolvePage!: (value: SessionHistoryPage) => void
+    vi.mocked(sessionsApi.getHistoryPage).mockReturnValueOnce(new Promise((resolve) => { resolvePage = resolve }))
+    const pending = useChatStore.getState().loadOlderHistory(TEST_SESSION_ID)
+    const messages: UIMessage[] = [{ id: 'replacement', type: 'assistant_text', content: 'new window', timestamp: 2 }]
+    const replacement = { ...page, sourceVersion: 'v2', nextCursor: 'different' }
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ messages, historyPage: replacement }) } })
+    resolvePage({ messages: [{ id: 'old', type: 'user', content: 'stale', timestamp: '2026-01-01T00:00:00Z' }], page: { ...page, nextCursor: null } })
+    await pending
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toBe(messages)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyPage).toBe(replacement)
   })
 
   it('does not request an older page twice while one is in flight', async () => {

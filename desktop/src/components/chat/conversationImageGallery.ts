@@ -1,5 +1,5 @@
 import { createContext } from 'react'
-import type { ToolResultImage } from '@/lib/toolResultContent'
+import type { InlineToolResultImage } from '@/lib/toolResultContent'
 
 export type GalleryImage = {
   src: string
@@ -7,14 +7,16 @@ export type GalleryImage = {
   /** The original file, for opening in the system application. */
   path?: string
   /** Tool pixels are decoded only while their gallery thumbnail or preview is mounted. */
-  inline?: ToolResultImage
+  inline?: InlineToolResultImage
+  /** Stored capture pixels addressed by a server reference, not the live file. */
+  captured?: boolean
 }
 
 /** Snapshot loaded history when a viewer opens, including virtualized-away rows. */
 export const ConversationImageGalleryContext = createContext<(() => GalleryImage[] | Promise<GalleryImage[]>) | null>(null)
 
 function hasCapturedPixels(image: GalleryImage): boolean {
-  return Boolean(image.inline) || /^(?:data|blob):/i.test(image.src)
+  return Boolean(image.inline || image.captured) || /^(?:data|blob):/i.test(image.src)
 }
 
 export function sameGalleryImage(left: GalleryImage, right: GalleryImage): boolean {

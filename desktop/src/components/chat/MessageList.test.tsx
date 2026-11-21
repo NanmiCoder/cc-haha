@@ -399,10 +399,47 @@ describe('MessageList nested tool calls', () => {
     expect(getPage).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
     expect(await screen.findByText('older page message')).toBeTruthy()
-    expect(getPage).toHaveBeenCalledWith(ACTIVE_TAB, { cursor: 'older-cursor' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(getPage).toHaveBeenCalledWith(ACTIVE_TAB, { cursor: 'older-cursor', mediaRefs: true }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages.map((message) => message.id)).toEqual(['old', 'live'])
   })
 
+
+  it('keeps the visible row in place when loading older pages enables virtualization', async () => {
+    const messages: UIMessage[] = Array.from({ length: 110 }, (_, index) => ({ id: `prepend-${index}`, type: 'assistant_text', content: `Visible prepend row ${index}`, timestamp: index }))
+    const scrollTops = new WeakMap<HTMLElement, number>()
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('chat-scroll-area') ? 400 : 0 })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(20_000)
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function (this: HTMLElement) { return scrollTops.get(this) ?? 0 })
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (this: HTMLElement, value: number) { scrollTops.set(this, Math.max(0, Math.min(value, 19_600))) })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('chat-scroll-area')) return { top: 100, bottom: 500, height: 400, width: 800 } as DOMRect
+      const scroller = this.closest<HTMLElement>('.chat-scroll-area')
+      if (!scroller || !this.dataset.chatRenderItemKey) return { top: 0, bottom: 0, height: 0, width: 800 } as DOMRect
+      const key = this.dataset.chatRenderItemKey
+      const index = key.startsWith('older-') ? Number(key.slice(6)) : Number(key.slice(8)) + (useChatStore.getState().sessions[ACTIVE_TAB]?.messages.length === 140 ? 30 : 0)
+      const top = 100 + index * 60 - scroller.scrollTop
+      return { top, bottom: top + 60, height: 60, width: 800 } as DOMRect
+    })
+    const page = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 10, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages, historyPage: page, historyWindowed: true }) } })
+    vi.spyOn(sessionsApi, 'getHistoryPage').mockResolvedValueOnce({
+      messages: Array.from({ length: 30 }, (_, index) => ({ id: `older-${index}`, type: 'assistant', content: `Older prepend row ${index}`, timestamp: '2026-01-01T00:00:00Z' })),
+      page: { ...page, nextCursor: null, previousCursor: 'newer', hasMore: false },
+    })
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    await waitForProgrammaticScrollReset()
+    fireEvent.wheel(scroller, { deltaY: -100 })
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+    const row = () => container.querySelector<HTMLElement>('[data-chat-render-item-key="prepend-0"]')!
+    const before = row().getBoundingClientRect().top
+    expect(container.querySelector('[data-virtual-message-item]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+    await waitFor(() => expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages).toHaveLength(140))
+    expect(container.querySelector('[data-virtual-message-item]')).not.toBeNull()
+    expect(row().getBoundingClientRect().top).toBe(before)
+  })
 
   it('does not render internal recovery state as a history banner', () => {
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, historyRecoveryStatus: 'incomplete' }) } })

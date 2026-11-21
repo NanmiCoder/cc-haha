@@ -74,9 +74,13 @@ export function collectConversationImages(messages: readonly UIMessage[], contex
     } else if (message.type === 'tool_result') {
       const call = calls.get(message.toolUseId)
       const toolImages = toolResultImagesFor({ toolName: call?.toolName ?? '', input: call?.input, content: message.content })
-      for (const inline of toolImages.images) {
+      for (const image of toolImages.images) {
         const path = toolImages.originalPath && isRootedLocalPath(toolImages.originalPath) ? toolImages.originalPath : undefined
-        add({ src: '', inline, name: path ? fileName(path) : context.imageLabel, ...(path ? { path } : {}) })
+        add({
+          ...(image.url !== undefined ? { src: `${image.url}?variant=full`, captured: true } : { src: '', inline: image }),
+          name: path ? fileName(path) : context.imageLabel,
+          ...(path ? { path } : {}),
+        })
       }
       if (call && isImageGenerationToolName(call.toolName)) {
         const generated = message.isError ? null : parseImageGenerationResult(message.content)
