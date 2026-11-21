@@ -1,6 +1,6 @@
 import { expect, describe, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import type { MessageEntry, SessionListItem } from '../services/sessionService.js'
@@ -258,7 +258,9 @@ async function withFixture(mode: Mode, exercise: (fixture: {
   api<T>(path: string, body?: unknown): Promise<T>
   createSession(): Promise<{ sessionId: string; transcript: string }>
   connect(sessionId: string): Promise<Client>
-}) => Promise<void>) {
+}) => Promise<void>, { coldServerRestart = false } = {}) {
+  // Bun 会缓存进程启动时的 homedir；直接运行本文件时不能让服务端退回真实用户目录。
+  const inProcess = !coldServerRestart && homedir() === process.env.CC_HAHA_TEST_HOME
   const home = await realpath(await mkdtemp(join(tmpdir(), 'cc-haha-agy-test-')))
   const bin = join(home, 'bin')
   const workDir = join(home, 'workspace')
@@ -271,14 +273,14 @@ async function withFixture(mode: Mode, exercise: (fixture: {
   const program = join(home, 'fake-agy.ts')
   const sockets = new Set<WebSocket>()
   let port: number
-  let stop: (() => Promise<number>) | undefined
+  let stop: (() => Promise<void>) | undefined
 
   try {
-    // Bun 启动时缓存 homedir；子进程从一开始就只看见假 HOME 和绝对临时 PATH。
     const env = createSandboxedTestEnvironment(home, {
       PATH: bin, CLAUDE_CLI_PATH: fallback, CC_HAHA_LOCAL_INDEX: 'off',
       ANTHROPIC_API_KEY: 'fixture-fallback-key', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1',
       SSH_CONNECTION: '192.0.2.1 12345 192.0.2.2 22',
+      CLAUDE_CODE_LOCAL_SKIP_REMOTE_PREFETCH: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CC_HAHA_SKIP_DOTENV: '1',
     })
     await mkdir(bin)
@@ -300,9 +302,54 @@ async function withFixture(mode: Mode, exercise: (fixture: {
       return stopCurrent?.()
     }
 
+    async function startInstrumentedServer() {
+      const savedEnv = { ...process.env }
+      const fetchBefore = globalThis.fetch
+      const signals = ['SIGINT', 'SIGTERM', 'exit'] as const
+      const listeners = signals.map(signal => process.listeners(signal))
+      const replaceEnv = (next: NodeJS.ProcessEnv) => {
+        for (const key of Object.keys(process.env)) delete process.env[key]
+        Object.assign(process.env, next)
+      }
+      replaceEnv(env)
+      globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input))
+        if (url.hostname !== '127.0.0.1') throw new Error('Network outside loopback is disabled in the AGY fixture')
+        return fetchBefore(input, init)
+      }, fetchBefore)
+      let shutdown: (() => Promise<void>) | undefined
+      stop = async () => {
+        try {
+          await shutdown?.()
+        } finally {
+          for (const [index, signal] of signals.entries()) {
+            for (const listener of process.listeners(signal)) {
+              if (!listeners[index]?.includes(listener)) process.off(signal, listener)
+            }
+          }
+          globalThis.fetch = fetchBefore
+          replaceEnv(savedEnv)
+        }
+      }
+      const { startServer, stopServerRuntimeForShutdown } = await import('../index.js')
+      const { apiPerformanceMonitor } = await import('../services/apiPerformanceMonitor.js')
+      let server: ReturnType<typeof startServer> | undefined
+      shutdown = async () => {
+        try {
+          await server?.stop(true)
+          await stopServerRuntimeForShutdown()
+        } finally {
+          apiPerformanceMonitor.stop()
+        }
+      }
+      server = startServer(0, '127.0.0.1')
+      port = server.port!
+    }
+
     async function restart() {
-      const exit = await stopServer()
-      if (exit !== undefined) expect(exit).toBe(0)
+      await stopServer()
+      // 普通用例由 Bun 采集实际服务端代码；冷重启用例仍检查真实进程和信号。
+      if (inProcess) return startInstrumentedServer()
       await rm(ready, { force: true })
       const proc = Bun.spawn([
         process.execPath, '--no-env-file', '--no-install', '--preload', join(import.meta.dir, '../../../preload.ts'), '-e', `
@@ -322,7 +369,7 @@ async function withFixture(mode: Mode, exercise: (fixture: {
       stop = async () => {
         proc.kill('SIGTERM')
         const timer = setTimeout(() => proc.kill('SIGKILL'), 4_000)
-        try { return await proc.exited } finally { clearTimeout(timer) }
+        try { expect(await proc.exited).toBe(0) } finally { clearTimeout(timer) }
       }
       port = await until('real server ready', async () => {
         if (proc.exitCode !== null || proc.signalCode !== null) throw new Error((await output).join('\n'))
@@ -359,7 +406,7 @@ async function withFixture(mode: Mode, exercise: (fixture: {
           return client
         },
       })
-      expect(await stopServer()).toBe(0)
+      await stopServer()
       expect(await Bun.file(fallbackLog).exists()).toBe(false)
     } finally {
       await stopServer()
@@ -420,7 +467,7 @@ function expectHistoryTurn(messages: MessageEntry[], input: string, suffix: 'one
 
 // 临时可执行文件使用 POSIX shebang，Windows 不走这个夹具。
 describe.skipIf(process.platform === 'win32')('Antigravity ACP integration', () => {
-  test('discovers on demand, streams and persists turns, cold-resumes by native ID, then clears the binding', async () => {
+  test('discovers on demand, streams and persists turns, resumes by native ID, then clears the binding', async () => {
     await withFixture('ready', async ({ agy, workDir, api, wire, connect, createSession, restart, setMode }) => {
       expect(await api('/api/providers')).toMatchObject({ localAgent: { id: providerId, kind: 'acp', status: 'unchecked', models: [] } })
       expect(await api(authPath)).toMatchObject({ localAgentStatus: 'unchecked' })
@@ -470,10 +517,10 @@ describe.skipIf(process.platform === 'win32')('Antigravity ACP integration', () 
       expect(await readFile(transcript, 'utf8')).toStartWith(legacyLine)
       expect(await summary()).toMatchObject(selection)
 
-      // 重启整个服务端，不重发 runtime 选择；只能从磁盘恢复设置和原生 ID。
+      // 关掉服务端和外部 Agent 后重开，不重发 runtime 选择。
       await restart()
       expect(await summary()).toMatchObject(selection)
-      expect(await history('cold reopen')).toEqual(first)
+      expect(await history('reopen')).toEqual(first)
       const resumed = await connect(sessionId)
       resumed.send({ type: 'prewarm_session' })
       const resumeOffset = discovered.length + firstWire.length
@@ -625,7 +672,8 @@ describe.skipIf(process.platform === 'win32')('Antigravity ACP integration', () 
       await finishTurn(await connect(sessionId), 'Continue after shutdown', 'two', true)
       const after = await api<{ messages: MessageEntry[] }>(`/api/sessions/${sessionId}/messages`)
       expect(after.messages.slice(0, messages.length)).toEqual(messages)
-    })
+      expect((await wire()).find(entry => entry.method === 'session/resume')?.params?.sessionId).toBe(nativeId)
+    }, { coldServerRestart: true })
   }, 15_000)
 
   for (const mode of ['background', 'detached'] as const) {
