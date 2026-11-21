@@ -276,6 +276,10 @@ export function decideReply(request: MockRequest): MockReply {
   if (prompt === 'MOCK_SESSION_DELEGATION' && hasTool(request, 'CreateSessions')) {
     return toolUse('CreateSessions', { requestId: 'mock-delegation', sessions: [{ title: 'Independent review', prompt: 'Reply with Ready when you are.' }] })
   }
+  const collaborationCall = /^MOCK_SESSION_COLLABORATION (ListSessions|SendSessionMessage|WaitSessions) (.+)$/.exec(prompt)
+  if (collaborationCall && hasTool(request, collaborationCall[1]!)) {
+    return toolUse(collaborationCall[1]!, JSON.parse(collaborationCall[2]!))
+  }
   if (prompt === 'MOCK_SCHEDULED_TASK_CREATE' && hasTool(request, 'ScheduledTask')) {
     return toolUse('ScheduledTask', {
       action: 'create', requestId: 'mock-scheduled-task', name: 'Fixture scheduled review', prompt: 'Inspect the disposable fixture.',

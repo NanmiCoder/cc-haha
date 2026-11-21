@@ -436,6 +436,51 @@ describe('filesystem API', () => {
       expect(res.status).toBe(403)
       expect((await res.json() as { error: string }).error).toContain('outside allowed directory')
     })
+
+    it.each([
+      ['clip.wav', 'audio/wav'],
+      ['clip.mp3', 'audio/mpeg'],
+      ['clip.m4a', 'audio/mp4'],
+      ['clip.ogg', 'audio/ogg'],
+      ['clip.flac', 'audio/flac'],
+      ['clip.aac', 'audio/aac'],
+      ['clip.opus', 'audio/ogg'],
+    ])('serves local audio %s with %s and byte-range streaming', async (filename, expectedType) => {
+      const dir = await homeFixture()
+      const audioBytes = Uint8Array.from({ length: 128 }, (_, i) => i)
+      const filePath = path.join(dir, filename)
+      await fsp.writeFile(filePath, audioBytes)
+
+      const full = await handleFilesystemRoute(
+        '/api/filesystem/file',
+        makeUrl('/api/filesystem/file', { path: filePath }),
+      )
+      expect(full.status).toBe(200)
+      expect(full.headers.get('Content-Type')).toBe(expectedType)
+      expect(full.headers.get('Accept-Ranges')).toBe('bytes')
+      expect(full.headers.get('Cache-Control')).toBe('private, no-cache')
+      expect(new Uint8Array(await full.arrayBuffer())).toEqual(audioBytes)
+
+      const partial = await handleFilesystemRoute(
+        '/api/filesystem/file',
+        makeUrl('/api/filesystem/file', { path: filePath }),
+        undefined,
+        new Headers({ Range: 'bytes=16-31' }),
+      )
+      expect(partial.status).toBe(206)
+      expect(partial.headers.get('Content-Type')).toBe(expectedType)
+      expect(partial.headers.get('Content-Range')).toBe('bytes 16-31/128')
+      expect(partial.headers.get('Content-Length')).toBe('16')
+      expect(new Uint8Array(await partial.arrayBuffer())).toEqual(audioBytes.slice(16, 32))
+
+      const unsatisfiable = await handleFilesystemRoute(
+        '/api/filesystem/file',
+        makeUrl('/api/filesystem/file', { path: filePath }),
+        undefined,
+        new Headers({ Range: 'bytes=999-' }),
+      )
+      expect(unsatisfiable.status).toBe(416)
+    })
   })
 
   it('accepts /private/tmp aliases on macOS for browsing and file serving', async () => {

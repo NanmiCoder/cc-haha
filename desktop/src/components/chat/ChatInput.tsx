@@ -24,7 +24,7 @@ import {
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { teamRuntimeControlKey, teamRuntimeScope, useTeamRuntimeControlStore } from '@/stores/teamRuntimeControlStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -82,6 +82,7 @@ import {
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { executeFastSlashCommand } from '../../lib/fastModeCommand'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
@@ -109,6 +110,8 @@ import {
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
+import { PromptOptimizeButton } from './PromptOptimizeButton'
+import { isOptimizablePrompt, usePromptOptimize } from './usePromptOptimize'
 
 type Attachment = ComposerAttachment
 
@@ -478,6 +481,42 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       setAtCursorPos(-1)
     },
   })
+  const applyOptimizedDraft = useCallback((
+    text: string,
+    nextMentions: ComposerMention[],
+    options?: { flash?: boolean },
+  ) => {
+    promptHistory.resetHistory()
+    if (composerRef.current) {
+      composerRef.current.replaceContentWithHistory(text, nextMentions, options)
+    } else {
+      setComposerInput(text, nextMentions)
+    }
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setAtFilter('')
+    setAtCursorPos(-1)
+    requestAnimationFrame(() => {
+      if (visible) composerRef.current?.focus()
+    })
+  }, [promptHistory.resetHistory, setComposerInput, visible])
+  const getPromptOptimizeDraft = useCallback(
+    () => ({ text: inputRef.current, mentions: mentionsRef.current }),
+    [],
+  )
+  const promptOptimize = usePromptOptimize({
+    sessionId: !isMemberSession ? (activeTabId ?? null) : null,
+    disabled: composerDisabled || dictationLive || (showLaunchControls && !launchReady),
+    getDraft: getPromptOptimizeDraft,
+    applyDraft: applyOptimizedDraft,
+  })
+  const canOptimizePrompt =
+    !isMemberSession &&
+    Boolean(activeTabId) &&
+    !composerDisabled &&
+    !dictationLive &&
+    (!showLaunchControls || launchReady) &&
+    isOptimizablePrompt(input)
   const referenceCwd = activeLaunchWorkDir || resolvedWorkDir || ''
   const referenceProviderId = mentionProviderId(runtimeSelection)
   const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}\0${referenceProviderId ?? ''}\0${isLean ? 'lean' : 'standard'}`
@@ -963,6 +1002,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const handleComposerChange = (text: string, nextMentions: ComposerMention[]) => {
     promptHistory.resetHistory()
+    promptOptimize.notifyDraftChanged()
     setComposerInput(text, nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? text.length
     if (isMemberSession) {
@@ -1136,7 +1176,22 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       return
     }
 
+    if (pendingSlashUiAction?.type === 'fast') {
+      promptHistory.recordSubmission({ text: input, mentions })
+      setComposerInput('', [])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      await executeFastSlashCommand({
+        mode: pendingSlashUiAction.mode,
+        runtimeKey: activeTabId ?? DRAFT_RUNTIME_SELECTION_KEY,
+        t,
+      })
+      return
+    }
+
     if (showLaunchControls && (!launchReady || launchTransitioning)) return
+    promptOptimize.notifyDraftChanged()
 
     const workspaceReferencePrompt = !isMemberSession
       ? formatWorkspaceReferencePrompt(workspaceReferences)
@@ -1364,6 +1419,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         setLocalSlashPanel(null)
         return true
       }
+    }
+
+    if (promptOptimize.isOptimizing && event.key === 'Escape' && !slashMenuOpen) {
+      event.preventDefault()
+      promptOptimize.cancel()
+      return true
     }
 
     if (slashMenuOpen && filteredCommands.length > 0) {
@@ -2240,6 +2301,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 />
               )}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
+              {!isMemberSession && activeTabId && (
+                <PromptOptimizeButton
+                  controller={promptOptimize}
+                  canOptimize={canOptimizePrompt}
+                  mobile={isMobileComposer}
+                />
+              )}
               {stopOffer === 'background' ? (
                 // Stopping background work while the composer can still send:
                 // the same ink stop circle as a running turn, beside the send key.

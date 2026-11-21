@@ -16,12 +16,19 @@ import { AssistantOutputTargetCard } from './AssistantOutputTargetCard'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import {
   collectAssistantOutputMentions,
+  extractMarkdownAudioSources,
   resolveAssistantOutputMentions,
   selectAssistantOutputTargets,
   type TurnOutputEvidence,
 } from '@/lib/assistantOutputTargets'
 import { resolveAssistantFileHref } from '@/lib/assistantFileContext'
-import { createAssistantMarkdownImageResolver, localPathFromMarkdownImageUrl } from '../../lib/markdownImages'
+import {
+  createAssistantMarkdownAudioResolver,
+  createAssistantMarkdownImageResolver,
+  localPathFromMarkdownImageUrl,
+  normalizeMarkdownImageDestination,
+} from '../../lib/markdownImages'
+import { isAbsoluteLocalPath } from '../../lib/handlePreviewLink'
 import type { MarkdownImageClick } from '../markdown/MarkdownRenderer'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { isManagedGeneratedImagePath } from '../../lib/attachmentImages'
@@ -53,6 +60,25 @@ type Props = {
 }
 
 const MAX_CARDS = 3
+
+function audioPathComparisonKey(raw: string, workDir?: string | null): string | null {
+  const normalized = normalizeMarkdownImageDestination(raw).trim()
+  if (!normalized || /^(?:data:|blob:|https?:)/i.test(normalized)) return null
+  const withoutSuffix = normalized.split('#')[0]!.split('?')[0]!
+  let decoded = withoutSuffix
+  try {
+    decoded = decodeURIComponent(withoutSuffix)
+  } catch {
+    // Keep raw string comparable if percent-escape is malformed.
+  }
+  const slashed = decoded.replaceAll('\\', '/').replace(/^\.\//, '')
+  const unprefixed = /^\/([A-Za-z]:\/)/.test(slashed) ? slashed.slice(1) : slashed
+  const absolute = workDir && !isAbsoluteLocalPath(unprefixed) && !unprefixed.startsWith('~/')
+    ? `${workDir.replaceAll('\\', '/').replace(/\/+$/, '')}/${unprefixed.replace(/^\/+/, '')}`
+    : unprefixed
+  const isWindows = /^[A-Za-z]:\//.test(absolute)
+  return isWindows ? absolute.toLowerCase() : absolute
+}
 
 export const AssistantMessage = memo(function AssistantMessage({
   content,
@@ -127,11 +153,34 @@ export const AssistantMessage = memo(function AssistantMessage({
     [aliases, content, sessionId, t, workDir],
   )
 
+  const inlineAudioKeys = useMemo(() => {
+    if (isStreaming || !sessionId) return new Set<string>()
+    const keys = new Set<string>()
+    for (const raw of extractMarkdownAudioSources(content)) {
+      const directKey = audioPathComparisonKey(raw, workDir)
+      if (directKey) keys.add(directKey)
+      const trimmed = raw.trim().split('#')[0]!.split('?')[0]!
+      let decoded = trimmed
+      try {
+        decoded = decodeURIComponent(trimmed)
+      } catch {
+        // Keep raw form for alias lookup.
+      }
+      const aliased = aliases.get(raw) ?? aliases.get(decoded)
+      if (aliased) {
+        const aliasedKey = audioPathComparisonKey(aliased, workDir)
+        if (aliasedKey) keys.add(aliasedKey)
+      }
+    }
+    return keys
+  }, [aliases, content, isStreaming, sessionId, workDir])
+
   const extractedTargets = useMemo(
     () =>
       isStreaming || !sessionId
         ? []
-        : // Image/video targets render inline (InlineImageGallery/InlineVideoGallery); never also as a card.
+        : // Image/video targets render inline (InlineImageGallery/InlineVideoGallery);
+          // inline-embedded audio players (`![...](*.wav)` / `<audio>`) also own their UI.
           selectAssistantOutputTargets(resolvedMentions, {
             workDir,
             changedFiles: turnChangedFiles,
@@ -141,10 +190,15 @@ export const AssistantMessage = memo(function AssistantMessage({
             // A card says the turn produced the file; until the checkpoint says
             // what could have written one, nothing unproven is.
             outputEvidence: { unlistedWrites: turnOutputEvidence?.unlistedWrites ?? false },
-          }).filter(
-            (target) => target.kind !== 'image' && target.kind !== 'video',
-          ),
-    [resolvedMentions, isStreaming, isTurnOutputOwner, sessionId, workDir, turnChangedFiles, turnOutputEvidence?.unlistedWrites],
+          }).filter((target) => {
+            if (target.kind === 'image' || target.kind === 'video') return false
+            if (inlineAudioKeys.size > 0 && target.kind === 'file') {
+              const key = audioPathComparisonKey(target.normalizedPath ?? target.href, workDir)
+              if (key && inlineAudioKeys.has(key)) return false
+            }
+            return true
+          }),
+    [resolvedMentions, isStreaming, isTurnOutputOwner, sessionId, workDir, turnChangedFiles, turnOutputEvidence?.unlistedWrites, inlineAudioKeys],
   )
   // A bare name the text could not bound is settled against the workspace listing,
   // then a file no changed file accounts for must show it was written this turn.
@@ -163,6 +217,17 @@ export const AssistantMessage = memo(function AssistantMessage({
         ? null
         : resolveLocalImage(src)
     },
+    [aliases, isStreaming, sessionId, workDir],
+  )
+  const resolveAssistantAudioSrc = useMemo(
+    () => (isStreaming || !sessionId
+      ? undefined
+      : createAssistantMarkdownAudioResolver({
+          baseUrl: getServerBaseUrl(),
+          sessionId,
+          workDir,
+          aliases,
+        })),
     [aliases, isStreaming, sessionId, workDir],
   )
 
@@ -228,6 +293,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             streaming={isStreaming}
             onLinkClick={sessionId ? handleLinkClick : undefined}
             resolveImageSrc={resolveAssistantImageSrc}
+            resolveAudioSrc={resolveAssistantAudioSrc}
             onImageClick={resolveAssistantImageSrc ? handleImageClick : undefined}
             fileLinkVerifier={fileLinkVerifier}
           />

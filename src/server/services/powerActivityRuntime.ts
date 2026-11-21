@@ -1,6 +1,7 @@
 import { hasSessionPowerActivity } from '../ws/handler.js'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 import { hasSideQuestionPowerActivity } from '../api/sideQuestions.js'
+import { hasPromptOptimizePowerActivity } from '../api/promptOptimize.js'
 import { hasSessionCollaborationPowerActivity } from './sessionCollaborationHost.js'
 import { readdir } from 'node:fs/promises'
 import { listTeamPlansAwaitingReview, readTeamPlan } from '../../utils/swarm/teamPlanStore.js'
@@ -38,7 +39,7 @@ export async function getPowerActivitySnapshot(): Promise<PowerActivitySnapshot>
   ])
   const busy = migrationMaintenance.isActive || reviews.length > 0 || teamWork || teamPlanService.hasActiveOperations()
     || cronScheduler.hasActiveWork() || hasSessionPowerActivity() || hasPowerActivityLeases()
-    || hasSideQuestionPowerActivity() || hasSessionCollaborationPowerActivity()
+    || hasSideQuestionPowerActivity() || hasPromptOptimizePowerActivity() || hasSessionCollaborationPowerActivity()
   const snapshot = powerActivityClock.read(busy)
   if (snapshot.revision !== before) snapshot.busy = true
   return snapshot

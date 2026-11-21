@@ -11,7 +11,7 @@ import { type AppState, useAppState, useSetAppState } from '../../state/AppState
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
 import { clearFastModeCooldown, FAST_MODE_MODEL_DISPLAY, getFastModeModel, getFastModeRuntimeState, getFastModeUnavailableReason, isFastModeEnabled, isFastModeSupportedByModel, prefetchFastModeStatus } from '../../utils/fastMode.js';
 import { formatDuration } from '../../utils/format.js';
-import { formatModelPricing, getOpus46CostTier } from '../../utils/modelCost.js';
+import { COST_OPUS_55_FAST, formatModelPricing, getFastModeCostTierForModel } from '../../utils/modelCost.js';
 import { updateSettingsForSource } from '../../utils/settings/settings.js';
 function applyFastMode(enable: boolean, setAppState: (f: (prev: AppState) => AppState) => void): void {
   clearFastModeCooldown();
@@ -58,14 +58,8 @@ export function FastModePicker(t0) {
   const runtimeState = t1;
   const isCooldown = runtimeState.status === "cooldown";
   const isUnavailable = unavailableReason !== null;
-  let t2;
-  if ($[1] === Symbol.for("react.memo_cache_sentinel")) {
-    t2 = formatModelPricing(getOpus46CostTier(true));
-    $[1] = t2;
-  } else {
-    t2 = $[1];
-  }
-  const pricing = t2;
+  const effectiveFastModel = isFastModeSupportedByModel(model) ? model : getFastModeModel();
+  const pricing = formatModelPricing(getFastModeCostTierForModel(effectiveFastModel ?? getFastModeModel()) ?? COST_OPUS_55_FAST);
   let t3;
   if ($[2] !== enableFastMode || $[3] !== isUnavailable || $[4] !== model || $[5] !== onDone || $[6] !== setAppState) {
     t3 = function handleConfirm() {
@@ -239,7 +233,8 @@ async function handleFastModeShortcut(enable: boolean, getAppState: () => AppSta
   if (enable) {
     const fastIcon = getFastIconString(true);
     const modelUpdated = !isFastModeSupportedByModel(mainLoopModel) ? ` · model set to ${FAST_MODE_MODEL_DISPLAY}` : '';
-    const pricing = formatModelPricing(getOpus46CostTier(true));
+    const effectiveModel = isFastModeSupportedByModel(mainLoopModel) ? mainLoopModel : getFastModeModel();
+    const pricing = formatModelPricing(getFastModeCostTierForModel(effectiveModel ?? getFastModeModel()) ?? COST_OPUS_55_FAST);
     return `${fastIcon} Fast mode ON${modelUpdated} · ${pricing}`;
   } else {
     return `Fast mode OFF`;

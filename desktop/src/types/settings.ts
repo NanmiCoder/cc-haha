@@ -163,6 +163,8 @@ export type UserSettings = {
   modelContext?: string
   effort?: EffortLevel
   alwaysThinkingEnabled?: boolean
+  /** Claude fast mode (persisted in ~/.claude/settings.json as fastMode; null clears it). */
+  fastMode?: boolean | null
   workflowKeywordTriggerEnabled?: boolean
   /** Desktop composer next-prompt suggestions; absent means off (opt-in, costs tokens). */
   nextPromptSuggestionsEnabled?: boolean

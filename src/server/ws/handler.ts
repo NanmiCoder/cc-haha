@@ -4854,7 +4854,16 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         cacheSessionInitMetadata(sessionId, cliMsg)
         const messages: ServerMessage[] = [
           // Send model info as a system notification, not a status change
-          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model, cwd: cliMsg.cwd } },
+          {
+            type: 'system_notification',
+            subtype: 'init',
+            message: `Model: ${cliMsg.model || 'unknown'}`,
+            data: {
+              model: cliMsg.model,
+              cwd: cliMsg.cwd,
+              ...(cliMsg.fast_mode_state !== undefined ? { fastModeState: cliMsg.fast_mode_state } : {}),
+            },
+          },
         ]
         // Send slash commands to frontend
         const cmds = sessionSlashCommands.get(sessionId)
@@ -4866,6 +4875,18 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           })
         }
         return messages
+      }
+      if (subtype === 'fast_mode_status') {
+        return [{
+          type: 'system_notification',
+          subtype: 'fast_mode_status',
+          message: typeof cliMsg.message === 'string' ? cliMsg.message : '',
+          data: {
+            fastModeState: cliMsg.fast_mode_state,
+            reason: cliMsg.reason,
+            ...(typeof cliMsg.reset_at === 'number' ? { resetAt: cliMsg.reset_at } : {}),
+          },
+        }]
       }
       if (subtype === 'memory_saved') {
         return [{

@@ -857,4 +857,22 @@ export const sessionsApi = {
       timeout: 60_000,
     })
   },
+
+  optimizePrompt(
+    sessionId: string,
+    body: { requestId: string; prompt: string },
+    signal?: AbortSignal,
+  ) {
+    return api.post<{ requestId: string; optimizedPrompt: string }>(
+      `/api/sessions/${sessionId}/optimize-prompt`,
+      body,
+      { timeout: 120_000, signal },
+    )
+  },
+
+  cancelOptimizePrompt(sessionId: string, requestId: string) {
+    return api.delete<{ requestId: string; cancelled: boolean }>(
+      `/api/sessions/${sessionId}/optimize-prompt/${requestId}`,
+    )
+  },
 }

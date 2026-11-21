@@ -296,6 +296,12 @@ export class SettingsService {
         throw ApiError.badRequest('maxOutputTokensEscalationMode must be auto, enabled, or disabled')
       }
     }
+    if (Object.hasOwn(settings, 'fastMode')) {
+      const value = settings.fastMode
+      if (value !== undefined && value !== null && typeof value !== 'boolean') {
+        throw ApiError.badRequest('fastMode must be a boolean or null')
+      }
+    }
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {
       const current = await this.readJsonFile(filePath)
@@ -307,6 +313,13 @@ export class SettingsService {
         (settings.language === undefined || settings.language === null)
       ) {
         delete merged.language
+      }
+
+      if (
+        Object.hasOwn(settings, 'fastMode') &&
+        (settings.fastMode === undefined || settings.fastMode === null)
+      ) {
+        delete merged.fastMode
       }
 
       const hasEffort = Object.hasOwn(settings, 'effort')

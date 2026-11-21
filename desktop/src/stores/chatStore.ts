@@ -20,6 +20,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
+import { useUIStore } from './uiStore'
 import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
@@ -6166,9 +6167,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 })
               }
             }
-            void import('./uiStore').then(({ useUIStore }) => {
-              useUIStore?.getState().addToast({ type: 'error', message: msg.message })
-            })
+            useUIStore?.getState().addToast({ type: 'error', message: msg.message })
             break
           }
           if (msg.permissionRequestId) break
@@ -6312,6 +6311,18 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           if (typeof cwd === 'string' && cwd.trim()) {
             useSessionStore.getState().updateSessionWorkDir(sessionId, cwd)
           }
+        }
+        if (msg.subtype === 'fast_mode_status') {
+          const data = msg.data as { fastModeState?: unknown; reason?: unknown } | undefined
+          if (data?.reason === 'org_disabled' || data?.reason === 'overage_rejected') {
+            useSettingsStore.setState({ fastMode: false })
+            if (typeof msg.message === 'string' && msg.message.trim()) {
+              useUIStore.getState().addToast({ type: 'warning', message: msg.message })
+            }
+          } else if (data?.fastModeState === 'cooldown' && typeof msg.message === 'string' && msg.message.trim()) {
+            useUIStore.getState().addToast({ type: 'info', message: msg.message })
+          }
+          break
         }
         if (msg.subtype === 'scheduled_tasks_changed') {
           void useTaskStore.getState().fetchTasks()

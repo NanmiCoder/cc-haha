@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import {
+  getIsInteractive,
+  getSessionId,
+  setIsInteractive,
+} from '../../bootstrap/state.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { PromptHook } from '../settings/types.js'
+import { addSessionHook } from './sessionHooks.js'
 
-const queryModelWithoutStreamingMock = mock(async () => ({
+const queryModelWithoutStreamingMock = mock(async (_params?: { signal?: AbortSignal }) => ({
   message: {
     content: [{ type: 'text', text: 'not json' }],
   },
@@ -16,15 +22,22 @@ mock.module('../../services/api/claude.js', () => ({
 }))
 
 const { execPromptHook } = await import('./execPromptHook.js')
+const { executeStopHooks } = await import('../hooks.js')
 
-function makeContext(): ToolUseContext {
+function makeContext(appStateOverride?: Record<string, unknown>): ToolUseContext {
   let responseLength = 0
+  let state: Record<string, unknown> = {
+    toolPermissionContext: { mode: 'default' },
+    sessionHooks: new Map(),
+    ...appStateOverride,
+  }
   return {
     abortController: new AbortController(),
     agentId: undefined,
-    getAppState: () => ({
-      toolPermissionContext: { mode: 'default' },
-    }),
+    getAppState: () => state,
+    setAppState: (updater: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+      state = updater(state)
+    },
     options: {
       tools: [],
     },
@@ -32,6 +45,17 @@ function makeContext(): ToolUseContext {
       responseLength = updater(responseLength)
     },
   } as unknown as ToolUseContext
+}
+
+function stallUntilAborted({ signal }: { signal?: AbortSignal } = {}) {
+  return new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(new Error('Request was aborted.'))
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 const goalHook = {
@@ -113,5 +137,90 @@ describe('execPromptHook goal failures', () => {
     expect(result.outcome).toBe('blocking')
     expect(result.preventContinuation).toBe(true)
     expect(result.blockingError?.blockingError).toContain('expected schema')
+  })
+
+  test('turns /goal evaluator timeout into blocking continuation when parent signal is omitted', async () => {
+    queryModelWithoutStreamingMock.mockImplementation(stallUntilAborted)
+    const fastGoalHook: PromptHook = { ...goalHook, timeout: 0.05 }
+
+    const result = await execPromptHook(
+      fastGoalHook,
+      'Stop',
+      'Stop',
+      '{}',
+      undefined,
+      makeContext(),
+    )
+
+    expect(result.outcome).toBe('blocking')
+    expect(result.preventContinuation).toBe(true)
+    expect(result.blockingError?.command).toContain('<cc-haha-goal-hook>')
+    expect(result.blockingError?.blockingError).toContain('evaluation timed out')
+  })
+})
+
+describe('executeStopHooks explicit prompt hook timeout', () => {
+  let prevInteractive = false
+
+  beforeEach(() => {
+    prevInteractive = getIsInteractive()
+    setIsInteractive(false)
+    queryModelWithoutStreamingMock.mockClear()
+    queryModelWithoutStreamingMock.mockImplementation(stallUntilAborted)
+  })
+
+  afterEach(() => {
+    setIsInteractive(prevInteractive)
+  })
+
+  test('reports evaluation timed out for /goal hook with explicit timeout instead of silently cancelling', async () => {
+    const context = makeContext()
+    const fastGoalHook: PromptHook = { ...goalHook, timeout: 0.05 }
+    addSessionHook(context.setAppState, getSessionId(), 'Stop', '', fastGoalHook)
+
+    const results = []
+    for await (const result of executeStopHooks(
+      'default',
+      context.abortController.signal,
+      undefined,
+      false,
+      undefined,
+      context,
+      [],
+    )) {
+      results.push(result)
+    }
+
+    const blocking = results.find(result => result.blockingError)
+    expect(blocking?.blockingError?.command).toContain('<cc-haha-goal-hook>')
+    expect(blocking?.blockingError?.blockingError).toContain('evaluation timed out')
+    expect(blocking?.blockingError?.blockingError).toContain('continue working toward it')
+  })
+
+  test('keeps user abort as cancelled without turning it into a timeout continuation', async () => {
+    const context = makeContext()
+    const slowGoalHook: PromptHook = { ...goalHook, timeout: 5 }
+    addSessionHook(context.setAppState, getSessionId(), 'Stop', '', slowGoalHook)
+
+    const abortTimer = setTimeout(() => context.abortController.abort(), 30)
+    const results = []
+    try {
+      for await (const result of executeStopHooks(
+        'default',
+        context.abortController.signal,
+        undefined,
+        false,
+        undefined,
+        context,
+        [],
+      )) {
+        results.push(result)
+      }
+    } finally {
+      clearTimeout(abortTimer)
+    }
+
+    expect(results.some(result => result.blockingError)).toBe(false)
+    expect(results.some(result => result.preventContinuation)).toBe(false)
   })
 })

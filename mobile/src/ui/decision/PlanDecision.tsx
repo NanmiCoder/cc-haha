@@ -20,7 +20,7 @@ import {
 } from '../kit'
 import { planExecutionModes } from '../modes'
 import { RuntimeSheet } from '../RuntimePicker'
-import { EffortControl } from '../EffortControl'
+import { EffortControl, EffortSheet } from '../EffortControl'
 import { Text } from '../Text'
 import type { PlanExecutionMode } from '../approvalData'
 import {
@@ -70,9 +70,15 @@ export function PlanDecision({
   // RuntimeSheet 回传所选模型时用它的显示名；沿用当前模型时只有 modelId。
   const [executionModelName, setExecutionModelName] = useState<string>()
   const [runtimeOpen, setRuntimeOpen] = useState(false)
+  const [effortOpen, setEffortOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [notSent, setNotSent] = useState(false)
+  const closePlanSheet = () => {
+    setRuntimeOpen(false)
+    setEffortOpen(false)
+    setSheetOpen(false)
+  }
   // 打开前就存在的错误属于别的操作，计划页里只显示之后出现的错误。
   const [initialError] = useState(serverError)
   const text = planSource(input)
@@ -106,10 +112,41 @@ export function PlanDecision({
       )}
       <PageSheet
         visible={sheetOpen}
-        onClose={() => setSheetOpen(false)}
+        onClose={closePlanSheet}
         title="计划"
         background={colors.card}
-        left={<TextButton title="稍后" onPress={() => setSheetOpen(false)} />}
+        left={<TextButton title="稍后" onPress={closePlanSheet} />}
+        overlayOpen={runtimeOpen || effortOpen}
+        onOverlayClose={() => {
+          setRuntimeOpen(false)
+          setEffortOpen(false)
+        }}
+        overlay={
+          <>
+            <RuntimeSheet
+              inline
+              visible={runtimeOpen}
+              onClose={() => setRuntimeOpen(false)}
+              title="执行模型"
+              client={client}
+              initial={execution}
+              onApply={(value, model) => {
+                setExecutionRuntime(value)
+                setExecutionModelName(model?.id === value.modelId ? model.name : undefined)
+                setRuntimeOpen(false)
+              }}
+            />
+            <EffortSheet
+              inline
+              visible={effortOpen}
+              onClose={() => setEffortOpen(false)}
+              client={client ?? null}
+              runtime={execution}
+              disabled={locked}
+              onApply={setExecutionRuntime}
+            />
+          </>
+        }
       >
         <KeyboardViewport style={{ flex: 1 }}>
           <ScrollView
@@ -177,7 +214,13 @@ export function PlanDecision({
               <Icon name="chevron-right" size={15} color={colors.chevron} strokeWidth={2.2} />
             </Pressable>
             <View style={{ alignItems: 'flex-start' }}>
-              <EffortControl client={client ?? null} runtime={execution} disabled={locked} onApply={setExecutionRuntime} />
+              <EffortControl
+                client={client ?? null}
+                runtime={execution}
+                disabled={locked}
+                onApply={setExecutionRuntime}
+                onOpen={() => setEffortOpen(true)}
+              />
             </View>
             {feedbackOpen ? (
               <View style={{ gap: 6 }}>
@@ -227,18 +270,6 @@ export function PlanDecision({
             )}
           </View>
         </KeyboardViewport>
-        <RuntimeSheet
-          visible={runtimeOpen}
-          onClose={() => setRuntimeOpen(false)}
-          title="执行模型"
-          client={client}
-          initial={execution}
-          onApply={(value, model) => {
-            setExecutionRuntime(value)
-            setExecutionModelName(model?.id === value.modelId ? model.name : undefined)
-            setRuntimeOpen(false)
-          }}
-        />
       </PageSheet>
     </DecisionSurface>
   )

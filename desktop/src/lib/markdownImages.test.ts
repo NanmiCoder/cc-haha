@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createAssistantMarkdownAudioResolver,
   createAssistantMarkdownImageResolver,
+  createWorkspaceMarkdownAudioResolver,
   createWorkspaceMarkdownImageResolver,
+  isLocalAudioName,
+  isMarkdownAudioDestination,
+  isSafeMarkdownAudioSource,
   isSafeMarkdownImageSource,
   localPathFromMarkdownImageUrl,
   normalizeMarkdownImageDestination,
@@ -414,5 +419,78 @@ describe('localPathFromMarkdownImageUrl', () => {
       const expected = source.startsWith('sub/') ? '/repo/sub/dir/x.png' : source
       expect(localPathFromMarkdownImageUrl(url, context)).toBe(expected)
     }
+  })
+})
+
+describe('markdown audio helpers and resolvers', () => {
+  it('recognizes supported audio filenames and data URIs without hijacking blob: images', () => {
+    for (const ext of ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac', 'opus', 'WAV', 'Mp3']) {
+      expect(isLocalAudioName(`/Users/me/sfx.${ext}`)).toBe(true)
+      expect(isMarkdownAudioDestination(`N:/project/outputs/sfx/clip.${ext}?v=1#t=2`)).toBe(true)
+    }
+    expect(isLocalAudioName('/Users/me/pic.png')).toBe(false)
+    expect(isLocalAudioName('/Users/me/.wav')).toBe(false)
+    expect(isMarkdownAudioDestination('data:audio/mpeg;base64,SUQz')).toBe(true)
+    expect(isMarkdownAudioDestination('data:audio/evil;base64,AAAA')).toBe(false)
+    expect(isMarkdownAudioDestination('blob:https://desktop.invalid/1234')).toBe(false)
+    expect(isSafeMarkdownAudioSource('blob:https://desktop.invalid/1234')).toBe(true)
+    expect(isSafeMarkdownAudioSource('data:audio/wav;base64,UklGRg==')).toBe(true)
+    expect(isSafeMarkdownAudioSource('data:image/png;base64,AAAA')).toBe(false)
+  })
+
+  it('routes assistant audio inside workdir via /preview-fs and outside via /api/filesystem/file', () => {
+    const BASE = 'http://127.0.0.1:3456'
+    const resolve = createAssistantMarkdownAudioResolver({
+      baseUrl: BASE,
+      sessionId: 'session-1',
+      workDir: 'N:\\project',
+    })
+    const filesystem = (p: string) => `${BASE}/api/filesystem/file?path=${encodeURIComponent(p)}`
+
+    expect(resolve('outputs/sfx/plane-crash.wav')).toBe(`${BASE}/preview-fs/session-1/outputs/sfx/plane-crash.wav`)
+    expect(resolve('/N:/project/outputs/sfx/plane-crash.wav')).toBe(`${BASE}/preview-fs/session-1/N%3A/project/outputs/sfx/plane-crash.wav`)
+    expect(resolve('/N:/other/sfx/take.flac')).toBe(filesystem('N:/other/sfx/take.flac'))
+    expect(resolve('~/Music/demo.mp3')).toBe(filesystem('~/Music/demo.mp3'))
+    expect(resolve('data:audio/mpeg;base64,SUQz')).toBe('data:audio/mpeg;base64,SUQz')
+    expect(resolve('blob:https://desktop.invalid/audio')).toBe('blob:https://desktop.invalid/audio')
+
+    // Rejects remote, loopback, non-audio, escapes, and malformed percent escapes.
+    expect(resolve('https://attacker.example/a.mp3')).toBeNull()
+    expect(resolve('http://127.0.0.1:8606/preview/a.wav')).toBeNull()
+    expect(resolve('notes/readme.txt')).toBeNull()
+    expect(resolve('../outside.wav')).toBeNull()
+    expect(resolve('outputs/%zz.wav')).toBeNull()
+  })
+
+  it('resolves workspace markdown audio through /preview-fs and /api/filesystem/file and blocks remote https URLs', () => {
+    const BASE = 'http://127.0.0.1:3456'
+    const filesystem = (p: string) => `${BASE}/api/filesystem/file?path=${encodeURIComponent(p)}`
+    const resolve = createWorkspaceMarkdownAudioResolver(CONTEXT)
+
+    expect(resolve('audio/demo.wav')).toBe(`${BASE}/preview-fs/session-1/docs/audio/demo.wav`)
+    expect(resolve('/repo/audio/in-workdir.mp3')).toBe(`${BASE}/preview-fs/session-1//repo/audio/in-workdir.mp3`)
+    expect(resolve('/Users/me/demo.mp3')).toBe(filesystem('/Users/me/demo.mp3'))
+    expect(resolve('~/Music/demo.flac')).toBe(filesystem('~/Music/demo.flac'))
+    expect(resolve('../../outside.wav')).toBe(filesystem('/outside.wav'))
+    expect(resolve('data:audio/ogg;base64,T2dn')).toBe('data:audio/ogg;base64,T2dn')
+    expect(resolve('http://127.0.0.1:8606/preview-fs/s1/clip.wav')).toBe('http://127.0.0.1:8606/preview-fs/s1/clip.wav')
+
+    // Remote https:// is blocked by media-src CSP and must not reach <audio>.
+    expect(resolve('https://example.com/demo.mp3')).toBeNull()
+    expect(resolve('data:image/png;base64,AAAA')).toBeNull()
+    expect(resolve('docs/notes.txt')).toBeNull()
+    expect(resolve('../../secret.txt')).toBeNull()
+
+    // Windows non-$HOME workDir absolute path stays on /preview-fs so it needs no registered root.
+    const winResolve = createWorkspaceMarkdownAudioResolver({
+      baseUrl: BASE,
+      sessionId: 'session-1',
+      filePath: 'README.md',
+      workDir: 'N:\\project',
+    })
+    expect(winResolve('/N:/project/outputs/sfx/plane-crash.wav')).toBe(
+      `${BASE}/preview-fs/session-1/N%3A/project/outputs/sfx/plane-crash.wav`,
+    )
+    expect(winResolve('N:/other/sfx/take.wav')).toBe(filesystem('N:/other/sfx/take.wav'))
   })
 })
