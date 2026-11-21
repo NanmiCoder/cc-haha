@@ -72,6 +72,7 @@ type SettingsStore = {
   nextPromptSuggestionsEnabled: boolean
   maxOutputTokensEscalationMode: 'auto' | 'enabled' | 'disabled'
   leanModeEnabled: boolean
+  includeCyberRiskInstruction: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
   autoDreamEnabled: boolean
@@ -124,6 +125,7 @@ type SettingsStore = {
   setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
   setMaxOutputTokensEscalationMode: (mode: 'auto' | 'enabled' | 'disabled') => Promise<void>
   setLeanModeEnabled: (enabled: boolean) => Promise<void>
+  setIncludeCyberRiskInstruction: (included: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
@@ -222,6 +224,9 @@ applyDocumentLocale(initialLocale)
 let leanModeSaveVersion = 0
 let leanModePendingSaves = 0
 let leanModeSaveQueue: Promise<void> = Promise.resolve()
+let cyberRiskSaveVersion = 0
+let cyberRiskPendingSaves = 0
+let cyberRiskSaveQueue: Promise<void> = Promise.resolve()
 let outputEscalationSaveVersion = 0
 let outputEscalationPendingSaves = 0
 let outputEscalationSaveQueue: Promise<void> = Promise.resolve()
@@ -242,6 +247,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   nextPromptSuggestionsEnabled: false,
   maxOutputTokensEscalationMode: 'auto',
   leanModeEnabled: false,
+  includeCyberRiskInstruction: true,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
   autoDreamEnabled: false,
@@ -291,6 +297,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   fetchAll: async () => {
     const leanModeVersionAtStart = leanModeSaveVersion
     const leanModePendingAtStart = leanModePendingSaves > 0
+    const cyberRiskVersionAtStart = cyberRiskSaveVersion
+    const cyberRiskPendingAtStart = cyberRiskPendingSaves > 0
     const outputEscalationVersionAtStart = outputEscalationSaveVersion
     const outputEscalationPendingAtStart = outputEscalationPendingSaves > 0
     const autoUpdateVersionAtStart = autoUpdateSaveVersion
@@ -358,6 +366,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         // Forward read migration: older settings leave the experiment disabled.
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
+        // Forward read migration: older settings keep built-in cyber-risk instructions enabled.
+        includeCyberRiskInstruction: !cyberRiskPendingAtStart && cyberRiskPendingSaves === 0 && cyberRiskVersionAtStart === cyberRiskSaveVersion
+          ? userSettings.includeCyberRiskInstruction !== false : get().includeCyberRiskInstruction,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
         // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
         maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
@@ -525,6 +536,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await save
     } finally {
       leanModePendingSaves -= 1
+    }
+  },
+
+  setIncludeCyberRiskInstruction: async (included) => {
+    cyberRiskSaveVersion += 1
+    cyberRiskPendingSaves += 1
+    const save = cyberRiskSaveQueue.then(async () => {
+      await settingsApi.updateUser({ includeCyberRiskInstruction: included })
+      set({ includeCyberRiskInstruction: included })
+    })
+    cyberRiskSaveQueue = save.catch(() => {})
+    try {
+      await save
+    } finally {
+      cyberRiskPendingSaves -= 1
     }
   },
 

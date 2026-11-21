@@ -355,6 +355,15 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           "Include built-in commit and PR workflow instructions in Claude's system prompt (default: true)",
         ),
+      includeCyberRiskInstruction: z
+        .boolean()
+        .optional()
+        // A malformed value here must not invalidate the whole settings file:
+        // parseSettingsFileUncached drops every setting when the schema throws.
+        .catch(undefined)
+        .describe(
+          'Include the Anthropic cyber-risk safety instruction and file-read malware reminder for third-party providers (default: true). Claude official OAuth accounts keep them unless overridden by CLAUDE_CODE_DISABLE_CYBER_RISK_INSTRUCTION.',
+        ),
       permissions: PermissionsSchema()
         .optional()
         .describe('Tool usage permissions configuration'),

@@ -230,6 +230,43 @@ describe('persistent storage upgrade migrations', () => {
     expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
   })
 
+  test('reads legacy settings without includeCyberRiskInstruction without rewriting shared user settings', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      updateProxy: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    const before = await service.getUserSettings()
+    expect(before.includeCyberRiskInstruction).toBeUndefined()
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+
+    await service.updateUserSettings({ includeCyberRiskInstruction: false })
+    expect((await new SettingsService().getUserSettings()).includeCyberRiskInstruction).toBe(false)
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({
+      ...legacy,
+      includeCyberRiskInstruction: false,
+    })
+
+    await service.updateUserSettings({ includeCyberRiskInstruction: true })
+    expect((await new SettingsService().getUserSettings()).includeCyberRiskInstruction).toBe(true)
+  })
+
+  test('rejects a non-boolean cyber-risk instruction choice without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ includeCyberRiskInstruction: true, unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(
+      new SettingsService().updateUserSettings({ includeCyberRiskInstruction: 'false' }),
+    ).rejects.toThrow('includeCyberRiskInstruction must be a boolean')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
   test('upgrades the legacy automatic update preference on read without rewriting shared user settings', async () => {
     const userPath = path.join(tempDir, 'settings.json')
     const legacy = {

@@ -48,6 +48,7 @@ import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
+import { CyberRiskInstructionSettings } from './CyberRiskInstructionSettings'
 import { PreventSleepSettings } from './PreventSleepSettings'
 import { IdlePowerSettings } from './IdlePowerSettings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
@@ -1167,6 +1168,7 @@ export function GeneralSettings() {
             </SettingsRow>
           )}
           <LeanModeSettings />
+          <CyberRiskInstructionSettings />
           <SettingsSwitchRow
             title={t('settings.general.workflowKeywordEnabled')}
             description={t('settings.general.workflowKeywordDescription')}
