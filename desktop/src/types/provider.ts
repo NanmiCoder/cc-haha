@@ -1,5 +1,19 @@
 // desktop/src/types/provider.ts
 
+import type { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
+
+export type LocalAgentStatus = 'not_installed' | 'unchecked' | 'ready' | 'login_required' | 'error'
+
+/** Discovered through the local server, never a saved API provider. */
+export type LocalAgentProvider = {
+  id: typeof ANTIGRAVITY_ACP_PROVIDER_ID
+  kind: 'acp'
+  status: LocalAgentStatus
+  models: { id: string; name: string }[]
+  currentModelId?: string
+  version?: string
+}
+
 export type ApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
 
 /** Protocols a preset can route one model family to; a saved record only carries an ApiFormat. */

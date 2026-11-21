@@ -59,6 +59,7 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
+import { AntigravityProviderCard } from './AntigravityProviderCard'
 import {
   highlightSegments,
   initialProviderTab,
@@ -590,6 +591,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
       />
 
       {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mt-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
+      <AntigravityProviderCard />
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <SegmentedControl
           as="tablist"

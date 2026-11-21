@@ -3,7 +3,7 @@ import {
   sessionsApi,
   type BatchDeleteSessionsResponse,
   type BranchSessionResponse,
-  type CreateSessionRepositoryOptions,
+  type CreateSessionRequest,
   type ProjectSessionHistoryParams,
   type ProjectSessionHistoryResponse,
 } from '../api/sessions'
@@ -11,7 +11,7 @@ import { ApiError } from '../api/client'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
-import type { AgentProfile, LocalIndexStatus, SessionListItem } from '../types/session'
+import type { LocalIndexStatus, SessionListItem } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
@@ -33,11 +33,7 @@ export type ProjectHistoryState = {
 }
 type RecentProjectBoundary = { beforeModifiedAt: string; beforeId: string }
 
-type CreateSessionOptions = {
-  agentProfile?: AgentProfile
-  repository?: CreateSessionRepositoryOptions
-  permissionMode?: PermissionMode
-}
+type CreateSessionOptions = Omit<CreateSessionRequest, 'workDir'>
 
 type BranchSessionResult = Pick<BranchSessionResponse, 'sessionId' | 'title' | 'workDir'>
 
@@ -336,6 +332,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ...(options?.agentProfile ? { agentProfile: options.agentProfile } : {}),
       ...(options?.repository ? { repository: options.repository } : {}),
       ...(requestedPermissionMode ? { permissionMode: requestedPermissionMode } : {}),
+      ...(options?.launchProviderId ? { launchProviderId: options.launchProviderId } : {}),
     })
     invalidateRecentProjectsCache()
     const now = new Date().toISOString()

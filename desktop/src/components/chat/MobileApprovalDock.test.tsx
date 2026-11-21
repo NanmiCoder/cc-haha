@@ -15,6 +15,7 @@ vi.mock('../../api/websocket', () => ({
 
 import { useChatStore, type PendingPermission } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useTabStore } from '../../stores/tabStore'
 import { MobileApprovalDock } from './MobileApprovalDock'
 import { PermissionDialog } from './PermissionDialog'
@@ -34,17 +35,18 @@ const edit: PendingPermission = {
   toolUseId: 'toolu-edit',
   input: { file_path: '/repo/src/LoginForm.tsx', old_string: 'a', new_string: 'b' },
 }
+const questionInput = {
+  questions: [{
+    question: 'Which channel should the release go to?',
+    header: 'Channel',
+    options: [{ label: 'Stable' }, { label: 'Beta' }],
+  }],
+}
 const question: PendingPermission = {
   requestId: 'perm-question',
   toolName: 'AskUserQuestion',
   toolUseId: 'toolu-question',
-  input: {
-    questions: [{
-      question: 'Which channel should the release go to?',
-      header: 'Channel',
-      options: [{ label: 'Stable' }, { label: 'Beta' }],
-    }],
-  },
+  input: questionInput,
 }
 const plan: PendingPermission = {
   requestId: 'perm-plan',
@@ -74,6 +76,8 @@ describe('MobileApprovalDock', () => {
     respondToPermission.mockReset()
     useSettingsStore.setState({ locale: 'en' })
     useTabStore.setState({ activeTabId: SESSION, tabs: [] })
+    useSessionRuntimeStore.setState({ selections: {} })
+    useChatStore.setState({ askUserQuestionDrafts: {} })
   })
 
   it('answers a tool request in one tap from where the composer was', () => {
@@ -92,6 +96,22 @@ describe('MobileApprovalDock', () => {
 
     fireEvent.click(within(dock).getByRole('button', { name: 'Allow for session' }))
     expect(respondToPermission).toHaveBeenLastCalledWith(SESSION, 'perm-bash', true, { rule: 'always' })
+  })
+
+  it('only allows or denies once for Antigravity, including in the full permission card', () => {
+    useSessionRuntimeStore.setState({ selections: { [SESSION]: { providerId: 'antigravity-acp', modelId: 'agent-default' } } })
+    seed([bash])
+    render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = within(screen.getByTestId('mobile-approval-dock'))
+    expect(dock.queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
+    expect(dock.queryByRole('button', { name: 'Deny and tell Claude why' })).not.toBeInTheDocument()
+    fireEvent.click(dock.getByRole('button', { name: 'Deny' }))
+    fireEvent.click(dock.getByRole('button', { name: 'View details' }))
+    const sheet = within(screen.getByTestId('mobile-approval-sheet'))
+    expect(sheet.queryByRole('button', { name: /^Allow for session/ })).not.toBeInTheDocument()
+    fireEvent.click(sheet.getByRole('button', { name: /^Allow: / }))
+    expect(respondToPermission.mock.calls).toEqual([[SESSION, 'perm-bash', false], [SESSION, 'perm-bash', true]])
   })
 
   it('denies with the reason the person types, which reaches the model', () => {
@@ -129,8 +149,9 @@ describe('MobileApprovalDock', () => {
     expect(within(sheet).getByRole('button', { name: /^Allow: / })).toBeInTheDocument()
   })
 
-  it('opens a question in a sheet instead of squeezing it into the bar', () => {
-    seed([question])
+  it.each([false, undefined])('answers in the sheet using the request input (allowFreeText=%s)', (allowFreeText) => {
+    const input = allowFreeText === false ? { ...questionInput, allowFreeText } : questionInput
+    seed([{ ...question, input }])
     render(<MobileApprovalDock sessionId={SESSION} />)
 
     const dock = screen.getByTestId('mobile-approval-dock')
@@ -139,7 +160,25 @@ describe('MobileApprovalDock', () => {
     expect(within(dock).queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
 
     fireEvent.click(within(dock).getByRole('button', { name: 'Answer' }))
-    expect(within(screen.getByTestId('mobile-approval-sheet')).getByText('Stable')).toBeInTheDocument()
+    const sheet = within(screen.getByTestId('mobile-approval-sheet'))
+    const stable = sheet.getByRole('button', { name: 'Stable' })
+    if (allowFreeText === false) {
+      expect(sheet.queryByRole('textbox')).not.toBeInTheDocument()
+      expect(sheet.queryByRole('button', { name: 'Chat about this' })).not.toBeInTheDocument()
+      fireEvent.click(stable)
+      expect(stable).toHaveAttribute('aria-pressed', 'true')
+    } else {
+      expect(sheet.getByRole('button', { name: 'Chat about this' })).toBeEnabled()
+      fireEvent.change(sheet.getByRole('textbox'), { target: { value: 'Canary' } })
+    }
+    fireEvent.click(sheet.getByRole('button', { name: 'Submit' }))
+
+    expect(respondToPermission).toHaveBeenCalledExactlyOnceWith(SESSION, question.requestId, true, {
+      updatedInput: {
+        ...input,
+        answers: { 'Which channel should the release go to?': allowFreeText === false ? 'Stable' : 'Canary' },
+      },
+    })
   })
 
   it('sends a plan to a full-height sheet to review', () => {

@@ -10,6 +10,8 @@ import { isImageGenerationToolName } from '@/components/chat/imageGenerationTool
 import { hasToolResultImageBlock } from '@/lib/toolResultContent'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
+import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { Component, useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { ArrowDown, BookMarked, ChevronDown, ChevronRight, FileStack, LoaderCircle, Settings, Target, Undo2 } from 'lucide-react'
@@ -478,15 +480,16 @@ function SelectableChatMessage({
   messageId,
   role,
   content,
+  sideChatAvailable,
   children,
 }: {
   sessionId?: string | null
   messageId: string
   role: ChatMessageRole
   content: string
+  sideChatAvailable: boolean
   children: ReactNode
 }) {
-  const isLean = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.agentProfile === 'lean'))
   const rootRef = useRef<HTMLDivElement>(null)
   const selectionMenuRef = useRef<HTMLDivElement>(null)
   const lastSelectionPointerRef = useRef<SelectionPointer | null>(null)
@@ -655,7 +658,7 @@ function SelectableChatMessage({
       }}
     >
       {children}
-      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
+      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={sideChatAvailable ? askSelectionInSideChat : undefined} popoverRef={selectionMenuRef} />
     </div>
   )
 }
@@ -2465,6 +2468,9 @@ export function MessageList({
     (tab.type === 'subagent' || tab.type === 'team-member')
   )))
   const isDirectAgentSession = isMemberSession || isAgentRunTab
+  const isAntigravity = useSessionRuntimeStore((s) => Boolean(resolvedSessionId &&
+    s.selections[resolvedSessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const supportsTurnCheckpoints = !isDirectAgentSession && !isAntigravity
   const isSideChatSession = useSideChatStore((s) => Boolean(resolvedSessionId && s.entries[resolvedSessionId]))
   const teamWorkbench = useTeamStore((s) =>
     resolvedSessionId ? s.workbenchesBySession[resolvedSessionId] : undefined,
@@ -2601,7 +2607,8 @@ export function MessageList({
     Boolean(sessionState?.activeToolUseId) ||
     Boolean(sessionState?.activeToolName)
   const isLean = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.agentProfile === 'lean'))
-  const branchActionsDisabled = isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
+  const branchActionsDisabled = isAntigravity || isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
+  const sideChatAvailable = !isAntigravity && !isLean
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
 
@@ -3081,7 +3088,7 @@ export function MessageList({
     [deferredMessages, chatState],
   )
   const waitingForReconnect = sessionState?.connectionState === 'reconnecting' || sessionState?.awaitingReconnectSync === true
-  const turnCheckpointQueryPaused = !checkpointHistoryReady || isDirectAgentSession || turnInProgress ||
+  const turnCheckpointQueryPaused = !checkpointHistoryReady || !supportsTurnCheckpoints || turnInProgress ||
     hasRunningBackgroundTasks || waitingForReconnect || sessionState?.awaitingStopIdle === true
   const historyWindowed = sessionState?.historyWindowed === true
   const turnTargetsCurrent = deferredMessages === messages
@@ -3100,7 +3107,7 @@ export function MessageList({
   const turnChangeLoadError = currentCheckpointResult?.kind === 'error' ? currentCheckpointResult.message : null
   const workspaceChangesFallback = currentCheckpointResult?.kind === 'over-budget' ? currentCheckpointResult : null
   // 断线会重置 historyHydrated，但不会清空正在显示的行；沿用这些行的只读卡片。
-  const canRetainTurnCards = !isDirectAgentSession && (!turnTargetsCurrent || completedTurnTargets.length > 0)
+  const canRetainTurnCards = supportsTurnCheckpoints && (!turnTargetsCurrent || completedTurnTargets.length > 0)
   const turnChangeCards = useMemo(() => {
     if (!canRetainTurnCards || checkpointResult?.kind !== 'ready' || checkpointResult.request.sessionId !== resolvedSessionId) {
       return EMPTY_TURN_CHANGE_CARDS
@@ -3129,7 +3136,7 @@ export function MessageList({
   )
   // No checkpoint is coming for this view; the disk alone has to vouch for outputs.
   // While one is still loading, nothing unproven is shown instead.
-  const turnEvidenceUnavailable = isDirectAgentSession || turnChangeLoadError !== null || workspaceChangesFallback !== null
+  const turnEvidenceUnavailable = !supportsTurnCheckpoints || turnChangeLoadError !== null || workspaceChangesFallback !== null
   const turnOutputOwnerIndexes = useMemo(
     () => buildTurnOutputOwnerIndexes(renderItems, turnChangeCards),
     [renderItems, turnChangeCards],
@@ -3621,7 +3628,7 @@ export function MessageList({
   ]
 
   const handleBranchMessage = useCallback(async (target: BranchableMessageTarget) => {
-    if (!resolvedSessionId || branchingMessageId) return
+    if (isAntigravity || !resolvedSessionId || branchingMessageId) return
 
     setBranchingMessageId(target.uiMessageId)
     try {
@@ -3641,7 +3648,7 @@ export function MessageList({
     } finally {
       setBranchingMessageId(null)
     }
-  }, [addToast, branchSession, branchingMessageId, resolvedSessionId, t])
+  }, [addToast, branchSession, branchingMessageId, isAntigravity, resolvedSessionId, t])
 
   // Pre-compute per-message branchAction + toolResult lookups so MessageBlock's
   // memo barrier is not broken by inline object literals on every render.
@@ -3726,7 +3733,8 @@ export function MessageList({
       : null
 
   const { editActionByMessageId, dialog: editResendDialog } = useUserMessageEditResend({
-    sessionId: resolvedSessionId,
+    // ACP has no rewind. Disconnect any pending editor or dry run as well as hiding its entry.
+    sessionId: isAntigravity ? null : resolvedSessionId,
     messages,
     turnCards: editTurnCards,
     completedMessageIds: completedTurnMessageIds,
@@ -4118,6 +4126,7 @@ export function MessageList({
               }
               branchAction={branchActionByMessageId.get(item.message.id)}
               editAction={editActionByMessageId.get(item.message.id)}
+              sideChatAvailable={sideChatAvailable}
               turnChangedFiles={changedFilesByRenderIndex.get(index)?.changedFiles}
               turnOutputEvidence={changedFilesByRenderIndex.get(index) ?? (turnEvidenceUnavailable ? UNKNOWN_TURN_OUTPUT_EVIDENCE : undefined)}
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
@@ -4394,6 +4403,7 @@ export const MessageBlock = memo(function MessageBlock({
   toolResult,
   branchAction,
   editAction,
+  sideChatAvailable,
   turnChangedFiles,
   turnOutputEvidence,
   isTurnOutputOwner,
@@ -4414,6 +4424,7 @@ export const MessageBlock = memo(function MessageBlock({
     onBranch: () => void
   }
   editAction?: UserMessageEditAction
+  sideChatAvailable: boolean
   turnChangedFiles?: string[]
   turnOutputEvidence?: TurnOutputEvidence
   isTurnOutputOwner?: boolean
@@ -4446,6 +4457,7 @@ export const MessageBlock = memo(function MessageBlock({
           messageId={message.id}
           role="user"
           content={message.content}
+          sideChatAvailable={sideChatAvailable}
         >
           <UserMessage
             content={message.content}
@@ -4471,6 +4483,7 @@ export const MessageBlock = memo(function MessageBlock({
           messageId={message.id}
           role="assistant"
           content={message.content}
+          sideChatAvailable={sideChatAvailable}
         >
           <AssistantMessage
             content={message.content}

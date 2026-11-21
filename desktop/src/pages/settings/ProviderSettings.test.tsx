@@ -38,6 +38,49 @@ const savedProviders: SavedProvider[] = ([
   models: { main: model, haiku: model, sonnet: model, opus: model },
 }))
 
+describe('Antigravity on the Model Settings page', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+  })
+
+  it.each([false, true])('checks the local connection and refreshes the shared catalog (browserMode=%s)', async (browserMode) => {
+    useSettingsStore.setState({ locale: 'en' })
+    const localAgent = { id: 'antigravity-acp', kind: 'acp', models: [] } as const
+    const providerOrder = ['grok-official', 'claude-official', 'openai-official', 'deepseek-account']
+    vi.spyOn(useMagpieStore.getState(), 'refresh').mockResolvedValue(null)
+    vi.spyOn(providersApi, 'list').mockResolvedValue({
+      providers: [], activeId: 'grok-official', providerOrder,
+      localAgent: { ...localAgent, models: [], status: 'unchecked' },
+    })
+    const ready = { ...localAgent, status: 'ready' as const, models: [{ id: 'agy:model-v1', name: 'Agent Model' }], currentModelId: 'agy:model-v1', version: '1.5.14' }
+    const discover = vi.spyOn(providersApi, 'discoverAntigravity')
+      .mockRejectedValueOnce(new Error('fixture transport error'))
+      .mockResolvedValueOnce({ ...localAgent, models: [], status: 'login_required' })
+      .mockResolvedValueOnce(ready)
+    const activate = vi.spyOn(providersApi, 'activate')
+
+    render(<ProviderSettings browserMode={browserMode} />)
+    const card = within(await screen.findByRole('region', { name: 'Antigravity' }))
+    expect(card.getByRole('status')).toHaveTextContent('CLI found')
+    expect(card.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(discover).not.toHaveBeenCalled()
+
+    fireEvent.click(card.getByRole('button', { name: 'Check connection' }))
+    expect(await card.findByRole('alert')).toHaveTextContent('Could not check the connection')
+    fireEvent.click(card.getByRole('button', { name: 'Check connection' }))
+    expect(await card.findByText(/agy acp --login/)).toBeInTheDocument()
+    fireEvent.click(card.getByRole('button', { name: 'Check connection' }))
+    expect(await card.findByText(/Connection verified.*1\.5\.14/)).toBeInTheDocument()
+    expect(discover.mock.calls).toEqual([[], [], []])
+    expect(useProviderStore.getState().localAgent).toEqual(ready)
+    expect(useProviderStore.getState().providerOrder).toEqual(providerOrder)
+    expect(useProviderStore.getState().activeId).toBe('grok-official')
+    expect(activate).not.toHaveBeenCalled()
+  })
+})
+
 describe('DeepSeek preset defaults', () => {
   const originalState = useProviderStore.getState()
 
