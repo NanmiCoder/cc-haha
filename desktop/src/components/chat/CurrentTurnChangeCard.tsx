@@ -1,5 +1,6 @@
 import { useCallback, useId, useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
+import { getDisclosure, setDisclosure } from '@/lib/disclosureMemory'
 import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, FileDiff, TriangleAlert, Undo2 } from 'lucide-react'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -27,6 +28,7 @@ type CurrentTurnChangeCardProps = {
   workDir: string | null
   error: string | null
   isUndoing: boolean
+  undoDisabled?: boolean
   isLatest: boolean
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
@@ -46,6 +48,7 @@ export function CurrentTurnChangeCard({
   workDir,
   error,
   isUndoing,
+  undoDisabled,
   isLatest,
   onUndo,
   expanded,
@@ -54,7 +57,8 @@ export function CurrentTurnChangeCard({
   const t = useTranslation()
   const filesId = useId()
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
-  const [showAllFiles, setShowAllFiles] = useState(false)
+  const filesDisclosureKey = JSON.stringify(['turn-change-files', sessionId, checkpoint.target.targetUserMessageId])
+  const [showAllFiles, setShowAllFiles] = useState(() => getDisclosure(filesDisclosureKey) ?? false)
   // A phone has no workspace beside the chat to open a file in; the turn's
   // change to it opens full height in a sheet instead.
   const isMobile = useMobileViewport() && !isDesktopRuntime()
@@ -209,14 +213,12 @@ export function CurrentTurnChangeCard({
           <span className="shrink-0 font-mono text-xs tabular-nums text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
         </button>
 
-        {/* Never disabled: rolling the conversation back is always possible, even
-            when the files are not restorable. The dialog picks what to touch.
-            What the checkpoint covers is the button's hint rather than a line
-            of grey text under every card; the confirm dialog repeats it. */}
+        {/* 无法恢复文件时，仍可选择只回退对话。 */}
         <Button
           variant="ghost"
           size="sm"
           loading={isUndoing}
+          disabled={undoDisabled}
           onClick={onUndo}
           aria-label={undoAria}
           title={subtitle}
@@ -292,7 +294,10 @@ export function CurrentTurnChangeCard({
             type="button"
             data-chat-disclosure="true"
             aria-expanded={showAllFiles}
-            onClick={() => setShowAllFiles((current) => !current)}
+            onClick={() => {
+              setDisclosure(filesDisclosureKey, !showAllFiles)
+              setShowAllFiles(!showAllFiles)
+            }}
             className="flex h-8 w-full items-center justify-center gap-1 border-t border-[var(--color-border)] px-4 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {showAllFiles ? (
