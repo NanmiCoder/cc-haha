@@ -21,6 +21,7 @@ import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
 import { useUIStore } from './uiStore'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { useTabStore } from './tabStore'
@@ -438,14 +439,22 @@ export type AskUserQuestionDraft = {
   activeTab: number
   selections: Record<number, string[]>
   freeTexts: Record<number, string>
+  images?: Record<number, ComposerAttachment[]>
   /**
    * Terminal states only this renderer knows about. The server records neither,
    * so without them a remount would resurrect an answerable form — and let the
-   * same answer be delivered twice.
+   * same answer be delivered twice. `submitted` bridges the brief window while
+   * async server-side image materialization runs before `tool_result` arrives.
    */
+  submitted?: boolean
   sentAsMessage?: boolean
   handedOff?: boolean
 }
+
+// Rollback stash for in-flight permission responses carrying attachments. If
+// server-side image materialization fails, the pending permission is restored
+// so the user can retry without losing their AskUserQuestion draft.
+const pendingAttachmentPermissionStash = new Map<string, PendingPermission>()
 
 type ChatStore = {
   applyBoundedUpdate: (update: (state: ChatStore) => Partial<ChatStore>) => void
@@ -497,11 +506,12 @@ type ChatStore = {
       rule?: string
       updatedInput?: Record<string, unknown>
       denyMessage?: string
+      attachments?: AttachmentRef[]
       permissionUpdates?: PermissionUpdate[]
       /** Execution-model switch applied together with an ExitPlanMode approval. */
       runtimeOverride?: RuntimeSelection
     },
-  ) => void
+  ) => boolean
   recordAskUserQuestionActivity: (sessionId: string, requestId: string) => void
   respondToComputerUsePermission: (
     sessionId: string,
@@ -3292,8 +3302,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const forSession = { ...(state.askUserQuestionDrafts[sessionId] ?? {}) }
       // The card writes on every mount, so an unfinished card must not leave an
       // entry behind for every question the user never touched.
+      const hasImages = Boolean(
+        draft.images && Object.values(draft.images).some((items) => items.length > 0),
+      )
       const isEmpty = Object.keys(draft.selections).length === 0 &&
         Object.keys(draft.freeTexts).length === 0 &&
+        !hasImages &&
+        !draft.submitted &&
         !draft.sentAsMessage &&
         !draft.handedOff
       if (isEmpty) {
@@ -3818,7 +3833,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
     const pending = getPendingPermission(get().sessions[sessionId], requestId)
-    if (pending?.planRuntimeSubmission) return
+    if (pending?.planRuntimeSubmission) return false
+    const payload: ClientMessage = {
+      type: 'permission_response',
+      requestId,
+      allowed,
+      ...(options?.rule ? { rule: options.rule } : {}),
+      ...(options?.updatedInput ? { updatedInput: options.updatedInput } : {}),
+      ...(options?.denyMessage ? { denyMessage: options.denyMessage } : {}),
+      ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
+      ...(options?.permissionUpdates?.length ? { permissionUpdates: options.permissionUpdates } : {}),
+      ...(options?.runtimeOverride ? { runtimeOverride: options.runtimeOverride } : {}),
+    }
+    if (options?.attachments?.length && rejectOversizedMessage(sessionId, payload)) return false
+    if (options?.attachments?.length && pending) {
+      pendingAttachmentPermissionStash.set(`${sessionId}:${requestId}`, pending)
+    }
     const submittingPlanRuntime = pending?.toolName === 'ExitPlanMode' && options?.runtimeOverride
     if (submittingPlanRuntime) {
       const runtime = useSessionRuntimeStore.getState()
@@ -3833,17 +3863,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         })),
       }))
     }
-    wsManager.send(sessionId, {
-      type: 'permission_response',
-      requestId,
-      allowed,
-      ...(options?.rule ? { rule: options.rule } : {}),
-      ...(options?.updatedInput ? { updatedInput: options.updatedInput } : {}),
-      ...(options?.denyMessage ? { denyMessage: options.denyMessage } : {}),
-      ...(options?.permissionUpdates?.length ? { permissionUpdates: options.permissionUpdates } : {}),
-      ...(options?.runtimeOverride ? { runtimeOverride: options.runtimeOverride } : {}),
-    })
-    if (submittingPlanRuntime) return
+    wsManager.send(sessionId, payload)
+    if (submittingPlanRuntime) return true
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, (session) => {
         const pendingPermissions = getPendingPermissionRecord(session)
@@ -3861,6 +3882,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
       }),
     }))
+    return true
   },
 
   recordAskUserQuestionActivity: (sessionId, requestId) => {
@@ -5891,6 +5913,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'permission_resolved':
+        pendingAttachmentPermissionStash.delete(`${sessionId}:${msg.requestId}`)
         update((session) => {
           if (msg.permissionType === 'computer_use') {
             const pendingComputerUsePermissions = getPendingComputerUsePermissionRecord(session)
@@ -6116,6 +6139,35 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               pendingPermission: current.pendingPermission?.requestId === request.requestId ? rejected : current.pendingPermission,
               chatState: 'permission_pending',
             }))
+            break
+          }
+          if (msg.code === 'ATTACHMENT_PROCESSING_FAILED' && msg.permissionRequestId) {
+            const stashKey = `${sessionId}:${msg.permissionRequestId}`
+            const stashed = pendingAttachmentPermissionStash.get(stashKey)
+            pendingAttachmentPermissionStash.delete(stashKey)
+            if (stashed) {
+              update((current) => ({
+                pendingPermissions: { ...getPendingPermissionRecord(current), [stashed.requestId]: stashed },
+                pendingPermission: stashed,
+                chatState: 'permission_pending',
+              }))
+              if (stashed.toolUseId) {
+                const toolUseId = stashed.toolUseId
+                set((state) => {
+                  let changed = false
+                  const nextDrafts = { ...state.askUserQuestionDrafts }
+                  for (const [draftSessionId, byTool] of Object.entries(nextDrafts)) {
+                    const draft = byTool[toolUseId]
+                    if (!draft || (!draft.submitted && !draft.handedOff)) continue
+                    const { submitted: _s, handedOff: _h, ...rest } = draft
+                    nextDrafts[draftSessionId] = { ...byTool, [toolUseId]: rest }
+                    changed = true
+                  }
+                  return changed ? { askUserQuestionDrafts: nextDrafts } : {}
+                })
+              }
+            }
+            useUIStore?.getState().addToast({ type: 'error', message: msg.message })
             break
           }
           if (msg.permissionRequestId) break
@@ -6998,12 +7050,29 @@ function normalizeHistoryToolResultContent(content: unknown, toolUseResult: unkn
   const result = readRecord(toolUseResult)
   if (parseScheduledTaskResult('ScheduledTask', result)) return result
   const answers = readRecord(result?.answers)
-  if (!result || !answers || !Array.isArray(result.questions)) return content
-  return {
-    questions: result.questions,
-    answers,
-    ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+  if (result && answers && Array.isArray(result.questions)) {
+    const annotations = readRecord(result.annotations)
+    return {
+      questions: result.questions,
+      answers,
+      ...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {}),
+      ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+    }
   }
+  if (typeof content === 'string' && content.startsWith(ASK_USER_QUESTION_CLARIFY_MESSAGE)) {
+    return {
+      handedOff: true,
+      message: content,
+    }
+  }
+  return content
+}
+
+function isStructuredAskUserQuestionResult(value: unknown): value is Record<string, unknown> {
+  const record = readRecord(value)
+  if (!record) return false
+  if (Array.isArray(record.questions) && readRecord(record.answers)) return true
+  return record.handedOff === true
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
@@ -8665,6 +8734,10 @@ export function mapHistoryMessagesToUiMessages(
       const userBlocks = msg.content as UserHistoryBlock[]
       const hasImageBlock = userBlocks.some((block) => block.type === 'image')
       const toolResultCount = userBlocks.filter((block) => block.type === 'tool_result').length
+      const hasAskQuestionToolResult = toolResultCount === 1 && userBlocks.some((block) =>
+        block.type === 'tool_result' &&
+        isStructuredAskUserQuestionResult(normalizeHistoryToolResultContent(block.content, msg.toolUseResult)),
+      )
       const entryDurationMs =
         toolResultCount === 1 &&
         typeof msg.durationMs === 'number' &&
@@ -8681,11 +8754,12 @@ export function mapHistoryMessagesToUiMessages(
           visibleTextParts.push(...teammateMessages.map((message) => message.content))
         } else if (block.type === 'text' && block.text) {
           modelTextParts.push(block.text)
-          const imageSourcePath = hasImageBlock ? extractImageMetadataSourcePath(block.text) : undefined
+          const canCarryImageMetadata = hasImageBlock || hasAskQuestionToolResult
+          const imageSourcePath = canCarryImageMetadata ? extractImageMetadataSourcePath(block.text) : undefined
           if (imageSourcePath) {
             imageSourcePaths.push(imageSourcePath)
           }
-          if (!hasImageBlock || !isGeneratedImageMetadataText(block.text)) {
+          if (!canCarryImageMetadata || !isGeneratedImageMetadataText(block.text)) {
             visibleTextParts.push(block.text)
           }
         }
@@ -8704,7 +8778,28 @@ export function mapHistoryMessagesToUiMessages(
         })
       }
       applyImageMetadataSourcePaths(attachments, imageSourcePaths)
-      if (visibleTextParts.length > 0 || attachments.length > 0) {
+      if (hasAskQuestionToolResult && imageSourcePaths.length > attachments.length) {
+        for (let i = attachments.length; i < imageSourcePaths.length; i++) {
+          const sourcePath = imageSourcePaths[i]!
+          attachments.push({
+            type: 'image',
+            name: getReferenceName(sourcePath),
+            path: sourcePath,
+          })
+        }
+      }
+      let consumedAskQuestionAttachments = false
+      if (toolResultCount === 1 && visibleTextParts.length === 0 && attachments.length > 0) {
+        const lastMessage = uiMessages[uiMessages.length - 1]
+        if (lastMessage?.type === 'tool_result' && isStructuredAskUserQuestionResult(lastMessage.content)) {
+          lastMessage.content = {
+            ...lastMessage.content,
+            attachments,
+          }
+          consumedAskQuestionAttachments = true
+        }
+      }
+      if (!consumedAskQuestionAttachments && (visibleTextParts.length > 0 || attachments.length > 0)) {
         const visibleText = visibleTextParts.join('\n')
         const modelText = modelTextParts.join('\n')
         const visualSelectionDisplay =

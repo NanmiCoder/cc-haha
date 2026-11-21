@@ -28,6 +28,7 @@ export type ClientMessage =
       rule?: string
       updatedInput?: Record<string, unknown>
       denyMessage?: string
+      attachments?: AttachmentRef[]
       permissionUpdates?: unknown[]
       // Optional execution-model switch applied together with an approval
       // (currently honored for ExitPlanMode only): same-provider switches are

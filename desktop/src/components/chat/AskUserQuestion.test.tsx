@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -27,10 +27,12 @@ vi.mock('../../api/sessions', () => ({
 }))
 
 import { AskUserQuestion } from './AskUserQuestion'
+import { getDesktopHost } from '../../lib/desktopHost'
 import { useChatStore, type PerSessionState } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { useUIStore } from '../../stores/uiStore'
 import { teamMemberSessionId } from '../../types/team'
 
 const ACTIVE_TAB = 'active-tab'
@@ -48,6 +50,7 @@ describe('AskUserQuestion', () => {
   beforeEach(() => {
     sendMock.mockReset()
     useSettingsStore.setState({ locale: 'en' })
+    useUIStore.setState({ toasts: [] })
     useTabStore.setState({
       activeTabId: ACTIVE_TAB,
       tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session', status: 'idle' }],
@@ -542,10 +545,560 @@ describe('AskUserQuestion', () => {
       updatedInput: {
         ...input,
         answers: {
-          'First question?': 'custom-q1',
+          'First question?': 'A1',
           'Second question?': 'A2',
         },
+        annotations: {
+          'First question?': { notes: 'custom-q1' },
+        },
       },
+    })
+  })
+
+  describe('issue #1961: option + custom notes, images, and chat-about-this payload', () => {
+    const SINGLE_INPUT = {
+      questions: [
+        {
+          question: 'Which approach should we use?',
+          options: [{ label: 'Option 1' }, { label: 'Option 2' }],
+        },
+      ],
+    }
+
+    it('keeps a selected option when typing supplemental custom notes and submits both', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+
+      const optionOne = screen.getByRole('button', { name: /^Option 1$/ })
+      fireEvent.click(optionOne)
+      expect(optionOne.getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByText('Add extra details or images (optional):')).toBeTruthy()
+
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Also keep backwards compatibility with v1.' },
+      })
+
+      expect(optionOne.getAttribute('aria-pressed')).toBe('true')
+
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: {
+            'Which approach should we use?': 'Option 1',
+          },
+          annotations: {
+            'Which approach should we use?': {
+              notes: 'Also keep backwards compatibility with v1.',
+            },
+          },
+        },
+      })
+      expect(screen.getByText('Option 1 (Also keep backwards compatibility with v1.)')).toBeTruthy()
+    })
+
+    it('keeps typed notes when choosing an option afterwards and stays on the tab', () => {
+      const twoQuestions = {
+        questions: [
+          { header: 'Q1', question: 'First?', options: [{ label: 'A1' }, { label: 'B1' }] },
+          { header: 'Q2', question: 'Second?', options: [{ label: 'A2' }] },
+        ],
+      }
+      render(<AskUserQuestion toolUseId="tool-1" input={twoQuestions} />)
+
+      const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'extra detail for Q1' } })
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+
+      // Typing notes before picking keeps the user on Q1 with both preserved.
+      expect(screen.getByText('First?')).toBeTruthy()
+      expect(textarea.value).toBe('extra detail for Q1')
+      expect(screen.getByRole('button', { name: /^A1$/ }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('renders structured result annotations and attachments after reload', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={SINGLE_INPUT}
+          result={{
+            questions: SINGLE_INPUT.questions,
+            answers: { 'Which approach should we use?': 'Option 1' },
+            annotations: { 'Which approach should we use?': { notes: 'Match the mockup' } },
+            attachments: [
+              { type: 'image', name: 'mockup.png', data: 'data:image/png;base64,aGVsbG8=' },
+            ],
+          }}
+        />,
+      )
+
+      expect(screen.getByText('Option 1 (Match the mockup)')).toBeTruthy()
+      expect(screen.getByAltText('mockup.png')).toBeTruthy()
+    })
+
+    it('attaches pasted images, allows removing them, persists across unmount, and submits them', async () => {
+      const first = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const textarea = screen.getByPlaceholderText('Type your answer...')
+      const pngFile = new File(['png-bytes'], 'paste-shot.png', { type: 'image/png' })
+      const txtFile = new File(['ignore-me'], 'notes.txt', { type: 'text/plain' })
+
+      fireEvent.paste(textarea, {
+        clipboardData: {
+          files: [pngFile, txtFile],
+          items: [
+            { kind: 'file', getAsFile: () => pngFile },
+            { kind: 'file', getAsFile: () => txtFile },
+          ],
+        },
+      })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+      })
+      expect(sendMock.mock.calls.filter(([, message]) => message.type === 'ask_user_question_activity'))
+        .toEqual([[ACTIVE_TAB, { type: 'ask_user_question_activity', requestId: 'perm-1' }]])
+
+      // Image-only answer enables Submit.
+      expect(screen.getByRole('button', { name: /^submit$/i })).toHaveProperty('disabled', false)
+
+      // Survives unmount/remount through askUserQuestionDrafts.
+      first.unmount()
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 2$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'See screenshot' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: { 'Which approach should we use?': 'Option 2' },
+          annotations: { 'Which approach should we use?': { notes: 'See screenshot\nAttached images: paste-shot.png' } },
+        },
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'paste-shot.png',
+            mimeType: 'image/png',
+            data: expect.stringMatching(/^data:image\/png;base64,/),
+          }),
+        ],
+      })
+      // Attached image remains visible and metadata suffix stays hidden in the submitted summary.
+      expect(screen.getByText('Option 2 (See screenshot)')).toBeTruthy()
+      expect(screen.queryByText(/Attached images:/)).toBeNull()
+      expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+    })
+
+    it('supports uploading an image via file input and submitting an image-only answer', async () => {
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      expect(fileInput).toBeTruthy()
+
+      const img = new File(['webp-bytes'], 'diagram.webp', { type: 'image/webp' })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('diagram.webp')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: { 'Which approach should we use?': '(Image attached)' },
+        },
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'diagram.webp',
+            mimeType: 'image/webp',
+          }),
+        ],
+      })
+    })
+
+    it('carries selected option, custom notes, and attached images when clicking Chat about this', async () => {
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['img-bytes'], 'reference.png', { type: 'image/png' })
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Can we combine Option 1 with this layout?' },
+      })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('reference.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: false,
+        denyMessage: [
+          '- "Which approach should we use?"',
+          '  Answer: Option 1',
+          '  Notes: Can we combine Option 1 with this layout?',
+          '  Attached images: reference.png',
+        ].join('\n'),
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'reference.png',
+            mimeType: 'image/png',
+          }),
+        ],
+      })
+      expect(screen.getByText(/Handed back to Claude/)).toBeTruthy()
+      expect(screen.getByText('Option 1 (Can we combine Option 1 with this layout?)')).toBeTruthy()
+      expect(screen.getByAltText('reference.png')).toBeTruthy()
+    })
+
+    it('carries custom response text alone when clicking Chat about this without picking an option', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Explain the trade-offs between Option 1 and Option 2 first.' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: false,
+        denyMessage: '- "Which approach should we use?"\n  Answer: Explain the trade-offs between Option 1 and Option 2 first.',
+      })
+    })
+
+    it('retains the card draft when respondToPermission refuses an oversized attachment payload', async () => {
+      const respond = vi.spyOn(useChatStore.getState(), 'respondToPermission').mockReturnValue(false)
+      try {
+        const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+        const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+        const img = new File(['big-bytes'], 'huge.png', { type: 'image/png' })
+        fireEvent.change(fileInput, { target: { files: [img] } })
+
+        await waitFor(() => {
+          expect(screen.getByAltText('huge.png')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+        expect(respond).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+        expect(screen.getByAltText('huge.png')).toBeTruthy()
+      } finally {
+        respond.mockRestore()
+      }
+    })
+
+    it('forwards attachments on expired fallback messages for both submit and chat-about-this', async () => {
+      patchSession({ pendingPermission: null, pendingPermissions: {}, chatState: 'idle' })
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['img-bytes'], 'expired-ref.png', { type: 'image/png' })
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Follow this mockup' },
+      })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('expired-ref.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, expect.objectContaining({
+        type: 'user_message',
+        content: expect.stringContaining('Notes: Follow this mockup'),
+        attachments: [
+          expect.objectContaining({ type: 'image', name: 'expired-ref.png' }),
+        ],
+      }))
+    })
+
+    it('renders reloaded handed-off clarify results with attached images', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={SINGLE_INPUT}
+          result={{
+            handedOff: true,
+            message: 'The user wants to clarify or discuss your questions before answering.',
+            attachments: [
+              { type: 'image', name: 'clarify-shot.png', data: 'data:image/png;base64,aGVsbG8=' },
+            ],
+          }}
+        />,
+      )
+
+      expect(screen.getByText('Handed off')).toBeTruthy()
+      expect(screen.getByText(/Handed back to Claude/)).toBeTruthy()
+      expect(screen.getByAltText('clarify-shot.png')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull()
+    })
+
+    it('calls preventDefault on non-image drag-drops and filters native desktop drops to inline images', async () => {
+      const host = getDesktopHost()
+      let desktopDropListener: ((event: { payload: unknown }) => void) | null = null
+      const isDesktopSpy = vi.spyOn(host, 'isDesktop', 'get').mockReturnValue(true)
+      const onDragDropSpy = vi.spyOn(host.webview, 'onDragDropEvent').mockImplementation(async (listener) => {
+        desktopDropListener = listener as (event: { payload: unknown }) => void
+        return () => { desktopDropListener = null }
+      })
+
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+        const dropZone = screen.getByPlaceholderText('Type your answer...').parentElement?.parentElement as HTMLElement
+        expect(dropZone).toBeTruthy()
+
+        // Non-image DOM drop must still be prevented so the webview does not navigate away.
+        const pdfFile = new File(['pdf'], 'spec.pdf', { type: 'application/pdf' })
+        const nonImageDrop = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent
+        Object.defineProperty(nonImageDrop, 'dataTransfer', {
+          value: { types: ['Files'], files: [pdfFile], dropEffect: 'none' },
+        })
+        fireEvent(dropZone, nonImageDrop)
+        expect(nonImageDrop.defaultPrevented).toBe(true)
+        expect(screen.queryByAltText('spec.pdf')).toBeNull()
+
+        // Valid DOM image drop attaches the image.
+        const pngFile = new File(['png-bytes'], 'dropped.png', { type: 'image/png' })
+        const imageDrop = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent
+        Object.defineProperty(imageDrop, 'dataTransfer', {
+          value: { types: ['Files'], files: [pngFile], dropEffect: 'none' },
+        })
+        fireEvent(dropZone, imageDrop)
+        await waitFor(() => {
+          expect(screen.getByAltText('dropped.png')).toBeTruthy()
+        })
+
+        // Native desktop file drop attaches inline images and ignores non-inline files (.txt/.svg).
+        vi.spyOn(dropZone, 'getBoundingClientRect').mockReturnValue({
+          left: 0, top: 0, right: 400, bottom: 400, width: 400, height: 400, x: 0, y: 0, toJSON: () => ({}),
+        })
+        await waitFor(() => {
+          expect(desktopDropListener).toBeTruthy()
+        })
+        act(() => {
+          desktopDropListener?.({
+            payload: {
+              type: 'drop',
+              paths: ['/tmp/native-shot.webp', '/tmp/notes.txt', '/tmp/vector.svg'],
+              position: { x: 50, y: 50 },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByAltText('native-shot.webp')).toBeTruthy()
+        })
+        expect(screen.queryByText('notes.txt')).toBeNull()
+        expect(screen.queryByText('vector.svg')).toBeNull()
+      } finally {
+        onDragDropSpy.mockRestore()
+        isDesktopSpy.mockRestore()
+      }
+    })
+
+    it('surfaces an error toast and keeps the draft when an oversized attachment exceeds the 16 MiB payload budget', () => {
+      const oversizedData = `data:image/png;base64,${'A'.repeat(17 * 1024 * 1024)}`
+      useChatStore.getState().setAskUserQuestionDraft(ACTIVE_TAB, 'tool-1', {
+        activeTab: 0,
+        selections: { 0: ['Option 1'] },
+        freeTexts: { 0: 'Keep draft' },
+        images: {
+          0: [{ id: 'big-1', type: 'image', name: 'giant.png', mimeType: 'image/png', data: oversizedData }],
+        },
+      })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock.mock.calls.filter(([, message]) => message.type === 'permission_response')).toHaveLength(0)
+      expect(useUIStore.getState().toasts.some((toast) => toast.type === 'error')).toBe(true)
+      expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+      expect((screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement).value).toBe('Keep draft')
+    })
+
+    it('persists in-flight image submission across unmount and reopens when ATTACHMENT_PROCESSING_FAILED restores the permission', async () => {
+      const first = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = first.container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['png-bytes'], 'inflight.png', { type: 'image/png' })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('inflight.png')).toBeTruthy()
+      })
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Keep on retry' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      // While waiting for server materialization, unmounting and remounting must not flash an expired form.
+      first.unmount()
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull()
+      expect(screen.getByAltText('inflight.png')).toBeTruthy()
+
+      // When server attachment materialization fails, chatStore restores pendingPermission and clears submitted.
+      act(() => {
+        useChatStore.getState().handleServerMessage(ACTIVE_TAB, {
+          type: 'error',
+          code: 'ATTACHMENT_PROCESSING_FAILED',
+          message: 'Failed to process attached images',
+          permissionRequestId: 'perm-1',
+        })
+      })
+
+      expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+      expect((screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement).value).toBe('Keep on retry')
+      expect(screen.getByAltText('inflight.png')).toBeTruthy()
+    })
+
+    it('disables image attachment and sends full structured text when a team-member AskUserQuestion expires', () => {
+      const LEAD = 'lead-expired'
+      const MEMBER_AGENT = 'worker@team-1'
+      const MEMBER_TAB = teamMemberSessionId(LEAD, MEMBER_AGENT)
+      const base = useChatStore.getState().sessions[ACTIVE_TAB]!
+
+      useTabStore.setState({
+        activeTabId: MEMBER_TAB,
+        tabs: [
+          { sessionId: LEAD, title: 'Lead', type: 'session', status: 'idle' },
+          {
+            sessionId: MEMBER_TAB,
+            title: 'worker',
+            type: 'team-member',
+            status: 'idle',
+            sourceSessionId: LEAD,
+            teamLeadSessionId: LEAD,
+            teamMemberAgentId: MEMBER_AGENT,
+            teamIncarnationId: 'inc-1',
+          },
+        ],
+      })
+      useTeamStore.setState({
+        memberTeamBySession: {
+          [MEMBER_TAB]: {
+            name: 'team-1',
+            incarnationId: 'inc-1',
+            leadSessionId: LEAD,
+            members: [{ agentId: MEMBER_AGENT, name: 'worker', role: 'general-purpose', status: 'idle', sessionId: 'm-1' }],
+          },
+        },
+      })
+      useChatStore.setState({
+        askUserQuestionDrafts: {},
+        sessions: {
+          [LEAD]: { ...base, chatState: 'idle', pendingPermission: null, pendingPermissions: {} },
+          [MEMBER_TAB]: { ...base, chatState: 'idle', pendingPermission: null, pendingPermissions: {} },
+        },
+      })
+
+      const sendMemberMessage = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(true)
+      try {
+        render(<AskUserQuestion sessionId={MEMBER_TAB} toolUseId="tool-expired" input={SINGLE_INPUT} />)
+
+        expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+
+        const textarea = screen.getByPlaceholderText('Type your answer...')
+        const pngFile = new File(['png-bytes'], 'blocked.png', { type: 'image/png' })
+        fireEvent.paste(textarea, {
+          clipboardData: {
+            files: [pngFile],
+            items: [{ kind: 'file', getAsFile: () => pngFile }],
+          },
+        })
+        expect(screen.queryByAltText('blocked.png')).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+        fireEvent.change(textarea, { target: { value: 'Use the dark palette' } })
+        fireEvent.click(screen.getByRole('button', { name: /send as new message/i }))
+
+        expect(sendMemberMessage).toHaveBeenCalledWith(
+          MEMBER_TAB,
+          expect.stringContaining('Notes: Use the dark palette'),
+          undefined,
+          expect.objectContaining({
+            displayContent: expect.stringContaining('Notes: Use the dark palette'),
+          }),
+        )
+      } finally {
+        sendMemberMessage.mockRestore()
+        act(() => useTeamStore.setState({ memberTeamBySession: {} }))
+      }
+    })
+
+    it('attributes per-question images in multi-question annotations, strips metadata in UI, and localizes image-only labels', async () => {
+      useSettingsStore.setState({ locale: 'zh' })
+      const multiInput = {
+        questions: [
+          { header: 'Q1', question: 'First?', options: [{ label: 'A1' }] },
+          { header: 'Q2', question: 'Second?', options: [{ label: 'A2' }] },
+        ],
+      }
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+
+      // Q1: image-only
+      fireEvent.change(fileInput, { target: { files: [new File(['q1'], 'q1-ref.png', { type: 'image/png' })] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('q1-ref.png')).toBeTruthy()
+      })
+
+      // Switch to Q2: option + note + image
+      fireEvent.click(screen.getByRole('button', { name: /Q2$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+      fireEvent.change(screen.getByPlaceholderText('输入你的回答...'), { target: { value: '保持居中' } })
+      fireEvent.change(fileInput, { target: { files: [new File(['q2'], 'q2-ref.png', { type: 'image/png' })] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('q2-ref.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /提交/ }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...multiInput,
+          answers: {
+            'First?': '(Image attached)',
+            'Second?': 'A2',
+          },
+          annotations: {
+            'First?': { notes: 'Attached images: q1-ref.png' },
+            'Second?': { notes: '保持居中\nAttached images: q2-ref.png' },
+          },
+        },
+        attachments: [
+          expect.objectContaining({ type: 'image', name: 'q1-ref.png' }),
+          expect.objectContaining({ type: 'image', name: 'q2-ref.png' }),
+        ],
+      })
+
+      // UI renders localized image-only text and hides the wire Attached images metadata suffix.
+      expect(screen.getByText('已附加图片; A2 (保持居中)')).toBeTruthy()
+      expect(screen.queryByText(/Attached images:/)).toBeNull()
     })
   })
 

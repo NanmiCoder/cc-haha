@@ -1254,6 +1254,30 @@ export class ConversationService {
     return sent
   }
 
+  async materializePermissionAttachments(
+    sessionId: string,
+    attachments?: AttachmentRef[],
+  ): Promise<UserContentBlock[]> {
+    if (!attachments || attachments.length === 0) return []
+    const materialized = await this.materializeAttachments(sessionId, attachments)
+    const blocks: UserContentBlock[] = []
+    blocks.push(...materialized.imageBlocks)
+    for (const metadataText of materialized.imageMetadataTexts) {
+      blocks.push({ type: 'text', text: metadataText })
+    }
+    const fallbackMatches = [...materialized.pathPrefix.matchAll(/@"([^"]+)"/g)]
+    for (const match of fallbackMatches) {
+      const fallbackPath = match[1]?.trim()
+      if (fallbackPath) {
+        blocks.push({ type: 'text', text: `[Image source: ${fallbackPath}]` })
+      }
+    }
+    if (blocks.length === 0) {
+      throw new Error('Failed to materialize attached images')
+    }
+    return blocks
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,
@@ -1263,9 +1287,10 @@ export class ConversationService {
     denyMessage?: string,
     permissionUpdates?: unknown[],
     automaticQuestionAnswer = false,
+    contentBlocks?: UserContentBlock[],
   ): boolean {
     const child = [...this.sessions.entries()].find(([, entry]) => entry.teamWorker?.parentSessionId === sessionId && entry.pendingPermissionRequests.has(requestId))
-    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer)
+    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer, contentBlocks)
     const session = this.sessions.get(sessionId)
     if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
@@ -1273,6 +1298,10 @@ export class ConversationService {
     if (session) {
       if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
     }
+
+    const extraBlocks = Array.isArray(contentBlocks) && contentBlocks.length > 0
+      ? { contentBlocks }
+      : {}
 
     return this.sendSdkMessage(sessionId, {
       type: 'control_response',
@@ -1285,6 +1314,7 @@ export class ConversationService {
               updatedInput: pendingRequest?.toolName === 'AskUserQuestion' && !automaticQuestionAnswer
                 ? stripAutomaticQuestionMarker(updatedInput ?? {})
                 : updatedInput ?? {},
+              ...extraBlocks,
               ...(Array.isArray(permissionUpdates) && permissionUpdates.length > 0
                 ? { updatedPermissions: permissionUpdates }
                 : rule === 'always' && pendingRequest
@@ -1310,6 +1340,7 @@ export class ConversationService {
               // ExitPlanMode is the exception — rejecting it means "keep
               // planning", so the model is told to revise rather than stop.
               message: buildDenyMessage(pendingRequest?.toolName, denyMessage),
+              ...extraBlocks,
             },
       },
     })

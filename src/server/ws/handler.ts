@@ -2155,17 +2155,30 @@ const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
 function finalizePermissionResponse(
   ws: SessionConnection,
   message: Extract<ClientMessage, { type: 'permission_response' }>,
+  contentBlocks?: Record<string, unknown>[],
 ): void {
   const { sessionId } = ws.data
-  const resolved = conversationService.respondToPermission(
-    sessionId,
-    message.requestId,
-    message.allowed,
-    message.rule,
-    message.updatedInput,
-    message.denyMessage,
-    message.permissionUpdates,
-  )
+  const resolved = contentBlocks && contentBlocks.length > 0
+    ? conversationService.respondToPermission(
+        sessionId,
+        message.requestId,
+        message.allowed,
+        message.rule,
+        message.updatedInput,
+        message.denyMessage,
+        message.permissionUpdates,
+        false,
+        contentBlocks,
+      )
+    : conversationService.respondToPermission(
+        sessionId,
+        message.requestId,
+        message.allowed,
+        message.rule,
+        message.updatedInput,
+        message.denyMessage,
+        message.permissionUpdates,
+      )
   if (resolved) {
     emitSessionTurnEvent({ type: 'output', sessionId, message: { type: 'control_response', request_id: message.requestId } })
     sendToSession(sessionId, {
@@ -2176,6 +2189,21 @@ function finalizePermissionResponse(
     })
   }
   console.log(`[WS] Permission response for ${message.requestId}: ${message.allowed}`)
+}
+
+async function handlePermissionResponseWithAttachments(
+  ws: SessionConnection,
+  message: Extract<ClientMessage, { type: 'permission_response' }>,
+): Promise<void> {
+  const { sessionId } = ws.data
+  // Cancel any pending auto-answer timer before async image resizing/staging so
+  // the server cannot race ahead and auto-resolve the question while images load.
+  conversationService.cancelAutoQuestionAnswer(sessionId, message.requestId)
+  const contentBlocks = await conversationService.materializePermissionAttachments(
+    sessionId,
+    message.attachments,
+  )
+  finalizePermissionResponse(ws, message, contentBlocks)
 }
 
 function handlePermissionResponse(
@@ -2196,6 +2224,18 @@ function handlePermissionResponse(
         type: 'error',
         message: 'Failed to apply the execution model. The plan is still waiting for approval.',
         code: 'RUNTIME_CONFIG_INVALID',
+        permissionRequestId: message.requestId,
+      })
+    })
+    return
+  }
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    void handlePermissionResponseWithAttachments(ws, message).catch((err) => {
+      console.error(`[WS] Failed to process permission response attachments for ${sessionId}:`, err)
+      sendMessage(ws, {
+        type: 'error',
+        message: 'Failed to process attached images. The question is still waiting for your answer.',
+        code: 'ATTACHMENT_PROCESSING_FAILED',
         permissionRequestId: message.requestId,
       })
     })
@@ -4493,7 +4533,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               type: 'tool_result',
               toolUseId: scopedToolUseId(parentToolUseId, block.tool_use_id),
               ...(parentToolUseId ? { originalToolUseId: block.tool_use_id } : {}),
-              content: normalizeAskUserQuestionToolResult(block.content, cliMsg.toolUseResult),
+              content: normalizeAskUserQuestionToolResult(
+                block.content,
+                cliMsg.toolUseResult,
+                toolResultBlocks.length === 1 ? cliMsg.message.content : undefined,
+              ),
               isError: !!block.is_error,
               parentToolUseId,
               ...(singleToolDurationMs !== undefined ? { durationMs: singleToolDurationMs } : {}),
