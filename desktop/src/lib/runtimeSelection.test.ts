@@ -3,6 +3,12 @@ import { normalizeRuntimeSelection, reconcileRuntimeSelection, resolveDefaultRun
 import type { SavedProvider } from '../types/provider'
 
 describe('normalizeRuntimeSelection', () => {
+  it('keeps the exact Antigravity runtime without Claude effort or fast mode even when it is not listed', () => {
+    const selection = { providerId: 'antigravity-acp', modelId: 'native/Model[1m]' }
+    const context = { hasLoadedProviders: true, providers: [], activeId: null, defaultEffortLevel: 'high' as const }
+    expect(reconcileRuntimeSelection(selection, context)).toBe(selection)
+    expect(reconcileRuntimeSelection({ ...selection, effortLevel: 'max', openAIFastMode: true }, context)).toEqual(selection)
+  })
   it('normalizes an old ChatGPT effort against its model without downgrading supported choices', () => {
     expect(normalizeRuntimeSelection({ providerId: 'openai-official', modelId: 'gpt-5.5', effortLevel: 'max' }))
       .toEqual({ providerId: 'openai-official', modelId: 'gpt-5.5', effortLevel: 'medium' })

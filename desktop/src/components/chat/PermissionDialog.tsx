@@ -18,6 +18,7 @@ import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ModelSelector } from '../controls/ModelSelector'
 import { isSideChatSession } from '@/lib/sideChatSessions'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { PermissionUpdate } from '../../types/chat'
@@ -88,6 +89,8 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const respondToPermission = useChatStore((s) => s.respondToPermission)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
+  const isAntigravity = useSessionRuntimeStore((state) => !!targetSessionId &&
+    state.selections[targetSessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID)
   const pendingPermission = useChatStore((s) => targetSessionId
     ? getPendingPermission(s.sessions[targetSessionId], requestId)
     : undefined)
@@ -95,7 +98,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const isPending = Boolean(pendingPermission)
   const [showRaw, setShowRaw] = useState(false)
 
-  if (isExitPlanModeTool(toolName)) {
+  if (!isAntigravity && isExitPlanModeTool(toolName)) {
     return (
       <ExitPlanModePermissionDialog
         sessionId={targetSessionId}
@@ -224,14 +227,16 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
         >
           {t('permission.allow')}
         </Button>
-        <Button
-          variant="secondary"
-          size="base"
-          aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
-          onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
-        >
-          {t('permission.allowForSession')}
-        </Button>
+        {!isAntigravity && (
+          <Button
+            variant="secondary"
+            size="base"
+            aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
+            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
+          >
+            {t('permission.allowForSession')}
+          </Button>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"

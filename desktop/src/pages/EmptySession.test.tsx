@@ -1305,6 +1305,100 @@ describe('EmptySession', () => {
     ])
   })
 
+  it.each(['unchecked', 'ready', 'error'] as const)('sends the exact Antigravity runtime before the first prompt (%s)', async (localAgentStatus) => {
+    mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: localAgentStatus !== 'error', source: 'none', activeProvider: 'Antigravity', localAgentStatus })
+    useProviderStore.setState({ activeId: 'relay', hasLoadedProviders: true })
+    useSettingsStore.setState({ permissionMode: 'bypassPermissions', leanModeEnabled: true })
+    const selection = { providerId: 'antigravity-acp', modelId: localAgentStatus === 'ready' ? 'agy:native/1[1m]' : 'agent-default' }
+    render(<EmptySession initialWorkDir="/workspace/project" />)
+    await openLaunchMenu()
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Isolated worktree' }))
+    act(() => useSessionRuntimeStore.getState().setSelection('__draft__', selection))
+    await openLaunchMenu()
+    expect(await screen.findByRole('button', { name: 'Pick project' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitemradio', { name: /worktree/i })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('permission-mode-selector')).not.toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => expect(mocks.wsSend).toHaveBeenCalledWith('draft-session', { type: 'user_message', content: 'draft question', attachments: [] }))
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledExactlyOnceWith('antigravity-acp')
+    expect(mocks.createSession).toHaveBeenCalledExactlyOnceWith({
+      workDir: '/workspace/project', permissionMode: 'default', launchProviderId: 'antigravity-acp',
+    })
+    expect(mocks.wsSend.mock.calls[0]).toEqual(['draft-session', { type: 'set_runtime_config', ...selection }])
+    expect(useSessionRuntimeStore.getState().selections).toEqual({ 'draft-session': selection })
+    expect(useProviderStore.getState().activeId).toBe('relay')
+  })
+
+  it('keeps the Antigravity draft when REST rejects additional folders, then sends it with another provider', async () => {
+    const workDir = '/workspace/project'
+    const selection = { providerId: 'antigravity-acp', modelId: 'agent-default' }
+    mocks.getProviderAuthStatus.mockResolvedValueOnce({ hasAuth: true, source: 'none', localAgentStatus: 'ready' })
+    mocks.createSession.mockImplementationOnce(async (request: { launchProviderId?: string }) => {
+      if (request.launchProviderId === 'antigravity-acp') {
+        throw new ApiError(400, { error: 'ANTIGRAVITY_UNSUPPORTED', message: 'Server detail' })
+      }
+      return { sessionId: 'draft-session' }
+    })
+    useUIStore.getState().startNewSessionDraft(workDir)
+    const { revision } = useUIStore.getState().newSessionDraft!
+    useSessionRuntimeStore.getState().setSelection('__draft__', selection)
+
+    render(<EmptySession draftRevision={revision} initialWorkDir={workDir} />)
+    setComposerText('keep this draft', 15)
+    const runButton = screen.getByRole('button', { name: /Run/i })
+    fireEvent.click(runButton)
+
+    await waitFor(() => expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+      type: 'error',
+      message: 'Antigravity does not support additional folders. Choose a project without additional folders or switch providers.',
+    }))
+    expect(useUIStore.getState().newSessionDraft).toEqual({ revision, workDir, hasContent: true })
+    expect(useSessionRuntimeStore.getState().selections).toEqual({ __draft__: selection })
+    expect(getComposerText()).toBe('keep this draft')
+    expect(useSessionStore.getState().sessions).toEqual([])
+    expect(useTabStore.getState().tabs).toEqual([])
+    expect(mocks.wsConnect).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+
+    act(() => useSessionRuntimeStore.getState().setSelection('__draft__', { providerId: 'relay', modelId: 'relay-model' }))
+    await waitFor(() => expect(runButton).toBeEnabled())
+    fireEvent.click(runButton)
+    await waitFor(() => expect(mocks.wsSend).toHaveBeenCalledWith('draft-session', {
+      type: 'user_message', content: 'keep this draft', attachments: [],
+    }))
+    expect(mocks.createSession).toHaveBeenNthCalledWith(2, {
+      workDir, repository: { branch: 'main', worktree: false }, permissionMode: 'default',
+    })
+    expect(useUIStore.getState().newSessionDraft).toBeNull()
+  })
+
+  it.each([
+    ['login_required', 'agy acp --login'],
+    ['not_installed', 'Antigravity CLI is not installed'],
+    [undefined, 'Could not check the connection'],
+  ] as const)('keeps the Antigravity draft and gives CLI guidance when %s', async (localAgentStatus, guidance) => {
+    // A legacy server may report working env credentials but is not ACP-aware.
+    mocks.getProviderAuthStatus.mockResolvedValue(localAgentStatus === undefined
+      ? { hasAuth: true, source: 'env' }
+      : { hasAuth: false, source: 'none', activeProvider: 'Antigravity', localAgentStatus })
+    const selection = { providerId: 'antigravity-acp', modelId: 'agent-default' }
+    useSessionRuntimeStore.getState().setSelection('__draft__', selection)
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe('__settings__'))
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(useUIStore.getState().toasts.at(-1)?.message).toContain(guidance)
+    expect(useSessionRuntimeStore.getState().selections.__draft__).toEqual(selection)
+    expect(getComposerText()).toBe('draft question')
+  })
+
   it('opens provider settings instead of creating a session when no model authentication exists', async () => {
     mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
 

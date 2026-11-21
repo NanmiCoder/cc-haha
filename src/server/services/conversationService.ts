@@ -42,7 +42,9 @@ import {
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
 } from '../../services/imageGeneration/config.js'
-import { sessionService, type MessageEntry } from './sessionService.js'
+import { sessionService, type MessageEntry, type SessionLaunchInfo } from './sessionService.js'
+import { ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_PROVIDER_ID, AntigravityError, openAntigravityAcp } from './antigravityAcp.js'
+import { AntigravityConversation } from './antigravityConversation.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -293,6 +295,8 @@ type SessionProcess = {
   controlRevoked?: boolean
   runtimeSelection?: SessionRuntimeSelection
   proc: ReturnType<typeof Bun.spawn>
+  antigravity?: AntigravityConversation
+  antigravityHistoryDraining?: boolean
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
@@ -735,9 +739,16 @@ export class ConversationService {
       throw new ConversationStartupError('Agent teams are unavailable in lean sessions', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
+    const isAntigravity = options?.providerId === ANTIGRAVITY_PROVIDER_ID
     const additionalDirectories = (options?.teamWorker
       ? (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.additionalDirectories
       : launchInfo?.additionalDirectories) ?? []
+    if (isAntigravity && (!launchInfo || side || options?.teamWorker || launchInfo.agentProfile === 'lean' || launchInfo.repository?.worktree || additionalDirectories.length)) {
+      throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'Antigravity requires a standard chat in the original checkout, without additional directories.')
+    }
+    if (isAntigravity && !sessionService.shouldPersistSession()) {
+      throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'Antigravity CLI keeps its own history and is unavailable when session history is disabled.')
+    }
     if (launchInfo?.agentProfile === 'lean' && (options?.permissionMode ?? launchInfo.permissionMode) === 'plan') {
       throw new ConversationStartupError('Plan mode is unavailable in lean sessions. Choose another permission mode before continuing.', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
@@ -745,7 +756,7 @@ export class ConversationService {
       ? options.teamWorker.resume === true && !!await sessionService.findSessionFile(sessionId)
       : !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
-      !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
+      !isAntigravity && !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
     const shouldCreateWorktree =
       !!launchInfo && shouldCreateWorktreeForSessionLaunch(launchInfo)
     const hasMaterializedWorktree =
@@ -818,6 +829,11 @@ export class ConversationService {
         `Working directory does not exist or is not a directory: ${launchWorkDir}`,
         'WORKDIR_INVALID',
       )
+    }
+
+    if (isAntigravity && launchInfo) {
+      await this.startAntigravitySession(sessionId, launchWorkDir, launchRepository, launchInfo, options?.model)
+      return
     }
 
     // `--resume` finds the conversation only from the folder that holds it.
@@ -1091,6 +1107,67 @@ export class ConversationService {
     }
   }
 
+  private async startAntigravitySession(
+    sessionId: string,
+    workDir: string,
+    repository: SessionLaunchInfo['repository'],
+    launchInfo: SessionLaunchInfo,
+    modelId = ANTIGRAVITY_DEFAULT_MODEL,
+  ): Promise<void> {
+    const nativeId = launchInfo.antigravitySessionId
+    if (!nativeId && launchInfo.transcriptMessageCount > 0) {
+      throw new AntigravityError('ANTIGRAVITY_RESUME_FAILED', 'This history is not linked to an Antigravity session. Start a new chat for Antigravity.')
+    }
+    const acp = await openAntigravityAcp(workDir, nativeId, modelId)
+    const assertSessionAvailable = () => {
+      migrationMaintenance.assertAvailable()
+      if (this.deletedSessions.has(sessionId)) throw new ConversationStartupError('Session was deleted before startup completed', 'SESSION_DELETED')
+    }
+    try {
+      assertSessionAvailable()
+      if (this.sessions.has(sessionId)) {
+        acp.close()
+        return
+      }
+      await sessionService.appendSessionMetadata(sessionId, {
+        workDir, repository, permissionMode: 'default', antigravitySessionId: acp.sessionId,
+        runtimeProviderId: ANTIGRAVITY_PROVIDER_ID, runtimeModelId: modelId,
+      })
+      assertSessionAvailable()
+      if (this.sessions.has(sessionId)) {
+        acp.close()
+        return
+      }
+    } catch (error) {
+      acp.close()
+      throw error
+    }
+
+    const session: SessionProcess = {
+      proc: acp.proc, workDir, permissionMode: 'default', providerId: ANTIGRAVITY_PROVIDER_ID,
+      runtimeSelection: { providerId: ANTIGRAVITY_PROVIDER_ID, modelId },
+      outputCallbacks: [], outputDrain: acp.drained,
+      sdkToken: '', sdkSocket: null, sdkAttached: Promise.resolve(), resolveSdkAttached: null,
+      pendingOutbound: [], seenSdkMessageUuids: new Set(), sdkMessages: [], initMessage: null,
+      startupPending: false, startupExitCode: null, stdoutLines: [], stderrLines: [],
+      networkRoutingFingerprint: '', networkDerivedFirstTokenTimeout: false,
+      networkDerivedStreamMaxDuration: false, networkDerivedToolInputDuration: false,
+      usesOfficialOAuth: false, officialOAuthToken: null,
+      pendingPermissionRequests: new Map(), pendingControlRequests: new Map(),
+    }
+    const ownsSession = () => this.sessions.get(sessionId) === session
+    const current = () => ownsSession() && !session.controlRevoked
+    session.antigravity = new AntigravityConversation(acp, message => {
+      if (current()) this.handleSdkPayload(sessionId, JSON.stringify(message))
+    }, messages => sessionService.appendAntigravityMessages(sessionId, acp.sessionId, messages,
+      () => ownsSession() && (!session.controlRevoked || session.antigravityHistoryDraining === true)))
+    this.sessions.set(sessionId, session)
+    void acp.proc.exited.then(async () => {
+      await session.antigravity!.waitForExit()
+      if (current()) this.sessions.delete(sessionId)
+    })
+  }
+
   addTeamRuntimeListener(listener: TeamRuntimeListener): () => void {
     this.teamRuntimeListeners.add(listener)
     return () => this.teamRuntimeListeners.delete(listener)
@@ -1124,6 +1201,26 @@ export class ConversationService {
     return this.sessions.get(sessionId)?.initMessage ?? null
   }
 
+  isAntigravityResponding(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.antigravity?.isResponding === true
+  }
+
+  getAntigravityTurnCompletion(sessionId: string): Promise<boolean> | undefined {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return
+    return session.antigravity.pendingTurnCompletion?.then(() =>
+      this.sessions.get(sessionId) === session && !session.controlRevoked)
+  }
+
+  async waitForAntigravityCancellation(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return
+    await session.antigravity.waitForCancelledTurn()
+    if (this.sessions.get(sessionId) === session && !session.controlRevoked && !session.antigravity.acp.isOpen) {
+      await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+    }
+  }
+
   async sendMessage(
     sessionId: string,
     content: string,
@@ -1133,6 +1230,13 @@ export class ConversationService {
     if (migrationMaintenance.isActive) return false
     const userContent = await this.buildUserContent(content, sessionId, attachments)
     let session = this.sessions.get(sessionId)
+    if (session?.antigravity) {
+      await session.antigravity.waitForCancelledTurn()
+      if (this.sessions.get(sessionId) !== session || session.controlRevoked || migrationMaintenance.isActive || (options?.canSend && !options.canSend())) return false
+      const sent = session.antigravity.send(userContent, options?.messageUuid ?? crypto.randomUUID())
+      if (sent) options?.onCommitted?.()
+      return sent
+    }
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false
     }
@@ -1267,6 +1371,11 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
+    if (session?.antigravity) {
+      if (session.controlRevoked || rule === 'always' || !session.antigravity.respond(requestId, allowed, updatedInput)) return false
+      if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
+      return true
+    }
     this.clearAutoAnswerWait(pendingRequest)
     if (session) {
       if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
@@ -1504,6 +1613,8 @@ export class ConversationService {
   }
 
   sendInterrupt(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (session?.antigravity) return !session.controlRevoked && session.antigravity.cancel()
     const pausedTeam = this.pauseTeamWorkers(sessionId)
     // A paused team's lead also holds the mail its members sent before the
     // Stop until the user speaks again; acting on it would start lead turns,
@@ -1556,9 +1667,9 @@ export class ConversationService {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
     }
-    if (!this.sessions.has(sessionId)) {
-      return Promise.reject(new Error('CLI session is not running'))
-    }
+    const activeSession = this.sessions.get(sessionId)
+    if (!activeSession) return Promise.reject(new Error('CLI session is not running'))
+    if (activeSession.antigravity) throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This Claude Code action is unavailable in an Antigravity session.')
 
     const startedAt = Date.now()
     await this.waitForControlChannelReady(sessionId, timeoutMs, signal)
@@ -1703,7 +1814,7 @@ export class ConversationService {
     socket: { send(data: string): void },
   ): boolean {
     const session = this.sessions.get(sessionId)
-    if (!session || session.controlRevoked) return false
+    if (!session || session.controlRevoked || session.antigravity) return false
 
     session.sdkSocket = socket
     session.resolveSdkAttached?.()
@@ -1863,7 +1974,7 @@ export class ConversationService {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
           session.pendingPermissionRequests.set(msg.request_id, request)
           powerActivityClock.changed()
-          void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
+          if (!session.antigravity) void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
         }
         if (
           (msg?.type === 'control_cancel_request' || msg?.type === 'control_response') &&
@@ -2115,15 +2226,19 @@ export class ConversationService {
     const activeSessions = Array.from(this.sessions.entries())
     if (activeSessions.length === 0) return
 
-    for (const [, session] of activeSessions) {
+    await Promise.all(activeSessions.map(async ([sessionId, session]) => {
       this.cancelPendingControlRequests(session)
-    }
-    this.sessions.clear()
-    await Promise.all(
-      activeSessions.map(([sessionId, session]) =>
-        this.stopProcessAndWait(sessionId, session, timeoutMs),
-      ),
-    )
+      if (session.antigravity) {
+        // 先撤销控制和实时输出（不能在关停时触发延迟重启），但保留历史写入所有权。
+        session.controlRevoked = true
+        session.antigravityHistoryDraining = true
+      } else {
+        this.sessions.delete(sessionId)
+      }
+      const history = session.antigravity?.flushForShutdown()
+      await Promise.all([this.stopProcessAndWait(sessionId, session, timeoutMs), history])
+      if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
+    }))
   }
 
   private async stopProcessAndWait(
@@ -2227,6 +2342,10 @@ export class ConversationService {
   async stopForMigration(): Promise<void> {
     const sessions = [...this.sessions.entries()]
     await Promise.all(sessions.map(async ([sessionId, session]) => {
+      if (session.antigravity) {
+        await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        return
+      }
       if (session.proc.exitCode == null) {
         await this.requestControl(sessionId, { subtype: 'end_session', reason: 'data_migration' }, 10_000)
       }
@@ -2299,7 +2418,7 @@ export class ConversationService {
     payload: Record<string, unknown>,
   ): boolean {
     const session = this.sessions.get(sessionId)
-    if (!session || session.controlRevoked) return false
+    if (!session || session.controlRevoked || session.antigravity) return false
 
     const line = JSON.stringify(payload) + '\n'
     if (session.sdkSocket) {

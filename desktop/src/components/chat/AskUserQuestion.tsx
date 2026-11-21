@@ -96,6 +96,7 @@ function parseInput(input: unknown): Question[] {
 
 type QuestionSelections = Record<number, string[]>
 type QuestionFreeTexts = Record<number, string>
+const EMPTY_FREE_TEXTS: QuestionFreeTexts = {}
 
 function getSelectedAnswer(question: Question, selected: string[] | undefined) {
   if (!selected || selected.length === 0) return ''
@@ -141,7 +142,8 @@ export function AskUserQuestion({
     targetSessionId ? s.sessions[targetSessionId]?.connectionState : undefined)
   const t = useTranslation()
   const questions = useMemo(() => parseInput(input), [input])
-  const inputObject = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
+  const inputObject = isRecord(input) ? input : {}
+  const allowFreeText = inputObject.allowFreeText !== false
   // Read once instead of subscribing: this card writes the draft on every
   // change, and a subscription would feed its own writes back as re-renders.
   const storedDraft = targetSessionId
@@ -149,11 +151,15 @@ export function AskUserQuestion({
     : undefined
   const [activeTab, setActiveTab] = useState(storedDraft?.activeTab ?? 0)
   const [selections, setSelections] = useState<QuestionSelections>(storedDraft?.selections ?? {})
-  const [freeTexts, setFreeTexts] = useState<QuestionFreeTexts>(storedDraft?.freeTexts ?? {})
+  const [draftFreeTexts, setFreeTexts] = useState(storedDraft?.freeTexts ?? EMPTY_FREE_TEXTS)
   const [hasSubmitted, setHasSubmitted] = useState(false)
-  const [hasRequestedChat, setHasRequestedChat] = useState(storedDraft?.handedOff === true)
-  // The question had no live request left, so the answers went out as a message.
-  const [hasSentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
+  const [handedOff, setHandedOff] = useState(storedDraft?.handedOff === true)
+  const [sentAsMessage, setSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
+  // Ignore old text and handoff drafts everywhere, not just in the form. They
+  // must not count as answers, keep a live card closed, or be saved again.
+  const freeTexts = allowFreeText ? draftFreeTexts : EMPTY_FREE_TEXTS
+  const hasRequestedChat = allowFreeText && handedOff
+  const hasSentAsMessage = allowFreeText && sentAsMessage
   const composingRef = useRef(false)
   const activitySentForRequest = useRef<string | null>(null)
 
@@ -255,10 +261,9 @@ export function AskUserQuestion({
     sessionChatState === 'tool_executing' ||
     sessionChatState === 'compacting' ||
     sessionChatState === 'permission_pending'
-  // Delivering an expired answer means sending a message, which needs a connected
-  // session. While reconnecting, the permission snapshot may not have arrived yet,
+  // While reconnecting, the permission snapshot may not have arrived yet,
   // so stay neutral rather than declaring the question dead.
-  const canSendAsMessage = Boolean(targetSessionId) && sessionConnectionState === 'connected'
+  const connected = Boolean(targetSessionId) && sessionConnectionState === 'connected'
   /**
    * The question outlived its live permission request: whoever was waiting for it
    * is gone (renderer was away, CLI reclaimed, turn interrupted) or the user has
@@ -269,8 +274,9 @@ export function AskUserQuestion({
    * answer MUST travel as a permission response — routing it to a message would
    * drop the real prompt and can cancel the turn waiting on it.
    */
-  const expired = !submitted && !pendingRequest && canSendAsMessage &&
+  const expired = !submitted && !pendingRequest && connected &&
     (supersededByUserMessage === true || !sessionBusy)
+  const readOnly = expired && !allowFreeText
 
   /** The `- "question"\n  Answer: …` block every AskUserQuestion handoff uses. */
   const describeAnswers = () => questions
@@ -290,7 +296,7 @@ export function AskUserQuestion({
    */
   const sendAsMessage = (content: string, displayContent: string) => {
     const sessionId = targetSessionId
-    if (!sessionId) return false
+    if (!allowFreeText || !sessionId) return false
     const store = useChatStore.getState()
     const liveChatState = store.sessions[sessionId]?.chatState ?? 'idle'
     if (liveChatState !== 'idle') {
@@ -308,7 +314,7 @@ export function AskUserQuestion({
   }
 
   const handleSelect = (qIndex: number, label: string) => {
-    if (submitted) return
+    if (submitted || readOnly) return
     markUserActivity()
     // Computed from the render snapshot rather than inside the updater: React
     // may run a state updater twice, and advancing the tab is a side effect.
@@ -351,7 +357,7 @@ export function AskUserQuestion({
   }
 
   const handleFreeTextChange = (qIndex: number, value: string) => {
-    if (submitted) return
+    if (!allowFreeText || submitted) return
     markUserActivity()
     setFreeTexts((prev) => {
       const next = { ...prev }
@@ -388,7 +394,7 @@ export function AskUserQuestion({
         `${ASK_USER_QUESTION_EXPIRED_ANSWER_PREFIX}\n\n${describeAnswers()}`,
         response,
       )
-      if (sent) setHasSentAsMessage(true)
+      if (sent) setSentAsMessage(true)
       return
     }
 
@@ -432,7 +438,7 @@ export function AskUserQuestion({
    * an ordinary message instead — the model still gets asked to follow up.
    */
   const handleChatAboutThis = () => {
-    if (submitted) return
+    if (!allowFreeText || submitted) return
 
     if (expired) {
       const questionsWithAnswers = describeAnswers()
@@ -442,13 +448,13 @@ export function AskUserQuestion({
         `${ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX}${questionsWithAnswers}`,
         questionsWithAnswers,
       )
-      if (sent) setHasRequestedChat(true)
+      if (sent) setHandedOff(true)
       return
     }
 
     if (!requestSessionId || !pendingRequest) return
 
-    setHasRequestedChat(true)
+    setHandedOff(true)
     respondToPermission(requestSessionId, pendingRequest.requestId, false, {
       // Carry whatever was already picked, so switching to a conversation isn't
       // punished by losing the partial answers.
@@ -531,10 +537,8 @@ export function AskUserQuestion({
       {/* Active question content */}
       {!submitted && (
         <div className="px-2.5 pt-3">
-          {/* Nothing is waiting on this question any more. The form below stays
-              usable on purpose — the answers are still worth sending — but which
-              channel they take changes, and that has to be visible. */}
-          {expired && (
+          {/* Only free-form questions can send their answers using a new message. */}
+          {expired && allowFreeText && (
             <div
               role="status"
               aria-live="polite"
@@ -560,9 +564,9 @@ export function AskUserQuestion({
                     key={optIndex}
                     type="button"
                     onClick={() => handleSelect(safeActiveTab, opt.label)}
-                    disabled={submitted}
+                    disabled={readOnly}
                     aria-pressed={isSelected}
-                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default ${
                       isSelected
                         ? 'bg-[var(--color-brand-soft)] shadow-[inset_0_0_0_1.5px_var(--color-brand)]'
                         : 'shadow-[inset_0_0_0_1px_var(--color-border)] hover:shadow-[inset_0_0_0_1px_var(--color-outline)]'
@@ -600,29 +604,30 @@ export function AskUserQuestion({
             </div>
           )}
 
-          {/* Free text input: the sunken answer slot. */}
-          <div className="mt-2.5">
-            <label className="mb-1 block px-1 text-xs text-[var(--color-text-tertiary)]">
-              {t('question.customResponse')}
-            </label>
-            <textarea
-              value={freeTexts[safeActiveTab] ?? ''}
-              onChange={(e) => handleFreeTextChange(safeActiveTab, e.target.value)}
-              onCompositionStart={() => { composingRef.current = true }}
-              onCompositionEnd={() => { composingRef.current = false }}
-              onKeyDown={(e) => {
-                if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && allAnswered) {
-                  e.preventDefault()
-                  handleSubmit()
-                }
-              }}
-              placeholder={t('question.typePlaceholder')}
-              rows={3}
-              wrap="soft"
-              className="max-h-48 min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-transparent bg-[var(--color-surface-container)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)] focus:outline-none"
-            />
-          </div>
+          {allowFreeText && (
+            <div className="mt-2.5">
+              <label className="mb-1 block px-1 text-xs text-[var(--color-text-tertiary)]">
+                {t('question.customResponse')}
+              </label>
+              <textarea
+                value={freeTexts[safeActiveTab] ?? ''}
+                onChange={(e) => handleFreeTextChange(safeActiveTab, e.target.value)}
+                onCompositionStart={() => { composingRef.current = true }}
+                onCompositionEnd={() => { composingRef.current = false }}
+                onKeyDown={(e) => {
+                  if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && allAnswered) {
+                    e.preventDefault()
+                    handleSubmit()
+                  }
+                }}
+                placeholder={t('question.typePlaceholder')}
+                rows={3}
+                wrap="soft"
+                className="max-h-48 min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-transparent bg-[var(--color-surface-container)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)] focus:outline-none"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -658,28 +663,29 @@ export function AskUserQuestion({
           label (kr/jp run long) can outgrow a narrow side-by-side pane. Next is
           pushed to the end of the row and wraps alone onto a second line when
           it runs out of room. */}
-      {!submitted && (
+      {!submitted && !readOnly && (
         <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-3">
           <Button
             variant="primary"
             size="base"
-            // `expired` is the one state where a button may work without a live
-            // request: it sends the answers as a message instead of answering.
+            // Only a free-form question can fall back to a chat message once expired.
             disabled={!allAnswered || (!expired && !pendingRequest)}
             onClick={handleSubmit}
           >
             {t(expired ? 'question.sendAsMessage' : 'question.submit')}
           </Button>
-          <Button
-            variant="ghost"
-            size="base"
-            disabled={!expired && !pendingRequest}
-            onClick={handleChatAboutThis}
-            title={t('question.chatAboutThisHint')}
-            icon={<MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} />}
-          >
-            {t('question.chatAboutThis')}
-          </Button>
+          {allowFreeText && (
+            <Button
+              variant="ghost"
+              size="base"
+              disabled={!expired && !pendingRequest}
+              onClick={handleChatAboutThis}
+              title={t('question.chatAboutThisHint')}
+              icon={<MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} />}
+            >
+              {t('question.chatAboutThis')}
+            </Button>
+          )}
           {/* Only on multi-question input, and never on the last one. Pushed to
               the end of the row so it stays out of the way of Submit, which is
               the action that actually ends the exchange. */}

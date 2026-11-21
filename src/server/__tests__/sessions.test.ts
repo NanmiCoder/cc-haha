@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { SessionService, sessionService } from '../services/sessionService.js'
+import { DesktopUiPreferencesService } from '../services/desktopUiPreferencesService.js'
 import {
   createRepositoryBranch,
   getRepositoryContext,
@@ -4310,6 +4311,56 @@ describe('Sessions API', () => {
     )
   })
 
+  it('POST /api/sessions rejects Antigravity with additional directories before writing a session', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'agy-project-')))
+    const extraDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'extra-folder-')))
+    const preferences = new DesktopUiPreferencesService()
+    await preferences.updateProjectDirectories({ workDir, additionalDirectories: [extraDir] })
+    const create = (launchProviderId?: string) => fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, launchProviderId }),
+    })
+
+    const rejected = await create('antigravity-acp')
+    expect(rejected.status).toBe(400)
+    expect(await rejected.json()).toMatchObject({ error: 'ANTIGRAVITY_UNSUPPORTED' })
+    expect(await fs.readdir(path.join(tmpDir, 'projects'))).toEqual([])
+    expect((await preferences.getProjectDirectories(workDir)).additionalDirectories).toEqual([extraDir])
+
+    // The ordinary provider flow still inherits the same directory snapshot.
+    const accepted = await create()
+    expect(accepted.status).toBe(201)
+    const { sessionId } = await accepted.json() as { sessionId: string }
+    expect((await sessionService.getSessionLaunchInfo(sessionId))?.additionalDirectories).toEqual([extraDir])
+  })
+
+  it.each(['unconfigured', 'launch-folder-only'] as const)('POST /api/sessions accepts Antigravity with no effective additional directories (%s)', async (scope) => {
+    const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'agy-project-')))
+    const workDir = path.join(projectRoot, 'nested')
+    await fs.mkdir(workDir)
+    if (scope === 'launch-folder-only') {
+      const preferences = new DesktopUiPreferencesService()
+      // The project adds this folder, but it is the main directory for this launch.
+      await preferences.updateProjectDirectories({ workDir: projectRoot, additionalDirectories: [workDir], createProject: true })
+      expect((await preferences.getProjectDirectories(workDir)).additionalDirectories).toEqual([workDir])
+    }
+
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, launchProviderId: 'antigravity-acp' }),
+    })
+    expect(created.status).toBe(201)
+    const { sessionId } = await created.json() as { sessionId: string }
+    expect((await sessionService.getSessionLaunchInfo(sessionId))?.additionalDirectories).toEqual([])
+    const file = await sessionService.findSessionFile(sessionId)
+    expect(file).not.toBeNull()
+    const transcript = await fs.readFile(file!.filePath, 'utf8')
+    expect(transcript).not.toContain('"launchProviderId"')
+    expect(transcript).not.toContain('"runtimeProviderId"')
+  })
+
   it('POST /api/sessions should create a session when workDir is omitted', async () => {
     const res = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
@@ -4332,6 +4383,16 @@ describe('Sessions API', () => {
     })
 
     expect(res.status).toBe(400)
+  })
+
+  it('POST /api/sessions rejects a non-string launch provider id', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: tmpDir, launchProviderId: { id: 'antigravity-acp' } }),
+    })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: 'BAD_REQUEST' })
   })
 
   it('GET /api/sessions/:id/inspection should report persisted permission mode for inactive sessions', async () => {

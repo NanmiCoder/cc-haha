@@ -45,6 +45,8 @@ type Props = {
   useWorktree: boolean
   onUseWorktreeChange: (enabled: boolean) => void
   onLaunchReadyChange?: (ready: boolean) => void
+  /** Only choose a directory; launch in that checkout as-is. */
+  directoryOnly?: boolean
   disabled?: boolean
   /**
    * `toolbar` sits inside the composer's control row and shares its 36px
@@ -182,6 +184,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   useWorktree,
   onUseWorktreeChange,
   onLaunchReadyChange,
+  directoryOnly = false,
   disabled = false,
   placement = 'outside',
   visible = true,
@@ -501,7 +504,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }, [branchFilter, context])
 
   const warning = useMemo(() => {
-    if (context?.state !== 'ok' || !selectedBranch || useWorktree) return null
+    if (directoryOnly || context?.state !== 'ok' || !selectedBranch || useWorktree) return null
     // A branch that points where HEAD already points cannot be blocked by
     // uncommitted changes — git only moves the ref, it rewrites nothing. That
     // is exactly the branch you just created off the one you are standing on,
@@ -521,7 +524,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       }
     }
     return null
-  }, [context, selectedBranch, t, useWorktree])
+  }, [context, directoryOnly, selectedBranch, t, useWorktree])
 
   const selectBranch = (candidate: RepositoryBranchInfo) => {
     // Picked by the user, even when it is the branch chosen for them before.
@@ -618,6 +621,11 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }
 
   const handleWorkDirChange = (path: string) => {
+    if (directoryOnly) {
+      if (path !== workDir) onWorkDirChange(path)
+      closeMenu()
+      return
+    }
     if (path === workDir) {
       // Re-picking the current directory changes nothing and fires no context
       // request, so there is nothing to wait for. The parent is not told either:
@@ -680,8 +688,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }
 
   const message = stateMessage(context, error)
-  const isGitReady = context?.state === 'ok'
-  const isLaunchReady = !workDir || (
+  const isGitReady = !directoryOnly && context?.state === 'ok'
+  const isLaunchReady = directoryOnly || !workDir || (
     !loading &&
     (!!context || !!error) &&
     (
@@ -724,7 +732,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   const detachedCommit = context?.state === 'ok' && !selectedBranch && !context.currentBranch && context.headCommit
     ? context.headCommit.slice(0, 7)
     : null
-  const branchPillName = selectedBranchName ?? (detachedCommit ? `HEAD ${detachedCommit}` : null)
+  const branchPillName = directoryOnly ? null : selectedBranchName ?? (detachedCommit ? `HEAD ${detachedCommit}` : null)
   // The worktree cards name where their changes would land. Working in place on
   // a detached HEAD lands on that commit; an isolated worktree is based on the
   // default branch when none is chosen.
@@ -737,7 +745,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
     selectedBranchName
       ? `${t('repoLaunch.branch')}: ${selectedBranchName}`
       : detachedCommit ? `${t('repoLaunch.detachedHead')}: ${detachedCommit}` : null,
-    useWorktree ? worktreeLabel : null,
+    !directoryOnly && useWorktree ? worktreeLabel : null,
   ].filter(Boolean).join('\n')
 
   const branchSubtitle = selectedBranch
@@ -1040,7 +1048,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       onSelect={handleWorkDirChange}
       touch={isMobileBrowser}
       showRecentHeading={!isMobileBrowser}
-      onCreateProject={handleProjectCreateOpen}
+      onCreateProject={directoryOnly ? undefined : handleProjectCreateOpen}
     />
   )
 

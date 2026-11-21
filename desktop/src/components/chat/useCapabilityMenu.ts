@@ -119,6 +119,7 @@ export function resetPopularSkillsCache(): void {
 export function useCapabilityMenu(options: {
   open: boolean
   lean?: boolean
+  attachmentsOnly?: boolean
   /**
    * Shows the Agent mode row. Without `onChange` the row is the read-only
    * record of a session's fixed mode.
@@ -136,7 +137,7 @@ export function useCapabilityMenu(options: {
   agentTeamsNotice: AgentTeamsNotice
   computerUseConsent: ComputerUseConsent
 } {
-  const { open, cwd, references, handlers, lean = false, agentProfile } = options
+  const { open, cwd, references, handlers, lean = false, attachmentsOnly = false, agentProfile } = options
   const t = useTranslation()
   const [data, setData] = useState<CapabilityMenuData>(EMPTY_DATA)
   const [popularSkills, setPopularSkills] = useState<NormalizedSkill[]>([])
@@ -146,12 +147,12 @@ export function useCapabilityMenu(options: {
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
-  const agentTeamArmed = armed && agentTeamsEnabled && !lean
+  const agentTeamArmed = armed && agentTeamsEnabled && !lean && !attachmentsOnly
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
 
   useEffect(() => {
-    if (!open || lean) return
+    if (!open || lean || attachmentsOnly) return
     let active = true
     const cwdArg = cwd || undefined
     setRecentSkillIds(readRecentSkills())
@@ -188,9 +189,10 @@ export function useCapabilityMenu(options: {
     })()
 
     return () => { active = false }
-  }, [open, cwd, lean])
+  }, [open, cwd, lean, attachmentsOnly])
 
   const sections = useMemo(() => buildCapabilitySections({
+    attachmentsOnly,
     skills: references.filter(reference => reference.kind === 'skill'),
     plugins: references.filter(reference => reference.kind === 'plugin'),
     recentSkillIds,
@@ -203,7 +205,7 @@ export function useCapabilityMenu(options: {
     computerUse: data.computerUse,
     agentProfile: profileValue ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, profileValue, profileLocked, t])
+  }), [attachmentsOnly, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }
@@ -233,6 +235,7 @@ export function useCapabilityMenu(options: {
   }
 
   const onAction = (action: CapabilityAction) => {
+    if (attachmentsOnly && action.type !== 'attachment') return
     if (lean && !isLeanAction(action)) return
     switch (action.type) {
       case 'attachment':
