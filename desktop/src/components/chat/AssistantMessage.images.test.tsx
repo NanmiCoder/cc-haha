@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { WorkspaceStatusResult } from '../../api/sessions'
+import { sessionsApi } from '../../api/sessions'
+import { resetWorkspaceFileStatsForTests } from '../../lib/workspaceFileStats'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { openLocalFileWithSystem } from '../../lib/systemFileOpen'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -61,6 +63,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetWorkspaceFileStatsForTests()
   act(() => withWorkDir(undefined))
   Reflect.deleteProperty(window, 'desktopHost')
   vi.restoreAllMocks()
@@ -316,5 +319,128 @@ describe('AssistantMessage · looking closer at a picture', () => {
 
       expect(open()).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('AssistantMessage · Markdown audio on disk', () => {
+  function proseAudios(container: HTMLElement): HTMLAudioElement[] {
+    return Array.from(container.querySelectorAll<HTMLAudioElement>('.markdown-prose audio'))
+  }
+
+  it('renders Markdown audio embeds inside a Windows workdir via /preview-fs without image errors or duplicate cards', () => {
+    withWorkDir('N:\\project')
+    const { container } = renderMessage('![飞机坠毁音效](N:/project/outputs/sfx/plane-crash.wav)')
+
+    expect(proseImages(container)).toHaveLength(0)
+    const audios = proseAudios(container)
+    expect(audios).toHaveLength(1)
+    expect(audios[0]).toHaveAttribute('src', `${BASE}/preview-fs/s1/N%3A/project/outputs/sfx/plane-crash.wav`)
+    expect(audios[0]).toHaveAttribute('controls')
+    expect(audios[0]).toHaveAttribute('preload', 'metadata')
+    expect(audios[0]).toHaveAttribute('aria-label', '飞机坠毁音效')
+    expect(screen.getByText('飞机坠毁音效')).toBeVisible()
+    expect(screen.getByText('plane-crash.wav')).toBeVisible()
+    // Should not also spawn a redundant AssistantOutputTargetCard below the inline player.
+    expect(screen.queryByRole('button', { name: /Open with/i })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['Windows path outside workdir', '![Crash](N:/project/outputs/sfx/plane-crash.wav)', 'N:/project/outputs/sfx/plane-crash.wav'],
+    ['Windows backslash path', '![Crash](N:\\project\\outputs\\sfx\\plane-crash.wav)', 'N:/project/outputs/sfx/plane-crash.wav'],
+    ['file:// URL with drive letter', '![Crash](file:///N:/project/outputs/sfx/plane-crash.wav)', 'N:/project/outputs/sfx/plane-crash.wav'],
+    ['POSIX path outside workdir', '![Take 1](/Users/me/sfx/take1.mp3)', '/Users/me/sfx/take1.mp3'],
+    ['home-relative FLAC', '![Master](~/Music/master.flac)', '~/Music/master.flac'],
+    ['M4A audio', '![Voice](/Users/me/voice.m4a)', '/Users/me/voice.m4a'],
+    ['OGG audio', '![Loop](/Users/me/loop.ogg)', '/Users/me/loop.ogg'],
+  ])('routes outside-workdir audio written as %s through /api/filesystem/file', (_label, markdown, expectedPath) => {
+    const { container } = renderMessage(markdown)
+
+    expect(proseImages(container)).toHaveLength(0)
+    expect(proseAudios(container).map((audio) => audio.getAttribute('src'))).toEqual([filesystem(expectedPath)])
+  })
+
+  it('renders raw <audio controls src="..."> tags for local paths, file:// URLs, and inline base64 audio', () => {
+    withWorkDir('N:\\project')
+    const { container } = renderMessage([
+      '<audio controls src="file:///N:/project/outputs/sfx/take1.wav"></audio>',
+      '<audio controls src="outputs/sfx/take2.mp3"></audio>',
+      '<audio controls src="data:audio/mpeg;base64,SUQz"></audio>',
+    ].join('\n\n'))
+
+    expect(proseAudios(container).map((audio) => audio.getAttribute('src'))).toEqual([
+      `${BASE}/preview-fs/s1/N%3A/project/outputs/sfx/take1.wav`,
+      `${BASE}/preview-fs/s1/outputs/sfx/take2.mp3`,
+      'data:audio/mpeg;base64,SUQz',
+    ])
+  })
+
+  it('excludes Markdown audio embeds from the conversation image gallery', () => {
+    const images = collectConversationImages([
+      {
+        id: 'a',
+        type: 'assistant_text',
+        content: '![飞机坠毁音效](/repo/outputs/sfx/plane-crash.wav)\n\n![封面](/repo/outputs/cover.png)',
+        timestamp: 1,
+      },
+    ], { sessionId: 's1', baseUrl: BASE, workDir: '/repo', imageLabel: 'Image' })
+
+    expect(images).toEqual([
+      { src: `${BASE}/preview-fs/s1//repo/outputs/cover.png`, name: 'cover.png', path: '/repo/outputs/cover.png' },
+    ])
+  })
+
+  it('strips local audio while streaming and refuses remote audio URLs', () => {
+    const streaming = renderMessage('![Crash](outputs/sfx/plane-crash.wav)', { isStreaming: true })
+    expect(proseAudios(streaming.container)).toHaveLength(0)
+
+    const remote = renderMessage('![Track](https://attacker.example/track.mp3)\n\n<audio controls src="https://attacker.example/raw.wav"></audio>')
+    expect(proseAudios(remote.container)).toHaveLength(0)
+  })
+
+  it('repairs workspace-prefixed Markdown audio paths via useWorkspacePathAliases without spawning a duplicate card', async () => {
+    withWorkDir('N:\\project')
+    vi.spyOn(sessionsApi, 'statWorkspaceFiles').mockResolvedValue({
+      files: [
+        { path: 'N:/project/project/outputs/sfx/plane-crash.wav', state: 'missing' },
+        { path: 'N:/project/outputs/sfx/plane-crash.wav', state: 'file', mtimeMs: 2000 },
+      ],
+    })
+
+    const { container } = render(
+      <AssistantMessage
+        sessionId="s1"
+        content="![飞机坠毁音效](project/outputs/sfx/plane-crash.wav)"
+        turnChangedFiles={['N:\\project\\outputs\\sfx\\plane-crash.wav']}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(proseAudios(container).map((audio) => audio.getAttribute('src'))).toEqual([
+        `${BASE}/preview-fs/s1/outputs/sfx/plane-crash.wav`,
+      ])
+    })
+    expect(screen.queryByRole('button', { name: /Open with/i })).not.toBeInTheDocument()
+  })
+
+  it('suppresses duplicate output cards for raw <audio> tags and co-mentioned audio paths', () => {
+    withWorkDir('/repo')
+    const { container } = render(
+      <AssistantMessage
+        sessionId="s1"
+        content={[
+          '<audio controls src="outputs/sfx/take1.wav"></audio>',
+          '![Take 2](outputs/sfx/take2.wav)',
+          '文件路径：`outputs/sfx/take2.wav`',
+        ].join('\n\n')}
+        turnChangedFiles={['/repo/outputs/sfx/take1.wav', '/repo/outputs/sfx/take2.wav']}
+        turnOutputEvidence={{ unlistedWrites: true, startedAt: 1 }}
+      />,
+    )
+
+    expect(proseAudios(container).map((audio) => audio.getAttribute('src'))).toEqual([
+      `${BASE}/preview-fs/s1/outputs/sfx/take1.wav`,
+      `${BASE}/preview-fs/s1/outputs/sfx/take2.wav`,
+    ])
+    expect(screen.queryByRole('button', { name: /Open with/i })).not.toBeInTheDocument()
   })
 })

@@ -138,4 +138,25 @@ describe('assistant Markdown image paths → filesystem authorization', () => {
       }
     `)
   })
+
+  it('serves home audio files resolved by createAssistantMarkdownAudioResolver with byte-range support', async () => {
+    await withTemporaryHome(`
+      const { createAssistantMarkdownAudioResolver } = await import('./desktop/src/lib/markdownImages')
+      const WAV = Uint8Array.from({ length: 64 }, (_, i) => i)
+      const audioPath = path.join(os.homedir(), 'Pictures', '测试 pics', 'plane-crash.wav')
+      await fs.writeFile(audioPath, WAV)
+      const resolveAudio = createAssistantMarkdownAudioResolver({
+        baseUrl: 'http://localhost:3456', sessionId: 'qa-audio', workDir: path.join(fixture, 'workspace'),
+      })
+      const src = resolveAudio(normalizeMarkdownImageDestination('~/Pictures/%E6%B5%8B%E8%AF%95%20pics/plane-crash.wav'))
+      assert.notEqual(src, null)
+      const url = new URL(src)
+      assert.equal(url.pathname, '/api/filesystem/file')
+      const res = await handleFilesystemRoute(url.pathname, url, undefined, new Headers({ Range: 'bytes=0-15' }))
+      assert.equal(res.status, 206)
+      assert.equal(res.headers.get('Content-Type'), 'audio/wav')
+      assert.equal(res.headers.get('Content-Range'), 'bytes 0-15/64')
+      assert.deepEqual(new Uint8Array(await res.arrayBuffer()), WAV.slice(0, 16))
+    `)
+  })
 })

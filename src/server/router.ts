@@ -222,7 +222,7 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
       return handleTracesApi(req, url, segments)
 
     case 'filesystem':
-      return handleFilesystemRoute(url.pathname, url, req.signal)
+      return handleFilesystemRoute(url.pathname, url, req.signal, req.headers)
 
     default:
       return Response.json(

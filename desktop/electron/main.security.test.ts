@@ -113,6 +113,8 @@ describe('Electron preview security boundary', () => {
     ['path attachment', 'GET', 'image', 'http://127.0.0.1:49321/api/filesystem/file?path=%2Ftmp%2Fimage.png'],
     ['workspace image', 'GET', 'image', 'http://127.0.0.1:49321/preview-fs/session/image.png'],
     ['workspace video range', 'GET', 'media', 'http://127.0.0.1:49321/preview-fs/session/video.mp4'],
+    ['workspace audio range', 'GET', 'media', 'http://127.0.0.1:49321/preview-fs/session/plane-crash.wav'],
+    ['local audio file', 'GET', 'media', 'http://127.0.0.1:49321/api/filesystem/file?path=%2Ftmp%2Fplane-crash.wav'],
   ])('allows the main renderer %s request', (_name, method, resourceType, url) => {
     expect(isAllowlistedMainRendererMediaRequest({
       method,

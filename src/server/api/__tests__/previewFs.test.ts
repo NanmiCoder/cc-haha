@@ -27,7 +27,11 @@ describe('contentTypeForPath', () => {
     expect(contentTypeForPath('/x/clip.m4v')).toBe('video/x-m4v')
     expect(contentTypeForPath('/x/song.mp3')).toBe('audio/mpeg')
     expect(contentTypeForPath('/x/song.wav')).toBe('audio/wav')
+    expect(contentTypeForPath('/x/song.m4a')).toBe('audio/mp4')
     expect(contentTypeForPath('/x/song.ogg')).toBe('audio/ogg')
+    expect(contentTypeForPath('/x/song.flac')).toBe('audio/flac')
+    expect(contentTypeForPath('/x/song.aac')).toBe('audio/aac')
+    expect(contentTypeForPath('/x/song.opus')).toBe('audio/ogg')
   })
   it('falls back to octet-stream for unknown', () => {
     expect(contentTypeForPath('/x/file.bin')).toBe('application/octet-stream')
