@@ -105,6 +105,7 @@ export function Approval({
         input={input}
         ready={ready}
         sent={sent}
+        serverError={serverError}
         signalActivity={() =>
           send({ type: 'ask_user_question_activity', requestId: request.requestId })
         }

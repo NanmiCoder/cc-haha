@@ -63,6 +63,14 @@ export function ActivitySheet({
   const { client } = useConnection(host.id)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [detail, setDetail] = useState<BackgroundTask | null>(null)
+  const [wasVisible, setWasVisible] = useState(visible)
+  if (visible !== wasVisible) {
+    setWasVisible(visible)
+    if (!visible) {
+      if (confirm) setConfirm(null)
+      if (detail) setDetail(null)
+    }
+  }
   const close = () => {
     setConfirm(null)
     setDetail(null)
@@ -86,6 +94,37 @@ export function ActivitySheet({
       visible={visible}
       onClose={close}
       scroll={false}
+      overlayOpen={!!confirm || !!detail}
+      onOverlayClose={() => {
+        if (confirm) setConfirm(null)
+        else if (detail) setDetail(null)
+      }}
+      overlay={
+        <>
+          <ConfirmSheet
+            inline
+            visible={!!confirm}
+            title={
+              confirm?.all ? `停止全部 ${confirm.ids.length} 项运行中的活动？` : '停止这项后台活动？'
+            }
+            subject={confirm?.subject}
+            detail="已修改的文件会保留，尚未完成的输出可能不完整。"
+            confirmTitle="确认停止"
+            destructive
+            onConfirm={stop}
+            onClose={() => setConfirm(null)}
+          />
+          {sessionId ? (
+            <TaskOutputSheet
+              inline
+              task={detail}
+              client={client}
+              sessionId={sessionId}
+              onClose={() => setDetail(null)}
+            />
+          ) : null}
+        </>
+      }
       left={
         <View
           accessibilityRole="header"
@@ -141,29 +180,6 @@ export function ActivitySheet({
             : undefined
         }
       />
-      {/* 嵌套的弹层放在绝对定位的零尺寸容器里：它们要挂在这张底单下面才能叠出来，又不能占一格 gap。 */}
-      <View pointerEvents="box-none" style={{ position: 'absolute', width: 0, height: 0 }}>
-        <ConfirmSheet
-          visible={!!confirm}
-          title={
-            confirm?.all ? `停止全部 ${confirm.ids.length} 项运行中的活动？` : '停止这项后台活动？'
-          }
-          subject={confirm?.subject}
-          detail="已修改的文件会保留，尚未完成的输出可能不完整。"
-          confirmTitle="确认停止"
-          destructive
-          onConfirm={stop}
-          onClose={() => setConfirm(null)}
-        />
-        {sessionId ? (
-          <TaskOutputSheet
-            task={detail}
-            client={client}
-            sessionId={sessionId}
-            onClose={() => setDetail(null)}
-          />
-        ) : null}
-      </View>
     </DetentSheet>
   )
 }
