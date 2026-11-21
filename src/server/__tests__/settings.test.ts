@@ -566,6 +566,30 @@ describe('Settings API', () => {
     expect(await new SettingsService().getUserSettings()).toEqual({})
   })
 
+  it('persists includeCyberRiskInstruction through the user settings API and preserves unrelated fields', async () => {
+    const settingsPath = path.join(tmpDir, 'settings.json')
+    const original = JSON.stringify({ futureSetting: { keep: true } })
+    await fs.writeFile(settingsPath, original)
+
+    for (const included of [false, true]) {
+      const put = makeRequest('PUT', '/api/settings/user', { includeCyberRiskInstruction: included })
+      expect((await handleSettingsApi(put.req, put.url, put.segments)).status).toBe(200)
+      const get = makeRequest('GET', '/api/settings/user')
+      const response = await handleSettingsApi(get.req, get.url, get.segments)
+      expect(await response.json()).toMatchObject({ includeCyberRiskInstruction: included, futureSetting: { keep: true } })
+      expect(JSON.parse(await fs.readFile(settingsPath, 'utf-8'))).toEqual({
+        futureSetting: { keep: true },
+        includeCyberRiskInstruction: included,
+      })
+    }
+  })
+
+  it.each(['false', null, 1])('rejects invalid includeCyberRiskInstruction preference %j without changing settings', async value => {
+    const put = makeRequest('PUT', '/api/settings/user', { includeCyberRiskInstruction: value })
+    expect((await handleSettingsApi(put.req, put.url, put.segments)).status).toBe(400)
+    expect(await new SettingsService().getUserSettings()).toEqual({})
+  })
+
   it('persists automatic updates through the user settings API and preserves unrelated fields', async () => {
     const settingsPath = path.join(tmpDir, 'settings.json')
     const original = JSON.stringify({ futureSetting: { keep: true } })
