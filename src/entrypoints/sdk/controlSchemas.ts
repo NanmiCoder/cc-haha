@@ -567,6 +567,18 @@ export const SDKControlCancelSideQuestionRequestSchema = lazySchema(() =>
   z.object({ subtype: z.literal('cancel_side_question'), question_id: z.uuid() }),
 )
 
+export const SDKControlOptimizePromptRequestSchema = lazySchema(() =>
+  z.object({
+    subtype: z.literal('optimize_prompt'),
+    request_id: z.uuid().optional(),
+    prompt: z.string().trim().min(1).max(32_000),
+  }),
+)
+
+export const SDKControlCancelOptimizePromptRequestSchema = lazySchema(() =>
+  z.object({ subtype: z.literal('cancel_optimize_prompt'), request_id: z.uuid() }),
+)
+
 export const SDKControlApplyFlagSettingsRequestSchema = lazySchema(() =>
   z
     .object({
@@ -687,6 +699,8 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSendAgentMessageRequestSchema(),
     SDKControlSideQuestionRequestSchema(),
     SDKControlCancelSideQuestionRequestSchema(),
+    SDKControlOptimizePromptRequestSchema(),
+    SDKControlCancelOptimizePromptRequestSchema(),
     SDKControlApplyFlagSettingsRequestSchema(),
     SDKControlGetSettingsRequestSchema(),
     SDKControlElicitationRequestSchema(),

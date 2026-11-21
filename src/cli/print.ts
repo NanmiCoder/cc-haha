@@ -158,6 +158,7 @@ import {
   resolveAgentMessageToolUseContext,
 } from 'src/utils/queryContext.js'
 import { runSideQuestion } from 'src/utils/sideQuestion.js'
+import { runPromptOptimize } from 'src/utils/promptOptimize.js'
 import {
   processSessionStartHooks,
   processSetupHooks,
@@ -1458,6 +1459,7 @@ function runHeadlessStreaming(
   // TODO: Clean up this code to avoid passing around a mutable array.
   const mutableMessages: Message[] = initialMessages
   const sideQuestionControllers = new Map<string, AbortController>()
+  const promptOptimizeControllers = new Map<string, AbortController>()
 
   // Seed the readFileState cache from the transcript (content the model saw,
   // with message timestamps) so getChangedFiles can detect external edits.
@@ -4455,6 +4457,52 @@ function runHeadlessStreaming(
               sendControlResponseError(message, errorMessage(e))
             } finally {
               sideQuestionControllers.delete(questionId)
+            }
+          })()
+        } else if (message.request.subtype === 'cancel_optimize_prompt') {
+          const controller = promptOptimizeControllers.get(message.request.request_id)
+          controller?.abort(new Error('Prompt optimization cancelled'))
+          sendControlResponseSuccess(message, { cancelled: Boolean(controller) })
+        } else if (message.request.subtype === 'optimize_prompt') {
+          // Register synchronously so a following cancel request can find the
+          // fork even while fallback context is being assembled.
+          const { prompt, request_id } = message.request
+          const optimizeId = request_id ?? message.request_id
+          if (promptOptimizeControllers.has(optimizeId)) {
+            sendControlResponseError(message, 'Prompt optimization already running')
+            continue
+          }
+          const controller = createAbortController()
+          promptOptimizeControllers.set(optimizeId, controller)
+          const currentMessages = mutableMessages.slice()
+          void (async () => {
+            try {
+              const saved = getLastCacheSafeParams()
+              const cacheSafeParams = saved
+                ? { ...saved, forkContextMessages: currentMessages }
+                : await buildSideQuestionFallbackParams({
+                    tools: buildAllTools(getAppState()),
+                    commands: currentCommands,
+                    mcpClients: [
+                      ...getAppState().mcp.clients,
+                      ...sdkClients,
+                      ...dynamicMcpState.clients,
+                    ],
+                    messages: currentMessages,
+                    readFileState,
+                    getAppState,
+                    setAppState,
+                    customSystemPrompt: options.systemPrompt,
+                    appendSystemPrompt: options.appendSystemPrompt,
+                    thinkingConfig: options.thinkingConfig,
+                    agents: currentAgents,
+                  })
+              const result = await runPromptOptimize({ prompt, cacheSafeParams, signal: controller.signal })
+              sendControlResponseSuccess(message, { optimizedPrompt: result.optimizedPrompt })
+            } catch (e) {
+              sendControlResponseError(message, errorMessage(e))
+            } finally {
+              promptOptimizeControllers.delete(optimizeId)
             }
           })()
         } else if (

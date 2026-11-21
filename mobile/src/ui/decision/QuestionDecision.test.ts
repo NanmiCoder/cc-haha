@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { test } from 'bun:test'
 
-function checkQuestionPage(body: string) {
+function checkQuestionPage(body: string, platform: 'ios' | 'android' | 'web' = 'ios') {
   const dir = mkdtempSync(join(tmpdir(), 'mobile-question-render-'))
   const script = `
     import { mock } from 'bun:test'
@@ -14,6 +14,12 @@ function checkQuestionPage(body: string) {
     const instances = new Map()
     mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
       useEffect: () => {},
+      useRef: (initial) => {
+        const slot = cursor++
+        const state = values
+        if (!(slot in state)) state[slot] = { current: initial }
+        return state[slot]
+      },
       useState: (initial) => {
         const slot = cursor++
         const state = values
@@ -25,18 +31,18 @@ function checkQuestionPage(body: string) {
     mock.module(${JSON.stringify(import.meta.resolve('react/jsx-dev-runtime'))}, () => ({ jsxDEV: jsx, Fragment: 'Fragment' }))
     mock.module(${JSON.stringify(import.meta.resolve('react/jsx-runtime'))}, () => ({ jsx, jsxs: jsx, Fragment: 'Fragment' }))
     mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({
-      Platform: { OS: 'ios', select: (values) => values.ios ?? values.default }, Modal: 'Modal', Pressable: 'Pressable', ScrollView: 'ScrollView', TextInput: 'TextInput', View: 'View',
+      Platform: { OS: ${JSON.stringify(platform)}, select: (values) => values[${JSON.stringify(platform)}] ?? values.default }, Modal: 'Modal', Pressable: 'Pressable', ScrollView: 'ScrollView', TextInput: 'TextInput', View: 'View',
     }))
     mock.module(${JSON.stringify(import.meta.resolve('react-native-safe-area-context'))}, () => ({ SafeAreaView: 'SafeAreaView', useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
-      Button: 'Button', HaloDot: 'HaloDot', Icon: 'Icon', Sheet: 'Sheet', Spinner: 'Spinner', TextButton: 'TextButton', useColors: () => ({}),
+      Button: 'Button', HaloDot: 'HaloDot', Icon: 'Icon', InlineError: 'InlineError', Sheet: 'Sheet', Spinner: 'Spinner', TextButton: 'TextButton', useColors: () => ({ bg: '#F4F3F0' }),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../KeyboardViewport'))}, () => ({ KeyboardViewport: 'KeyboardViewport' }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('./parts'))}, () => ({
       CountdownPill: 'CountdownPill', NoteInput: 'NoteInput', SubmittedRow: 'SubmittedRow', webNoOutline: {},
     }))
-    const { QuestionPage } = require(${JSON.stringify(import.meta.resolve('./QuestionDecision'))})
+    const { QuestionDecision, QuestionPage } = require(${JSON.stringify(import.meta.resolve('./QuestionDecision'))})
     // Keep each function component's hooks separate, including keyed option rows.
     const flat = (node, path = 'root', ancestors = []) => {
       if (!node || typeof node !== 'object') return []
@@ -51,6 +57,7 @@ function checkQuestionPage(body: string) {
       return [{ ...node, ancestors }, ...flat(node.props?.children, path + '/children', [...ancestors, node])]
     }
     const renderPage = (props) => flat({ type: QuestionPage, props })
+    const renderDecision = (props) => flat({ type: QuestionDecision, props })
     ${body}
   `
   const scriptPath = join(dir, 'render.ts')
@@ -254,4 +261,300 @@ test('truncated Chinese and English details expand independently without choosin
       assert.ok(node.ancestors.some((ancestor) => ancestor.props?.style?.overflow === 'hidden'), 'measurement text cannot extend collapsed scroll content')
     }
   `)
+})
+
+test('discuss sheet renders inline as a sibling of SafeAreaView/KeyboardViewport, resets on close, and reports send failures in-page', () => {
+  checkQuestionPage(`
+    let closed = 0, allowSubmit = true, allowDiscuss = true
+    const notes = []
+    const props = {
+      visible: true,
+      onClose: () => { closed++ },
+      request: { requestId: 'discuss', toolName: 'AskUserQuestion' },
+      input: { questions: [{ question: '怎么改？', options: [{ label: '方案 A' }] }] },
+      ready: true,
+      sent: false,
+      signalActivity: () => true,
+      submit: () => allowSubmit,
+      discuss: (text) => { notes.push(text); return allowDiscuss },
+    }
+    const render = () => renderPage(props)
+    const modal = () => render().find((n) => n.type === 'Modal')
+    const sheet = () => render().find((n) => n.type === 'Sheet')
+    const safeArea = () => render().find((n) => n.type === 'SafeAreaView')
+    const errors = () => render().filter((n) => n.type === 'InlineError' && n.props?.text)
+
+    // iOS uses overFullScreen + themed backdropColor so root view stays attached without white flash.
+    assert.equal(modal().props.presentationStyle, 'overFullScreen')
+    assert.equal(modal().props.backdropColor, '#F4F3F0')
+    assert.equal(sheet().props.inline, true, 'discuss sheet must stay inline inside QuestionPage Modal')
+    assert.equal(sheet().props.visible, false)
+    assert.ok(!sheet().ancestors.some((a) => a.type === 'SafeAreaView' || a.type === 'KeyboardViewport'), 'inline Sheet must stay outside SafeAreaView and KeyboardViewport')
+
+    // Failed submit keeps page open and renders in-page error; choosing again clears it.
+    render().find((n) => n.props?.accessibilityLabel === '方案 A').props.onPress()
+    allowSubmit = false
+    render().find((n) => n.props?.accessibilityLabel === '提交').props.onPress()
+    assert.equal(closed, 0)
+    assert.equal(errors().length, 1)
+    assert.ok(errors()[0].props.text.includes('尚未发出'))
+    render().find((n) => n.props?.accessibilityLabel === '方案 A').props.onPress()
+    assert.equal(errors().length, 0)
+
+    // Opening discuss hides underlying question tree from accessibility and intercepts back close first.
+    render().find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    assert.equal(sheet().props.visible, true)
+    assert.equal(safeArea().props.accessibilityElementsHidden, true)
+    assert.equal(safeArea().props.importantForAccessibility, 'no-hide-descendants')
+    assert.equal(safeArea().props['aria-hidden'], true)
+
+    // Whitespace-only note keeps 发送说明 disabled; offline/sent also disables it.
+    render().find((n) => n.props?.accessibilityLabel === '告诉它还需要澄清什么').props.onChangeText('   ')
+    assert.equal(sheet().props.footer.props.disabled, true)
+    render().find((n) => n.props?.accessibilityLabel === '告诉它还需要澄清什么').props.onChangeText('先别改，按方案 B 来')
+    assert.equal(sheet().props.footer.props.disabled, false)
+    props.ready = false
+    assert.equal(sheet().props.footer.props.disabled, true)
+    props.ready = true
+    props.sent = true
+    assert.equal(sheet().props.footer.props.disabled, true)
+    props.sent = false
+
+    // Failed discuss keeps sheet open, preserves note, does not close QuestionPage, and renders InlineError.
+    allowDiscuss = false
+    sheet().props.footer.props.onPress()
+    assert.equal(sheet().props.visible, true)
+    assert.equal(closed, 0)
+    assert.equal(render().find((n) => n.props?.accessibilityLabel === '告诉它还需要澄清什么').props.value, '先别改，按方案 B 来')
+    assert.equal(errors().length, 1)
+
+    // First back/requestClose dismisses the inline discuss sheet and restores underlying accessibility.
+    modal().props.onRequestClose()
+    assert.equal(sheet().props.visible, false)
+    assert.equal(safeArea().props.accessibilityElementsHidden, false)
+    assert.equal(safeArea().props.importantForAccessibility, 'auto')
+    assert.equal(safeArea().props['aria-hidden'], false)
+    assert.equal(errors().length, 0)
+    assert.equal(closed, 0)
+
+    // External visible=false or pressing 收起 resets discussOpen so reopening starts clean.
+    render().find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    assert.equal(sheet().props.visible, true)
+    props.visible = false
+    assert.equal(sheet().props.visible, false, 'setting visible=false resets discussOpen')
+    props.visible = true
+    assert.equal(sheet().props.visible, false)
+
+    render().find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    render().find((n) => n.props?.accessibilityLabel === '收起').props.onPress()
+    assert.equal(sheet().props.visible, false, 'pressing 收起 resets discussOpen')
+    assert.equal(closed, 1)
+
+    // Submitting a discuss note sends it, closes the inline sheet, and closes QuestionPage.
+    allowDiscuss = true
+    render().find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    sheet().props.footer.props.onPress()
+    assert.deepEqual(notes, ['先别改，按方案 B 来', '先别改，按方案 B 来'])
+    assert.equal(sheet().props.visible, false)
+    assert.equal(closed, 2)
+  `)
+
+  // Non-iOS leaves presentationStyle undefined; Web sets inert on the underlying SafeAreaView.
+  checkQuestionPage(`
+    const props = {
+      visible: true, onClose: () => {},
+      request: { requestId: 'android', toolName: 'AskUserQuestion' },
+      input: { questions: [{ question: '平台？', options: [{ label: 'Android' }] }] },
+      ready: true, sent: false, signalActivity: () => true, submit: () => true, discuss: () => true,
+    }
+    const modal = renderPage(props).find((n) => n.type === 'Modal')
+    assert.equal(modal.props.presentationStyle, undefined)
+  `, 'android')
+
+  checkQuestionPage(`
+    const props = {
+      visible: true, onClose: () => {},
+      request: { requestId: 'web', toolName: 'AskUserQuestion' },
+      input: { questions: [{ question: '网页？', options: [{ label: '是' }] }] },
+      ready: true, sent: false, signalActivity: () => true, submit: () => true, discuss: () => true,
+    }
+    const safeArea = () => renderPage(props).find((n) => n.type === 'SafeAreaView')
+    assert.equal(safeArea().props.inert, undefined)
+    renderPage(props).find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    assert.equal(safeArea().props.inert, true, 'web marks underlying SafeAreaView inert while inline sheet is open')
+    assert.equal(safeArea().props['aria-hidden'], true)
+  `, 'web')
+})
+
+test('QuestionDecision defers iOS reopen during mid-dismissal animation until onDismiss completes', () => {
+  checkQuestionPage(`
+    const props = {
+      request: { requestId: 'reopen', toolName: 'AskUserQuestion' },
+      input: { questions: [{ question: '确认？', options: [{ label: '好' }] }] },
+      ready: true, sent: false, signalActivity: () => true, submit: () => true, discuss: () => true,
+    }
+    const modal = () => renderDecision(props).find((n) => n.type === 'Modal')
+    const prompt = () => renderDecision(props).find((n) => n.props?.accessibilityLabel === '有 1 个问题等你回答')
+
+    assert.equal(modal().props.visible, false)
+    prompt().props.onPress()
+    assert.equal(modal().props.visible, true)
+
+    // Close starts iOS native dismissal; tapping prompt before onDismiss must defer, not force visible=true mid-transition.
+    renderDecision(props).find((n) => n.props?.accessibilityLabel === '收起').props.onPress()
+    assert.equal(modal().props.visible, false)
+    prompt().props.onPress()
+    assert.equal(modal().props.visible, false, 'wait for native onDismiss before reopening on iOS')
+
+    // Once onDismiss fires, the pending reopen opens cleanly.
+    modal().props.onDismiss()
+    assert.equal(modal().props.visible, true)
+  `)
+})
+
+test('real QuestionPage + real Sheet mounts only one native Modal and unmounts NoteInput when discuss is closed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mobile-sheet-inline-'))
+  const script = `
+    import { mock } from 'bun:test'
+    import assert from 'node:assert/strict'
+    let cursor = 0
+    let values = []
+    const instances = new Map()
+    const effects = []
+    mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
+      default: {
+        useRef: (initial) => {
+          const slot = cursor++
+          const state = values
+          if (!(slot in state)) state[slot] = { current: initial }
+          return state[slot]
+        },
+      },
+      useEffect: (fn) => { effects.push(fn) },
+      useMemo: (fn) => fn(),
+      useRef: (initial) => {
+        const slot = cursor++
+        const state = values
+        if (!(slot in state)) state[slot] = { current: initial }
+        return state[slot]
+      },
+      useState: (initial) => {
+        const slot = cursor++
+        const state = values
+        if (!(slot in state)) state[slot] = typeof initial === 'function' ? initial() : initial
+        return [state[slot], (next) => { state[slot] = typeof next === 'function' ? next(state[slot]) : next }]
+      },
+    }))
+    const jsx = (type, props, key) => ({ type, props, key })
+    mock.module(${JSON.stringify(import.meta.resolve('react/jsx-dev-runtime'))}, () => ({ jsxDEV: jsx, Fragment: 'Fragment' }))
+    mock.module(${JSON.stringify(import.meta.resolve('react/jsx-runtime'))}, () => ({ jsx, jsxs: jsx, Fragment: 'Fragment' }))
+    mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({
+      AccessibilityInfo: { announceForAccessibility: () => {} },
+      ActivityIndicator: 'ActivityIndicator',
+      Animated: { Value: class {}, timing: () => ({ start: () => {} }), loop: () => ({ start: () => {}, stop: () => {} }), View: 'AnimatedView' },
+      Easing: { inOut: () => () => 0, sin: () => 0 },
+      FlatList: 'FlatList',
+      Modal: 'Modal',
+      Platform: { OS: 'ios', select: (values) => values.ios ?? values.default },
+      Pressable: 'Pressable',
+      ScrollView: 'ScrollView',
+      TextInput: 'TextInput',
+      View: 'View',
+      useWindowDimensions: () => ({ width: 390, height: 844 }),
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('react-native-safe-area-context'))}, () => ({
+      SafeAreaView: 'SafeAreaView',
+      useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('react-native-svg'))}, () => ({
+      default: 'Svg',
+      Circle: 'Circle',
+      Path: 'Path',
+      Rect: 'Rect',
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('expo-router'))}, () => ({ router: { canGoBack: () => false, back: () => {}, replace: () => {} } }))
+    mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({
+      useTheme: () => ({ colors: { bg: '#F4F3F0', card: '#fff', scrim: 'rgba(0,0,0,0.4)', sheet: '#fff', chevron: '#999', ink: '#111', ink2: '#333', ink3: '#666', hair: '#ddd', fill: '#eee', run: '#2563eb', btn: '#111', btnInk: '#fff' }, dark: false }),
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('../KeyboardViewport'))}, () => ({ KeyboardViewport: 'KeyboardViewport' }))
+    mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
+    mock.module(${JSON.stringify(import.meta.resolve('../icons'))}, () => ({ Icon: 'Icon' }))
+    const { PageSheet, Sheet } = require(${JSON.stringify(import.meta.resolve('../kit'))})
+    const { QuestionPage } = require(${JSON.stringify(import.meta.resolve('./QuestionDecision'))})
+    const flat = (node, path = 'root', ancestors = []) => {
+      if (!node || typeof node !== 'object') return []
+      if (Array.isArray(node)) return node.flatMap((child, index) => flat(child, path + '/' + (child?.key ?? index), ancestors))
+      if (typeof node.type === 'function') {
+        const identity = path + '/' + node.type.name
+        if (!instances.has(identity)) instances.set(identity, [])
+        values = instances.get(identity)
+        cursor = 0
+        return flat(node.type(node.props), identity, ancestors)
+      }
+      return [{ ...node, ancestors }, ...flat(node.props?.children, path + '/children', [...ancestors, node])]
+    }
+
+    // 1. Standalone Sheet inline vs default Modal
+    assert.equal(flat({ type: Sheet, props: { visible: false, inline: true, onClose: () => {}, children: 'body' } }).length, 0)
+    let closed = 0
+    const inlineTree = flat({ type: Sheet, props: { visible: true, inline: true, onClose: () => { closed++ }, title: '先讨论一下', children: 'body' } })
+    assert.equal(inlineTree.some((n) => n.type === 'Modal'), false, 'inline Sheet must not mount a nested native Modal')
+    assert.equal(inlineTree[0].props.style.position, 'absolute')
+    const dialog = inlineTree.find((n) => n.props?.role === 'dialog')
+    assert.ok(dialog && dialog.props['aria-modal'] === true && dialog.props['aria-label'] === '先讨论一下')
+    inlineTree.find((n) => n.props?.accessibilityLabel === '关闭').props.onPress()
+    assert.equal(closed, 1)
+
+    const lockedTree = flat({ type: Sheet, props: { visible: true, inline: true, dismissable: false, onClose: () => { closed++ }, children: 'body' } })
+    lockedTree.find((n) => n.props?.accessibilityLabel === '关闭').props.onPress()
+    assert.equal(closed, 1, 'inline Sheet respects dismissable=false')
+
+    const modalTree = flat({ type: Sheet, props: { visible: true, onClose: () => {}, title: '普通弹层', children: 'body' } })
+    assert.equal(modalTree[0].type, 'Modal', 'default Sheet still renders Modal')
+
+    // 2. Integrated QuestionPage + real Sheet: always exactly 1 Modal, NoteInput unmounted until discuss opens
+    const qProps = {
+      visible: true, onClose: () => {},
+      request: { requestId: 'real', toolName: 'AskUserQuestion' },
+      input: { questions: [{ question: '继续？', options: [{ label: '是' }] }] },
+      ready: true, sent: false, signalActivity: () => true, submit: () => true, discuss: () => true,
+    }
+    let tree = flat({ type: QuestionPage, props: qProps })
+    assert.equal(tree.filter((n) => n.type === 'Modal').length, 1)
+    assert.equal(tree.some((n) => n.props?.accessibilityLabel === '告诉它还需要澄清什么'), false, 'NoteInput must not mount while discuss is closed')
+
+    tree.find((n) => n.props?.accessibilityLabel === '先讨论一下').props.onPress()
+    tree = flat({ type: QuestionPage, props: qProps })
+    assert.equal(tree.filter((n) => n.type === 'Modal').length, 1, 'opening discuss still mounts only 1 native Modal')
+    assert.equal(tree.some((n) => n.props?.accessibilityLabel === '告诉它还需要澄清什么'), true, 'NoteInput mounts once discuss opens')
+
+    // 3. PageSheet overlay slot closes overlay before closing PageSheet
+    let overlayClosed = 0, pageClosed = 0
+    const psTree = flat({
+      type: PageSheet,
+      props: {
+        visible: true,
+        onClose: () => { pageClosed++ },
+        title: '计划',
+        overlayOpen: true,
+        onOverlayClose: () => { overlayClosed++ },
+        overlay: { type: Sheet, props: { inline: true, visible: true, onClose: () => {}, title: '执行模型', children: 'pick' } },
+        children: 'plan',
+      },
+    })
+    assert.equal(psTree.filter((n) => n.type === 'Modal').length, 1, 'PageSheet with inline overlay renders only 1 Modal')
+    psTree.find((n) => n.type === 'Modal').props.onRequestClose()
+    assert.equal(overlayClosed, 1)
+    assert.equal(pageClosed, 0)
+  `
+  const scriptPath = join(dir, 'sheet.ts')
+  writeFileSync(scriptPath, script)
+  try {
+    execFileSync(process.execPath, [scriptPath], { cwd: dir, encoding: 'utf8' })
+  } catch (error) {
+    const failure = error as { stderr?: string; stdout?: string; signal?: string; status?: number }
+    throw new Error(`${failure.status} ${failure.signal || ''} ${failure.stderr || ''} ${failure.stdout || ''}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

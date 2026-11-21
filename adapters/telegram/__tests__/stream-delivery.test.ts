@@ -195,4 +195,54 @@ describe('TelegramStreamDelivery', () => {
     ).rejects.toThrow('send rejected')
     expect(delivery.hasState('42')).toBe(true)
   })
+
+  it('drops buffered text and detaches the old placeholder when cleared mid-turn', async () => {
+    const fake = createFakeApi()
+    const delivery = createDelivery(fake.api)
+
+    await delivery.handleEvent('42', { type: 'content_start', blockType: 'text' })
+    const oldPlaceholderId = delivery.getPlaceholderMessageId('42')
+    await delivery.handleEvent('42', { type: 'content_delta', text: 'abandoned partial text' })
+
+    delivery.clear('42')
+    expect(delivery.hasState('42')).toBe(false)
+
+    await streamReply(delivery, '42', ['fresh reply'])
+
+    expect(fake.messages.get(oldPlaceholderId!)).toBe('▍')
+    expect([...fake.messages.entries()].filter(([id]) => id !== oldPlaceholderId).map(([, text]) => text)).toEqual(['fresh reply'])
+  })
+
+  it('stops an in-flight multi-chunk streaming flush once cleared', async () => {
+    let releaseFirstEdit!: () => void
+    const firstEditGate = new Promise<void>((resolve) => { releaseFirstEdit = resolve })
+    let nextMessageId = 1
+    const sends: string[] = []
+    const edits: Array<{ messageId: number; text: string }> = []
+    const api: TelegramDeliveryApi = {
+      async sendMessage(_chatId, text) {
+        sends.push(text)
+        return { message_id: nextMessageId++ }
+      },
+      async editMessageText(_chatId, messageId, text) {
+        edits.push({ messageId, text })
+        if (edits.length === 1) await firstEditGate
+        return {}
+      },
+    }
+    const delivery = createDelivery(api, { bufferCharThreshold: 1 })
+
+    await delivery.handleEvent('42', { type: 'content_start', blockType: 'text' })
+    await delivery.handleEvent('42', { type: 'content_delta', text: 'z'.repeat(8500) })
+    await Bun.sleep(0)
+    expect(edits).toHaveLength(1)
+
+    delivery.clear('42')
+    releaseFirstEdit()
+    await Bun.sleep(10)
+
+    // Only the initial placeholder send happened; no follow-up chunk was sent after clear().
+    expect(sends).toEqual(['▍'])
+    expect(edits).toHaveLength(1)
+  })
 })

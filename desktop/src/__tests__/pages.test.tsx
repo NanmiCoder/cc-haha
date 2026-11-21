@@ -9,6 +9,13 @@ import { sessionsApi } from '../api/sessions'
 import { useUIStore } from '../stores/uiStore'
 import { useContextUsageStore } from '../stores/contextUsageStore'
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../api/skills', () => ({
   skillsApi: {
     list: vi.fn(async () => ({ skills: [] })),
@@ -75,6 +82,7 @@ vi.mock('../api/sessions', async (importOriginal) => {
 
 // Import all pages
 import { EmptySession } from '../pages/EmptySession'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, setComposerText } from '../components/chat/composerTestUtils'
 import { ActiveSession } from '../pages/ActiveSession'
 import { ScheduledTasks } from '../pages/ScheduledTasks'
@@ -92,6 +100,7 @@ import { useTabStore } from '../stores/tabStore'
 import { useTaskStore } from '../stores/taskStore'
 
 beforeEach(() => {
+  clearComposerPromptHistoryCacheForTesting()
   useContextUsageStore.setState({ bySession: {} })
   useSettingsStore.setState({ locale: 'en' })
   useProviderStore.setState({

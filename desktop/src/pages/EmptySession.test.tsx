@@ -48,6 +48,13 @@ vi.mock('../api/client', async (importOriginal) => ({
   rawRecordDiagnosticEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../api/sessions', () => ({
   sessionsApi: {
     create: mocks.createSession,
@@ -198,6 +205,7 @@ vi.mock('../components/controls/ModelSelector', async () => {
 })
 
 import { EmptySession } from './EmptySession'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { ApiError } from '../api/client'
 import { useChatStore } from '../stores/chatStore'
 import { useProviderStore } from '../stores/providerStore'
@@ -298,6 +306,7 @@ describe('EmptySession', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     // ProseMirror selection scrolling needs geometry APIs absent in jsdom.
     Object.defineProperties(Range.prototype, {
       getClientRects: { configurable: true, value: () => [] },

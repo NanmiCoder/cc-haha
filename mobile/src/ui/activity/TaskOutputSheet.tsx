@@ -34,16 +34,18 @@ export function TaskOutputSheet({
   client,
   sessionId,
   onClose,
+  inline,
 }: {
   task: BackgroundTask | null
   client: ApiClient | null
   sessionId: string
   onClose(): void
+  inline?: boolean
 }) {
   const colors = useColors()
   const { height } = useWindowDimensions()
   return (
-    <Sheet visible={!!task} onClose={onClose} scroll={false}>
+    <Sheet inline={inline} visible={!!task} onClose={onClose} scroll={false}>
       {task && (
         <View style={{ gap: 12 }}>
           <View style={{ alignItems: 'center', gap: 2, paddingTop: 6, paddingBottom: 4 }}>
