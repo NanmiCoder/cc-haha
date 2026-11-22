@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 import { GROK_MODEL_CATALOG } from '../../services/grokAuth/models.js'
-import { getDesktopGrokModelCatalog } from './grokModelCatalog.js'
+import { getDesktopGrokModelCatalog, readCachedDesktopGrokModelCatalog } from './grokModelCatalog.js'
 import { hahaGrokOAuthService } from './hahaGrokOAuthService.js'
 import { SettingsService } from './settingsService.js'
 
@@ -74,5 +74,33 @@ describe('desktop Grok catalog credentials and network policy', () => {
     const fetchOverride = mock(async () => { throw new Error('must not request a CLI catalog') }) as unknown as typeof fetch
     expect(await getDesktopGrokModelCatalog({ fetchOverride, forceRefresh: true })).toEqual(GROK_MODEL_CATALOG)
     expect(fetchOverride).not.toHaveBeenCalled()
+  })
+
+  test('readCachedDesktopGrokModelCatalog returns only the signed-in account cache and waitForInitial follows account switches', async () => {
+    await saveAccount('account-a')
+    expect(await readCachedDesktopGrokModelCatalog()).toEqual(GROK_MODEL_CATALOG)
+
+    const oldStarted = Promise.withResolvers<void>()
+    const oldReply = Promise.withResolvers<Response>()
+    const fetchOverride = (async (_input, init) => {
+      const auth = new Headers(init?.headers).get('Authorization')
+      if (auth === 'Bearer desktop-token-account-a') {
+        oldStarted.resolve()
+        return oldReply.promise
+      }
+      return Response.json({ models: [{ id: 'grok-4.7', context_window: 750_000 }] })
+    }) as typeof fetch
+
+    const pending = getDesktopGrokModelCatalog({ fetchOverride, waitForInitial: true })
+    await oldStarted.promise
+    await saveAccount('account-b')
+    oldReply.resolve(Response.json({ models: [{ id: 'grok-4.7', context_window: 300_000 }] }))
+
+    const resolved = await pending
+    expect(resolved[0]).toMatchObject({ value: 'grok-4.7', contextWindow: 750_000 })
+    expect((await readCachedDesktopGrokModelCatalog())[0]).toMatchObject({ value: 'grok-4.7', contextWindow: 750_000 })
+
+    await hahaGrokOAuthService.deleteTokens()
+    expect(await readCachedDesktopGrokModelCatalog()).toEqual(GROK_MODEL_CATALOG)
   })
 })

@@ -74,9 +74,11 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
   const accountKey = useOfficialAccountKey(providerId)
   const [models, setModels] = useState<ModelMapping | null>(null)
   const [availableModelIds, setAvailableModelIds] = useState<string[]>([])
-  // Only ChatGPT Official runs on a window the user can set; the other
-  // accounts take theirs from their own catalogs.
-  const supportsContextWindows = providerId === OPENAI_OFFICIAL_PROVIDER_ID
+  // ChatGPT Official and Grok Official let the user override per-model context
+  // windows; the other accounts take theirs from their own catalogs.
+  const supportsContextWindows =
+    providerId === OPENAI_OFFICIAL_PROVIDER_ID ||
+    providerId === GROK_OFFICIAL_PROVIDER_ID
   const [windowInfo, setWindowInfo] = useState<Record<string, OfficialModelWindowInfo>>({})
   const [contextInputs, setContextInputs] = useState<Record<string, string>>({})
   const [savedModelIds, setSavedModelIds] = useState<string[]>([])

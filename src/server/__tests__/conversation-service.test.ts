@@ -10,12 +10,14 @@ import {
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
 import { updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 
 describe('ConversationService', () => {
   let tmpDir: string
@@ -1101,6 +1103,28 @@ describe('ConversationService', () => {
     } finally {
       fetchSpy.mockRestore()
       clearOpenAICodexModelCatalogCache()
+    }
+  })
+
+  test('sendMessage dispatches to an existing Grok CLI without fetching a cold catalog', async () => {
+    clearGrokModelCatalogCache()
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('catalog unavailable'))
+    try {
+      await hahaGrokOAuthService.saveTokens({ accessToken: 'grok-fixture-token', refreshToken: null,
+        expiresAt: null, email: null })
+      const service = new ConversationService() as any
+      const sent: string[] = []
+      const session = installNetworkTestSession(service, 'grok-turn', sent)
+      Object.assign(session, {
+        providerId: 'grok-official',
+        providerAuth: { baseUrl: '', apiKey: '', authToken: '' },
+      })
+      expect(await service.sendMessage('grok-turn', 'continue')).toBe(true)
+      expect(sent.map(line => JSON.parse(line).type)).toEqual(['user'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      clearGrokModelCatalogCache()
     }
   })
 

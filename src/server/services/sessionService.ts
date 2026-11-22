@@ -67,6 +67,7 @@ import { SYNTHETIC_MODEL } from '../../utils/messages.js'
 import { getTokenUsage, isUsableContextUsage } from '../../utils/tokens.js'
 import { ProviderService } from './providerService.js'
 import { OPENAI_OFFICIAL_PROVIDER_ID, isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
+import { GROK_OFFICIAL_PROVIDER_ID, isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
@@ -3204,7 +3205,10 @@ export class SessionService {
     model: string,
     launchInfoOverride?: ProviderContextWindowHint | null,
     hints: { autoCompactWindow?: string } = {},
-    openAIRuntimeEnv?: Record<string, string> | null,
+    officialRuntimeEnvs?: {
+      openAI?: Record<string, string> | null
+      grok?: Record<string, string> | null
+    },
   ): Promise<number | undefined> {
     const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
@@ -3244,9 +3248,11 @@ export class SessionService {
     let sessionProviderAutoCompactWindow: string | undefined
     let sawSessionProvider = false
     for (const providerId of providerIds) {
-      const env = openAIRuntimeEnv !== undefined && isOpenAIOfficialProviderId(providerId)
-        ? openAIRuntimeEnv
-        : await this.providerService.getProviderRuntimeEnv(providerId, { cachedCatalogOnly: true }).catch(() => null)
+      const env = officialRuntimeEnvs?.openAI !== undefined && isOpenAIOfficialProviderId(providerId)
+        ? officialRuntimeEnvs.openAI
+        : officialRuntimeEnvs?.grok !== undefined && isGrokOfficialProviderId(providerId)
+          ? officialRuntimeEnvs.grok
+          : await this.providerService.getProviderRuntimeEnv(providerId, { cachedCatalogOnly: true }).catch(() => null)
       hints.autoCompactWindow = env?.[AUTO_COMPACT_WINDOW_ENV_KEY]
       if (env && !sawSessionProvider) {
         sawSessionProvider = true
@@ -3398,7 +3404,10 @@ export class SessionService {
     sessionId: string,
     model: string,
     launchInfo?: ProviderContextWindowHint | null,
-    openAIRuntimeEnv?: Record<string, string> | null,
+    officialRuntimeEnvs?: {
+      openAI?: Record<string, string> | null
+      grok?: Record<string, string> | null
+    },
   ): Promise<number> {
     const hints: { autoCompactWindow?: string } = {}
     const providerContextWindow = await this.getProviderContextWindowForSession(
@@ -3406,7 +3415,7 @@ export class SessionService {
       model,
       launchInfo,
       hints,
-      openAIRuntimeEnv,
+      officialRuntimeEnvs,
     )
     if (providerContextWindow !== undefined) {
       return applyAutoCompactWindowLimit(providerContextWindow, hints.autoCompactWindow, true)
@@ -3537,13 +3546,15 @@ export class SessionService {
     const stat = await fs.stat(found.filePath, { bigint: true })
     // The transcript is immutable between polls, but its interpreted token budget
     // also depends on editable provider settings and process-level overrides.
-    const [providers, openAIRuntimeEnv] = await Promise.all([
+    const [providers, openAIRuntimeEnv, grokRuntimeEnv] = await Promise.all([
       this.providerService.listProviders().catch(() => null),
       this.providerService.getProviderRuntimeEnv(OPENAI_OFFICIAL_PROVIDER_ID, { cachedCatalogOnly: true }).catch(() => null),
+      this.providerService.getProviderRuntimeEnv(GROK_OFFICIAL_PROVIDER_ID, { cachedCatalogOnly: true }).catch(() => null),
     ])
     const contextRevision = createHash('sha256').update(JSON.stringify({
       activeId: providers?.activeId,
       openAIRuntimeEnv,
+      grokRuntimeEnv,
       providers: providers?.providers.map(provider => ({
         id: provider.id,
         models: provider.models,
@@ -3562,7 +3573,10 @@ export class SessionService {
     const existing = this.inspectionSnapshots.get(key)
     if (existing) return existing
     const request = (async () => {
-      const snapshot = await this.readInspectionTranscriptSnapshot(sessionId, openAIRuntimeEnv)
+      const snapshot = await this.readInspectionTranscriptSnapshot(sessionId, {
+        openAI: openAIRuntimeEnv,
+        grok: grokRuntimeEnv,
+      })
       const after = await fs.stat(found.filePath, { bigint: true })
       if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs) {
         throw ApiError.conflict('Transcript changed during inspection; retry the request')
@@ -3580,7 +3594,10 @@ export class SessionService {
 
   private async readInspectionTranscriptSnapshot(
     sessionId: string,
-    openAIRuntimeEnv: Record<string, string> | null,
+    officialRuntimeEnvs: {
+      openAI: Record<string, string> | null
+      grok: Record<string, string> | null
+    },
   ): Promise<SessionInspectionTranscriptSnapshot | null> {
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
@@ -3799,7 +3816,7 @@ export class SessionService {
         sessionId,
         modelUsage.model,
         modelRuntimeHints.get(modelUsage.model),
-        openAIRuntimeEnv,
+        officialRuntimeEnvs,
       )
     }
 
@@ -3832,7 +3849,7 @@ export class SessionService {
     const latestContextUsage = resolveTranscriptContextUsage(contextState)
     const contextEstimate = latestContextUsage
       ? this.buildTranscriptContextEstimate(
-          await this.getSessionModelContextWindow(sessionId, latestContextUsage.model, launchInfo, openAIRuntimeEnv),
+          await this.getSessionModelContextWindow(sessionId, latestContextUsage.model, launchInfo, officialRuntimeEnvs),
           latestContextUsage,
           contextState.estimatedTokensFromMessages,
           contextState.estimatedTokensAfterUsage + contextState.unreportedOutputTokens,

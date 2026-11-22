@@ -26,6 +26,7 @@ import {
   GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
+  isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
 import {
   DEEPSEEK_OAUTH_FILE_ENV_KEY,
@@ -1274,8 +1275,13 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    // ChatGPT's CLI reads OAuth credentials from its token file directly.
-    if (!session.providerId || !session.providerAuth || isOpenAIOfficialProviderId(session.providerId)) return true
+    // ChatGPT and Grok CLIs read OAuth credentials from their token files directly.
+    if (
+      !session.providerId ||
+      !session.providerAuth ||
+      isOpenAIOfficialProviderId(session.providerId) ||
+      isGrokOfficialProviderId(session.providerId)
+    ) return true
     let env: Record<string, string>
     try {
       env = await this.providerService.getProviderRuntimeEnv(session.providerId)

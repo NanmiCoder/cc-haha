@@ -367,15 +367,41 @@ describe('OfficialProviderModelSettings', () => {
       expect(screen.getAllByRole('textbox')).toHaveLength(3)
     })
 
-    it('does not offer window fields on the other official accounts', async () => {
+    it('offers context window overrides for Grok Official and saves them with the mapping', async () => {
+      const grokMapping = { main: 'grok-4.7', haiku: 'grok-4.7-build-fast', sonnet: 'grok-4.7', opus: 'grok-4.7' }
+      vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+        models: grokMapping,
+        modelContextWindows: {},
+      })
+      vi.mocked(modelsApi.catalog).mockResolvedValue({
+        models: [
+          { id: 'grok-4.7', name: 'Grok 4.7', description: '', context: '500000' },
+          { id: 'grok-4.7-build-fast', name: 'Grok 4.7 Fast', description: '', context: '500000', maxContext: '1000000' },
+        ],
+      })
       render(<OfficialProviderModelSettings providerId="grok-official" />)
+
+      const grok47 = await field('grok-4.7')
+      expect(grok47).toHaveAttribute('placeholder', '500,000')
+      expect(screen.getByText('Default 500,000')).toBeInTheDocument()
+      expect(screen.getByText('Default 500,000, up to 1,000,000')).toBeInTheDocument()
+
+      fireEvent.change(grok47, { target: { value: '256000' } })
+      save()
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'grok-official', grokMapping, { 'grok-4.7': 256_000 },
+      ))
+    })
+
+    it('does not offer window fields on the other official accounts', async () => {
+      render(<OfficialProviderModelSettings providerId="claude-official" />)
       await screen.findByRole('combobox', { name: /Main Model/ })
       expect(screen.queryByRole('group', { name: 'Context window (optional)' })).not.toBeInTheDocument()
 
       save()
       // Nothing about windows is sent, so a shared client cannot touch another account's settings.
       await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
-        'grok-official', mapping, undefined,
+        'claude-official', mapping, undefined,
       ))
     })
   })

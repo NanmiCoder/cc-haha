@@ -13,6 +13,7 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { buildOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { getOpenAIModelCatalogEntry } from '../../services/openaiAuth/models.js'
+import { getGrokModelCatalogEntry } from '../../services/grokAuth/models.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
@@ -35,8 +36,10 @@ import { hahaOAuthService } from './hahaOAuthService.js'
 import {
   GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OFFICIAL_PROVIDER,
+  buildGrokOfficialRuntimeEnv,
   isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
+import { getDesktopGrokModelCatalog, readCachedDesktopGrokModelCatalog } from './grokModelCatalog.js'
 import {
   DEEPSEEK_ACCOUNT_PROVIDER,
   isDeepSeekAccountProviderId,
@@ -330,10 +333,7 @@ export class ProviderService {
       return this.resolveOpenAIOfficialProvider(index)
     }
     if (isGrokOfficialProviderId(id)) {
-      return {
-        ...GROK_OFFICIAL_PROVIDER,
-        models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
-      }
+      return this.resolveGrokOfficialProvider(index)
     }
     if (isDeepSeekAccountProviderId(id)) {
       return {
@@ -355,6 +355,21 @@ export class ProviderService {
       modelContextWindows: {
         ...OPENAI_OFFICIAL_PROVIDER.modelContextWindows,
         ...index.officialProviderContextWindows[OPENAI_OFFICIAL_PROVIDER_ID],
+      },
+    }
+  }
+
+  /** The built-in Grok provider as saved: the user's model mapping and window overrides over its defaults. */
+  private resolveGrokOfficialProvider(
+    index: ProvidersIndex,
+    models?: ModelMapping,
+  ): SavedProvider {
+    return {
+      ...GROK_OFFICIAL_PROVIDER,
+      models: models ?? this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
+      modelContextWindows: {
+        ...GROK_OFFICIAL_PROVIDER.modelContextWindows,
+        ...index.officialProviderContextWindows[GROK_OFFICIAL_PROVIDER_ID],
       },
     }
   }
@@ -403,7 +418,7 @@ export class ProviderService {
       }
       const contextWindows = options?.modelContextWindows
       if (contextWindows !== undefined) {
-        this.assertOfficialContextWindows(id, contextWindows)
+        await this.assertOfficialContextWindows(id, contextWindows)
       }
 
       const index = await this.readIndex()
@@ -430,9 +445,9 @@ export class ProviderService {
     if (index.activeId === id) {
       const provider = id === OPENAI_OFFICIAL_PROVIDER_ID
         ? this.resolveOpenAIOfficialProvider(index, normalized)
-        : id === DEEPSEEK_ACCOUNT_PROVIDER_ID
-          ? { ...DEEPSEEK_ACCOUNT_PROVIDER, models: normalized }
-          : { ...GROK_OFFICIAL_PROVIDER, models: normalized }
+        : id === GROK_OFFICIAL_PROVIDER_ID
+          ? this.resolveGrokOfficialProvider(index, normalized)
+          : { ...DEEPSEEK_ACCOUNT_PROVIDER, models: normalized }
       await this.syncToSettings(provider)
     }
 
@@ -440,17 +455,26 @@ export class ProviderService {
   }
 
   /**
-   * Only ChatGPT Official runs on windows the user can set (the other built-in
-   * providers take theirs from their own catalogs), and no model may be set
-   * above what its catalog allows.
+   * ChatGPT Official and Grok Official let the user override per-model context
+   * windows (the other built-in providers take theirs from their own catalogs),
+   * and no model may be set above what its catalog allows.
    */
-  private assertOfficialContextWindows(id: string, windows: Record<string, number>): void {
+  private async assertOfficialContextWindows(id: string, windows: Record<string, number>): Promise<void> {
     if (Object.keys(windows).length === 0) return
-    if (id !== OPENAI_OFFICIAL_PROVIDER_ID) {
-      throw ApiError.badRequest('Context window overrides are only supported for ChatGPT Official')
+    if (id !== OPENAI_OFFICIAL_PROVIDER_ID && id !== GROK_OFFICIAL_PROVIDER_ID) {
+      throw ApiError.badRequest('Context window overrides are only supported for ChatGPT Official and Grok Official')
     }
+    const openAICatalog = id === OPENAI_OFFICIAL_PROVIDER_ID
+      ? await readCachedDesktopOpenAICodexModelCatalog()
+      : undefined
+    const grokCatalog = id === GROK_OFFICIAL_PROVIDER_ID
+      ? await readCachedDesktopGrokModelCatalog()
+      : undefined
     for (const [model, window] of Object.entries(windows)) {
-      const max = getOpenAIModelCatalogEntry(model)?.maxContextWindow
+      const max = id === OPENAI_OFFICIAL_PROVIDER_ID
+        ? (getOpenAIModelCatalogEntry(model, openAICatalog)?.maxContextWindow
+          ?? getOpenAIModelCatalogEntry(model)?.maxContextWindow)
+        : getGrokModelCatalogEntry(model, grokCatalog)?.maxContextWindow
       if (max !== undefined && window > max) {
         throw ApiError.badRequest(
           `${model}: context window ${window} is above the limit of ${max}`,
@@ -735,7 +759,15 @@ export class ProviderService {
           ? await readCachedDesktopOpenAICodexModelCatalog()
           : await getDesktopOpenAICodexModelCatalog({ waitForInitial: true }),
       )
-      : this.buildManagedEnv(provider, { proxyPath: `/proxy/providers/${provider.id}` })
+      : isGrokOfficialProviderId(id)
+        ? buildGrokOfficialRuntimeEnv(
+          provider.models,
+          index.officialProviderContextWindows[id],
+          options?.cachedCatalogOnly
+            ? await readCachedDesktopGrokModelCatalog()
+            : await getDesktopGrokModelCatalog({ waitForInitial: true }),
+        )
+        : this.buildManagedEnv(provider, { proxyPath: `/proxy/providers/${provider.id}` })
     // The JSON editor belongs to the active provider. Pass its subagent choice
     // in the host's launch snapshot; the CLI must still filter settings-sourced
     // model vars so another provider (and approved team workers) stays isolated.

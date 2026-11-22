@@ -1,5 +1,6 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { CONTEXT_1M_BETA_HEADER } from '../constants/betas.js'
+import { getGrokContextWindowForModel } from '../services/grokAuth/models.js'
 import { getOpenAICodexContextWindowForModel } from '../services/openaiAuth/models.js'
 import { getGlobalConfig } from './config.js'
 import {
@@ -129,6 +130,11 @@ export function getContextWindowForModel(
     return openAIContextWindow
   }
 
+  const grokContextWindow = getGrokContextWindowForModel(model)
+  if (grokContextWindow) {
+    return capToDefaultIfExtendedContextDisabled(grokContextWindow)
+  }
+
   const cap = getModelCapability(model)
   if (cap?.max_input_tokens && cap.max_input_tokens >= 100_000) {
     if (
@@ -182,7 +188,8 @@ export function isModelWindowKnownForAutoCompact(model: string): boolean {
   return (
     has1mContext(model) ||
     getConfiguredOrBuiltInModelContextWindow(model) !== undefined ||
-    getOpenAICodexContextWindowForModel(model) != null
+    getOpenAICodexContextWindowForModel(model) != null ||
+    getGrokContextWindowForModel(model) != null
   )
 }
 
@@ -250,7 +257,8 @@ export function hasKnownContextWindow(model: string): boolean {
     getConfiguredModelContextWindow(model) !== undefined ||
     has1mContext(model) ||
     getBuiltInModelContextWindow(model) !== undefined ||
-    getOpenAICodexContextWindowForModel(model)
+    getOpenAICodexContextWindowForModel(model) ||
+    getGrokContextWindowForModel(model)
   ) {
     return true
   }

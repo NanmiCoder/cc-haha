@@ -6,10 +6,12 @@ import { handleSessionsApi } from '../api/sessions.js'
 import { handleModelsApi } from '../api/models.js'
 import { ProviderService } from '../services/providerService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { SessionService } from '../services/sessionService.js'
 import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
 import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
 import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 import { sanitizePath } from '../../utils/sessionStoragePortable.js'
 import { roughTokenCountEstimationForMessage } from '../../services/tokenEstimation.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
@@ -148,6 +150,89 @@ describe('transcript context after switching providers', () => {
       expect(catalogRequests).toBe(1)
     } finally {
       clearOpenAICodexModelCatalogCache()
+    }
+  })
+
+  it('recomputes an unchanged Grok transcript after refreshing the catalog or saving a window override', async () => {
+    clearGrokModelCatalogCache()
+    try {
+      const model = 'grok-4.8-preview'
+      const providerId = 'grok-official'
+      const providers = new ProviderService()
+      await providers.activateProvider(providerId)
+      await hahaGrokOAuthService.saveTokens({ accessToken: 'fixture-grok-token', refreshToken: null,
+        expiresAt: null, email: null })
+      await writeFile(filePath, [
+        { type: 'session-meta', workDir: join(configDir, 'project'), runtimeProviderId: providerId, runtimeModelId: model },
+        { type: 'assistant', uuid: 'fixture-grok-reply', message: {
+          id: 'fixture-grok-response', role: 'assistant', model,
+          content: [{ type: 'text', text: 'Fixture reply' }], usage: { input_tokens: 75_000, output_tokens: 418 },
+        } },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+
+      const inspect = async (id = sessionId) => {
+        const target = new URL(`http://127.0.0.1/api/sessions/${id}/inspection?contextOnly=1`)
+        const response = await handleSessionsApi(new Request(target), target, target.pathname.split('/').filter(Boolean))
+        expect(response.status).toBe(200)
+        return response.json()
+      }
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(200_000)
+
+      let catalogRequests = 0
+      globalThis.fetch = (async input => {
+        expect(new URL(String(input)).pathname).toBe('/v1/models')
+        catalogRequests++
+        return Response.json({ models: [{ id: model, context_window: 750_000 }] })
+      }) as typeof fetch
+      const refresh = new URL(`http://127.0.0.1/api/models/catalog?provider=${providerId}&refresh=true`)
+      expect((await handleModelsApi(new Request(refresh), refresh, refresh.pathname.split('/').filter(Boolean))).status).toBe(200)
+
+      const updated = await inspect()
+      expect(updated.contextEstimate.rawMaxTokens).toBe(750_000)
+      expect(updated.usage.models[0].contextWindow).toBe(750_000)
+      expect(catalogRequests).toBe(1)
+
+      // A custom provider in the same server process must not inherit the Grok OAuth account's live catalog window.
+      const customProvider = await providers.addProvider({
+        presetId: 'custom',
+        name: 'Custom Fixture',
+        apiKey: 'sk-custom',
+        baseUrl: 'https://example.invalid',
+        apiFormat: 'anthropic',
+        models: { main: model, haiku: model, sonnet: model, opus: model },
+      })
+      const customSessionId = 'c3333333-d444-e555-f666-a77777777777'
+      await writeFile(join(dirname(filePath), `${customSessionId}.jsonl`), [
+        { type: 'session-meta', workDir: join(configDir, 'project'), runtimeProviderId: customProvider.id, runtimeModelId: model },
+        { type: 'assistant', uuid: 'custom-reply', message: {
+          id: 'custom-response', role: 'assistant', model,
+          content: [{ type: 'text', text: 'Custom reply' }], usage: { input_tokens: 75_000, output_tokens: 418 },
+        } },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+      expect((await inspect(customSessionId)).contextEstimate.rawMaxTokens).toBe(200_000)
+
+      const mapping = await providers.getOfficialProviderModels(providerId)
+      await providers.updateOfficialProviderModels(providerId, mapping, {
+        modelContextWindows: { [model]: 300_000 },
+      })
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(300_000)
+
+      await providers.updateOfficialProviderModels(providerId, mapping, { modelContextWindows: {} })
+      await hahaGrokOAuthService.deleteTokens()
+      // Inspect a brand-new, never-cached session after logout so an earlier snapshot cache entry cannot hide a leak.
+      const freshSessionId = 'b2222222-c333-d444-e555-f66666666666'
+      await writeFile(join(dirname(filePath), `${freshSessionId}.jsonl`), [
+        { type: 'session-meta', workDir: join(configDir, 'project'), runtimeProviderId: providerId, runtimeModelId: model },
+        { type: 'assistant', uuid: 'fresh-grok-reply', message: {
+          id: 'fresh-grok-response', role: 'assistant', model,
+          content: [{ type: 'text', text: 'Fresh reply' }], usage: { input_tokens: 75_000, output_tokens: 418 },
+        } },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+      expect((await inspect(freshSessionId)).contextEstimate.rawMaxTokens).toBe(200_000)
+      expect((await inspect()).contextEstimate.rawMaxTokens).toBe(200_000)
+      expect(catalogRequests).toBe(1)
+    } finally {
+      clearGrokModelCatalogCache()
     }
   })
 

@@ -12,7 +12,7 @@ for (const catalogState of ['discovered', 'pending', 'failed'] as const) {
   test(`a fresh official Grok process preserves selected effort with a ${catalogState} catalog`, async () => {
     const sandbox = await mkdtemp(join(tmpdir(), 'grok-runtime-effort-'))
     try {
-      await getGrokModelCatalog({
+      const catalog = await getGrokModelCatalog({
         accessToken: 'offline-access-token',
         forceRefresh: catalogState === 'discovered',
         throwOnError: catalogState === 'discovered',
@@ -33,7 +33,7 @@ for (const catalogState of ['discovered', 'pending', 'failed'] as const) {
       const env = createSandboxedTestEnvironment(sandbox, buildGrokOfficialRuntimeEnv({
         main: 'grok-future-release', haiku: 'grok-future-release',
         sonnet: 'grok-future-release', opus: 'grok-future-release',
-      }))
+      }, undefined, catalog))
       const tokenFile = join(env.CLAUDE_CONFIG_DIR!, 'grok-oauth.json')
       await mkdir(env.CLAUDE_CONFIG_DIR!, { recursive: true })
       await writeFile(tokenFile, JSON.stringify({

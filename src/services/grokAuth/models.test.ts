@@ -4,6 +4,7 @@ import {
   GROK_MODEL_CATALOG,
   GROK_MODEL_CATALOG_ENV_KEY,
   getGrokContextWindowForModel,
+  getGrokModelCatalogEntry,
   getGrokRuntimeModelCatalog,
   resolveGrokModel,
   resolveGrokReasoningEffort,
@@ -46,7 +47,46 @@ describe('Grok model catalog', () => {
     expect(getGrokContextWindowForModel('grok-4.7-build-fast')).toBe(500_000)
     expect(getGrokContextWindowForModel('grok-4.6')).toBe(500_000)
     expect(getGrokContextWindowForModel('grok-4.5')).toBe(500_000)
+    expect(getGrokContextWindowForModel('grok-build-0.1')).toBe(256_000)
+    expect(getGrokContextWindowForModel('grok-4.3')).toBe(1_000_000)
+    expect(getGrokContextWindowForModel('claude-opus-4-1')).toBeNull()
     expect(getGrokContextWindowForModel('unknown-model')).toBeNull()
+  })
+
+  test('resolves context window and ceiling from an explicit catalog without leaking global runtime state', () => {
+    const liveCatalog = [
+      {
+        value: 'grok-4.7',
+        label: 'Grok 4.7',
+        description: '',
+        contextWindow: 750_000,
+        maxContextWindow: 1_000_000,
+      },
+      {
+        value: 'grok-4.8',
+        label: 'Grok 4.8',
+        description: '',
+        contextWindow: 1_000_000,
+      },
+    ]
+    setGrokRuntimeModelCatalog(liveCatalog)
+    // Without an explicit catalog (or a Grok OAuth CLI launch env), global runtimeCatalog
+    // must not leak another account's windows into generic context lookups.
+    expect(getGrokContextWindowForModel('grok-4.7')).toBe(500_000)
+    expect(getGrokContextWindowForModel('grok-4.8')).toBeNull()
+    expect(getGrokModelCatalogEntry('grok-4.7')?.maxContextWindow).toBeUndefined()
+
+    // Explicit catalog lookup honors live windows and ceilings, falling back to bundled entries.
+    expect(getGrokContextWindowForModel('grok-4.7', liveCatalog)).toBe(750_000)
+    expect(getGrokContextWindowForModel('grok-4.8', liveCatalog)).toBe(1_000_000)
+    expect(getGrokContextWindowForModel('grok-4.5', liveCatalog)).toBe(500_000)
+    expect(getGrokModelCatalogEntry('GROK-4.7', liveCatalog)?.maxContextWindow).toBe(1_000_000)
+    expect(getGrokModelCatalogEntry('claude-sonnet-4-6', liveCatalog)).toBeUndefined()
+
+    // Inside a Grok OAuth CLI subprocess, its own process-scoped launch snapshot applies.
+    process.env.CC_HAHA_GROK_OAUTH_PROVIDER = '1'
+    process.env[GROK_MODEL_CATALOG_ENV_KEY] = JSON.stringify(liveCatalog)
+    expect(getGrokContextWindowForModel('grok-4.8')).toBe(1_000_000)
   })
 
   test('normalizes reasoning effort through the bundled catalog', () => {
@@ -121,6 +161,7 @@ describe('Grok model catalog', () => {
       JSON.stringify([{ value: 'grok-future', reasoningEfforts: ['max', 1] }]),
       JSON.stringify([{ value: 'grok-future', reasoningEffort: {} }]),
       JSON.stringify([{ value: 'grok-future', contextWindow: -1 }]),
+      JSON.stringify([{ value: 'grok-future', maxContextWindow: 0 }]),
     ]) {
       process.env[GROK_MODEL_CATALOG_ENV_KEY] = raw
       expect(getGrokRuntimeModelCatalog()).toBe(GROK_MODEL_CATALOG)
