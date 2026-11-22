@@ -650,44 +650,44 @@ describe('provider presets API', () => {
   })
 
   /**
-   * UberLLM serves Anthropic Messages at its own root (and OpenAI chat at /v1),
+   * MartLLM serves Anthropic Messages at its own root (and OpenAI chat at /v1),
    * so like OpenRouter the preset stays a direct connection with no proxy, no
    * per-model routing and no injected env.
    */
-  describe('UberLLM preset', () => {
-    const uberllm = PROVIDER_PRESETS.find((preset) => preset.id === 'uberllm')!
+  describe('MartLLM preset', () => {
+    const martllm = PROVIDER_PRESETS.find((preset) => preset.id === 'martllm')!
 
     test('publishes a direct Anthropic-native preset with API key signup', () => {
-      expect(uberllm).toBeDefined()
-      expect(uberllm.name).toBe('UberLLM')
-      expect(uberllm.baseUrl).toBe('https://api.uberllm.dev')
-      expect(uberllm.apiFormat).toBe('anthropic')
-      expect(uberllm.authStrategy).toBe('auth_token')
-      expect(uberllm.needsApiKey).toBe(true)
-      expect(uberllm.websiteUrl).toBe('https://uberllm.dev')
-      expect(uberllm.apiKeyUrl).toBe('https://uberllm.dev/signup')
-      expect(uberllm.deprecated).toBeUndefined()
+      expect(martllm).toBeDefined()
+      expect(martllm.name).toBe('MartLLM')
+      expect(martllm.baseUrl).toBe('https://api.martllm.com')
+      expect(martllm.apiFormat).toBe('anthropic')
+      expect(martllm.authStrategy).toBe('auth_token')
+      expect(martllm.needsApiKey).toBe(true)
+      expect(martllm.websiteUrl).toBe('https://martllm.com')
+      expect(martllm.apiKeyUrl).toBe('https://martllm.com/signup')
+      expect(martllm.deprecated).toBeUndefined()
       // Claude Code appends /v1/messages itself; a /v1 base URL would double it.
-      expect(uberllm.baseUrl).not.toMatch(/\/v1$/)
+      expect(martllm.baseUrl).not.toMatch(/\/v1$/)
     })
 
     test('stays out of the sponsor row and ships no proxy or routing rules', () => {
-      expect(uberllm.featured).toBeUndefined()
-      expect(uberllm.promoText).toBeUndefined()
-      expect(uberllm.modelApiFormats).toBeUndefined()
-      expect(uberllm.upstreamHeaders).toBeUndefined()
-      expect(uberllm.defaultEnv).toEqual({})
-      expect(providerNeedsProxy(uberllm.apiFormat, undefined)).toBe(false)
+      expect(martllm.featured).toBeUndefined()
+      expect(martllm.promoText).toBeUndefined()
+      expect(martllm.modelApiFormats).toBeUndefined()
+      expect(martllm.upstreamHeaders).toBeUndefined()
+      expect(martllm.defaultEnv).toEqual({})
+      expect(providerNeedsProxy(martllm.apiFormat, undefined)).toBe(false)
     })
 
-    test('connects straight to UberLLM with the token and a cleared x-api-key', () => {
+    test('connects straight to MartLLM with the token and a cleared x-api-key', () => {
       const env = buildProviderManagedEnv({
-        id: 'uberllm-test', presetId: uberllm.id, name: uberllm.name,
-        baseUrl: uberllm.baseUrl, apiFormat: uberllm.apiFormat,
-        authStrategy: uberllm.authStrategy, apiKey: 'ull-offline-fixture',
-        models: uberllm.defaultModels,
+        id: 'martllm-test', presetId: martllm.id, name: martllm.name,
+        baseUrl: martllm.baseUrl, apiFormat: martllm.apiFormat,
+        authStrategy: martllm.authStrategy, apiKey: 'ull-offline-fixture',
+        models: martllm.defaultModels,
       })
-      expect(env.ANTHROPIC_BASE_URL).toBe('https://api.uberllm.dev')
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://api.martllm.com')
       expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe('ull-offline-fixture')
       expect(env.ANTHROPIC_API_KEY).toBe('')
@@ -705,16 +705,16 @@ describe('provider presets API', () => {
     })
 
     test('publishes a context window for every model it offers as a default', () => {
-      for (const model of Object.values(uberllm.defaultModels)) {
+      for (const model of Object.values(martllm.defaultModels)) {
         expect(model).toContain('/')
-        expect(uberllm.modelContextWindows?.[model], model).toBeGreaterThan(0)
+        expect(martllm.modelContextWindows?.[model], model).toBeGreaterThan(0)
       }
     })
 
     test('stays ordered before the local endpoints so the catalog layout is stable', () => {
       const ids = PROVIDER_PRESETS.map((preset) => preset.id)
-      expect(ids.indexOf('uberllm')).toBeGreaterThan(-1)
-      expect(ids.indexOf('uberllm')).toBeLessThan(ids.indexOf('lmstudio'))
+      expect(ids.indexOf('martllm')).toBeGreaterThan(-1)
+      expect(ids.indexOf('martllm')).toBeLessThan(ids.indexOf('lmstudio'))
       expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
     })
   })

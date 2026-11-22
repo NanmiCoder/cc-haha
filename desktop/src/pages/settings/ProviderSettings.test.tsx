@@ -1220,11 +1220,11 @@ describe('Magpie on the provider list', () => {
 })
 
 /**
- * UberLLM is a one-key gateway with an Anthropic Messages endpoint: the user
+ * MartLLM is a one-key gateway with an Anthropic Messages endpoint: the user
  * pastes a key and the preset supplies the endpoint, the Bearer header and the
  * Claude 5.5 defaults.
  */
-describe('UberLLM provider', () => {
+describe('MartLLM provider', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
     vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
@@ -1240,15 +1240,15 @@ describe('UberLLM provider', () => {
 
   it('is added with an API key alone, prefilled with the root endpoint and Claude 5.5 slots', async () => {
     const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
-      provider: { ...input, id: 'saved-uberllm', apiFormat: input.apiFormat ?? 'anthropic' },
+      provider: { ...input, id: 'saved-martllm', apiFormat: input.apiFormat ?? 'anthropic' },
     }))
     render(<ProviderSettings />)
     fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
     const dialog = within(screen.getByRole('dialog'))
-    fireEvent.click(dialog.getByRole('button', { name: 'UberLLM' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'MartLLM' }))
 
     // The root, not /v1 — the CLI appends /v1/messages itself.
-    expect(dialog.getByDisplayValue('https://api.uberllm.dev')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('https://api.martllm.com')).toBeInTheDocument()
     expect(dialog.getAllByDisplayValue('anthropic/claude-sonnet-5.5')).toHaveLength(2)
     expect(dialog.getByDisplayValue('anthropic/claude-haiku-5.5')).toBeInTheDocument()
     expect(dialog.getByDisplayValue('anthropic/claude-opus-5.5')).toBeInTheDocument()
@@ -1256,8 +1256,8 @@ describe('UberLLM provider', () => {
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'ull-fake' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      presetId: 'uberllm',
-      baseUrl: 'https://api.uberllm.dev',
+      presetId: 'martllm',
+      baseUrl: 'https://api.martllm.com',
       apiFormat: 'anthropic',
       authStrategy: 'auth_token',
       apiKey: 'ull-fake',
@@ -1270,14 +1270,14 @@ describe('UberLLM provider', () => {
     })))
   })
 
-  it('links the key field to the UberLLM signup page', async () => {
+  it('links the key field to the MartLLM signup page', async () => {
     const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
     render(<ProviderSettings />)
     fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
     const dialog = within(screen.getByRole('dialog'))
-    fireEvent.click(dialog.getByRole('button', { name: 'UberLLM' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'MartLLM' }))
 
     fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
-    expect(open).toHaveBeenCalledWith('https://uberllm.dev/signup')
+    expect(open).toHaveBeenCalledWith('https://martllm.com/signup')
   })
 })

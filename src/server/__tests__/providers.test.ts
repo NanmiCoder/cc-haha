@@ -4767,11 +4767,11 @@ describe('OpenRouter preset request contract (offline fixtures)', () => {
 })
 
 /**
- * UberLLM serves Anthropic Messages at https://api.uberllm.dev/v1/messages, so
+ * MartLLM serves Anthropic Messages at https://api.martllm.com/v1/messages, so
  * the CLI and the connectivity probe must reach exactly one /v1 over Bearer,
  * with ANTHROPIC_API_KEY cleared and the local proxy out of the path.
  */
-describe('UberLLM preset request contract (offline fixtures)', () => {
+describe('MartLLM preset request contract (offline fixtures)', () => {
   beforeEach(setup)
   afterEach(teardown)
 
@@ -4779,7 +4779,7 @@ describe('UberLLM preset request contract (offline fixtures)', () => {
 
   async function loadPreset() {
     const { PROVIDER_PRESETS } = await import('../config/providerPresets.js')
-    const preset = PROVIDER_PRESETS.find(item => item.id === 'uberllm')
+    const preset = PROVIDER_PRESETS.find(item => item.id === 'martllm')
     expect(preset).toBeDefined()
     return preset!
   }
@@ -4807,7 +4807,7 @@ describe('UberLLM preset request contract (offline fixtures)', () => {
     expect(activated.status).toBe(200)
 
     const env = (await readSettings()).env as Record<string, string>
-    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.uberllm.dev')
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.martllm.com')
     expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe(apiKey)
     expect(env.ANTHROPIC_API_KEY).toBe('')
@@ -4846,7 +4846,7 @@ describe('UberLLM preset request contract (offline fixtures)', () => {
       expect(result.connectivity.modelUsed).toBe('anthropic/claude-sonnet-5.5')
       expect(result.proxy).toBeUndefined()
       expect(calls).toHaveLength(1)
-      expect(calls[0].url).toBe('https://api.uberllm.dev/v1/messages')
+      expect(calls[0].url).toBe('https://api.martllm.com/v1/messages')
       expect(calls[0].headers.get('authorization')).toBe(`Bearer ${apiKey}`)
       expect(calls[0].headers.get('x-api-key')).toBeNull()
       expect(calls[0].headers.get('anthropic-version')).toBe('2023-06-01')

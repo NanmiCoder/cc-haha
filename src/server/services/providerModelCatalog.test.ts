@@ -157,9 +157,9 @@ describe('buildModelsUrlCandidates', () => {
       expected: ['https://openrouter.ai/api/v1/models'],
     },
     {
-      name: 'a bare API root gets /v1/models (UberLLM preset)',
-      baseUrl: PROVIDER_PRESETS.find((preset) => preset.id === 'uberllm')!.baseUrl,
-      expected: ['https://api.uberllm.dev/v1/models'],
+      name: 'a bare API root gets /v1/models (MartLLM preset)',
+      baseUrl: PROVIDER_PRESETS.find((preset) => preset.id === 'martllm')!.baseUrl,
+      expected: ['https://api.martllm.com/v1/models'],
     },
     {
       name: 'a full endpoint URL is cut at its /v1/ prefix',
@@ -383,8 +383,8 @@ describe('fetchProviderModels', () => {
     expect(authHeaderOf(calls[0])).toBe('Bearer sk-or-offline-fixture')
   })
 
-  test('keeps the vendor/model namespace of UberLLM model ids', async () => {
-    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'uberllm')!
+  test('keeps the vendor/model namespace of MartLLM model ids', async () => {
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'martllm')!
     stubFetchSequence([() => jsonResponse({
       object: 'list',
       data: [
@@ -401,9 +401,9 @@ describe('fetchProviderModels', () => {
         { id: 'anthropic/claude-sonnet-5.5', ownedBy: 'Anthropic' },
         { id: 'deepseek/deepseek-v4.1-flash', ownedBy: 'DeepSeek' },
       ],
-      endpoint: 'https://api.uberllm.dev/v1/models',
+      endpoint: 'https://api.martllm.com/v1/models',
     })
-    expect(calls[0].url).toBe('https://api.uberllm.dev/v1/models')
+    expect(calls[0].url).toBe('https://api.martllm.com/v1/models')
     expect(authHeaderOf(calls[0])).toBe('Bearer ull-offline-fixture')
   })
 

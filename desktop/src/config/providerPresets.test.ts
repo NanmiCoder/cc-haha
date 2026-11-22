@@ -231,17 +231,17 @@ describe('bundled provider presets', () => {
     }
   })
 
-  it('bundles UberLLM as a direct Anthropic-native aggregation preset', () => {
-    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'uberllm')
+  it('bundles MartLLM as a direct Anthropic-native aggregation preset', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'martllm')
 
     expect(preset).toMatchObject({
-      name: 'UberLLM',
-      baseUrl: 'https://api.uberllm.dev',
+      name: 'MartLLM',
+      baseUrl: 'https://api.martllm.com',
       apiFormat: 'anthropic',
       authStrategy: 'auth_token',
       needsApiKey: true,
-      websiteUrl: 'https://uberllm.dev',
-      apiKeyUrl: 'https://uberllm.dev/signup',
+      websiteUrl: 'https://martllm.com',
+      apiKeyUrl: 'https://martllm.com/signup',
       defaultModels: {
         main: 'anthropic/claude-sonnet-5.5',
         haiku: 'anthropic/claude-haiku-5.5',
@@ -250,12 +250,12 @@ describe('bundled provider presets', () => {
       },
     })
     expect(preset?.deprecated).toBeUndefined()
-    // UberLLM serves /v1/messages at its root, so no proxy route or header is needed.
+    // MartLLM serves /v1/messages at its root, so no proxy route or header is needed.
     expect(preset?.modelApiFormats).toBeUndefined()
     expect(preset?.upstreamHeaders).toBeUndefined()
-    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://API.UBERLLM.DEV/ ')).toBe(true)
+    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://API.MARTLLM.DEV/ ')).toBe(true)
     expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
-      .toContain('uberllm')
+      .toContain('martllm')
     for (const model of Object.values(preset!.defaultModels)) {
       expect(preset?.modelContextWindows?.[model], model).toBeGreaterThan(0)
     }

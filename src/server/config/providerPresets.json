@@ -471,9 +471,9 @@
     }
   },
   {
-    "id": "uberllm",
-    "name": "UberLLM",
-    "baseUrl": "https://api.uberllm.dev",
+    "id": "martllm",
+    "name": "MartLLM",
+    "baseUrl": "https://api.martllm.com",
     "apiFormat": "anthropic",
     "defaultModels": {
       "main": "anthropic/claude-sonnet-5.5",
@@ -482,8 +482,8 @@
       "opus": "anthropic/claude-opus-5.5"
     },
     "needsApiKey": true,
-    "websiteUrl": "https://uberllm.dev",
-    "apiKeyUrl": "https://uberllm.dev/signup",
+    "websiteUrl": "https://martllm.com",
+    "apiKeyUrl": "https://martllm.com/signup",
     "authStrategy": "auth_token",
     "defaultEnv": {},
     "modelContextWindows": {
