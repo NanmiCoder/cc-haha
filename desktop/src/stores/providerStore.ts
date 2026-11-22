@@ -30,7 +30,6 @@ import type {
   CcSwitchImportResult,
   ProviderModelsInput,
   ProviderModelsResult,
-  LocalAgentProvider,
 } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
 import type { RuntimeSelection } from '../types/runtime'
@@ -41,14 +40,12 @@ type ProviderStore = {
   activeId: string | null
   /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
   deepSeekAccountModels: ModelMapping
-  localAgent: LocalAgentProvider | undefined
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
   isLoading: boolean
   error: string | null
 
   fetchProviders: () => Promise<void>
-  discoverAntigravity: () => Promise<void>
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
   updateProvider: (id: string, input: UpdateProviderInput) => Promise<SavedProvider>
   deleteProvider: (id: string) => Promise<void>
@@ -187,7 +184,6 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
   deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
-  localAgent: undefined,
   hasLoadedProviders: false,
   presets: BUNDLED_PROVIDER_PRESETS,
   isLoading: false,
@@ -197,15 +193,12 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const firstLoad = !get().hasLoadedProviders
-      const previousLocalAgent = get().localAgent
-      const { providers, activeId, providerOrder, deepSeekAccountModels, localAgent } = await providersApi.list()
+      const { providers, activeId, providerOrder, deepSeekAccountModels } = await providersApi.list()
       set({
         providers,
         providerOrder: normalizeProviderOrder(providerOrder, providers),
         activeId,
         ...(deepSeekAccountModels && { deepSeekAccountModels }),
-        // A list request started before discovery must not erase its result.
-        ...(get().localAgent === previousLocalAgent && { localAgent }),
         hasLoadedProviders: true,
         isLoading: false,
       })
@@ -218,11 +211,6 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         error: err instanceof Error ? err.message : String(err),
       })
     }
-  },
-
-  discoverAntigravity: async () => {
-    const localAgent = await providersApi.discoverAntigravity()
-    set({ localAgent })
   },
 
   createProvider: async (input) => {

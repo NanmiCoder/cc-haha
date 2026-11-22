@@ -43,7 +43,6 @@ import type { AttachmentRef } from '../../types/chat'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { SlashCommandOption } from '../../types/slashCommand'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
-import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
@@ -306,7 +305,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
-  const isAntigravity = runtimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
   const currentModel = useSettingsStore((state) => state.currentModel)
   const chatSendBehavior = useSettingsStore((state) => state.chatSendBehavior)
   const runtimeSelectionKey = runtimeSelection
@@ -316,7 +314,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const sideChat = useSideChatStore(state => activeTabId ? state.entries[activeTabId] : undefined)
   const listedSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
   const activeSession = listedSession ?? (sideChat ? { ...sideChat, id: sideChat.sessionId, workDirExists: true, workspaceState: 'available' as const, messageCount: 1, projectRoot: sideChat.workDir } : null)
-  const isLean = !isAntigravity && listedSession?.agentProfile === 'lean'
+  const isLean = listedSession?.agentProfile === 'lean'
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -452,8 +450,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const hasWorkspaceReferences = !isMemberSession && workspaceReferences.length > 0
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
-  const showLaunchControls = !isAntigravity && !isMemberSession && !sideChat && messageCount === 0
-  const sideChatAvailable = !isAntigravity && !isLean && (Boolean(sideChat) || messageCount > 0)
+  const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
+  const sideChatAvailable = !isLean && (Boolean(sideChat) || messageCount > 0)
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -526,7 +524,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(reference => isComposerReferenceVisible(reference) && (!isLean || reference.kind === 'skill')), [referenceCurrent?.items, isLean])
   useEffect(() => {
     let active = true
-    if (isMemberSession || isAntigravity) return
+    if (isMemberSession) return
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
     void composerReferencesApi.list(referenceCwd || undefined, referenceProviderId, isLean ? 'lean' : undefined).then(data => {
       useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
@@ -535,7 +533,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, referenceCwd, referenceProviderId, isAntigravity, isLean, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
+  }, [referenceContext, referenceCwd, referenceProviderId, isLean, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -558,7 +556,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // second line on columns with hundreds of pixels to spare.
   const showLocationInToolbar = !useCompactControls && !isMemberSession
   const embedLaunchControlsInToolbar = showLocationInToolbar && showLaunchControls
-  const pendingSlashUiAction = !isAntigravity && !isMemberSession && input.trim().startsWith('/')
+  const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
     : null
   const canSubmit = !isWorkspaceMissing &&
@@ -896,7 +894,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // A lean session's own list already passed the lean runtime rule.
   const listedSlashCommandNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands])
   const allSlashCommands = useMemo(() => {
-    if (isAntigravity) return []
     if (isMemberSession) {
       if (!memberCliSessionId) return []
       // The member's CLI reports its own commands and skills; the fallback keeps
@@ -915,7 +912,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     // `/btw` forks the conversation so far; a blank session has none to fork.
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedSlashCommandNames)) && (sideChatAvailable || command.name !== 'btw'))
-  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isAntigravity, isLean, isMemberSession, memberCliSessionId, memberSlashCommands, t])
+  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isLean, isMemberSession, memberCliSessionId, memberSlashCommands, t])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
@@ -924,7 +921,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const filteredCommands = filteredCommandGroups.ordered
   // A member page lists only what its CLI can run, and nothing without one.
   const isSlashMenuVisible = slashMenuOpen && filteredCommands.length > 0
-  const isReferenceMenuVisible = !isAntigravity && !isMemberSession && fileSearchOpen
+  const isReferenceMenuVisible = !isMemberSession && fileSearchOpen
   // The predicted next prompt only shows on an idle desktop composer with
   // nothing else claiming the empty draft. The touch composer has no Tab key.
   const promptSuggestionGhost =
@@ -1008,7 +1005,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     promptOptimize.notifyDraftChanged()
     setComposerInput(text, nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? text.length
-    if (isAntigravity) return
     if (isMemberSession) {
       // A command typed here goes to the member's own CLI as is; files and
       // references stay out of member messages.
@@ -1137,14 +1133,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       return
     }
 
-    if (isAntigravity && (attachments.some((attachment) => attachment.type !== 'image' || !attachment.data) ||
-      workspaceReferences.some((reference) => reference.kind !== 'chat-selection'))) {
-      useUIStore.getState().addToast({ type: 'info', message: t('settings.providers.antigravity.imagesOnly') })
-      return
-    }
-
     // Immediate local command: never enter the main turn, launch flow or queue.
-    const sideQuestion = !isAntigravity && !isMemberSession ? parseSideQuestionCommand(text) : null
+    const sideQuestion = !isMemberSession ? parseSideQuestionCommand(text) : null
     if (sideQuestion !== null && activeTabId) {
       promptHistory.recordSubmission({ text: input, mentions })
       void openSideChat(sideChat?.parentSessionId ?? activeTabId, { question: sideQuestion || undefined, submit: true })
@@ -1209,8 +1199,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // Inline @-mentions travel as the `@"absolute path"` text the CLI already
     // parses. Serialized from the live document — only the doc knows which
     // `@label` is a pill and which is literal text the user typed.
-    const sessionReferences = isAntigravity ? [] : getSessionReferences(input, mentions)
-    const serializedText = isAntigravity ? text : (composerRef.current?.getModelContent() ?? input).trim()
+    const sessionReferences = getSessionReferences(input, mentions)
+    const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     const joinedContent = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
     // Agent Team armed in the + menu: the model gets the team instruction, the
     // bubble keeps what the user typed.
@@ -1406,7 +1396,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (composingRef.current || event.isComposing || event.keyCode === 229) return false
 
     // Route reference selection and directory navigation to the unified menu
-    if (isReferenceMenuVisible) {
+    if (fileSearchOpen) {
       const key = event.key
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'ArrowRight' || key === 'Enter' || key === 'Tab' || key === 'Escape') {
         event.preventDefault()
@@ -1671,13 +1661,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }
   const mobileComposerSettings: MobileComposerSetting[] = isMobileComposer && !isMemberSession
     ? [
-      ...(!isAntigravity ? [{
+      {
         key: 'permission',
         icon: <ShieldCheck size={16} strokeWidth={1.75} aria-hidden="true" />,
         label: t('permMode.executionPermissions'),
         value: t(PERMISSION_MODE_LABEL_KEYS[resolvedPermissionMode]),
         onSelect: () => openFromComposerSheet(() => permissionSelectorRef.current?.open()),
-      }] : []),
+      },
       ...(activeTabId ? [
         {
           key: 'model',
@@ -1710,7 +1700,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // Desktop: the quiet glyph (or, once writes run unattended, the named chip)
   // sits first in the trailing group. A phone keeps it after the chips, where
   // it only appears when some writes run unattended.
-  const permissionSelector = isMemberSession || isAntigravity ? null : (
+  const permissionSelector = isMemberSession ? null : (
     <PermissionModeSelector
       lean={isLean}
       ref={permissionSelectorRef}
@@ -1753,7 +1743,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const capabilityMenu = useCapabilityMenu({
     open: plusMenuOpen && !isMemberSession,
-    attachmentsOnly: isAntigravity,
     cwd: referenceCwd,
     references: composerReferences,
     lean: isLean,
@@ -1873,7 +1862,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             />
           )}
 
-          {isReferenceMenuVisible && (
+          {!isMemberSession && fileSearchOpen && (
             <ComposerReferenceMenu
               ref={fileSearchRef}
               id={referenceMenuId}
@@ -1915,7 +1904,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             />
           )}
 
-          {!isAntigravity && !isMemberSession && localSlashPanel && (
+          {!isMemberSession && localSlashPanel && (
             <div ref={slashMenuRef}>
               <LocalSlashCommandPanel
                 command={localSlashPanel}
@@ -2185,7 +2174,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                         cwd={referenceCwd}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
+                        onSelectFile={insertSelectedFileMention}
                         id={capabilityMenuId}
                         sections={capabilityMenu.sections}
                         onAction={capabilityMenu.onAction}
@@ -2202,7 +2191,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                         cwd={referenceCwd}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
+                        onSelectFile={insertSelectedFileMention}
                         onAction={capabilityMenu.onAction}
                       />
                     )}
@@ -2285,7 +2274,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   }
                 />
               )}
-              {isMobileComposer && !isAntigravity && (
+              {isMobileComposer && (
                 <AgentProfileControl
                   ref={agentProfileRef}
                   value={isLean ? 'lean' : 'standard'}
@@ -2381,13 +2370,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           <p>{t('agentTeams.runtime.memberMessageHint')}</p>
         </div>}
 
-        <input ref={fileInputRef} type="file" multiple accept={isAntigravity ? 'image/*' : undefined} className="hidden" onChange={handleFileSelect} />
+        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
 
         {/* On a phone, a session under way names its project in the top bar;
             only a session still choosing where to run needs the picker here. */}
         {!isMemberSession && !showLocationInToolbar && !(isMobileComposer && messageCount > 0) && (
           <div className={useCompactControls ? 'mt-2 flex min-w-0 px-1' : 'mt-3 px-1'}>
-            {!showLaunchControls ? (
+            {messageCount > 0 ? (
               <ProjectContextChip
                 workDir={resolvedWorkDir}
                 projectRoot={activeSession?.projectRoot}
