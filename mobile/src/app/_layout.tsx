@@ -5,6 +5,7 @@ import { AppProvider } from '../state/AppContext'
 import { LiveActivityBridge } from '../widgets/LiveActivityBridge'
 import { PushRegistrationProvider } from '../state/PushRegistrationContext'
 import { NotificationBridge } from '../state/NotificationBridge'
+import { KeepAwakeBridge } from '../state/KeepAwakeBridge'
 import { NotifyPromptHost } from '../state/NotifyPromptHost'
 import { DashboardProvider } from '../state/DashboardContext'
 import { PreferencesProvider } from '../state/PreferencesContext'
@@ -68,6 +69,7 @@ function Navigation() {
   return (
     <>
       <NotificationBridge />
+      <KeepAwakeBridge />
       <LiveActivityBridge />
       <NotifyPromptHost />
       <StatusBar style={dark ? 'light' : 'dark'} />

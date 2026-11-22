@@ -53,11 +53,13 @@ export class P2PPeer {
   #peer?: RtcPeer
   #channels?: Record<P2PChannel, RtcChannel>
   #closed = false
+  #backgrounded = false
   #ping = 0
   #misses = 0
   #awaiting?: number
   #health?: unknown
   #pongTimer?: unknown
+  #abortConnect?: (error: Error) => void
   /** 正在等自己那个 pong 的确认（见 `check`），按 ping 序号。 */
   #checks = new Map<number, (alive: boolean) => void>()
 
@@ -95,6 +97,7 @@ export class P2PPeer {
     let failed: (error: Error) => void = () => {}
     const failure = new Promise<never>((_, reject) => { failed = reject })
     failure.catch(() => {})
+    this.#abortConnect = failed
     peer.onState((state) => {
       if (state === 'failed' || state === 'closed') {
         failed(new Error(`Direct connection ${state}`))
@@ -154,9 +157,11 @@ export class P2PPeer {
     try {
       await Promise.race([Promise.all([negotiate(), opened]), failure, deadline])
       const path = await peer.selectedPath().catch(() => 'direct' as const)
-      this.#heartbeat()
+      this.#abortConnect = undefined
+      if (!this.#backgrounded) this.#heartbeat()
       return path
     } catch (error) {
+      this.#abortConnect = undefined
       this.close()
       throw error
     }
@@ -193,11 +198,33 @@ export class P2PPeer {
     })
   }
 
+  /**
+   * 退到后台时暂停周期心跳：Android 省电策略可能把 1.5 秒 pong 计时器推迟，导致把还能用的直连误杀。
+   * 回到前台后恢复心跳（长时离屏会由 HostLink 先 `check` 再恢复）。
+   */
+  setBackground(background: boolean) {
+    if (this.#closed || this.#backgrounded === background) return
+    this.#backgrounded = background
+    if (background) {
+      this.options.timers.clear(this.#health)
+      this.options.timers.clear(this.#pongTimer)
+      this.#health = this.#pongTimer = undefined
+      this.#awaiting = undefined
+      this.#misses = 0
+    } else if (this.open && !this.#health) {
+      this.#heartbeat()
+    }
+  }
+
   close() {
     if (this.#closed) return
     this.#closed = true
     this.options.timers.clear(this.#health)
     this.options.timers.clear(this.#pongTimer)
+    this.#health = this.#pongTimer = undefined
+    const abort = this.#abortConnect
+    this.#abortConnect = undefined
+    abort?.(new Error('Direct connection closed'))
     for (const settle of [...this.#checks.values()]) settle(false)
     try {
       this.#peer?.close()
