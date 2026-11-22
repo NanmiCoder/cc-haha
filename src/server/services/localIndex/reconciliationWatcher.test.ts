@@ -621,4 +621,50 @@ describe('local index reconciliation watcher', () => {
     expect(watcher.getMetrics().watchFailures).toBe(1)
     await watcher.stop()
   })
+
+  test('ignores sibling files in scope root and non-transcript project artifacts without triggering full sweeps', async () => {
+    const scope = await createTempDir()
+    const projectDir = join(scope, 'projects', '-repo')
+    await mkdir(projectDir, { recursive: true })
+    const listeners = new Map<string, (eventType: string, filename: string | null) => void>()
+    const batches: ReconciliationBatch[] = []
+    const watcher = createReconciliationWatcher({
+      scope,
+      debounceMs: 10,
+      maxWaitMs: 30,
+      safetySweepMs: 60_000,
+      watchDirectory: (directory, listener) => {
+        listeners.set(directory, listener)
+        return { close() {} }
+      },
+      onBatch: async batch => {
+        batches.push(batch)
+      },
+    })
+
+    await watcher.start()
+    try {
+      // Sibling writes directly inside `~/.claude` (e.g. history.jsonl on every prompt)
+      // must not sweep `~/.claude/projects`.
+      listeners.get(scope)?.('change', 'history.jsonl')
+      listeners.get(scope)?.('rename', 'settings.json')
+      listeners.get(scope)?.('change', 'cc-haha')
+      // Non-transcript artifacts inside a project directory must not trigger full sweeps.
+      listeners.get(projectDir)?.('change', join('session-1', 'subagents', 'agent-a.meta.json'))
+      listeners.get(projectDir)?.('rename', join('session-1', 'subagents', 'agent-a.meta.json'))
+      listeners.get(projectDir)?.('rename', join('session-1', 'tool-results', 'call_1.txt'))
+      listeners.get(projectDir)?.('rename', join('memory', 'MEMORY.md'))
+      listeners.get(projectDir)?.('rename', 'sessions-index.json')
+      await Bun.sleep(50)
+      expect(batches).toEqual([])
+      expect(watcher.getMetrics().fullSweeps).toBe(0)
+
+      // Structural changes to the `projects` entry itself still trigger a full sweep.
+      listeners.get(scope)?.('rename', 'projects')
+      await waitFor(() => batches.length === 1)
+      expect(batches).toEqual([{ paths: [], fullSweep: true }])
+    } finally {
+      await watcher.stop()
+    }
+  })
 })

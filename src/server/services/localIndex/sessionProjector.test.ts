@@ -1361,3 +1361,50 @@ it('persists lean profile through index reopen and incremental metadata, and reb
     expect(index.getSession?.('old-session')?.agentProfile).toBe('standard')
   } finally { database.close() }
 })
+
+it('skips redundant backfill_state write transactions when re-checking unchanged sources', async () => {
+  const root = await createTempDir('projector-unchanged-no-write')
+  const candidate = await createCandidate({
+    root,
+    projectPath: '-repo',
+    sessionId: 'unchanged-session',
+    content: line(user('Stable prompt', '2026-01-01T00:00:00Z')),
+  })
+  const rawDatabase = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+  let transactions = 0
+  const database = {
+    ...rawDatabase,
+    transaction<T>(operation: Parameters<typeof rawDatabase.transaction<T>>[0]): T {
+      transactions += 1
+      return rawDatabase.transaction(operation)
+    },
+  }
+  const index = createSessionIndex(database)
+  const projector = createSessionProjector({ database, index, scope: root })
+  const progress = {
+    state: 'building' as const,
+    discovered: 1,
+    indexed: 1,
+    degraded: 0,
+    lastErrorCode: null,
+  }
+
+  try {
+    expect(await projector.projectSource(candidate, progress)).toMatchObject({ kind: 'indexed', action: 'full' })
+    transactions = 0
+
+    expect(await projector.projectSource(candidate, progress)).toMatchObject({ kind: 'indexed', action: 'unchanged' })
+    expect(transactions).toBe(0)
+
+    // A changed backfill status (e.g. degraded -> building) still writes once.
+    rawDatabase.write(op => op.run(
+      `UPDATE backfill_state SET state = 'degraded', degraded = 1, last_error_code = 'LOCAL_INDEX_SOURCE_CHANGED' WHERE scope = ?`,
+      root,
+    ))
+    expect(await projector.projectSource(candidate, progress)).toMatchObject({ kind: 'indexed', action: 'unchanged' })
+    expect(transactions).toBe(1)
+    expect(index.getBackfillState(root)).toMatchObject({ state: 'building', degraded: 0, lastErrorCode: null })
+  } finally {
+    rawDatabase.close()
+  }
+})
