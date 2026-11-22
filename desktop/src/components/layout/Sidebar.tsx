@@ -1,5 +1,6 @@
 import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Archive, Bell, CalendarClock, Check, ChevronRight, Clock, Copy, Download, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pencil, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, Trash2, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -11,6 +12,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
+import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { GlobalSearchModal } from '../search/GlobalSearchModal'
 import { FindInPageModal } from '../search/FindInPageModal'
@@ -270,15 +272,44 @@ export function Sidebar({
     setProjectHeaderSubmenu(null)
   }, [])
 
+  const hasOpenSidebarMenu = contextMenu !== null || projectContextMenu !== null || projectHeaderMenu !== null || projectHeaderSubmenu !== null
+
   // Each menu already stops propagation on its own container, so listing them
   // as "inside" reproduces the previous behavior. `triggerRef` covers the two
   // project-header buttons: without it their own click would reopen the menu
   // this hook just closed.
   useDismissable({
-    open: contextMenu !== null || projectContextMenu !== null || projectHeaderMenu !== null || projectHeaderSubmenu !== null,
+    open: hasOpenSidebarMenu,
     refs: [sessionContextMenuRef, projectContextMenuRef, projectHeaderMenuRef, projectHeaderSubmenuRef],
     triggerRef: projectHeaderActionsRef,
     onDismiss: closeAllSidebarMenus,
+  })
+
+  // Scope scroll dismissal to the sidebar's own scroll container instead of
+  // `useDismissable`'s global capture scroll listener, so live chat streaming
+  // auto-scroll in `#content-area` does not dismiss open sidebar menus.
+  useEffect(() => {
+    if (!hasOpenSidebarMenu) return
+    const scrollArea = sessionScrollAreaRef.current
+    window.addEventListener('resize', closeAllSidebarMenus)
+    scrollArea?.addEventListener('scroll', closeAllSidebarMenus)
+    return () => {
+      window.removeEventListener('resize', closeAllSidebarMenus)
+      scrollArea?.removeEventListener('scroll', closeAllSidebarMenus)
+    }
+  }, [closeAllSidebarMenus, hasOpenSidebarMenu])
+
+  const sessionContextMenuPosition = useAnchoredPosition({
+    open: contextMenu !== null,
+    anchorRect: {
+      top: contextMenu?.y ?? 0,
+      bottom: contextMenu?.y ?? 0,
+      left: contextMenu?.x ?? 0,
+      right: contextMenu?.x ?? 0,
+    },
+    floatingRef: sessionContextMenuRef,
+    offset: 0,
+    clampHeight: true,
   })
 
   // Open archive tabs keep their metadata in the store, outside the default list.
@@ -453,6 +484,9 @@ export function Sidebar({
   const handleContextMenu = useCallback((e: React.MouseEvent, id: string) => {
     e.preventDefault()
     if (isBatchMode) return
+    setProjectContextMenu(null)
+    setProjectHeaderMenu(null)
+    setProjectHeaderSubmenu(null)
     setContextMenu({ id, x: e.clientX, y: e.clientY })
   }, [isBatchMode])
 
@@ -1588,12 +1622,12 @@ export function Sidebar({
         </div>
       )}
 
-      {contextMenu && (
+      {contextMenu && createPortal(
         <div
           ref={sessionContextMenuRef}
           role="menu"
-          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+          style={sessionContextMenuPosition.style}
         >
           <SidebarMenuItem
             icon={<Pencil size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
@@ -1632,7 +1666,8 @@ export function Sidebar({
           >
             {t('common.delete')}
           </SidebarMenuItem>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {projectContextMenu && (() => {
