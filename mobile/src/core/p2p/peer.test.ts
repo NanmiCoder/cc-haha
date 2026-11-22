@@ -150,6 +150,32 @@ describe('direct connection to the computer', () => {
     expect(await f.peer.check(P2P_PONG_MS)).toBe(false)
   })
 
+  test('pausing heartbeat in background prevents Doze delays from killing the direct link and resumes on foreground', async () => {
+    const f = setup()
+    const connected = f.peer.connect()
+    await flush()
+    await connected
+    const ctl = f.rtc.peers[0]!.channels.ctl!
+    f.peer.setBackground(true)
+    const sentBefore = ctl.sent.length
+    f.timers.advance(P2P_HEALTH_MS * 4)
+    expect(ctl.sent.length).toBe(sentBefore)
+    expect(f.closes()).toBe(0)
+    expect(f.peer.open).toBe(true)
+
+    f.peer.setBackground(false)
+    f.timers.advance(P2P_HEALTH_MS + 2 * P2P_PONG_MS)
+    expect(f.closes()).toBe(1)
+  })
+
+  test('closing a peer while negotiation is still pending rejects connect immediately', async () => {
+    const f = setup({}, { openOnAnswer: false })
+    const connected = f.peer.connect()
+    await flush()
+    f.peer.close()
+    await expect(connected).rejects.toThrow('Direct connection closed')
+  })
+
   test('an ICE failure closes the connection', async () => {
     const f = setup()
     const connected = f.peer.connect()

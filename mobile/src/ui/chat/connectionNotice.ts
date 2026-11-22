@@ -58,20 +58,50 @@ export function connectionNotice({
   }
 }
 
+export type NoticeTrack = {
+  ready: boolean
+  since: number
+  everReady: boolean
+  foregroundTick: number
+}
+
+/** 根据最新连接状态和回前台计数更新离开 ready 的起点。 */
+export function advanceNoticeTrack(
+  track: NoticeTrack,
+  ready: boolean,
+  now: number,
+  foregroundTick = 0
+): NoticeTrack {
+  if (track.ready !== ready || (!ready && track.foregroundTick !== foregroundTick)) {
+    return {
+      ready,
+      since: now,
+      everReady: track.everReady || ready,
+      foregroundTick,
+    }
+  }
+  if (track.foregroundTick !== foregroundTick) return { ...track, foregroundTick }
+  return track
+}
+
 /** 记下这次离开 ready 的时刻，并在提示该出现时重新渲染。 */
 export function useConnectionNotice(
   connection: ConnectionState,
   failures = 0,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  /** 每次从后台回到前台递增，避免后台静默断线时长计入前台宽限窗口。 */
+  foregroundTick = 0
 ) {
   const ready = connection === 'ready'
-  const [track, setTrack] = useState(() => ({ ready, since: now(), everReady: ready }))
-  // 状态变化当场记下时刻：等 effect 再记会先用旧时刻算一帧，把提示条闪出来。
-  let current = track
-  if (track.ready !== ready) {
-    current = { ready, since: now(), everReady: track.everReady || ready }
-    setTrack(current)
-  }
+  const [track, setTrack] = useState<NoticeTrack>(() => ({
+    ready,
+    since: now(),
+    everReady: ready,
+    foregroundTick,
+  }))
+  // 状态变化或回到前台时当场记下时刻：等 effect 再记会先用旧时刻算一帧，把提示条闪出来。
+  const current = advanceNoticeTrack(track, ready, now(), foregroundTick)
+  if (current !== track) setTrack(current)
   const [, setChecks] = useState(0)
   const notice = connectionNotice({
     connection,

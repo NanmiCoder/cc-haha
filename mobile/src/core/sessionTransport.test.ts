@@ -1437,6 +1437,102 @@ describe('returning to the foreground', () => {
     h.transport.dispose()
   })
 
+  test('backgrounding pauses heartbeat and background drops wait quietly for an immediate stream resume on return', async () => {
+    let holds = 0
+    const released: number[] = []
+    const gate = {
+      hold: () => {
+        const id = ++holds
+        return () => released.push(id)
+      },
+    }
+    const h = harness(undefined, undefined, undefined, { gate, streams: true })
+    await flush()
+    const first = h.sockets[0]!
+    first.open()
+    first.attach({ resumed: false, next: 1, last: 0 })
+    const next = first.streamSnapshots(1)
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(released).toEqual([1])
+    const historyReads = h.historyCalls()
+    const pingsBefore = first.sent.filter((m) => m.type === 'ping').length
+
+    // Entering background pauses heartbeats so Android Doze cannot falsely kill the socket.
+    h.transport.background()
+    h.timers.advance(60_000)
+    expect(first.sent.filter((m) => m.type === 'ping')).toHaveLength(pingsBefore)
+    expect(first.closed).toBe(false)
+
+    // When the OS or P2P idle close drops the socket in background, no background retry loop runs.
+    first.drop(1006)
+    h.timers.advance(120_000)
+    await flush()
+    expect(h.sockets).toHaveLength(1)
+    expect(h.transport.failures).toBe(0)
+    expect(h.verifies).toHaveLength(0)
+    expect(h.errors).toHaveLength(0)
+    expect(holds).toBe(1)
+
+    // Returning to foreground resumes the same stream immediately with zero backoff and no history read.
+    h.transport.resume(h.now() - 180_000)
+    await flush()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.transport.connection).toBe('resuming')
+    expect(holds).toBe(2)
+    const second = h.sockets[1]!
+    second.open()
+    second.attach({ resumed: true, next, last: next - 1 })
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.historyCalls()).toBe(historyReads)
+    expect(released).toEqual([1, 2])
+    h.transport.dispose()
+  })
+
+  test('returning to the foreground resets backoff so a radio-wakeup hiccup retries in 500ms instead of 30s', async () => {
+    const h = harness()
+    await h.ready()
+    // Escalate backoff to the 30-second cap before backgrounding.
+    for (let i = 0; i < 6; i++) {
+      h.sockets.at(-1)!.drop(1001)
+      h.timers.advance(30_000)
+      await flush()
+    }
+    h.sockets.at(-1)!.drop(1001)
+    h.transport.background()
+    h.timers.advance(60_000)
+    await flush()
+    const beforeResume = h.sockets.length
+
+    // Returning tries right away; if that first attempt hits radio wake-up and drops, retry stays fast (500ms).
+    h.transport.resume(h.now() - 60_000)
+    await flush()
+    expect(h.sockets).toHaveLength(beforeResume + 1)
+    h.sockets.at(-1)!.drop(1006)
+    h.timers.advance(499)
+    await flush()
+    expect(h.sockets).toHaveLength(beforeResume + 1)
+    h.timers.advance(1)
+    await flush()
+    expect(h.sockets).toHaveLength(beforeResume + 2)
+    h.transport.dispose()
+  })
+
+  test('a dead socket that closes during a foreground probe reconnects at once instead of waiting 500ms', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.transport.background()
+    h.transport.resume(h.now() - 30_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    socket.drop(1006)
+    // Immediate reconnect timer (0ms) fires without waiting for the 500ms first backoff.
+    h.timers.advance(0)
+    await flush()
+    expect(h.sockets).toHaveLength(2)
+    h.transport.dispose()
+  })
+
   test('holds the foreground gate only while it is not ready', async () => {
     let holds = 0
     const released: number[] = []

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  advanceNoticeTrack,
   CONNECTION_BANNER_AFTER_MS,
   CONNECTION_LABEL_AFTER_MS,
   connectionNotice,
@@ -48,4 +49,25 @@ test('a resume that drags on shows the same reconnect banner as a reconnect', ()
 test('a revoked pairing is shown immediately and a ready connection shows nothing', () => {
   expect(connectionNotice({ connection: 'pairing_required', since: 0, now: 0, everReady: true })).toEqual({ label: true, banner: true })
   expect(connectionNotice({ connection: 'ready', since: 0, now: 99_999, everReady: true })).toEqual({ label: false, banner: false })
+})
+
+test('returning to the foreground resets the grace window for a drop that happened while away', () => {
+  const droppedInBackground = advanceNoticeTrack(
+    { ready: true, since: 0, everReady: true, foregroundTick: 0 },
+    false,
+    10_000,
+    0
+  )
+  // Two minutes later the user opens the app: without resetting the grace window, the banner would flash immediately.
+  const returned = advanceNoticeTrack(droppedInBackground, false, 130_000, 1)
+  expect(returned.since).toBe(130_000)
+  expect(
+    connectionNotice({
+      connection: 'resuming',
+      since: returned.since,
+      now: 130_500,
+      everReady: returned.everReady,
+      failures: 0,
+    })
+  ).toMatchObject({ label: false, banner: false })
 })
