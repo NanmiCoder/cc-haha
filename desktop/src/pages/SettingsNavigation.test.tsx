@@ -124,4 +124,96 @@ describe('Settings section navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
     expect(frameFor().className).toBe(providersClass)
   })
+
+  it('filters settings categories live by title and domain keyword, and shows an empty state', () => {
+    render(<Settings />)
+
+    const search = screen.getByTestId('settings-nav-search')
+    fireEvent.change(search, { target: { value: 'theme' } })
+
+    expect(screen.getByRole('button', { name: 'General' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Diagnostics' })).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'Diagnostics' } })
+    expect(screen.getByRole('button', { name: 'Diagnostics' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'General' })).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'zzz-no-setting' } })
+    expect(screen.getByTestId('settings-nav-empty')).toHaveTextContent('No matches found')
+  })
+
+  it('focuses the category filter on / and clears it on Escape without leaking the event', () => {
+    const parentKeyDown = vi.fn()
+    render(
+      <div onKeyDown={parentKeyDown}>
+        <Settings />
+      </div>,
+    )
+
+    const search = screen.getByTestId('settings-nav-search')
+    fireEvent.keyDown(window, { key: '/' })
+    expect(search).toHaveFocus()
+
+    fireEvent.change(search, { target: { value: 'token' } })
+    expect(screen.getByRole('button', { name: 'Token usage' })).toBeInTheDocument()
+
+    parentKeyDown.mockClear()
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(search).toHaveValue('')
+    expect(parentKeyDown).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Model Settings' })).toBeInTheDocument()
+  })
+
+  it('supports keyboard navigation and Enter selection from the sidebar filter', () => {
+    render(<Settings />)
+
+    const search = screen.getByTestId('settings-nav-search')
+    fireEvent.change(search, { target: { value: 'update' } })
+    expect(screen.getByRole('button', { name: 'About' })).toBeInTheDocument()
+
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(useUIStore.getState().activeSettingsTab).toBe('about')
+
+    fireEvent.change(search, { target: { value: '' } })
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    expect(useUIStore.getState().activeSettingsTab).toBe('providers')
+  })
+
+  it('renders inline Settings on opaque paper surfaces for both the root container and navigation rail', () => {
+    render(<Settings />)
+    const root = screen.getByTestId('desktop-settings-root')
+    const rail = screen.getByTestId('settings-navigation')
+    expect(root).toHaveClass('bg-[var(--color-surface)]')
+    expect(root).not.toHaveClass('bg-transparent')
+    expect(rail).toHaveClass('bg-[var(--color-surface)]', 'border-r')
+    expect(rail).not.toHaveClass('bg-transparent')
+  })
+
+  it('ignores the / search shortcut while a nested modal dialog is open on top of inline Settings', () => {
+    render(<Settings />)
+
+    const search = screen.getByTestId('settings-nav-search')
+    // Without an open modal dialog, `/` focuses the inline Settings category filter.
+    fireEvent.keyDown(window, { key: '/' })
+    expect(search).toHaveFocus()
+
+    // When a modal dialog opens on top of Settings, `/` must not steal focus back to Settings.
+    const nestedDialog = document.createElement('div')
+    nestedDialog.setAttribute('role', 'dialog')
+    nestedDialog.setAttribute('aria-modal', 'true')
+    const nestedBtn = document.createElement('button')
+    nestedBtn.type = 'button'
+    nestedBtn.textContent = 'Confirm'
+    nestedDialog.appendChild(nestedBtn)
+    document.body.appendChild(nestedDialog)
+
+    try {
+      nestedBtn.focus()
+      fireEvent.keyDown(window, { key: '/' })
+      expect(nestedBtn).toHaveFocus()
+      expect(search).not.toHaveFocus()
+    } finally {
+      nestedDialog.remove()
+    }
+  })
 })

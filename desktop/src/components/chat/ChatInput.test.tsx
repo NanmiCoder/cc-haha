@@ -1058,12 +1058,11 @@ describe('ChatInput file mentions', () => {
     expect(modeSheet).toHaveTextContent('Unavailable')
   })
 
-  // On desktop the lean badge and its info button used to share the row with
-  // the project, branch and model, and the row wrapped its trailing group onto a
-  // second line to make room, which left the first line's right half empty.
-  // The lean mode is a chip in the leading group now, so the row never wraps.
-  // jsdom lays nothing out; this pins the pieces that keep that from coming back.
-  it.each([false, true])('keeps the desktop toolbar to one row, the leading group giving way (lean session %s)', (lean) => {
+  // On desktop the run location lives in the bare under-card context strip, so
+  // the leading group stays `shrink-0` (protecting "+" from ever colliding with
+  // trailing controls in narrow split-pane columns) while the trailing group
+  // (`min-w-0 flex-1`) gives up model-name width cleanly without wrapping.
+  it.each([false, true])('keeps the desktop toolbar to one row without crushing the leading controls (lean session %s)', (lean) => {
     stubComposerColumnWidth(640)
     if (lean) useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
     render(<ChatInput compact />)
@@ -1072,8 +1071,8 @@ describe('ChatInput file mentions', () => {
     const trailing = screen.getByTestId('chat-input-toolbar-trailing')
 
     expect(toolbar).not.toHaveClass('flex-wrap')
-    expect(leading).toHaveClass('min-w-0', 'shrink')
-    expect(trailing).toHaveClass('shrink-0')
+    expect(leading).toHaveClass('shrink-0')
+    expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
     expect(trailing).toContainElement(screen.getByTestId('model-selector-shell'))
     expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
@@ -1537,16 +1536,18 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput variant="hero" />)
 
     const panel = screen.getByTestId('chat-input-panel')
-    // The floating card (「素」): `--radius-xl` + the composer step of the
-    // shadow scale, the same shell EmptySession renders.
-    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'glass-panel--composer')
+    // Floating frosted-glass composer shell: `.composer-glass` + `--radius-2xl`.
+    expect(panel).toHaveClass('rounded-[var(--radius-2xl)]', 'composer-glass')
     expect(panel).not.toHaveClass('rounded-b-none')
 
-    // One pill in the toolbar instead of a three-button bar welded to the
-    // panel's bottom edge — which is what used to square off that edge.
+    // Repository launch pill lives in the bare under-card strip cleanly below
+    // the rounded composer card without overlapping its bottom corners.
+    const strip = screen.getByTestId('composer-context-strip')
+    expect(strip).toHaveClass('surface-glass', 'pt-2')
+    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const pill = await screen.findByRole('button', { name: 'Location: repo / main' })
-    expect(panel).toContainElement(pill)
-    // A 28px toolbar control like its neighbours, not a bordered pill.
+    expect(strip).toContainElement(pill)
+    expect(panel).not.toContainElement(pill)
     expect(pill).toHaveClass('h-7')
     expect(screen.queryByText('Select a project...')).not.toBeInTheDocument()
 
@@ -1565,16 +1566,20 @@ describe('ChatInput file mentions', () => {
   // composer only while the session is empty, so a live session is always the
   // default one. Asserting this against `hero` passed while the shipped
   // composer still dropped the chip below the panel.
-  it('swaps the pill for a read-only chip in the same row once the session has messages', async () => {
+  it('swaps the pill for a read-only chip in the bare under-card strip once the session has messages', async () => {
     // beforeEach seeds one message, so this is a live session, not a draft.
     render(<ChatInput variant="default" />)
 
+    const strip = screen.getByTestId('composer-context-strip')
+    expect(strip).toHaveClass('surface-glass', 'pt-2')
+    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const chip = await screen.findByTestId('run-location-readonly')
     expect(chip).toHaveTextContent('repo')
     expect(chip).toHaveTextContent('main')
 
-    expect(screen.getByTestId('chat-input-toolbar')).toContainElement(chip)
-    expect(screen.getByTestId('chat-input-panel')).toContainElement(chip)
+    expect(strip).toContainElement(chip)
+    expect(screen.getByTestId('chat-input-toolbar')).not.toContainElement(chip)
+    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(chip)
     expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Location/ })).not.toBeInTheDocument()
   })
@@ -1741,13 +1746,13 @@ describe('ChatInput file mentions', () => {
   // permission mode to a bare icon even on a column with room to spare — the
   // panel is resizable and the window is not fixed, so its open state says
   // nothing about the width the composer actually got.
-  it('keeps the run location in the toolbar when a workspace panel leaves the column wide', async () => {
+  it('keeps the full read-only location in the under-card strip when a workspace panel leaves the column wide', async () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
     const chip = await screen.findByTestId('run-location-readonly')
-    expect(screen.getByTestId('chat-input-toolbar')).toContainElement(chip)
+    expect(screen.getByTestId('composer-context-strip')).toContainElement(chip)
     expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
 
     // The same width buys back the labelled permission pill.
@@ -3653,15 +3658,13 @@ describe('ChatInput file mentions', () => {
     expect(panel).not.toHaveClass('overflow-hidden')
   })
 
-  it.each([320, 400, 529, 530, 640])('keeps the toolbar actions at their width and lets the leading group give way in a %ipx desktop column', (width) => {
+  it.each([320, 400, 529, 530, 640])('protects leading "+" and lets trailing controls flex cleanly in a %ipx desktop column', (width) => {
     stubComposerColumnWidth(width)
     render(<ChatInput compact />)
-    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('min-w-0', 'shrink')
-    if (width >= 530) {
-      expect(screen.getByTestId('chat-input-toolbar-location')).toHaveClass('min-w-0', 'flex-1')
-    }
-    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('shrink-0', 'justify-end')
-    expect(screen.getByTestId('model-selector-shell')).toHaveClass('shrink-0')
+    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0')
+    expect(screen.getByTestId('composer-context-strip')).toHaveClass('surface-glass', 'pt-2')
+    expect(screen.getByTestId('composer-context-strip')).not.toHaveClass('composer-seam-below', '-mt-4')
+    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('shrink-0')
   })
 
@@ -3693,8 +3696,8 @@ describe('ChatInput file mentions', () => {
     // The phone branch used to swap it for a `shadow-[…]` utility, which loses
     // to `.glass-panel`'s own `box-shadow` on stylesheet order — so the phone
     // composer silently rendered the floating-overlay shadow instead.
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('glass-panel--composer')
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-xl)]')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('composer-glass')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-2xl)]')
     expect(screen.getByTestId('chat-input-panel')).not.toHaveClass('rounded-b-none')
     expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0', 'gap-1')
     expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end', 'gap-1')
@@ -4592,6 +4595,37 @@ describe('ChatInput file mentions', () => {
 
       expect(activeRecording.cancel).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it('docks queued messages as a top seam banner and morphs the circular CTA when drafting mid-turn', async () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          chatState: 'streaming',
+        },
+      },
+    })
+
+    render(<ChatInput />)
+
+    // Empty draft while streaming: single Stop circle.
+    const stopOnly = screen.getByRole('button', { name: 'Stop' })
+    expect(stopOnly).toHaveClass('control-bevel-cta', 'h-8', 'w-8', 'rounded-full')
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
+
+    // Typing mid-turn exposes the circular Queue/Send CTA beside Stop.
+    setComposerText('follow-up steer', 15)
+    const queueBtn = screen.getByRole('button', { name: 'Run' })
+    expect(queueBtn).toHaveClass('control-bevel-cta', 'h-8', 'w-8', 'rounded-full')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    // Clicking Queue docks the message into the top `.composer-seam-above` banner outside the panel.
+    fireEvent.click(queueBtn)
+    const banner = await screen.findByTestId('pending-user-message-list')
+    expect(banner).toHaveClass('surface-glass', 'composer-seam-above', 'rounded-t-[var(--radius-2xl)]')
+    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(banner)
+    expect(banner).toHaveTextContent('follow-up steer')
   })
 
 })

@@ -1,3 +1,4 @@
+import { createRef } from 'react'
 import { render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { describe, expect, it } from 'vitest'
@@ -67,5 +68,15 @@ describe('Input', () => {
   it('honors an explicit id', () => {
     render(<Input label="Port" id="custom-port" />)
     expect(screen.getByLabelText('Port')).toHaveAttribute('id', 'custom-port')
+  })
+
+  it('forwards ref and supports mono/tabular numerals with subtle surface bevel', () => {
+    const ref = createRef<HTMLInputElement>()
+    render(<Input ref={ref} label="Port" mono />)
+    const input = screen.getByLabelText('Port')
+    expect(ref.current).toBe(input)
+    expect(input.className).toContain('font-mono')
+    expect(input.className).toContain('tabular-nums')
+    expect(input.className).toContain('shadow-[var(--bevel-surface-rest)]')
   })
 })

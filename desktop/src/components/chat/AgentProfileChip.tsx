@@ -15,7 +15,7 @@ export function AgentProfileChip({ onRemove }: { onRemove?(): void }) {
       <span
         data-testid="agent-profile-chip"
         title={t('agentProfile.locked')}
-        className={`inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 text-xs font-medium text-[var(--color-text-secondary)] ${height}`}
+        className={`control-bevel inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2 text-xs font-medium text-[var(--color-text-secondary)] ${height}`}
       >
         <Lock size={11} strokeWidth={1.75} aria-hidden="true" />
         {t('agentProfile.leanShort')}
@@ -26,7 +26,7 @@ export function AgentProfileChip({ onRemove }: { onRemove?(): void }) {
     <span
       data-testid="agent-profile-chip"
       title={t('agentProfile.draftHint')}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-brand-soft)] pl-2 text-xs font-medium text-[var(--color-on-brand-soft)] ${height}`}
+      className={`control-bevel inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] pl-2 text-xs font-medium text-[var(--color-on-brand-soft)] ${height}`}
     >
       {t('agentProfile.leanShort')}
       <button

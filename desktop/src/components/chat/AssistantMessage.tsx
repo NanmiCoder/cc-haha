@@ -57,6 +57,8 @@ type Props = {
   isTurnOutputOwner?: boolean
   /** Set only on the last reply of a finished turn: when it ended and how long it took. */
   turnCompletion?: TurnCompletion
+  /** Latest turn keeps its closing action bar visible; earlier turns reveal on hover. */
+  isLatestTurn?: boolean
 }
 
 const MAX_CARDS = 3
@@ -89,6 +91,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   turnOutputEvidence,
   isTurnOutputOwner = true,
   turnCompletion,
+  isLatestTurn = true,
 }: Props) {
   const t = useTranslation()
   const workDir = useWorkspaceContentStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
@@ -317,7 +320,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             />
           )}
           {isStreaming && (
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-shimmer bg-[var(--color-brand)] align-text-bottom" />
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-stepped-pulse bg-[var(--color-brand)] align-text-bottom" />
           )}
         </div>
 
@@ -368,7 +371,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             copyLabel={t('chat.copyReply')}
             branchAction={actionMenu.enabled ? undefined : branchAction}
             align="start"
-            alwaysVisible
+            alwaysVisible={isLatestTurn}
             metadata={<TurnCompletionStamp completion={turnCompletion!} />}
           />
         )}

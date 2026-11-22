@@ -12,6 +12,8 @@ import { useTranslation } from '../../i18n'
 import { ArrowRight, Check, CircleCheck, ImagePlus, Info, MessageCircleQuestion, MessagesSquare, Send } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { Kbd } from '@/components/ui/Kbd'
+import { detectPlatform } from '@/lib/workspace/shortcuts'
 import { isInlineImagePath } from '../../lib/attachmentImages'
 import {
   filesToComposerAttachments,
@@ -882,8 +884,10 @@ export function AskUserQuestion({
         : terminalWithoutAnswers ? 'question.completed' : 'question.answered'
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] ${
-      submitted ? 'border-[var(--color-border)]' : 'border-[var(--color-outline)]'
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border ${
+      submitted
+        ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
+        : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
     }`}>
       {/* Header: 42px, the shared card head of the ask / plan cards. */}
       <div className={`flex h-[42px] items-center gap-2 px-3.5 ${submitted ? '' : 'border-b border-[var(--color-border)]'}`}>
@@ -1035,8 +1039,8 @@ export function AskUserQuestion({
                 )}
               </div>
               <div
-                className={`rounded-[var(--radius-md)] border bg-[var(--color-surface-container)] transition-colors focus-within:border-[var(--color-outline)] focus-within:bg-[var(--color-surface-container-lowest)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
-                  isDragActive ? 'border-[var(--color-brand)]' : 'border-transparent'
+                className={`rounded-[var(--radius-md)] border bg-[var(--color-surface-container-low)] transition-colors focus-within:border-[var(--color-outline)] focus-within:bg-[var(--color-surface-container-lowest)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
+                  isDragActive ? 'border-[var(--color-brand)]' : 'border-[var(--color-border)]'
                 }`}
               >
                 {activeImages.length > 0 && (
@@ -1065,7 +1069,7 @@ export function AskUserQuestion({
                   placeholder={t('question.typePlaceholder')}
                   rows={3}
                   wrap="soft"
-                  className="max-h-48 min-h-[72px] w-full resize-y bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
+                  className="scrollbar-autohide max-h-48 min-h-[72px] w-full resize-y bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
                 />
               </div>
             </div>
@@ -1126,7 +1130,8 @@ export function AskUserQuestion({
             disabled={!allAnswered || (!expired && !pendingRequest)}
             onClick={handleSubmit}
           >
-            {t(expired ? 'question.sendAsMessage' : 'question.submit')}
+            <span>{t(expired ? 'question.sendAsMessage' : 'question.submit')}</span>
+            <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{detectPlatform() === 'mac' ? '⌘↵' : 'Ctrl+↵'}</Kbd>
           </Button>
           {allowFreeText && (
             <Button

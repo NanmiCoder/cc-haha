@@ -28,7 +28,7 @@ function RunOutput({ run }: { run: TaskRun }) {
         className="mt-2.5"
         title={t('common.error')}
         detail={
-          <span className="block max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{run.error}</span>
+          <span className="scrollbar-autohide block max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{run.error}</span>
         }
       />
     )
@@ -38,17 +38,17 @@ function RunOutput({ run }: { run: TaskRun }) {
 
   if (!text) {
     return (
-      <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
+      <Card radius="lg" surface="container" shadow="bevel" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
         {run.sessionId ? t('tasks.outputHintSession') : t('tasks.noOutputText')}
       </Card>
     )
   }
 
-  // The handoff's "summary card": a white bordered sheet on the drawer's
+  // The handoff's "summary card": a bordered sheet on the drawer's
   // sunken ground rather than a second tinted inset, so the commit hashes
   // inside it read as chips against a surface instead of two greys stacked.
   return (
-    <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 max-h-48 overflow-y-auto px-4 py-3">
+    <Card radius="lg" surface="container" shadow="bevel" padding="none" className="scrollbar-autohide mt-2.5 max-h-48 overflow-y-auto px-4 py-3">
       <MarkdownRenderer
         content={text}
         variant="compact"
@@ -263,7 +263,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
       </div>
 
       {/* Content */}
-      <div className="max-h-64 overflow-y-auto px-4 pb-3">
+      <div className="scrollbar-autohide max-h-64 overflow-y-auto px-4 pb-3">
         {loading ? (
           // Same 16px brand spinner in the same `py-6` box; the label goes from
           // an `aria-label` on the SVG to an `aria-live` region, so the wait is
@@ -328,7 +328,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
                   {isExpanded && (run.output || run.error) ? (
                     <RunOutput run={run} />
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'loading' ? (
-                    <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
+                    <Card radius="lg" surface="container" shadow="bevel" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
                       {t('common.loading')}
                     </Card>
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'error' ? (

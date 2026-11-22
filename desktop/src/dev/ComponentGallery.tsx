@@ -17,10 +17,12 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton, type IconButtonSize, type IconButtonTone } from '@/components/ui/IconButton'
 import { Input } from '@/components/ui/Input'
+import { Kbd, KbdGroup } from '@/components/ui/Kbd'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { Modal } from '@/components/ui/Modal'
 import { Progress } from '@/components/ui/Progress'
+import { ScrollArea } from '@/components/ui/ScrollArea'
 import { SearchField } from '@/components/ui/SearchField'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { SelectField } from '@/components/ui/SelectField'
@@ -456,7 +458,8 @@ export function ComponentGallery() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
+    document.documentElement.style.colorScheme =
+      theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark' ? 'dark' : 'light'
   }, [theme])
 
   useEffect(() => {
@@ -637,16 +640,22 @@ export function ComponentGallery() {
       <Section title="Form controls">
         <div className="grid max-w-3xl grid-cols-2 gap-4">
           <Input label="Server name" placeholder="my-server" />
-          <Input label="Port" error="Must be a number" defaultValue="abc" />
+          <Input label="Port" error="Must be a number" defaultValue="abc" mono />
           <Input label="Disabled" disabled defaultValue="locked" />
-          <Input label="With hint" hint="Between 1024 and 65535" />
+          <Input label="With hint" hint="Between 1024 and 65535" tabularNums defaultValue="8080" />
           <SelectField
             label="Transport"
             options={[{ value: 'stdio', label: 'stdio' }, { value: 'http', label: 'HTTP' }]}
             value={transport}
             onChange={setTransport}
           />
-          <SearchField label="Search sessions" clearLabel="Clear search" value={search} onChange={setSearch} />
+          <SearchField
+            label="Search sessions"
+            clearLabel="Clear search"
+            value={search}
+            onChange={setSearch}
+            trailing={<Kbd size="xs">⌘K</Kbd>}
+          />
           <TextArea label="System prompt" hint="Markdown is supported" />
           <TextArea label="Broken" error="Cannot be empty" />
         </div>
@@ -715,17 +724,58 @@ export function ComponentGallery() {
         <SkeletonCards label="Loading cards" count={3} withAvatar className="grid-cols-3" />
       </Section>
 
-      <Section title="Card">
+      <Section title="Card" note="Surface layers including frosted glass, tactile settings group, and 1px hairline bevel.">
         <div className="flex flex-wrap gap-3">
           <Card>base</Card>
           <Card surface="low">low</Card>
           <Card surface="lowest">lowest</Card>
           <Card surface="high">high</Card>
+          <Card surface="group" shadow="bevel">group + bevel</Card>
+          <Card surface="glass">glass</Card>
           <Card border="dashed">dashed</Card>
           <Card interactive>interactive (hover / focus)</Card>
           <Card shadow="card">shadow=card</Card>
           <Card shadow="composer">shadow=composer</Card>
           <Card interactive lift>lift (hover raises 2px)</Card>
+        </div>
+      </Section>
+
+      <Section title="Kbd / ScrollArea" note="Physical keycap hints and single-node auto-hiding scroll containers with optional 24px edge fades.">
+        <div className="flex flex-wrap items-center gap-4">
+          <KbdGroup>
+            <Kbd size="xs">⌘</Kbd>
+            <Kbd size="xs">K</Kbd>
+          </KbdGroup>
+          <KbdGroup>
+            <Kbd size="sm">⌘</Kbd>
+            <Kbd size="sm">⇧</Kbd>
+            <Kbd size="sm">P</Kbd>
+          </KbdGroup>
+          <Kbd size="md">Enter</Kbd>
+          <Kbd appearance="subtle">Esc</Kbd>
+          <Kbd appearance="inverse">⌘J</Kbd>
+        </div>
+        <div className="grid max-w-3xl grid-cols-2 gap-4">
+          <Card padding="none" surface="low" className="overflow-hidden">
+            <ScrollArea fadeTop fadeBottom className="h-36 px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+              {Array.from({ length: 12 }, (_, index) => (
+                <div key={index} className="flex items-center justify-between py-1.5">
+                  <span>Scrollable row {index + 1}</span>
+                  <Badge pill={false}>{index + 1}</Badge>
+                </div>
+              ))}
+            </ScrollArea>
+          </Card>
+          <Card padding="none" surface="low" className="overflow-hidden">
+            <ScrollArea topbarFade className="h-36 px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+              {Array.from({ length: 12 }, (_, index) => (
+                <div key={index} className="flex items-center justify-between py-1.5">
+                  <span>Topbar 7-stop fade row {index + 1}</span>
+                  <Kbd size="xs">{index + 1}</Kbd>
+                </div>
+              ))}
+            </ScrollArea>
+          </Card>
         </div>
       </Section>
 
@@ -769,13 +819,13 @@ export function ComponentGallery() {
           <Tooltip content="This is a tooltip. It should flip near the viewport edge.">
             <Button variant="ghost">Hover / focus me</Button>
           </Tooltip>
-          <Tooltip appearance="surface" content={<span className="flex items-center gap-3">Toggle bottom panel <kbd>⌘J</kbd></span>}>
+          <Tooltip appearance="surface" content={<span className="flex items-center gap-3">Toggle bottom panel <Kbd size="xs">⌘J</Kbd></span>}>
             <Button variant="ghost">Workspace tooltip</Button>
           </Tooltip>
           <Dropdown
             items={[
-              { value: 'sonnet', label: 'Sonnet', description: 'Balanced' },
-              { value: 'opus', label: 'Opus', description: 'Most capable' },
+              { value: 'sonnet', label: 'Sonnet', description: 'Balanced', shortcut: <Kbd size="xs">⌘1</Kbd> },
+              { value: 'opus', label: 'Opus', description: 'Most capable', shortcut: <Kbd size="xs">⌘2</Kbd> },
               { value: 'haiku', label: 'Haiku', description: 'Fastest', disabled: true },
             ]}
             value={model}

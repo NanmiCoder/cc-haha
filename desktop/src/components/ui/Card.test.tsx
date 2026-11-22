@@ -24,11 +24,23 @@ describe('Card', () => {
     const { container: flat } = render(<Card>x</Card>)
     expect(flat.firstElementChild?.className).not.toContain('shadow-[')
 
+    const { container: bevel } = render(<Card shadow="bevel">x</Card>)
+    expect(bevel.firstElementChild?.className).toContain('shadow-[var(--bevel-surface-rest)]')
+
     const { container: raised } = render(<Card shadow="card">x</Card>)
     expect(raised.firstElementChild?.className).toContain('shadow-[var(--shadow-card)]')
 
     const { container: composer } = render(<Card shadow="composer">x</Card>)
     expect(composer.firstElementChild?.className).toContain('shadow-[var(--shadow-composer)]')
+  })
+
+  it('supports frosted glass and tactile group surfaces', () => {
+    const { container: glass } = render(<Card surface="glass">Glass</Card>)
+    expect(glass.firstElementChild?.className).toContain('surface-glass')
+    expect(glass.firstElementChild?.className).toContain('border-[var(--color-surface-glass-border)]')
+
+    const { container: group } = render(<Card surface="group">Group</Card>)
+    expect(group.firstElementChild?.className).toContain('bg-[var(--color-surface-container-low)]')
   })
 
   it('emits exactly one resting shadow when lifting', () => {

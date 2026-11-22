@@ -34,8 +34,9 @@ describe('Skeleton', () => {
 })
 
 describe('SkeletonGroup', () => {
-  it('is the only place that animates', () => {
+  it('is the only place that animates using low-GPU stepped pulse', () => {
     const { container } = render(<SkeletonGroup label="Loading"><Skeleton /></SkeletonGroup>)
+    expect(container.firstElementChild?.className).toContain('animate-stepped-pulse')
     expect(container.firstElementChild?.className).toContain('animate-pulse')
   })
 

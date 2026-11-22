@@ -1375,15 +1375,301 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     })
   }
 
+  const heroBlock = (
+    <div
+      data-testid="empty-session-hero"
+      className={`flex flex-col items-center gap-2.5 text-center ${isMobileComposer ? 'max-w-[300px]' : 'mb-7 max-w-[600px]'}`}
+    >
+      <BrandSeal size={isMobileComposer ? 'md' : 'lg'} />
+      <h1
+        className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${
+          isMobileComposer ? 'text-[22px]' : 'text-[26px]'
+        }`}
+      >
+        {heroProject
+          ? t('empty.heroTitle', { project: heroProject })
+          : t('empty.heroTitleNoProject')}
+      </h1>
+      <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
+        {t('empty.heroSubtitle')}
+      </p>
+    </div>
+  )
+
+  const composerShell = (
+    <div
+      data-testid="empty-session-composer-shell"
+      className={`flex justify-center ${
+        isMobileComposer
+          ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
+          : 'relative z-[var(--z-raised)] w-full shrink-0'
+      }`}
+    >
+      <div className={`flex w-full flex-col ${isMobileComposer ? 'max-w-none' : 'max-w-[var(--chat-content-max-width)]'}`}>
+        <div
+          ref={panelRef}
+          data-testid="empty-session-composer-panel"
+          // Kept identical to ChatInput's floating frosted glass card:
+          // `.composer-glass` + `--radius-2xl` + `z-[var(--z-raised)]` so the
+          // bare under-card context strip tucks seamlessly behind its bottom edge.
+          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          {...dragHandlers}
+        >
+          {isDragActive && (
+            <ComposerDropOverlay
+              testId="empty-session-drop-overlay"
+              title={t('chat.dropFilesTitle')}
+              description={t('chat.dropFilesHint')}
+            />
+          )}
+
+          <div className="contents">
+            {fileSearchOpen && (
+              <ComposerReferenceMenu
+                ref={fileSearchRef}
+                id={referenceMenuId}
+                compact={isMobileComposer}
+                references={composerReferences}
+                referencesLoading={referenceCurrent?.loading ?? true}
+                referencesError={referenceCurrent?.error}
+                onActiveChange={setReferenceOptionId}
+                cwd={workDir || ''}
+                filter={atFilter}
+                onNavigate={(relativePath) => {
+                  if (atCursorPos < 0) return
+                  promptHistory.resetHistory()
+                  const replacement = `@${relativePath}`
+                  const tokenEnd = atCursorPos + 1 + atFilter.length
+                  const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
+                  const newCursorPos = atCursorPos + replacement.length
+                  setInput(newValue)
+                  setAtFilter(relativePath)
+                  requestAnimationFrame(() => {
+                    composerRef.current?.focus()
+                    composerRef.current?.setSelectionOffsets(newCursorPos)
+                  })
+                }}
+                onSelect={(mention) => {
+                  if (atCursorPos < 0) return
+                  promptHistory.resetHistory()
+                  const tokenEnd = atCursorPos + 1 + atFilter.length
+                  const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
+                  setInput(inserted.text)
+                  setMentions(inserted.mentions)
+                  setFileSearchOpen(false)
+                  setAtFilter('')
+                  setAtCursorPos(-1)
+                  void composerRef.current?.focus()
+                  requestAnimationFrame(() => {
+                    composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+                  })
+                }}
+              />
+            )}
+
+            {localSlashPanel && (
+              <div ref={slashMenuRef}>
+                <LocalSlashCommandPanel
+                  command={localSlashPanel}
+                  cwd={workDir || undefined}
+                  commands={allSlashCommands}
+                  onClose={() => setLocalSlashPanel(null)}
+                />
+              </div>
+            )}
+
+            {isSlashMenuVisible && (
+              <SlashCommandMenu
+                ref={slashMenuRef}
+                id={slashMenuId}
+                groups={filteredCommandGroups}
+                isSearching={Boolean(slashFilter.trim())}
+                references={composerReferences}
+                selectedIndex={slashSelectedIndex}
+                itemRefs={slashItemRefs}
+                onSelect={selectSlashCommand}
+                onHighlight={setSlashSelectedIndex}
+                showKeyboardHints={!isMobileComposer}
+              />
+            )}
+
+            {attachments.length > 0 && (
+              <div className="px-2 pt-2">
+                <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
+              </div>
+            )}
+
+            <div className="flex items-start">
+              <MentionComposer
+                ref={composerRef}
+                rootRef={composerContainerRef}
+                value={input}
+                mentions={mentions}
+                onMentionClick={setReferenceDetail}
+                onChange={handleComposerChange}
+                onKeyDown={handleComposerKeyDown}
+                onPaste={handleComposerPaste}
+                onCompositionStart={dictation.compositionHandlers.onCompositionStart}
+                onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
+                placeholder={capabilityMenu.agentTeamArmed ? t('chat.capabilities.teamPlaceholder') : t('empty.placeholder')}
+                // `min-w-0`: see ChatInput — an unbreakable long run (URL,
+                // hash) otherwise grows this flex item past the panel.
+                className="flex-1 min-w-0"
+                editorClassName={`chat-reading-text scrollbar-autohide min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
+                  isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
+                }`}
+                aria={{
+                  role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
+                  'aria-autocomplete': isSlashMenuVisible || fileSearchOpen ? 'list' : undefined,
+                  'aria-expanded': isSlashMenuVisible || fileSearchOpen ? 'true' : undefined,
+                  'aria-controls': fileSearchOpen ? referenceMenuId : isSlashMenuVisible ? slashMenuId : undefined,
+                  'aria-activedescendant': fileSearchOpen ? referenceOptionId : isSlashMenuVisible
+                    ? getSlashCommandOptionId(slashMenuId, slashSelectedIndex)
+                    : undefined,
+                }}
+              />
+            </div>
+
+            <div
+              data-testid="empty-session-toolbar"
+              className={`flex min-w-0 items-center justify-between pt-1.5 ${
+                isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
+              }`}
+            >
+              {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
+              <div data-testid="empty-session-toolbar-leading" hidden={dictationLive} className="flex shrink-0 items-center gap-1">
+                <div ref={plusMenuRef} className="relative shrink-0">
+                  {/* Hand-rolled like ChatInput's: a quiet 28px square on
+                      desktop, the 44px touch minimum on a phone. */}
+                  <button
+                    type="button"
+                    onClick={() => setPlusMenuOpen((prev) => !prev)}
+                    aria-label={t('chat.composerTools')}
+                    aria-haspopup="menu"
+                    aria-expanded={plusMenuOpen}
+                    className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                      plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+                    } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
+                  >
+                    <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+
+                  {plusMenuOpen && !isMobileComposer && (
+                    <ComposerCapabilityMenu
+                      cwd={workDir}
+                      referencesLoading={referenceCurrent?.loading ?? true}
+                      referencesError={referenceCurrent?.error}
+                      onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
+                      id={capabilityMenuId}
+                      sections={capabilityMenu.sections}
+                      onAction={capabilityMenu.onAction}
+                      onClose={() => setPlusMenuOpen(false)}
+                    />
+                  )}
+                  {isMobileComposer && (
+                    <MobileComposerSheet
+                      open={plusMenuOpen}
+                      onClose={() => setPlusMenuOpen(false)}
+                      menuId={capabilityMenuId}
+                      settings={mobileComposerSettings}
+                      sections={capabilityMenu.sections}
+                      cwd={workDir}
+                      referencesLoading={referenceCurrent?.loading ?? true}
+                      referencesError={referenceCurrent?.error}
+                      onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
+                      onAction={capabilityMenu.onAction}
+                    />
+                  )}
+                  <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                  <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
+                </div>
+
+                {capabilityMenu.agentTeamArmed ? (
+                  <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                ) : null}
+
+                {isLean && !isMobileComposer ? (
+                  <AgentProfileChip onRemove={isSubmitting ? undefined : () => changeAgentProfile('standard')} />
+                ) : null}
+
+                {isMobileComposer ? permissionSelector : null}
+              </div>
+
+              {/* A draft has used none of its context, so the usage ring is not
+                  on this row: it appears with the session's first reading. */}
+              <div
+                data-testid="empty-session-toolbar-trailing"
+                hidden={dictationLive}
+                className="flex min-w-0 flex-1 items-center justify-end gap-1"
+              >
+                {leanModeEnabled && isMobileComposer && !isAntigravity && <AgentProfileControl
+                  ref={agentProfileRef}
+                  value={agentProfile}
+                  onChange={changeAgentProfile}
+                  disabled={isSubmitting}
+                />}
+                {!isMobileComposer ? permissionSelector : null}
+                <ModelSelector
+                  ref={modelSelectorRef}
+                  runtimeKey={DRAFT_RUNTIME_SELECTION_KEY}
+                  disabled={isSubmitting}
+                  compact={isMobileComposer}
+                  permissionModeLabel={!isAntigravity ? t(PERMISSION_MODE_LABEL_KEYS[draftPermissionMode]) : undefined}
+                  onOpenPermissions={!isAntigravity ? () => permissionSelectorRef.current?.open() : undefined}
+                />
+                <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
+                <Button
+                  variant="accent"
+                  size="base"
+                  shape="circle"
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  aria-label={t('common.run')}
+                  title={t('common.run')}
+                  className={`shrink-0 motion-safe:enabled:hover:scale-105 ${isMobileComposer ? 'h-11 w-11' : ''}`}
+                  icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bare under-card context strip sitting cleanly below the floating
+            composer card on desktop without overlapping its rounded corners. */}
+        {!isMobileComposer && (
+          <div
+            data-testid="composer-context-strip"
+            className="relative flex min-w-0 items-center justify-between gap-2 overflow-x-clip px-2.5 pb-0.5 pt-2"
+          >
+            <RepositoryLaunchControls
+              ref={repositoryLaunchRef}
+              workDir={workDir}
+              onWorkDirChange={handleWorkDirChange}
+              branch={selectedBranch}
+              onBranchChange={setSelectedBranch}
+              useWorktree={useWorktree}
+              onUseWorktreeChange={setUseWorktree}
+              onLaunchReadyChange={setRepositoryLaunchReady}
+              directoryOnly={isAntigravity}
+              disabled={isSubmitting}
+              visible={visible}
+              placement="toolbar"
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
   return (
-    // The new-session page (「素」, su-12). On desktop the composer sits in the
-    // flow between the hero (bottom-aligned) and the starter row (top-aligned),
-    // which puts it just above the middle of the page. On a phone it stays
-    // docked to the bottom edge, above the keyboard, and the project sits at
-    // the top, where the keyboard cannot cover it and it is read before Send.
-    <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
-      {isMobileComposer && (
-        <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
+    // Zero-shift centered Draft Hero on desktop: headline is anchored via a
+    // viewport-clamped top inset so typing multiline drafts or toggling
+    // attachments never jumps the hero upward. On a phone the composer stays
+    // docked to the bottom above the keyboard and the project stays at the top.
+    <div className="surface-grain relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
+      {isMobileComposer ? (
+        <>
+          <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
             <RepositoryLaunchControls
               ref={repositoryLaunchRef}
               workDir={workDir}
@@ -1397,302 +1683,23 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               disabled={isSubmitting}
               visible={visible}
             />
-        </div>
-      )}
-      <div className={`flex flex-col items-center text-center ${
-        isMobileComposer
-          ? 'min-h-0 flex-1 justify-center overflow-hidden px-6 pb-[230px] pt-6'
-          : 'min-h-0 flex-1 justify-end overflow-hidden px-8 pb-7 pt-8'
-      }`}>
-        <div className={`flex flex-col items-center gap-2.5 ${isMobileComposer ? 'max-w-[300px]' : 'max-w-[600px]'}`}>
-          <BrandSeal size={isMobileComposer ? 'md' : 'lg'} />
-          <h1
-            className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${
-              isMobileComposer ? 'text-[22px]' : 'text-[26px]'
-            }`}
-          >
-            {heroProject
-              ? t('empty.heroTitle', { project: heroProject })
-              : t('empty.heroTitleNoProject')}
-          </h1>
-          <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
-            {t('empty.heroSubtitle')}
-          </p>
-        </div>
-      </div>
-
-      <div
-        data-testid="empty-session-composer-shell"
-        className={`flex justify-center ${
-        isMobileComposer
-          ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
-          : 'relative z-[var(--z-raised)] shrink-0 px-8'
-      }`}
-      >
-        <div className={`flex w-full flex-col ${isMobileComposer ? 'max-w-none' : 'max-w-3xl'}`}>
-          <div
-            ref={panelRef}
-            data-testid="empty-session-composer-panel"
-            // Kept identical to ChatInput's floating card: `--radius-xl`, the
-            // composer shadow step from `glass-panel--composer`, and an 8px
-            // inset that the editor and toolbar pad themselves within.
-            className={`glass-panel glass-panel--composer relative flex flex-col overflow-visible rounded-[var(--radius-xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
-            {...dragHandlers}
-          >
-            {isDragActive && (
-              <ComposerDropOverlay
-                testId="empty-session-drop-overlay"
-                title={t('chat.dropFilesTitle')}
-                description={t('chat.dropFilesHint')}
-              />
-            )}
-
-            <div className="contents">
-              {fileSearchOpen && (
-                <ComposerReferenceMenu
-                  ref={fileSearchRef}
-                  id={referenceMenuId}
-                  compact={isMobileComposer}
-                  references={composerReferences}
-                  referencesLoading={referenceCurrent?.loading ?? true}
-                  referencesError={referenceCurrent?.error}
-                  onActiveChange={setReferenceOptionId}
-                  cwd={workDir || ''}
-                  filter={atFilter}
-                  onNavigate={(relativePath) => {
-                    if (atCursorPos < 0) return
-                    promptHistory.resetHistory()
-                    const replacement = `@${relativePath}`
-                    const tokenEnd = atCursorPos + 1 + atFilter.length
-                    const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
-                    const newCursorPos = atCursorPos + replacement.length
-                    setInput(newValue)
-                    setAtFilter(relativePath)
-                    requestAnimationFrame(() => {
-                      composerRef.current?.focus()
-                      composerRef.current?.setSelectionOffsets(newCursorPos)
-                    })
-                  }}
-                  onSelect={(mention) => {
-                    if (atCursorPos < 0) return
-                    promptHistory.resetHistory()
-                    const tokenEnd = atCursorPos + 1 + atFilter.length
-                    const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
-                    setInput(inserted.text)
-                    setMentions(inserted.mentions)
-                    setFileSearchOpen(false)
-                    setAtFilter('')
-                    setAtCursorPos(-1)
-                    void composerRef.current?.focus()
-                    requestAnimationFrame(() => {
-                      composerRef.current?.setSelectionOffsets(inserted.cursorPos)
-                    })
-                  }}
-                />
-              )}
-
-              {localSlashPanel && (
-                <div ref={slashMenuRef}>
-                  <LocalSlashCommandPanel
-                    command={localSlashPanel}
-                    cwd={workDir || undefined}
-                    commands={allSlashCommands}
-                    onClose={() => setLocalSlashPanel(null)}
-                  />
-                </div>
-              )}
-
-              {isSlashMenuVisible && (
-                <SlashCommandMenu
-                  ref={slashMenuRef}
-                  id={slashMenuId}
-                  groups={filteredCommandGroups}
-                  isSearching={Boolean(slashFilter.trim())}
-                  references={composerReferences}
-                  selectedIndex={slashSelectedIndex}
-                  itemRefs={slashItemRefs}
-                  onSelect={selectSlashCommand}
-                  onHighlight={setSlashSelectedIndex}
-                  showKeyboardHints={!isMobileComposer}
-                />
-              )}
-
-              {attachments.length > 0 && (
-                <div className="px-2 pt-2">
-                  <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
-                </div>
-              )}
-
-              <div className="flex items-start">
-                <MentionComposer
-                  ref={composerRef}
-                  rootRef={composerContainerRef}
-                  value={input}
-                  mentions={mentions}
-                  onMentionClick={setReferenceDetail}
-                  onChange={handleComposerChange}
-                  onKeyDown={handleComposerKeyDown}
-                  onPaste={handleComposerPaste}
-                  onCompositionStart={dictation.compositionHandlers.onCompositionStart}
-                  onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
-                  placeholder={capabilityMenu.agentTeamArmed ? t('chat.capabilities.teamPlaceholder') : t('empty.placeholder')}
-                  // `min-w-0`: see ChatInput — an unbreakable long run (URL,
-                  // hash) otherwise grows this flex item past the panel.
-                  className="flex-1 min-w-0"
-                  editorClassName={`chat-reading-text min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
-                    isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
-                  }`}
-                  aria={{
-                    role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
-                    'aria-autocomplete': isSlashMenuVisible || fileSearchOpen ? 'list' : undefined,
-                    'aria-expanded': isSlashMenuVisible || fileSearchOpen ? 'true' : undefined,
-                    'aria-controls': fileSearchOpen ? referenceMenuId : isSlashMenuVisible ? slashMenuId : undefined,
-                    'aria-activedescendant': fileSearchOpen ? referenceOptionId : isSlashMenuVisible
-                      ? getSlashCommandOptionId(slashMenuId, slashSelectedIndex)
-                      : undefined,
-                  }}
-                />
-              </div>
-
-              {/* No divider: the editor's bottom inset and this row's top inset
-                  separate the two, exactly as in ChatInput. */}
-              {/* The row has to hold the project, branch and model next to the
-                  fixed controls, and the three had one budget: everything else
-                  was `shrink-0`, so the project and branch paid for every
-                  control that was added ("claude-cod…" / "…in"). With the lean
-                  control on the row (desktop; a phone keeps it in the "+" sheet),
-                  the trailing group takes what the leading
-                  one leaves and gives up only the model's name, down to a floor;
-                  when even that does not fit, it wraps to its own line instead
-                  of squeezing the location. Without the control the row is the
-                  one it always was. */}
-              <div
-                data-testid="empty-session-toolbar"
-                className={`flex min-w-0 items-center justify-between pt-1.5 ${
-                  isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
-                }`}
-              >
-                {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
-                <div data-testid="empty-session-toolbar-leading" hidden={dictationLive} className="flex min-w-0 shrink items-center gap-1">
-                  <div ref={plusMenuRef} className="relative shrink-0">
-                    {/* Hand-rolled like ChatInput's: a quiet 28px square on
-                        desktop, the 44px touch minimum on a phone. */}
-                    <button
-                      type="button"
-                      onClick={() => setPlusMenuOpen((prev) => !prev)}
-                      aria-label={t('chat.composerTools')}
-                      aria-haspopup="menu"
-                      aria-expanded={plusMenuOpen}
-                      className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-                        plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
-                      } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
-                    >
-                      <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
-                    </button>
-
-                    {plusMenuOpen && !isMobileComposer && (
-                      <ComposerCapabilityMenu
-                        cwd={workDir}
-                        referencesLoading={referenceCurrent?.loading ?? true}
-                        referencesError={referenceCurrent?.error}
-                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
-                        id={capabilityMenuId}
-                        sections={capabilityMenu.sections}
-                        onAction={capabilityMenu.onAction}
-                        onClose={() => setPlusMenuOpen(false)}
-                      />
-                    )}
-                    {isMobileComposer && (
-                      <MobileComposerSheet
-                        open={plusMenuOpen}
-                        onClose={() => setPlusMenuOpen(false)}
-                        menuId={capabilityMenuId}
-                        settings={mobileComposerSettings}
-                        sections={capabilityMenu.sections}
-                        cwd={workDir}
-                        referencesLoading={referenceCurrent?.loading ?? true}
-                        referencesError={referenceCurrent?.error}
-                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
-                        onAction={capabilityMenu.onAction}
-                      />
-                    )}
-                    <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
-                    <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
-                  </div>
-
-                  {capabilityMenu.agentTeamArmed ? (
-                    <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
-                  ) : null}
-
-                  {isLean && !isMobileComposer ? (
-                    <AgentProfileChip onRemove={isSubmitting ? undefined : () => changeAgentProfile('standard')} />
-                  ) : null}
-
-                  {isMobileComposer ? permissionSelector : null}
-
-                  {!isMobileComposer && (
-                    <RepositoryLaunchControls
-                      ref={repositoryLaunchRef}
-                      workDir={workDir}
-                      onWorkDirChange={handleWorkDirChange}
-                      branch={selectedBranch}
-                      onBranchChange={setSelectedBranch}
-                      useWorktree={useWorktree}
-                      onUseWorktreeChange={setUseWorktree}
-                      onLaunchReadyChange={setRepositoryLaunchReady}
-                      directoryOnly={isAntigravity}
-                      disabled={isSubmitting}
-                      visible={visible}
-                      placement="toolbar"
-                    />
-                  )}
-                </div>
-
-                {/* A draft has used none of its context, so the usage ring is not
-                    on this row: it appears with the session's first reading. */}
-                <div
-                  data-testid="empty-session-toolbar-trailing"
-                  hidden={dictationLive}
-                  className={isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}
-                >
-                  {leanModeEnabled && isMobileComposer && !isAntigravity && <AgentProfileControl
-                    ref={agentProfileRef}
-                    value={agentProfile}
-                    onChange={changeAgentProfile}
-                    disabled={isSubmitting}
-                  />}
-                  {!isMobileComposer ? permissionSelector : null}
-                  <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
-                  <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
-                  {/* Kept identical to ChatInput's send button — same
-                      component, shape, size and icon. See the note there for
-                      why the label went away. */}
-                  <Button
-                    variant="accent"
-                    size="base"
-                    shape="circle"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    aria-label={t('common.run')}
-                    title={t('common.run')}
-                    className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                    icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
-                  />
-                </div>
-              </div>
-            </div>
-
           </div>
-        </div>
-      </div>
-
-      {!isMobileComposer && (
-        <div className="flex min-h-0 flex-[1.3] flex-col items-center overflow-y-auto px-8 pb-8 pt-4">
-          <NewSessionStarter
-            projectPath={workDir || null}
-            projectLabel={heroProject}
-            onSuggestion={insertSuggestion}
-          />
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-6 pb-[230px] pt-6 text-center">
+            {heroBlock}
+          </div>
+          {composerShell}
+        </>
+      ) : (
+        <div className="scrollbar-autohide flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-8 pb-10 pt-[clamp(3rem,14vh,8.5rem)]">
+          {heroBlock}
+          {composerShell}
+          <div className="mt-6 flex w-full max-w-[var(--chat-content-max-width)] flex-col items-center">
+            <NewSessionStarter
+              projectPath={workDir || null}
+              projectLabel={heroProject}
+              onSuggestion={insertSuggestion}
+            />
+          </div>
         </div>
       )}
 

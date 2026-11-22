@@ -713,10 +713,10 @@ describe('Content-only pages render without errors', () => {
       statusOnly: true,
       signal: expect.any(AbortSignal),
     })
-    // The inspector is a token-colored popover card, not the old hex-tinted sheet.
+    // The inspector is a token-colored frosted glass popover card, not the old hex-tinted sheet.
     expect(screen.getByText('Session inspector').closest('.absolute')).toHaveClass(
-      'bg-[var(--color-surface-container-lowest)]',
-      'shadow-[var(--shadow-dropdown)]',
+      'dropdown-glass',
+      'popover-motion',
     )
     expect(container.innerHTML).not.toContain('bg-[#fbfaf6]')
     expect(container.innerHTML).not.toContain('bg-[#f4f2ed]')

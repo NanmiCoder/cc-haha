@@ -72,7 +72,7 @@ export function ToolTimeline({ children, className = '' }: { children: ReactNode
     <div data-tool-timeline="" className={`relative ${className}`}>
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute bottom-3 left-[10.5px] top-3 w-px bg-[var(--color-outline)]"
+        className="pointer-events-none absolute bottom-3 left-[11.5px] top-3 w-px bg-[var(--color-border)]"
       />
       {children}
     </div>
@@ -291,9 +291,12 @@ export const ActivityGroup = memo(function ActivityGroup({
           onClick={() => setPinnedCollapsed(!collapsed)}
           aria-expanded={!collapsed}
           title={summaryText}
-          className="group/activity flex min-h-[28px] w-full items-center gap-2 rounded-[var(--radius-sm)] text-left text-[13px] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+          className={[
+            'group/activity -mx-1.5 flex min-h-6 w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
+            showsProgress ? 'border-b border-[var(--color-info-container)]' : '',
+          ].filter(Boolean).join(' ')}
         >
-          <span aria-hidden="true" className="flex shrink-0 items-center gap-0.5 text-[var(--color-text-tertiary)]">
+          <span aria-hidden="true" className="flex min-w-6 shrink-0 items-center justify-center gap-0.5 text-[var(--color-text-tertiary)]">
             {headerIcons.map((segment) => {
               const Icon = segment.icon
               return <Icon key={segment.key} size={14} strokeWidth={1.75} />
@@ -306,19 +309,19 @@ export const ActivityGroup = memo(function ActivityGroup({
             {summaryText}
           </span>
           {failedCount > 0 && (
-            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-error)]">
-              <CircleX size={12} strokeWidth={2} aria-hidden="true" />
+            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] tabular-nums text-[var(--color-error)]">
+              <CircleX size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('toolGroup.failedCount', { count: failedCount })}
             </span>
           )}
           {awaitingCount > 0 ? (
             <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
-              <CirclePause size={12} strokeWidth={2} aria-hidden="true" />
+              <CirclePause size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('permission.awaitingApproval')}
             </span>
           ) : showsProgress ? (
-            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-info)]">
-              <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+            <span className="animate-stepped-pulse inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-info)]">
+              <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
               {t('agentStatus.running')}
             </span>
           ) : durationLabel ? (
@@ -357,10 +360,10 @@ export const ActivityGroup = memo(function ActivityGroup({
 /** A thought on the rail: a small hollow stop, its row hung on the text column. */
 const TimelineThinking = memo(function TimelineThinking({ content, isActive }: { content: string; isActive: boolean }) {
   return (
-    <div className="relative pl-[30px]">
+    <div className="relative pl-7">
       <span
         aria-hidden="true"
-        className="absolute left-[7px] top-[10px] h-2 w-2 rounded-full border border-[var(--color-outline)] bg-[var(--color-surface)]"
+        className="absolute left-[8px] top-[9px] h-2 w-2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]"
       />
       <ThinkingBlock content={content} isActive={isActive} />
     </div>
@@ -492,7 +495,7 @@ const ActivityToolRow = memo(function ActivityToolRow({
         running={live && !result && toolCall.status !== 'stopped'}
       />
       {childToolCalls.length > 0 && (
-        <ToolTimeline className="ml-[30px]">
+        <ToolTimeline className="ml-7">
           {childToolCalls.map((childToolCall) => (
             <ActivityToolRow
               key={childToolCall.id}

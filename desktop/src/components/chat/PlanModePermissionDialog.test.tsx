@@ -638,4 +638,174 @@ describe('plan mode permission UI', () => {
       runtimeOverride: expect.anything(),
     }))
   })
+
+  it('collapses long plans with a bottom fade and expands on toggle', () => {
+    const longPlan = Array.from({ length: 20 }, (_, i) => `${i + 1}. Step ${i + 1} implementation detail`).join('\n')
+    const { container } = render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: longPlan, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-plan-expand-toggle="true"]')
+    expect(toggle).toBeTruthy()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle!)
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it.each([
+    { label: 'Cmd+Enter', init: { key: 'Enter', metaKey: true } },
+    { label: 'Ctrl+Enter', init: { key: 'Enter', ctrlKey: true } },
+  ])('submits revision feedback instead of approving when pressing $label inside the feedback textarea', ({ init }) => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    const textarea = screen.getByPlaceholderText('Tell Claude what to change')
+    fireEvent.change(textarea, {
+      target: { value: 'Keep the schema migration in a separate PR.' },
+    })
+    fireEvent.keyDown(textarea, init)
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: false,
+      denyMessage: 'Keep the schema migration in a separate PR.',
+    })
+  })
+
+  it.each([
+    { label: 'empty feedback', value: '' },
+    { label: 'whitespace-only feedback', value: '   \n\t  ' },
+  ])('does not approve when pressing Cmd+Enter inside the feedback textarea with $label', ({ value }) => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    const textarea = screen.getByPlaceholderText('Tell Claude what to change')
+    if (value) {
+      fireEvent.change(textarea, { target: { value } })
+    }
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+
+  it('approves with requested permissions when pressing Cmd+Enter on the card outside the feedback textarea', () => {
+    const { container } = render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    fireEvent.keyDown(container.firstElementChild!, { key: 'Enter', metaKey: true })
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+      permissionUpdates: [
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'prompt: run tests' }],
+          behavior: 'allow',
+          destination: 'session',
+        },
+      ],
+    })
+  })
+
+  it('shows platform-aware shortcut keycap labels on permission and plan cards', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get')
+    const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get')
+
+    try {
+      platformSpy.mockReturnValue('Win32')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+
+      const { rerender } = render(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-plan"
+          toolName="ExitPlanMode"
+          input={{ plan: PLAN }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: 'Approve plan' }).textContent).toContain('Ctrl+↵')
+
+      act(() => {
+        useChatStore.setState((state) => ({
+          sessions: {
+            ...state.sessions,
+            'session-1': {
+              ...state.sessions['session-1']!,
+              pendingPermission: {
+                requestId: 'perm-bash',
+                toolName: 'Bash',
+                toolUseId: 'toolu-bash',
+                input: { command: 'echo hi' },
+              },
+            },
+          },
+        }))
+      })
+
+      rerender(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-bash"
+          toolName="Bash"
+          input={{ command: 'echo hi' }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /^Allow:/ }).textContent).toContain('Ctrl+↵')
+
+      platformSpy.mockReturnValue('MacIntel')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
+
+      rerender(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-bash"
+          toolName="Bash"
+          input={{ command: 'echo hi' }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /^Allow:/ }).textContent).toContain('⌘↵')
+    } finally {
+      platformSpy.mockRestore()
+      userAgentSpy.mockRestore()
+    }
+  })
 })

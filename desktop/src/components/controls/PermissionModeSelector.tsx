@@ -174,7 +174,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
     ? isMobile
       ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0'
       : 'h-7 w-7 justify-center rounded-[var(--radius-sm)] p-0'
-    : 'h-7 gap-1.5 rounded-[var(--radius-sm)] px-2 text-xs'
+    : 'control-bevel h-7 gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 text-xs'
   const TriggerIcon = MODE_ICONS[currentMode]
   const menuPlacementClass = menuPlacement === 'bottom'
     ? 'top-full mt-2'

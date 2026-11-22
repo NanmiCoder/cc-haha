@@ -724,6 +724,13 @@ describe('CurrentTurnChangeCard – collapse long file lists', () => {
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(5)
     expect(screen.getByText('chat.turnChangesShowMore')).toBeInTheDocument()
   })
+
+  it('uses overflow-x-clip on the card container so the sticky header can stick', () => {
+    renderExpandedCard(makeFiles(6))
+    const section = screen.getByRole('region', { name: 'chat.turnChangesLatestCardLabel' })
+    expect(section).toHaveClass('overflow-x-clip')
+    expect(section).not.toHaveClass('overflow-hidden')
+  })
 })
 
 describe('CurrentTurnChangeCard on a phone', () => {

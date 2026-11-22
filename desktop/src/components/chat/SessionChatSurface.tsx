@@ -28,7 +28,7 @@ export function SessionChatHeader({
     <div
       data-testid="session-header"
       className={[
-        'w-full border-b border-[var(--color-border)]',
+        'w-full shrink-0 bg-transparent',
         mobileLayout ? 'px-3 py-2.5' : compact ? 'px-4 py-2.5' : 'px-6 py-3.5',
       ].join(' ')}
     >
@@ -49,7 +49,7 @@ export function SessionChatHeader({
               {titleAddon}
             </div>
             {metadata.length > 0 ? (
-              <div className="mt-[3px] flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-xs text-[var(--color-text-tertiary)] [&_svg]:shrink-0">
+              <div className="mt-[3px] flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-xs tabular-nums text-[var(--color-text-tertiary)] [&_svg]:shrink-0">
                 {metadata.map((item, index) => (
                   <Fragment key={item.key}>
                     {index > 0 ? (
@@ -62,7 +62,7 @@ export function SessionChatHeader({
             ) : null}
             {children}
           </div>
-          {actions ? <div className="flex shrink-0 items-center gap-2 pt-1">{actions}</div> : null}
+          {actions ? <div className="flex shrink-0 items-center gap-2 pt-0.5">{actions}</div> : null}
         </div>
       </div>
     </div>

@@ -32,7 +32,7 @@ const TEXT_ATTRIBUTE = /^(?:title|alt|placeholder|label|content|aria-(?:label|de
 const KEYWORD_ATTRIBUTES = new Set(['enterKeyHint'])
 
 /** Elements whose text is code, a key cap or a style sheet rather than prose. */
-const NON_PROSE_ELEMENTS = new Set(['kbd', 'Keycap', 'code', 'pre', 'style', 'script'])
+const NON_PROSE_ELEMENTS = new Set(['kbd', 'Kbd', 'Keycap', 'code', 'pre', 'style', 'script'])
 
 /**
  * Literals that read the same in every language, by file. Anything else goes
@@ -43,7 +43,7 @@ const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'components/chat/MermaidRenderer.tsx': ['mermaid'], // the diagram language, as a code block labels it
   'components/chat/ToolCallBlock.tsx': ['bash', 'powershell'], // shell names, as a code block labels them
   'components/layout/H5ConnectionView.tsx': ['https://chat.example.com'], // example URL
-  'components/layout/Sidebar.tsx': ['cc-', 'haha', 'GitHub'], // wordmark, brand
+  'components/layout/Sidebar.tsx': ['cc-', 'haha', 'GitHub', 'cc-haha v${}'], // wordmark, brand, version tooltip
   'components/market/FrontmatterPanel.tsx': ['true', 'false'], // YAML values, shown as written
   'components/market/InstallConfirmDialog.tsx': ['…/skills/'], // a path
   'components/market/MarketSkillDetail.tsx': ['SKILL.md'], // a file name

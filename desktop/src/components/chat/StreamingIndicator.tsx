@@ -129,7 +129,7 @@ export function StreamingIndicator() {
           <summary className="cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
             {t('chat.retry.details')}
           </summary>
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">{diagnostics}</pre>
+          <pre className="scrollbar-autohide mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">{diagnostics}</pre>
           <p className="mt-2">{t('chat.retry.historyHint')}</p>
           <CopyButton
             text={diagnostics}
@@ -150,10 +150,12 @@ export function StreamingIndicator() {
         data-testid="streaming-fallback-indicator"
         role="status"
         aria-live="polite"
-        className="flex min-h-7 w-fit max-w-full flex-wrap items-center gap-x-2 text-[13px] text-[var(--color-text-secondary)]"
+        className="flex min-h-6 w-fit max-w-full flex-wrap items-center gap-x-1.5 text-[13px] text-[var(--color-text-secondary)]"
       >
-        <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
-        <span className="font-medium text-[var(--color-text-primary)]">
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center">
+          <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" />
+        </span>
+        <span className="animate-stepped-pulse font-medium text-[var(--color-text-primary)]">
           {t('chat.fallback.title')}
         </span>
         <span className="text-xs text-[var(--color-text-tertiary)]">
@@ -179,18 +181,20 @@ export function StreamingIndicator() {
         aria-live="polite"
         // Bare line, not a pill: it sits at the end of the live turn, and a
         // bordered chip here would read as a second, competing status object.
-        className="flex h-7 w-fit max-w-full items-center gap-2 text-[13px] text-[var(--color-text-secondary)]"
+        className="flex min-h-6 w-fit max-w-full items-center gap-1.5 border-b border-[var(--color-info-container)] py-0.5 text-[13px] text-[var(--color-text-secondary)]"
       >
         {/* The ring a running tool row spins, in the running colour: the
             turn is working, and it says so the way the rest of the timeline
             does rather than with a decorative "AI" glyph. */}
-        <LoaderCircle
-          size={15}
-          strokeWidth={1.75}
-          aria-hidden="true"
-          className="turn-status-spinner shrink-0 text-[var(--color-info)] motion-safe:animate-spin"
-        />
-        <span className="turn-status-shimmer min-w-0 truncate font-medium">{verb}...</span>
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center">
+          <LoaderCircle
+            size={14}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className="turn-status-spinner shrink-0 text-[var(--color-info)] motion-safe:animate-spin"
+          />
+        </span>
+        <span className="turn-status-shimmer animate-stepped-shimmer min-w-0 truncate font-medium">{verb}...</span>
         {elapsedSeconds > 0 && (
           <span className={STATUS_META_CLASS}>{formatDurationSeconds(elapsedSeconds, t)}</span>
         )}
@@ -211,22 +215,17 @@ export function StreamingIndicator() {
 const STATUS_META_CLASS = 'shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]'
 
 /**
- * The verb reads as live through a light sweeping across it, and the ring
+ * The verb reads as live through a stepped light sweep across it, and the ring
  * spins; neither moves the layout. Reduced motion keeps both still and leaves
  * the text in its plain secondary colour.
  */
 const TURN_STATUS_STYLES = `
-@keyframes turn-status-sweep {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
 .turn-status-shimmer {
   background: linear-gradient(90deg, var(--color-text-tertiary) 0%, var(--color-text-tertiary) 40%, var(--color-text-primary) 50%, var(--color-text-tertiary) 60%, var(--color-text-tertiary) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: turn-status-sweep 2.2s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .turn-status-shimmer {

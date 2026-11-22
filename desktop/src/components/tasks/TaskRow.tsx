@@ -117,7 +117,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
 
         {/* Right: schedule + actions. The schedule is a sentence, not code, so
             it is not set in mono; the raw cron stays on hover. */}
-        <Badge title={task.cron} icon={<Clock size={11} strokeWidth={2} aria-hidden="true" />}>
+        <Badge tabularNums title={task.cron} icon={<Clock size={11} strokeWidth={1.75} aria-hidden="true" />}>
           {describeTaskSchedule(task, t)}
         </Badge>
 
@@ -173,9 +173,10 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
             />
 
             {showMenu && !confirmAction && (
-              <div className="glass-panel absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-lg)] p-1">
+              <div className="dropdown-glass popover-motion absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-lg)] p-1">
                 {/* Edit */}
                 <button
+                  type="button"
                   onClick={() => { setShowMenu(false); openTaskEditor(task.id) }}
                   className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                 >
@@ -186,6 +187,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                 {/* Toggle */}
                 {!finished && (
                   <button
+                    type="button"
                     onClick={() => setConfirmAction('toggle')}
                     className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                   >
@@ -202,6 +204,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                     alpha, which Safari 15 WebView drops; `-soft` is the opaque
                     token for exactly this. */}
                 <button
+                  type="button"
                   onClick={() => setConfirmAction('delete')}
                   className={`${menuItem} text-[var(--color-error)] hover:bg-[var(--color-error-soft)]`}
                 >

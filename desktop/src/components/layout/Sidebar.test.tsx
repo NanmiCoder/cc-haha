@@ -1897,7 +1897,7 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('keeps project row actions hidden until project hover or focus', () => {
+  it('keeps project row actions hidden until project hover or Safari 15-safe focus-within', () => {
     useSessionStore.setState({
       sessions: [
         makeSession('alpha-1', 'Alpha Session', '/workspace/alpha', new Date().toISOString()),
@@ -1910,6 +1910,7 @@ describe('Sidebar', () => {
     expect(actionButton.parentElement).toHaveClass('opacity-0')
     expect(actionButton.parentElement).toHaveClass('group-hover/project:opacity-100')
     expect(actionButton.parentElement).toHaveClass('group-focus-within/project:opacity-100')
+    expect(actionButton.parentElement?.className).not.toContain('has-[')
   })
 
   it('shows the project action menu with pin and Finder actions', async () => {
@@ -3445,6 +3446,172 @@ describe('Sidebar', () => {
       const bell = screen.getByRole('button', { name: 'Task view' })
       expect(bell).toBeInTheDocument()
       expect(bell).not.toHaveAttribute('tabindex', '-1')
+    })
+
+    it('renders the h-8 sticky action row, top navigation items, ScrollArea edge fades, adaptive thread card metadata, and clean settings dock', () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [
+          makeSession('plain', 'Plain thread', '/workspace/alpha', at),
+          {
+            ...makeSession('wt', 'Worktree thread', '/workspace/alpha', at),
+            workDir: '/workspace/alpha/.claude/worktrees/feat-polish',
+          },
+        ],
+      })
+
+      render(<Sidebar />)
+
+      // Single h-8 sticky action row combining search (+ Kbd), task view toggle, and new session.
+      const controls = screen.getByTestId('sidebar-search-controls-section')
+      expect(within(controls).getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
+      expect(within(controls).getByTestId('sidebar-task-view-toggle')).toBeInTheDocument()
+      expect(within(controls).getByTestId('sidebar-new-session-button')).toBeInTheDocument()
+
+      // Top primary navigation sits below search/actions and above projects/sessions.
+      const primaryNav = screen.getByTestId('sidebar-primary-nav')
+      expect(within(primaryNav).getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
+      expect(within(primaryNav).getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
+      expect(within(primaryNav).queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+
+      // ScrollArea with autohide and top/bottom edge fades.
+      const scrollArea = screen.getByTestId('sidebar-session-scroll-area')
+      expect(scrollArea).toHaveClass('scrollbar-autohide', 'scroll-edge-fade')
+      expect(scrollArea).toHaveAttribute('data-fade-top', 'true')
+      expect(scrollArea).toHaveAttribute('data-fade-bottom', 'true')
+      expect(primaryNav.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      // Adaptive thread card shows worktree branch badge when present and collapses when absent.
+      const worktreeRow = screen.getByRole('button', { name: /Worktree thread/ })
+      expect(within(worktreeRow).getByText('feat-polish')).toBeInTheDocument()
+      const plainRow = screen.getByRole('button', { name: /Plain thread/ })
+      expect(within(plainRow).queryByText('worktree')).not.toBeInTheDocument()
+
+      // Bottom dock stays focused on Settings (not crowded with Scheduled or Extension Market).
+      const dock = screen.getByTestId('sidebar-settings-dock')
+      expect(within(dock).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+      expect(within(dock).queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
+      expect(within(dock).queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
+    })
+
+    it('keeps Scheduled, Extension Market, and Phone connection in the top rail when collapsed and Settings in the bottom dock', () => {
+      const previousHost = window.desktopHost
+      window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+      useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      try {
+        render(<Sidebar />)
+        const primaryNav = screen.getByTestId('sidebar-primary-nav')
+        expect(within(primaryNav).getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
+        expect(within(primaryNav).getByRole('button', { name: 'Phone connection' })).toBeInTheDocument()
+        expect(within(primaryNav).getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
+
+        const dock = screen.getByTestId('sidebar-settings-dock')
+        expect(within(dock).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Phone connection' })).not.toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
+      } finally {
+        window.desktopHost = previousHost
+      }
+    })
+
+    it('clamps the session action menu inside the viewport when triggered near the bottom edge', () => {
+      const previousInnerWidth = window.innerWidth
+      const previousInnerHeight = window.innerHeight
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 900 })
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('bottom-1', 'Bottom Session', '/workspace/alpha', new Date().toISOString()),
+        ],
+      })
+
+      try {
+        render(<Sidebar />)
+        const moreButton = screen.getByRole('button', { name: 'tasks.moreActions' })
+        vi.spyOn(moreButton, 'getBoundingClientRect').mockReturnValue({
+          x: 220,
+          y: 560,
+          top: 560,
+          left: 220,
+          right: 244,
+          bottom: 584,
+          width: 24,
+          height: 24,
+          toJSON: () => ({}),
+        } as DOMRect)
+
+        fireEvent.click(moreButton)
+        const menu = screen.getByRole('menu')
+        const top = Number.parseFloat(menu.style.top)
+        const left = Number.parseFloat(menu.style.left)
+        expect(top).toBeGreaterThanOrEqual(8)
+        expect(top).toBeLessThanOrEqual(600 - 210 - 8)
+        expect(left).toBeGreaterThanOrEqual(8)
+        expect(left).toBeLessThanOrEqual(900 - 200 - 8)
+      } finally {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousInnerWidth })
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: previousInnerHeight })
+      }
+    })
+
+    it('does not reserve macOS traffic-light padding on Linux desktop runtimes', () => {
+      const previousHost = window.desktopHost
+      const previousPlatform = Object.getOwnPropertyDescriptor(window.navigator, 'platform')
+      const previousUserAgent = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent')
+      window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+
+      try {
+        Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'Linux x86_64' })
+        Object.defineProperty(window.navigator, 'userAgent', {
+          configurable: true,
+          value: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36',
+        })
+
+        useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+        const { rerender } = render(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pl-2.5')
+        expect(screen.getByTestId('sidebar-title-region')).not.toHaveClass('pl-[76px]')
+
+        act(() => {
+          useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pt-3')
+        expect(screen.getByTestId('sidebar-title-region')).not.toHaveClass('pt-[52px]')
+
+        // Contrast with macOS desktop, which reserves traffic-light inset in both states.
+        Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' })
+        Object.defineProperty(window.navigator, 'userAgent', {
+          configurable: true,
+          value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        })
+        act(() => {
+          useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pl-[76px]')
+
+        act(() => {
+          useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pt-[52px]')
+      } finally {
+        window.desktopHost = previousHost
+        if (previousPlatform) {
+          Object.defineProperty(window.navigator, 'platform', previousPlatform)
+        } else {
+          Reflect.deleteProperty(window.navigator, 'platform')
+        }
+        if (previousUserAgent) {
+          Object.defineProperty(window.navigator, 'userAgent', previousUserAgent)
+        } else {
+          Reflect.deleteProperty(window.navigator, 'userAgent')
+        }
+      }
     })
   })
 })

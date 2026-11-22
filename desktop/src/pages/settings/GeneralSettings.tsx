@@ -15,6 +15,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { Input } from '@/components/ui/Input'
+import { Kbd, KbdGroup } from '@/components/ui/Kbd'
 import { Button, type ButtonProps } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { cx } from '@/lib/cx'
@@ -801,25 +802,37 @@ export function GeneralSettings() {
       <span>{t('settings.general.uiZoomShortcutHint')}</span>
       <span className="inline-flex items-center gap-1">
         <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">+</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">+</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">-</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">-</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">0</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">0</Kbd>
+        </KbdGroup>
       </span>
       <span className="inline-flex items-center gap-1">
         <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">+</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">+</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">-</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">-</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">0</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">0</Kbd>
+        </KbdGroup>
       </span>
       <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
     </div>
@@ -1928,7 +1941,7 @@ function ThemeCard({ theme, label, selected, onSelect }: {
       type="button"
       aria-pressed={selected}
       onClick={onSelect}
-      className="group grid min-w-0 justify-items-center gap-2 rounded-[var(--radius-md)] text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)]"
+      className="group grid min-w-0 justify-items-center gap-2 rounded-[var(--radius-md)] text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container)]"
     >
       <span
         aria-hidden="true"

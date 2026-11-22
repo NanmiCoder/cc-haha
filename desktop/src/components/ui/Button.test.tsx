@@ -33,6 +33,23 @@ describe('Button', () => {
     expect(container.firstElementChild?.className).toContain('focus-visible:ring-2')
   })
 
+  it.each(['primary', 'accent', 'danger', 'inverse'] as const)(
+    'applies CTA bevel craft to solid variant=%s',
+    (variant) => {
+      const { container } = render(<Button variant={variant}>Go</Button>)
+      expect(container.firstElementChild?.className).toContain('control-bevel-cta')
+    },
+  )
+
+  it.each(['secondary', 'tonal', 'tonal-outline', 'danger-outline'] as const)(
+    'applies surface bevel craft to outlined/tonal variant=%s',
+    (variant) => {
+      const { container } = render(<Button variant={variant}>Action</Button>)
+      expect(container.firstElementChild?.className).toContain('control-bevel')
+      expect(container.firstElementChild?.className).not.toContain('control-bevel-cta')
+    },
+  )
+
   describe('shape="circle"', () => {
     it.each(SIZES)('matches width to the size=%s height so it is round, not a pill', (size) => {
       const { container } = render(

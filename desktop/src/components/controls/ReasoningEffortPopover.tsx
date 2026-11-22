@@ -148,7 +148,7 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
         aria-valuemax={maxIndex}
         aria-valuenow={selectedIndex >= 0 ? selectedIndex : undefined}
         aria-valuetext={value === null ? undefined : labels[value]}
-        className="mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        className="mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] p-0.5 shadow-[var(--bevel-surface-pressed)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
         onClick={(event) => selectFromClientX(event.clientX)}
         onPointerDown={(event) => {
@@ -199,7 +199,7 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
               // tertiary type on the sunken track.
               className={`flex min-w-0 items-center justify-center truncate rounded-[var(--radius-xs)] px-1 text-xs transition-colors ${
                 selected
-                  ? 'bg-[var(--color-surface-container-lowest)] font-medium text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
+                  ? 'control-bevel bg-[var(--color-surface-container)] font-medium text-[var(--color-text-primary)] shadow-[var(--bevel-surface-rest)]'
                   : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
               }`}
             >
