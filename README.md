@@ -246,6 +246,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 - [Electron](https://github.com/electron/electron)：跨端桌面应用能力与工程实践。
 - [agent-desktop](https://github.com/vercel-labs/agent-desktop)（Vercel Labs）：Windows / Linux Computer Use 参考并直接复用其原生实现。固定版本 **1.0.2**，commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d)；保留 [Apache-2.0 许可](native/agent-desktop/LICENSE)、[来源与文件摘要](native/agent-desktop/UPSTREAM.json)及[本地改动说明](native/agent-desktop/PATCHES.md)。
 - [cc-switch](https://github.com/farion1231/cc-switch)：模型供应商配置能力参考。
+- [t3code](https://github.com/pingdotgg/t3code)：桌面端 UI 质感与交互设计参考。
 - [LINUX DO](https://linux.do/)：新的理想型开发者社区。
 - [AtomGit](https://atomgit.com/NanmiCoder/cc-haha)：为本项目提供国内代码托管。
 
