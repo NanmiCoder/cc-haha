@@ -133,6 +133,10 @@ export class SessionTransport {
   #started = false
   #disposed = false
   #pairingRequired = false
+  /** App 当前在后台：暂停心跳与后台重连循环，避免 Android 后台省电误断与退避累积。 */
+  #backgrounded = false
+  /** 后台断线后暂停了重连循环，回到前台时立即续传或重连。 */
+  #paused = false
   #generation = 0
   #turnEpoch = 0
   #historyEpoch = 0
@@ -252,21 +256,50 @@ export class SessionTransport {
   }
 
   /**
+   * App 退到后台：暂停心跳与后台重连循环，避免 Android 后台限网或省电策略导致误判心跳超时、
+   * 持续累积失败次数和 30 秒退避。已有连接保留不拆，短时间切回时探活通过即可直接复用。
+   */
+  background() {
+    if (!this.#started || this.#disposed || this.#pairingRequired || this.#backgrounded) return
+    this.#backgrounded = true
+    this.#timers.clear(this.#heartbeatTimer)
+    this.#timers.clear(this.#probeTimer)
+    this.#heartbeatTimer = this.#probeTimer = undefined
+    this.#awaitingPong = false
+    this.#probePongs = 0
+    if (this.#reconnectTimer !== undefined) {
+      this.#timers.clear(this.#reconnectTimer)
+      this.#reconnectTimer = undefined
+      this.#paused = true
+      this.#holdGate(false)
+    }
+  }
+
+  /**
    * 回到前台或网络变化时调用。连接看起来还开着就先探活，不拆掉还能用的连接；
-   * 正在建连的不打断；在等退避的立即重试。`hiddenAt` 是切到后台的时刻（同一时钟）。
+   * 正在建连的不打断；在等退避或后台暂停的立即重试。`hiddenAt` 是切到后台的时刻（同一时钟）。
    */
   resume(hiddenAt?: number) {
     if (!this.#started || this.#disposed || this.#pairingRequired) return
+    const wasPaused = this.#paused
+    this.#backgrounded = false
+    this.#paused = false
+    // 回到前台或切网后重新起算退避与失败计数，避免后台或旧网络累积的 30 秒退避拖住恢复。
+    this.#retries = 0
+    this.#failures = 0
     const action = resumeAction({
       connection: this.connection,
       socketOpen: this.#socket?.readyState === 1,
       backoffPending: this.#reconnectTimer !== undefined,
+      paused: wasPaused,
       attemptStartedAt: this.#attemptStartedAt,
       hiddenAt,
       now: this.#now(),
     })
     if (action === 'probe') this.#probe()
     else if (action !== 'none') this.#connect(true)
+    else if (this.#socket?.readyState === 1 && !this.#heartbeatTimer && !this.#probeTimer)
+      this.#heartbeat(this.#generation)
   }
 
   /**
@@ -509,6 +542,7 @@ export class SessionTransport {
   #connect(reconnecting: boolean) {
     this.#generation++
     const generation = this.#generation
+    this.#paused = false
     this.#cleanup()
     this.#attemptStartedAt = this.#now()
     // 已和电脑对齐过的流：带着看到的帧号直接接回去，不读历史、不重开会话。
@@ -561,7 +595,7 @@ export class SessionTransport {
       if (!this.#valid(generation) || controller.signal.aborted) return
       if (this.#isUnauthorized(error)) this.#requirePairing()
       else {
-        this.#report(error)
+        if (!this.#backgrounded) this.#report(error)
         this.#disconnect()
       }
     } finally {
@@ -587,7 +621,7 @@ export class SessionTransport {
       this.#bind(socket, generation)
       this.#syncTimer = this.#timers.set(() => {
         if (!this.#valid(generation) || this.connection === 'ready') return
-        this.#options.onError(new ApiError('连接电脑超时', 0, 'TIMEOUT'))
+        if (!this.#backgrounded) this.#options.onError(new ApiError('连接电脑超时', 0, 'TIMEOUT'))
         this.#disconnect()
       }, SOCKET_OPEN_TIMEOUT_MS)
     } catch (error) {
@@ -615,7 +649,7 @@ export class SessionTransport {
       this.#timers.clear(this.#syncTimer)
       this.#syncTimer = this.#timers.set(() => {
         if (!this.#valid(generation) || this.connection === 'ready') return
-        this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
+        if (!this.#backgrounded) this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
         this.#disconnect()
       }, SYNC_TIMEOUT_MS)
       // 接回原来的流：等电脑答复能不能续，再决定要不要重新对齐。补发迟迟收不完也由上面的时限兜底。
@@ -627,7 +661,7 @@ export class SessionTransport {
         this.#disconnect()
         return
       }
-      this.#heartbeat(generation)
+      if (!this.#backgrounded) this.#heartbeat(generation)
       // The stream is already subscribed before taking its HTTP baseline.
       void this.#initialHistory(generation)
     }
@@ -636,15 +670,17 @@ export class SessionTransport {
       if (!this.#valid(generation)) return
       // 换路时电脑把流交给了新连接，用 4000 关掉旧的：等新连接答复，不当断线。
       if (code === STREAM_SUPERSEDED && this.#migration) return
-      this.#disconnect()
+      const probing = this.#probeTimer !== undefined
+      this.#disconnect(probing)
       // Older gateways also use 1008 for restarts and rate limits. Only an
       // authenticated HTTP rejection can establish that pairing was revoked.
-      if (code === 1006 || code === 1008) void this.#probeAuthorization()
+      if (!this.#backgrounded && (code === 1006 || code === 1008)) void this.#probeAuthorization()
     }
     socket.onerror = () => {
       if (this.#valid(generation)) {
-        this.#disconnect()
-        void this.#probeAuthorization()
+        const probing = this.#probeTimer !== undefined
+        this.#disconnect(probing)
+        if (!this.#backgrounded) void this.#probeAuthorization()
       }
     }
   }
@@ -769,7 +805,7 @@ export class SessionTransport {
       if (!this.#valid(generation) || controller.signal.aborted) return
       if (this.#isUnauthorized(error)) this.#requirePairing()
       else {
-        this.#report(error)
+        if (!this.#backgrounded) this.#report(error)
         this.#disconnect()
       }
     } finally {
@@ -817,6 +853,8 @@ export class SessionTransport {
     if (this.#streamActive()) this.#stream!.synced = true
     this.#syncEpoch++
     if (!this.state.turnActive) this.#markUndelivered()
+    if (!this.#backgrounded && !this.#heartbeatTimer && !this.#probeTimer)
+      this.#heartbeat(this.#generation)
     this.#setConnection('ready')
     this.#afterReady()
   }
@@ -1031,6 +1069,14 @@ export class SessionTransport {
 
   #disconnect(immediate = false) {
     if (this.#disposed || this.#pairingRequired) return
+    if (this.#backgrounded) {
+      this.#generation++
+      this.#cleanup()
+      this.#paused = true
+      this.#publish({ ...this.state, connected: false })
+      this.#setConnection('reconnecting')
+      return
+    }
     // 从就绪掉线不算失败；之后每次建连没成才算，连着两次就该告诉用户了。
     if (this.connection !== 'ready') this.#failures++
     this.#generation++
@@ -1275,10 +1321,11 @@ export class SessionTransport {
     this.connection = connection
     if (connection === 'ready') this.#failures = 0
     this.#holdGate(
-      connection === 'connecting' ||
-        connection === 'syncing' ||
-        connection === 'resuming' ||
-        connection === 'reconnecting'
+      !this.#paused &&
+        (connection === 'connecting' ||
+          connection === 'syncing' ||
+          connection === 'resuming' ||
+          connection === 'reconnecting')
     )
     this.#options.onConnection(connection)
   }
@@ -1370,7 +1417,7 @@ export class SessionTransport {
       this.#connect(true)
       return
     }
-    this.#heartbeat(generation)
+    if (!this.#backgrounded) this.#heartbeat(generation)
     this.#resumed(attached)
   }
   /** 电脑接回了这条流（续传或换路）：记下从哪里补发，等补发收完再重发没执行的命令。 */
@@ -1515,14 +1562,14 @@ export class SessionTransport {
     this.#timers.clear(this.#probeTimer)
     this.#timers.clear(this.#heartbeatTimer)
     this.#probeTimer = undefined
-    this.#heartbeat(generation)
+    if (!this.#backgrounded) this.#heartbeat(generation)
     this.#resumed(attached)
     // 补发迟迟收不完时不能一直挡着新命令：和续传一样由同步时限兜底，重新接一次。
     if (!this.#replaying()) return
     this.#timers.clear(this.#syncTimer)
     this.#syncTimer = this.#timers.set(() => {
       if (!this.#valid(generation) || !this.#replaying()) return
-      this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
+      if (!this.#backgrounded) this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
       this.#disconnect()
     }, SYNC_TIMEOUT_MS)
   }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -644,5 +644,17 @@ describe('H5AccessService', () => {
     expect(saved.env?.ANTHROPIC_MODEL).toBe('keep-me')
     expect(saved.h5Access?.enabled).toBe(true)
     expect(saved.h5Access?.tokenHash).toEqual(expect.any(String))
+  })
+
+  test('getSettings skips synchronous os.networkInterfaces calls when H5 access is disabled', async () => {
+    const service = new H5AccessService()
+    const spy = spyOn(os, 'networkInterfaces')
+    try {
+      const settings = await service.getSettings()
+      expect(settings.enabled).toBe(false)
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

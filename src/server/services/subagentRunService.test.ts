@@ -1964,4 +1964,50 @@ describe('getSubagentRunByAgentId', () => {
 
     expect(await getSubagentRunByAgentId(sessionId, 'nope')).toBeNull()
   })
+
+  it('aborts promptly when caller AbortSignal is already aborted', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-000000000001'
+    await writeSessionFile('-tmp-subagent-abort', sessionId, [
+      makeAgentToolUseEntry('tool-abort-1'),
+      makeAgentToolResultEntry('tool-abort-1', 'agent-abort-1'),
+    ])
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      getSubagentRunByTool(sessionId, 'tool-abort-1', undefined, { signal: controller.signal }),
+    ).rejects.toThrow()
+    await expect(
+      getSubagentRunByAgentId(sessionId, 'agent-abort-1', { signal: controller.signal }),
+    ).rejects.toThrow()
+  })
+
+  it('skips scanning subagents/*.meta.json when the parent result already resolves the transcript', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'cccccccc-cccc-4ccc-8ccc-000000000002'
+    const projectDir = '-tmp-subagent-no-meta-scan'
+    const toolUseId = 'tool-direct-1'
+    const agentId = 'direct-agent-1'
+    await writeSessionFile(projectDir, sessionId, [
+      makeAgentToolUseEntry(toolUseId),
+      makeAgentToolResultEntry(toolUseId, agentId),
+    ])
+    await writeSubagentTranscriptFile(projectDir, sessionId, agentId, [{
+      type: 'assistant',
+      message: { role: 'assistant', content: 'Direct answer' },
+      uuid: 'direct-msg-1',
+      timestamp: '2026-01-01T00:00:05.000Z',
+    }])
+
+    const scanSpy = spyOn(sessionService, 'findSubagentAgentIdByToolUseId')
+    try {
+      const result = await getSubagentRunByTool(sessionId, toolUseId)
+      expect(result?.agentId).toBe(agentId)
+      expect(result?.messages).toHaveLength(1)
+      expect(scanSpy).not.toHaveBeenCalled()
+    } finally {
+      scanSpy.mockRestore()
+    }
+  })
 })

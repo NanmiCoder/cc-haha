@@ -483,7 +483,7 @@ export async function handleSessionsApi(
             { status: 404 },
           )
         }
-        const byAgent = await getSubagentRunByAgentId(sessionId, agentId)
+        const byAgent = await getSubagentRunByAgentId(sessionId, agentId, { signal: req.signal })
         if (!byAgent) {
           throw ApiError.notFound(`SubAgent run not found: ${agentId}`)
         }
@@ -524,6 +524,7 @@ export async function handleSessionsApi(
         sessionId,
         toolUseId,
         url.searchParams.get('taskId') ?? undefined,
+        { signal: req.signal },
       )
       if (!result) {
         throw ApiError.notFound(`SubAgent run not found: ${toolUseId}`)

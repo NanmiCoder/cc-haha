@@ -298,7 +298,11 @@ describe('SubagentRunPage', () => {
     )
 
     expect(await screen.findByText('survey response.js')).toBeInTheDocument()
-    expect(subagentsApi.getRunByAgent).toHaveBeenCalledWith('session-1', 'wfagent1')
+    expect(subagentsApi.getRunByAgent).toHaveBeenCalledWith(
+      'session-1',
+      'wfagent1',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
     expect(subagentsApi.getRunByTool).not.toHaveBeenCalled()
     expectSharedSessionSurface('subagent')
   })
@@ -712,7 +716,12 @@ describe('SubagentRunPage', () => {
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" taskId="agent-1" title="Kuhn" />)
 
     expect(await screen.findByText('Kuhn')).toBeInTheDocument()
-    expect(subagentsApi.getRunByTool).toHaveBeenCalledWith('session-1', 'tool-1', 'agent-1')
+    expect(subagentsApi.getRunByTool).toHaveBeenCalledWith(
+      'session-1',
+      'tool-1',
+      'agent-1',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
     expect(screen.getByText('Agent: abc123')).toBeInTheDocument()
     expect(screen.getAllByText('Explore repo').length).toBeGreaterThan(0)
     expect(screen.getByText('Output: /tmp/result.md')).toBeInTheDocument()
@@ -1355,6 +1364,7 @@ describe('SubagentRunPage', () => {
         'session-1',
         'agent:wf123/wf123/Agent:0',
         undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       )
     })
     expect(subagentsApi.getRunByAgent).toHaveBeenCalledTimes(1)
@@ -2565,7 +2575,12 @@ describe('SubagentRunPage', () => {
 
     expect(await screen.findByText('Running')).toBeInTheDocument()
     expectSharedSessionSurface('subagent')
-    expect(subagentsApi.getRunByTool).toHaveBeenCalledWith('session-1', 'tool-1', undefined)
+    expect(subagentsApi.getRunByTool).toHaveBeenCalledWith(
+      'session-1',
+      'tool-1',
+      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
 
     act(() => {
       useChatStore.setState({
@@ -2587,7 +2602,12 @@ describe('SubagentRunPage', () => {
     })
 
     await waitFor(() => {
-      expect(subagentsApi.getRunByTool).toHaveBeenCalledWith('session-1', 'tool-1', 'agent-1')
+      expect(subagentsApi.getRunByTool).toHaveBeenCalledWith(
+        'session-1',
+        'tool-1',
+        'agent-1',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
     })
     expectSharedSessionSurface('subagent')
   })
@@ -2658,5 +2678,162 @@ describe('SubagentRunPage', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('refresh failed'))
     expect(screen.getAllByText('Initial result').length).toBeGreaterThan(0)
+  })
+
+  it('stops polling once a non-resumable SubAgent run is completed and aborts in-flight requests on unmount', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({
+        status: 'completed',
+        canSendMessage: false,
+        historyComplete: true,
+        activityComplete: true,
+      }))
+
+      const { unmount } = render(
+        <SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Done Agent" />,
+      )
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        vi.advanceTimersByTime(6_000)
+        await Promise.resolve()
+      })
+      expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(1)
+      unmount()
+
+      // Verify in-flight requests are aborted on unmount so the server releases read slots.
+      const pending = deferred<SubagentRunResponse>()
+      let capturedSignal: AbortSignal | undefined
+      vi.mocked(subagentsApi.getRunByTool).mockImplementationOnce((_s, _t, _task, opts) => {
+        capturedSignal = opts?.signal
+        return pending.promise
+      })
+      const second = render(
+        <SubagentRunPage sourceSessionId="session-1" toolUseId="tool-2" title="Pending Agent" />,
+      )
+      expect(capturedSignal?.aborted).toBe(false)
+      second.unmount()
+      expect(capturedSignal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fetches one final snapshot when a live workflow agent transitions to done between polls, then stops polling', async () => {
+    vi.useFakeTimers()
+    try {
+      useWorkflowStore.setState({
+        runs: {
+          'wf-live-run': {
+            runId: 'wf-live-run',
+            taskId: 'w-live-run',
+            sourceSessionId: 'session-1',
+            workflowName: 'live-check',
+            status: 'running',
+            startedAt: 100,
+            updatedAt: 100,
+            progress: [{
+              type: 'workflow_agent',
+              agentId: 'wf-live-1',
+              label: 'Worker',
+              phaseIndex: 1,
+              phaseTitle: 'Check',
+              agentIndex: 1,
+              state: 'running',
+            }],
+          } as never,
+        },
+      })
+
+      vi.mocked(subagentsApi.getRunByAgent)
+        .mockResolvedValueOnce(subagentRun({
+          toolUseId: 'wf-live-1',
+          agentId: 'wf-live-1',
+          status: 'running',
+          canSendMessage: false,
+          historyComplete: true,
+          activityComplete: true,
+          messages: [{
+            id: 'msg-mid',
+            type: 'assistant',
+            content: [{ type: 'text', text: 'Mid-run progress' }],
+            timestamp: TRANSCRIPT_TIMESTAMP,
+          }],
+        }))
+        .mockResolvedValueOnce(subagentRun({
+          toolUseId: 'wf-live-1',
+          agentId: 'wf-live-1',
+          status: 'completed',
+          canSendMessage: false,
+          historyComplete: true,
+          activityComplete: true,
+          messages: [{
+            id: 'msg-final',
+            type: 'assistant',
+            content: [{ type: 'text', text: 'Final workflow answer' }],
+            timestamp: TRANSCRIPT_TIMESTAMP,
+          }],
+        }))
+
+      render(
+        <SubagentRunPage
+          sourceSessionId="session-1"
+          toolUseId="agent:wf-live-1"
+          title="Live Workflow Agent"
+        />,
+      )
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(subagentsApi.getRunByAgent).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Mid-run progress')
+
+      // Workflow completes via WebSocket before the next 2s poll fires.
+      act(() => {
+        useWorkflowStore.setState({
+          runs: {
+            'wf-live-run': {
+              runId: 'wf-live-run',
+              taskId: 'w-live-run',
+              sourceSessionId: 'session-1',
+              workflowName: 'live-check',
+              status: 'completed',
+              startedAt: 100,
+              updatedAt: 200,
+              progress: [{
+                type: 'workflow_agent',
+                agentId: 'wf-live-1',
+                label: 'Worker',
+                phaseIndex: 1,
+                phaseTitle: 'Check',
+                agentIndex: 1,
+                state: 'done',
+              }],
+            } as never,
+          },
+        })
+      })
+
+      // One final poll must still run to pull the persisted final answer.
+      await act(async () => {
+        vi.advanceTimersByTime(2_500)
+        await Promise.resolve()
+      })
+      expect(subagentsApi.getRunByAgent).toHaveBeenCalledTimes(2)
+      expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Final workflow answer')
+
+      // After the post-terminal snapshot arrives, polling stops.
+      await act(async () => {
+        vi.advanceTimersByTime(6_000)
+        await Promise.resolve()
+      })
+      expect(subagentsApi.getRunByAgent).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

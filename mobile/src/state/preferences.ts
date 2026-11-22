@@ -14,6 +14,8 @@ export type Preferences = Record<string, unknown> & {
   notifyPrompted: boolean
   /** iOS：审批提醒标成时效性通知，专注模式下也送达。 */
   timeSensitive: boolean
+  /** 打开 App 时保持屏幕常亮，避免自动息屏。 */
+  keepAwake: boolean
 }
 export type LiveActivityMode = 'running' | 'decisions'
 export type PreferencesPatch = Omit<
@@ -85,6 +87,7 @@ export function migratePreferences(raw: string | null): Preferences {
     liveActivityShowCommand: value.liveActivityShowCommand !== false,
     notifyPrompted: value.notifyPrompted === true,
     timeSensitive: value.timeSensitive !== false,
+    keepAwake: value.keepAwake === true,
   }
 }
 export class PreferencesRepository {
