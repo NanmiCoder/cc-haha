@@ -381,6 +381,70 @@ describe('connection path to a remote computer', () => {
     expect(f.cf.slice(-2)).toEqual([INFO, OFFER])
   })
 
+  test('a direct path stays alive during background without heartbeat false-kills, and resumes heartbeat on return', async () => {
+    const f = setup()
+    await f.upgrade()
+    f.link.background()
+    // Even if the peer does not answer periodic pings while backgrounded, it is not killed early.
+    f.computer.reachable = false
+    f.timers.advance(BACKGROUND_CLOSE_MS - 10_000)
+    await flush()
+    expect(f.rtc.peers[0]!.closed).toBe(false)
+    expect(f.link.path).toBe('lan')
+    // Returning when the path is reachable keeps it and restores foreground heartbeat.
+    f.computer.reachable = true
+    f.link.foreground()
+    await flush()
+    expect(f.rtc.peers[0]!.closed).toBe(false)
+    expect(f.link.path).toBe('lan')
+  })
+
+  test('a negotiation that spanned a long background stay is aborted and restarted at once on return', async () => {
+    const f = setup()
+    // Hold the first offer open as if the OS froze it mid-handshake.
+    const origFetch = f.link.fetch
+    let releaseOffer!: () => void
+    let offerCalls = 0
+    const timers = new FakeTimers()
+    const rtc = fakeRtc()
+    const link = new HostLink({
+      host,
+      credential: 'native_fixture',
+      cfFetch: async (input, request) => {
+        const path = new URL(input).pathname
+        if (path === '/api/public-access/p2p')
+          return { ok: true, status: 200, url: input, redirected: false, text: async () => JSON.stringify({ v: 1, available: true, iceServers: [], gatherMs: 10 }) }
+        if (path.endsWith('/offer')) {
+          offerCalls++
+          if (offerCalls === 1) await new Promise<void>((resolve) => { releaseOffer = resolve })
+          return { ok: true, status: 200, url: input, redirected: false, text: async () => JSON.stringify({ peerId: `p${offerCalls}`, sdp: 'v=0 answer', candidates: [], complete: true }) }
+        }
+        return { ok: true, status: 200, url: input, redirected: false, text: async () => '{}' }
+      },
+      cfSocket: () => ({ readyState: 0 }) as unknown as SocketLike,
+      rtc: rtc.factory,
+      timers,
+      now: () => timers.now,
+    })
+    void origFetch
+    await link.fetch('https://desk.example.test/api/sessions', init())
+    timers.advance(UPGRADE_DELAY_MS + 10)
+    await flush()
+    expect(offerCalls).toBe(1)
+    link.background()
+    timers.advance(STALE_AFTER_BACKGROUND_MS)
+    link.foreground()
+    timers.advance(0)
+    await flush()
+    timers.advance(10)
+    await flush()
+    expect(offerCalls).toBe(2)
+    expect(link.path).toBe('lan')
+    releaseOffer()
+    await flush()
+    expect(link.path).toBe('lan')
+  })
+
   test('a GET cut off on the direct path is retried on Cloudflare; a POST is never resent', async () => {
     const f = setup()
     await f.upgrade()

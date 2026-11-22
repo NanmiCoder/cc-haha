@@ -6,6 +6,7 @@ import { isH5 } from '../state/h5'
 import { pushTokens, useApp, useConnection } from '../state/AppContext'
 import { usePushRegistration, useRetryPushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
+import { isKeepAwakeAvailable } from '../state/keepAwake'
 import {
   Footnote,
   Group,
@@ -68,6 +69,7 @@ const notificationRows: { key: NotificationKey; title: string; detail?: string }
 ]
 
 const platform = Platform.OS === 'ios' ? 'ios' : 'android'
+const keepAwakeAvailable = isKeepAwakeAvailable(Platform.OS)
 
 export default function Settings() {
   const colors = useColors()
@@ -316,6 +318,23 @@ export default function Settings() {
             void setAppearance(value).catch((e) => setAppearanceError(errorText(e)))
           }}
         />
+        {keepAwakeAvailable ? (
+          <>
+            <Group style={{ marginTop: 12 }}>
+              <ListRowWithSwitch
+                first
+                title="屏幕常亮"
+                detail="打开 App 时不自动息屏，适合持续查看任务"
+                value={preferences.keepAwake}
+                onChange={(value) => {
+                  setAppearanceError('')
+                  void update({ keepAwake: value }).catch((e) => setAppearanceError(errorText(e)))
+                }}
+              />
+            </Group>
+            <Footnote>切到后台或手动锁屏后仍按系统设置息屏。</Footnote>
+          </>
+        ) : null}
         <InlineError text={appearanceError} style={{ marginTop: 8 }} />
 
         {isH5 ? null : (

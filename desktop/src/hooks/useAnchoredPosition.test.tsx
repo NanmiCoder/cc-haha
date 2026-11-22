@@ -239,6 +239,69 @@ describe('useAnchoredPosition', () => {
     expect(result.style.top).toBe(150)
   })
 
+  it('clears a previous maxHeight when closed so reopening does not inherit a stale clamp', () => {
+    const captured: { current: Result | null } = { current: null }
+    const observedMaxHeightAtMeasure: string[] = []
+
+    function Harness({ open, height, anchor }: { open: boolean; height: number; anchor: Partial<DOMRect> }) {
+      const anchorRef = useRef<HTMLDivElement | null>(null)
+      const floatingRef = useRef<HTMLDivElement | null>(null)
+      captured.current = useAnchoredPosition({
+        open,
+        anchorRef,
+        floatingRef,
+        clampHeight: true,
+      })
+      return (
+        <>
+          <div
+            ref={(element) => {
+              anchorRef.current = element
+              if (element) stubRect(element, anchor)
+            }}
+          />
+          {open && (
+            <div
+              style={captured.current.style}
+              ref={(element) => {
+                floatingRef.current = element
+                if (element) {
+                  element.getBoundingClientRect = () => {
+                    observedMaxHeightAtMeasure.push(element.style.maxHeight)
+                    const appliedCap = Number.parseFloat(element.style.maxHeight)
+                    const effectiveHeight = Number.isFinite(appliedCap) ? Math.min(height, appliedCap) : height
+                    return {
+                      top: 0, left: 0, right: 180, bottom: effectiveHeight, width: 180, height: effectiveHeight, x: 0, y: 0,
+                      toJSON: () => ({}),
+                    } as DOMRect
+                  }
+                }
+              }}
+            />
+          )}
+        </>
+      )
+    }
+
+    window.innerHeight = 200
+    const { rerender } = render(<Harness open height={300} anchor={{ top: 100, bottom: 130, left: 200, right: 300 }} />)
+    expect(captured.current!.style.top).toBe(8)
+    expect(captured.current!.style.maxHeight).toBe(200 - 8 - 8)
+
+    rerender(<Harness open={false} height={300} anchor={{ top: 100, bottom: 130, left: 200, right: 300 }} />)
+    expect(captured.current!.ready).toBe(false)
+    expect(captured.current!.style.maxHeight).toBeUndefined()
+
+    // Reopen near the bottom of a taller viewport: measurement must see the full
+    // 300px height (not the stale 184px clamp) so it flips to 600 - 300 - 6 = 294.
+    window.innerHeight = 800
+    rerender(<Harness open height={300} anchor={{ top: 600, bottom: 630, left: 200, right: 300 }} />)
+    expect(observedMaxHeightAtMeasure).toEqual(['', ''])
+    expect(captured.current!.placement).toBe('top-start')
+    expect(captured.current!.style.top).toBe(600 - 300 - 6)
+    expect(captured.current!.style.maxHeight).toBe(800 - 8 - (600 - 300 - 6))
+  })
+
   it('hides the overlay until it has been measured', () => {
     // Rendering at the initial guess and then correcting is visible as a jump;
     // the caller relies on `visibility` to avoid painting the wrong spot.

@@ -114,19 +114,22 @@ describe('mobile preferences forward migration', () => {
     expect(migrated.liveActivityShowCommand).toBe(true)
     expect(migrated.notifyPrompted).toBe(false)
     expect(migrated.timeSensitive).toBe(true)
+    expect(migrated.keepAwake).toBe(false)
     expect(migrated.notifications.completed).toBe(false)
     expect(migrated.quietHours.start).toBe('22:00')
     expect(migratePreferences(JSON.stringify(migrated))).toEqual(migrated)
   })
-  test('keeps saved live activity choices and ignores unknown values', () => {
+  test('keeps saved live activity and keepAwake choices and ignores unknown values', () => {
     const kept = migratePreferences(
-      '{"liveActivity":"decisions","liveActivityShowCommand":false,"notifyPrompted":true}'
+      '{"liveActivity":"decisions","liveActivityShowCommand":false,"notifyPrompted":true,"keepAwake":true}'
     )
     expect(kept.liveActivity).toBe('decisions')
     expect(kept.liveActivityShowCommand).toBe(false)
     expect(kept.notifyPrompted).toBe(true)
+    expect(kept.keepAwake).toBe(true)
     expect(migratePreferences('{"liveActivity":"bogus"}').liveActivity).toBe('running')
     expect(migratePreferences('{"timeSensitive":false}').timeSensitive).toBe(false)
+    expect(migratePreferences('{"keepAwake":"yes"}').keepAwake).toBe(false)
   })
   test('updating one new field does not disturb the others', async () => {
     const values = new Map<string, string>()
@@ -141,9 +144,11 @@ describe('mobile preferences forward migration', () => {
     })
     await repository.update({ notifyPrompted: true })
     await repository.update({ liveActivity: 'decisions' })
+    await repository.update({ keepAwake: true })
     const result = await repository.load()
     expect(result.notifyPrompted).toBe(true)
     expect(result.liveActivity).toBe('decisions')
     expect(result.liveActivityShowCommand).toBe(true)
+    expect(result.keepAwake).toBe(true)
   })
 })

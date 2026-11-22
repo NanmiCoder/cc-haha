@@ -724,6 +724,132 @@ describe('Sidebar', () => {
     expect(archive).toHaveAttribute('title', 'sidebar.archiveBusy')
   })
 
+  it('flips the session context menu upward when opened near the bottom of the window', () => {
+    // Regression anchor (#1976): placing the menu directly at (clientX, clientY)
+    // pushed the lower actions (Archive, Delete) past the window bottom when
+    // right-clicking a session near the bottom of the sidebar.
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 1024
+    window.innerHeight = 768
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('bottom-session', 'Bottom session', '/workspace/alpha', '2026-01-01')] })
+      render(<Sidebar />)
+
+      const clientX = 120
+      const clientY = window.innerHeight - 20
+      fireEvent.contextMenu(screen.getByText('Bottom session'), { clientX, clientY })
+
+      const menu = screen.getByRole('menu')
+      const left = Number.parseFloat(menu.style.left)
+      const top = Number.parseFloat(menu.style.top)
+      expect(menu.parentElement).toBe(document.body)
+      expect(menu.style.position).toBe('fixed')
+      expect(left).toBe(clientX)
+      expect(top).toBe(clientY - height)
+      expect(top).toBeGreaterThanOrEqual(8)
+      expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8)
+      expect(menu.style.visibility).toBe('visible')
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
+  })
+
+  it('clamps the session context menu inside a short viewport and dismisses only on sidebar scroll or window resize', () => {
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 400
+    window.innerHeight = 260
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('short-viewport-session', 'Short viewport session', '/workspace/alpha', '2026-01-01')] })
+      render(
+        <div>
+          <Sidebar />
+          <div data-testid="unrelated-chat-scroll" />
+        </div>,
+      )
+
+      // Neither opening downward (140 + 180 = 320 > 252) nor flipping upward
+      // (140 - 180 = -40 < 8) fits, and clientX is near the right edge.
+      fireEvent.contextMenu(screen.getByText('Short viewport session'), { clientX: 390, clientY: 140 })
+
+      const menu = screen.getByRole('menu')
+      const left = Number.parseFloat(menu.style.left)
+      const top = Number.parseFloat(menu.style.top)
+      expect(left).toBeGreaterThanOrEqual(8)
+      expect(left + width).toBeLessThanOrEqual(window.innerWidth - 8)
+      expect(top).toBeGreaterThanOrEqual(8)
+      expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8)
+      expect(menu.style.visibility).toBe('visible')
+
+      // Streaming chat auto-scroll outside the sidebar must not dismiss sidebar menus.
+      fireEvent.scroll(screen.getByTestId('unrelated-chat-scroll'))
+      expect(screen.getByRole('menu')).toBeInTheDocument()
+
+      // Scrolling the sidebar's own session list dismisses the menu.
+      fireEvent.scroll(screen.getByTestId('sidebar-session-scroll-area'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+      // Window resize also dismisses an open menu.
+      fireEvent.contextMenu(screen.getByText('Short viewport session'), { clientX: 390, clientY: 140 })
+      expect(screen.getByRole('menu')).toBeInTheDocument()
+      fireEvent(window, new Event('resize'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
+  })
+
+  it('caps the session context menu height when the viewport is shorter than the menu', () => {
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 400
+    window.innerHeight = 160
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('tiny-viewport-session', 'Tiny viewport session', '/workspace/alpha', '2026-01-01')] })
+      render(<Sidebar />)
+
+      fireEvent.contextMenu(screen.getByText('Tiny viewport session'), { clientX: 120, clientY: 120 })
+
+      const menu = screen.getByRole('menu')
+      expect(Number.parseFloat(menu.style.top)).toBe(8)
+      expect(Number.parseFloat(menu.style.maxHeight)).toBe(160 - 8 - 8)
+      expect(menu.className).toContain('overflow-y-auto')
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
+  })
+
   it('archives the batch selection, skips busy sessions, and undoes the archived ones together', async () => {
     useSessionStore.setState({
       sessions: [

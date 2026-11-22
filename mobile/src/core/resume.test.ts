@@ -42,11 +42,25 @@ test('an attempt that spanned a long background stay is restarted', () => {
   ).toBe('none')
 })
 
-test('waiting on backoff retries at once; an offline transport reconnects', () => {
+test('waiting on backoff retries at once; an offline or background-paused transport reconnects', () => {
   expect(resumeAction({ ...base, connection: 'reconnecting', backoffPending: true })).toBe('expedite')
+  expect(resumeAction({ ...base, connection: 'reconnecting', paused: true, socketOpen: false })).toBe('reconnect')
   expect(resumeAction({ ...base, connection: 'offline', socketOpen: false })).toBe('reconnect')
 })
 
+test('an attempt started during a long background stay is restarted on return', () => {
+  expect(
+    resumeAction({
+      ...base,
+      connection: 'reconnecting',
+      socketOpen: false,
+      attemptStartedAt: 5_000,
+      hiddenAt: 200,
+      now: 200 + RESUME_STALE_ATTEMPT_MS,
+    })
+  ).toBe('reconnect')
+})
+
 test('a revoked pairing is never retried automatically', () => {
-  expect(resumeAction({ ...base, connection: 'pairing_required', backoffPending: true, hiddenAt: 0 })).toBe('none')
+  expect(resumeAction({ ...base, connection: 'pairing_required', backoffPending: true, paused: true, hiddenAt: 0 })).toBe('none')
 })

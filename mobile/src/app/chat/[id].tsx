@@ -23,7 +23,7 @@ import { notificationPermissionResponse, runtimeMatches } from '../../core/chatA
 import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
 import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
 import { sessionHistory } from '../../core/historyCache'
-import { isAppForeground } from '../../core/appVisibility'
+import { foregroundTransitions } from '../../core/appVisibility'
 import { foregroundGate } from '../../core/foregroundGate'
 import { newStreamId } from '../../core/resumableStream'
 import type { LinkPath } from '../../core/hostLink'
@@ -202,6 +202,8 @@ function ChatSession({
   const [syncEpoch, setSyncEpoch] = useState(0)
   // 连着失败的建连次数：两次就不再等满十秒才提示。
   const [failures, setFailures] = useState(0)
+  // 每次从后台回到前台递增，让前台连接提示的宽限窗口从回来那一刻重新算。
+  const [foregroundTick, setForegroundTick] = useState(0)
   const [session, setSession] = useState<Session | null>(null)
   const [error, setError] = useState('')
   const [recoveryError, setRecoveryError] = useState('')
@@ -352,16 +354,20 @@ function ChatSession({
     transport.current = channel
     recovery.start()
     channel.start()
-    let hiddenAt: number | undefined
+    let hiddenAt: number | undefined = AppState.currentState === 'background' ? Date.now() : undefined
+    if (hiddenAt !== undefined) channel.background()
+    const transition = foregroundTransitions(AppState.currentState)
     const listener = AppState.addEventListener('change', (value) => {
-      if (!isAppForeground(value)) {
+      const change = transition(value)
+      if (change === 'left') {
         hiddenAt ??= Date.now()
-        return
+        channel.background()
+      } else if (change === 'returned') {
+        if (alive) setForegroundTick((tick) => tick + 1)
+        // 离开多久都先探活；连接还活着就接着用，后台暂停的断线立刻续传接回。
+        channel.resume(hiddenAt)
+        hiddenAt = undefined
       }
-      if (value !== 'active') return
-      // 离开多久都先探活；连接还活着就接着用，不拆掉重来。
-      channel.resume(hiddenAt)
-      hiddenAt = undefined
     })
     // 直连打通了：会话带着已看到的帧号换到新路上；直连断了由续传经 Cloudflare 接回。
     queueMicrotask(() => {
@@ -385,7 +391,7 @@ function ChatSession({
   }, [client, credential, hostId, id, revision])
 
   const ready = connection === 'ready'
-  const connectionNotice = useConnectionNotice(connection, failures)
+  const connectionNotice = useConnectionNotice(connection, failures, Date.now, foregroundTick)
   const busy =
     state.turnActive ||
     state.permissions.length > 0 ||
