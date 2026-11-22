@@ -189,7 +189,7 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
             key={line.value}
             data-testid="stream-grid-label"
             aria-hidden="true"
-            className="pointer-events-none absolute left-0 -translate-y-full pb-0.5 font-mono text-[11px] leading-none text-[var(--color-text-tertiary)] [text-shadow:0_0_3px_var(--color-surface),0_0_3px_var(--color-surface)]"
+            className="pointer-events-none absolute left-0 -translate-y-full pb-0.5 font-mono text-[11px] leading-none tabular-nums text-[var(--color-text-tertiary)] [text-shadow:0_0_3px_var(--color-surface),0_0_3px_var(--color-surface)]"
             style={{ top: `${(line.y / HEIGHT) * 100}%` }}
           >
             {formatTokenAmount(line.value, locale).text}
@@ -197,7 +197,7 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
         ))}
         <span
           data-testid="stream-peak"
-          className="pointer-events-none absolute whitespace-nowrap text-[13px] font-medium text-[var(--color-text-primary)]"
+          className="pointer-events-none absolute whitespace-nowrap text-[13px] font-medium tabular-nums text-[var(--color-text-primary)]"
           style={{
             left: `${(peak.x / WIDTH) * 100}%`,
             top: `${(Math.max(peak.y - 22, 0) / HEIGHT) * 100}%`,
@@ -249,11 +249,11 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
             ref={previewRef}
             data-testid="stream-day-preview"
             aria-hidden="true"
-            className="pointer-events-none absolute z-[var(--z-raised)] w-max min-w-[148px] max-w-[240px] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 shadow-[var(--shadow-dropdown)]"
+            className="dropdown-glass popover-motion pointer-events-none absolute z-[var(--z-raised)] w-max min-w-[148px] max-w-[240px] rounded-[var(--radius-md)] px-3 py-2"
             style={{ left: preview.left, top: preview.top }}
           >
             <div className="flex items-baseline justify-between gap-3 whitespace-nowrap">
-              <span className="font-mono text-[11px] text-[var(--color-text-tertiary)]">{formatShortDate(hovered.date, locale)}</span>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{formatShortDate(hovered.date, locale)}</span>
               <span data-testid="stream-day-preview-total" className="text-[13px] font-medium tabular-nums text-[var(--color-text-primary)]">
                 {formatTokenAmount(hovered.total, locale).text}
               </span>
@@ -273,7 +273,7 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
         ) : null}
       </div>
 
-      <div aria-hidden="true" className="relative h-5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+      <div aria-hidden="true" className="relative h-5 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
         {geometry.monthTicks.map((tick) => (
           <span
             key={tick.date}

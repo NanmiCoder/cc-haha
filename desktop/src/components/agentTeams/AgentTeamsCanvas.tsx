@@ -165,7 +165,7 @@ function memberTaskChipStyle(task: TeamWorkbenchTask, next: boolean, accent: str
   if (task.status === 'completed') {
     return { borderColor: 'var(--color-border)', backgroundColor: 'var(--color-success-container)', color: 'var(--color-on-success-container)' }
   }
-  return { borderColor: accent, backgroundColor: 'var(--color-surface-container-lowest)', color: 'var(--color-text-primary)' }
+  return { borderColor: accent, backgroundColor: 'var(--color-surface-container)', color: 'var(--color-text-primary)' }
 }
 
 function leadStatusLabel(snapshot: TeamWorkbenchSnapshot, t: TranslationFn): string {
@@ -190,7 +190,7 @@ function taskStateColors(state: WorkbenchTaskState, accent: string) {
   }
   if (state === 'running') {
     return {
-      background: 'var(--color-surface-container-lowest)',
+      background: 'var(--color-surface-container)',
       border: accent,
       // Running is the app-wide "in progress" tone, never the brand.
       pillBackground: 'var(--color-info-container)',
@@ -201,7 +201,7 @@ function taskStateColors(state: WorkbenchTaskState, accent: string) {
   }
   if (state === 'open') {
     return {
-      background: 'var(--color-surface-container-lowest)',
+      background: 'var(--color-surface-container)',
       border: 'var(--color-outline)',
       pillBackground: 'var(--color-surface-container-high)',
       pillForeground: 'var(--color-text-secondary)',
@@ -573,7 +573,7 @@ function MemberNode({
       </span>
 
       <span
-        className="mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] px-2.5 py-1 shadow-[var(--shadow-card)]"
+        className="surface-glass mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[var(--radius-lg)] border px-2.5 py-1 shadow-[var(--bevel-surface-rest)]"
         style={{ borderColor: selected ? 'var(--color-brand)' : 'var(--color-border)' }}
       >
         <span className="truncate font-mono text-[11px] font-medium text-[var(--color-text-primary)]">
@@ -709,7 +709,7 @@ function TaskCard({
       onMouseLeave={onHoverEnd}
       onFocus={onFocus}
       onBlur={onBlur}
-      className={`agent-teams-task absolute z-[var(--z-sticky)] flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[var(--radius-md)] border p-[9px_10px] text-left shadow-none outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-card)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
+      className={`agent-teams-task absolute z-[var(--z-sticky)] flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[var(--radius-md)] border p-[9px_10px] text-left shadow-[var(--bevel-surface-rest)] outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-card)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
       style={{
         left: x,
         top: y,
@@ -911,7 +911,7 @@ export function AgentTeamsCanvas({
   return (
     <div
       data-testid="agent-teams-canvas-viewport"
-      className="h-full min-h-0 min-w-0 overflow-auto bg-[var(--color-background)] text-[var(--color-text-primary)]"
+      className="surface-grain scrollbar-autohide h-full min-h-0 min-w-0 overflow-auto bg-[var(--color-background)] text-[var(--color-text-primary)]"
     >
       <div
         data-testid="agent-teams-canvas"
@@ -1105,7 +1105,7 @@ export function AgentTeamsCanvas({
               <span className="truncate text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 {title}
               </span>
-              <span className="shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
+              <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">
                 {completed}/{lane.count}
               </span>
             </div>
@@ -1159,7 +1159,7 @@ export function AgentTeamsCanvas({
             aria-hidden="true"
             data-testid="agent-teams-active-flight"
             data-flight-channel={route.channel}
-            className="agent-teams-flight pointer-events-none absolute z-[var(--z-nav)] flex items-center gap-1.5 whitespace-nowrap rounded-full border-[1.5px] bg-[var(--color-surface-container-lowest)] px-2 py-1 shadow-[var(--shadow-card)]"
+            className="agent-teams-flight surface-glass pointer-events-none absolute z-[var(--z-nav)] flex items-center gap-1.5 whitespace-nowrap rounded-full border-[1.5px] px-2 py-1 shadow-[var(--shadow-card)]"
             style={{
               borderColor: route.color,
               color: route.color,

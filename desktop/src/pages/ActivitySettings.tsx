@@ -47,12 +47,15 @@ type StatTile = { label: string; value: string; detail?: string }
 
 function StatsRow({ tiles }: { tiles: StatTile[] }) {
   return (
-    <dl className="mt-14 grid grid-cols-2 gap-x-6 gap-y-6 border-t border-[var(--color-border)] pt-5 @[560px]:grid-cols-4">
+    <dl className="mt-10 grid grid-cols-2 gap-3 @[560px]:grid-cols-4">
       {tiles.map((tile) => (
-        <div key={tile.label} className="min-w-0">
+        <div
+          key={tile.label}
+          className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-3.5 shadow-[var(--bevel-surface-rest)]"
+        >
           <dt className="truncate text-xs text-[var(--color-text-tertiary)]">{tile.label}</dt>
           <dd className="m-0 mt-1.5 text-[22px] font-semibold leading-tight tabular-nums text-[var(--color-text-primary)]">{tile.value}</dd>
-          {tile.detail ? <div className="mt-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{tile.detail}</div> : null}
+          {tile.detail ? <div className="mt-1 truncate font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{tile.detail}</div> : null}
         </div>
       ))}
     </dl>
@@ -61,7 +64,7 @@ function StatsRow({ tiles }: { tiles: StatTile[] }) {
 
 function LoadingSkeleton() {
   return (
-    <div aria-hidden="true" className="mt-10 animate-pulse">
+    <div aria-hidden="true" className="animate-stepped-pulse mt-10 animate-pulse">
       <div className="flex flex-wrap items-end justify-between gap-8">
         <div className="flex min-w-0 items-center gap-4 @[560px]:gap-6">
           <div className="h-16 w-16 shrink-0 rounded-full bg-[var(--color-surface-container)] @[560px]:h-32 @[560px]:w-32" />

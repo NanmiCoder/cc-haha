@@ -190,7 +190,7 @@ describe('stored appearance preferences', () => {
     expect(readStoredLightTheme(window.localStorage)).toBe('white')
 
     window.localStorage.setItem('cc-haha-theme', 'celadon')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('dark')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
   })
 
   it('rejects stored values outside their own ground', () => {
@@ -200,7 +200,7 @@ describe('stored appearance preferences', () => {
 
     expect(readStoredTheme(window.localStorage)).toBe('white')
     expect(readStoredLightTheme(window.localStorage)).toBe('white')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('dark')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
   })
 
   it('survives storage that throws instead of returning a value', () => {
@@ -211,7 +211,7 @@ describe('stored appearance preferences', () => {
 
     expect(readStoredTheme(storage)).toBe('white')
     expect(readStoredLightTheme(storage)).toBe('white')
-    expect(readStoredDarkTheme(storage)).toBe('dark')
+    expect(readStoredDarkTheme(storage)).toBe('neutral-dark')
     expect(readStoredFollowSystemTheme(storage)).toBe(true)
   })
 

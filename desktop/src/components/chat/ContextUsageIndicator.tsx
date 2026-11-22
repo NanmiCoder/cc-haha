@@ -565,7 +565,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
           role="dialog"
           aria-label={t('contextIndicator.title')}
           data-testid="context-usage-popover"
-          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 text-left shadow-[var(--shadow-dropdown)]"
+          className="dropdown-glass popover-motion scrollbar-autohide fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-lg)] p-4 text-left"
           style={{
             top: popoverPosition.top,
             bottom: popoverPosition.bottom,

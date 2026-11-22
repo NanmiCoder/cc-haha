@@ -174,11 +174,28 @@ describe('Dropdown', () => {
     warn.mockRestore()
   })
 
-  it('sits on the shared dropdown layer', () => {
+  it('sits on the shared dropdown layer with frosted glass and popover motion', () => {
     render(<Dropdown items={ITEMS} value="sonnet" onChange={() => {}} trigger={<button type="button">Model</button>} label="Model" />)
     open()
 
-    expect(screen.getByRole('listbox').className).toContain('z-[var(--z-dropdown)]')
+    const list = screen.getByRole('listbox')
+    expect(list.className).toContain('z-[var(--z-dropdown)]')
+    expect(list.className).toContain('dropdown-glass')
+    expect(list.className).toContain('popover-motion')
+  })
+
+  it('renders optional shortcut adornments on items', () => {
+    render(
+      <Dropdown
+        items={[{ value: 'sonnet', label: 'Sonnet', shortcut: <kbd>⌘1</kbd> }]}
+        value="sonnet"
+        onChange={() => {}}
+        trigger={<button type="button">Model</button>}
+        label="Model"
+      />,
+    )
+    open()
+    expect(screen.getByText('⌘1')).toBeInTheDocument()
   })
 })
 

@@ -19,15 +19,17 @@ import { Check } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { cx } from '@/lib/cx'
 
-type DropdownItem<T extends string> = {
+export type DropdownItem<T extends string> = {
   value: T
   label: string
   description?: string
   icon?: ReactNode
+  /** Optional right-aligned keyboard shortcut hint (e.g. `<Kbd>⌘1</Kbd>`). */
+  shortcut?: ReactNode
   disabled?: boolean
 }
 
-type DropdownProps<T extends string> = {
+export type DropdownProps<T extends string> = {
   items: DropdownItem<T>[]
   value: T
   onChange: (value: T) => void
@@ -256,15 +258,15 @@ export function Dropdown<T extends string>({
       tabIndex={-1}
       onKeyDown={handleListKeyDown}
       className={cx(
-        // Menus are cards (12px) with padded rows; one value here settles
-        // the corner for every Dropdown menu in the app.
-        'z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1',
-        'bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]',
-        'shadow-[var(--shadow-dropdown)] focus:outline-none',
-        portal || maxHeight ? 'overflow-y-auto' : 'overflow-hidden',
+        // Menus are frosted cards (12px) with padded rows; one recipe here
+        // settles the corner, hairline glass border, and motion for every
+        // Dropdown menu in the app.
+        'dropdown-glass popover-motion z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1 focus:outline-none',
+        portal || maxHeight ? 'overflow-y-auto scrollbar-autohide' : 'overflow-hidden',
+        !portal && '[-webkit-app-region:no-drag]',
         !portal && (align === 'right' ? 'right-0' : 'left-0'),
-        portal ? 'animate-overlay-in' : 'absolute',
-        !portal && (placement === 'top' ? 'bottom-full mb-1 animate-overlay-in-bottom' : 'top-full mt-1 animate-overlay-in-top'),
+        !portal && 'absolute',
+        !portal && (placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'),
       )}
       style={menuStyle}
     >
@@ -298,8 +300,11 @@ export function Dropdown<T extends string>({
               <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{item.description}</div>
             )}
           </div>
+          {item.shortcut && (
+            <span className="flex shrink-0 items-center">{item.shortcut}</span>
+          )}
           {item.value === value && (
-            <Check size={15} strokeWidth={2} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
+            <Check size={15} strokeWidth={1.75} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
           )}
         </div>
       ))}

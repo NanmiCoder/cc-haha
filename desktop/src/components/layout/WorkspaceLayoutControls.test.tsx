@@ -78,4 +78,21 @@ describe('WorkspaceLayoutControls', () => {
     expect(props.onToggleBottom).toHaveBeenCalledTimes(1)
     expect(props.onToggleWorkspace).toHaveBeenCalledTimes(1)
   })
+
+  it('renders a quiet no-drag toggle cluster with beveled active states and optional leading slot', () => {
+    renderControls({
+      layout: 'split',
+      bottomOpen: true,
+      leadingSlot: <button type="button" data-testid="leading-activity">Activity</button>,
+    })
+
+    const cluster = screen.getByTestId('workspace-layout-controls')
+    expect(cluster).toHaveClass('tab-bar-interactive', '[-webkit-app-region:no-drag]')
+    expect(cluster).toContainElement(screen.getByTestId('leading-activity'))
+    expect(screen.getByTestId('workspace-toggle-side')).toHaveClass('control-bevel')
+    expect(screen.getByTestId('workspace-toggle-side')).toHaveAttribute('data-pressed', 'true')
+    expect(screen.getByTestId('workspace-toggle-bottom')).toHaveClass('control-bevel')
+    expect(screen.getByTestId('workspace-toggle-bottom')).toHaveAttribute('data-pressed', 'true')
+    expect(screen.getByTestId('workspace-toggle-fullscreen')).not.toHaveClass('control-bevel')
+  })
 })

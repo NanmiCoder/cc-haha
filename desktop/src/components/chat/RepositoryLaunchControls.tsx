@@ -808,7 +808,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       id={listboxId}
       role="listbox"
       aria-label={t('repoLaunch.selectBranch')}
-      className={isMobileBrowser ? 'p-1.5' : 'max-h-[280px] overflow-y-auto'}
+      className={isMobileBrowser ? 'p-1.5' : 'scrollbar-autohide max-h-[280px] overflow-y-auto'}
     >
       {filteredBranches.length === 0 ? (
         <div className="px-4 py-8 text-center text-xs text-[var(--color-text-tertiary)]">
@@ -1117,7 +1117,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
     </button>
   )
 
-  const menuClassName = 'flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  const menuClassName = 'dropdown-glass popover-motion scrollbar-autohide flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-lg)] p-1'
   const menuStyle = {
     position: 'fixed' as const,
     left: menuPos?.left,

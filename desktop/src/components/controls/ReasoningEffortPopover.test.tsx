@@ -48,17 +48,17 @@ describe('ReasoningEffortPopover', () => {
   // 「素」: the effort control is a five-way segmented track inside a menu
   // sheet (white, hairline, `--radius-lg`, dropdown shadow), headed by the
   // section label — the old serif level name over a slider knob is gone.
-  it('renders the effort as a segmented track inside the shared menu sheet', () => {
+  it('renders the effort as a segmented track inside the shared frosted-glass menu sheet', () => {
     renderPopover()
 
     const popover = screen.getByTestId('reasoning-effort-popover')
     expect(popover).toHaveStyle({ width: '320px' })
-    expect(popover).toHaveClass('rounded-[var(--radius-lg)]', 'border-[var(--color-border)]', 'shadow-[var(--shadow-dropdown)]', 'p-1')
+    expect(popover).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-lg)]', 'p-1')
     expect(popover.querySelectorAll('svg')).toHaveLength(0)
     expect(screen.getByTestId('reasoning-effort-context-label')).toHaveTextContent('推理强度')
     expect(screen.getByTestId('reasoning-effort-header')).toHaveClass('text-[11px]', 'font-semibold')
     const slider = screen.getByRole('slider', { name: '推理强度' })
-    expect(slider).toHaveClass('h-[30px]', 'bg-[var(--color-surface-container)]')
+    expect(slider).toHaveClass('h-[30px]', 'bg-[var(--color-surface-container-high)]', 'shadow-[var(--bevel-surface-pressed)]')
     expect(slider).toHaveStyle({ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' })
     expect(screen.getAllByTestId('reasoning-effort-stop').map((stop) => stop.textContent))
       .toEqual(['低', '中', '高', '极高', '最大'])
@@ -71,9 +71,9 @@ describe('ReasoningEffortPopover', () => {
     const selected = stops.filter((stop) => stop.hasAttribute('data-selected'))
     expect(selected).toHaveLength(1)
     expect(selected[0]).toHaveTextContent('极高')
-    // The lifted segment of SegmentedControl, not a terracotta fill: brand is
+    // The beveled lifted segment of SegmentedControl, not a brand fill: brand is
     // reserved for the send key and selection checks.
-    expect(selected[0]).toHaveClass('bg-[var(--color-surface-container-lowest)]', 'shadow-[var(--shadow-segment)]')
+    expect(selected[0]).toHaveClass('control-bevel', 'bg-[var(--color-surface-container)]', 'shadow-[var(--bevel-surface-rest)]')
     for (const stop of stops) {
       expect(stop.className).not.toMatch(/white/)
       expect(stop.className).not.toMatch(/\/\d+/)

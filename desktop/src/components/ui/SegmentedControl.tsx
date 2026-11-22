@@ -110,7 +110,7 @@ export function SegmentedControl<T extends string>({
         isChip ? 'flex flex-wrap items-center gap-1.5' : 'inline-flex items-center',
         appearance === 'underline'
           ? 'gap-1 border-b border-[var(--color-border)]'
-          : !isChip && 'gap-0.5 rounded-[var(--radius-md)] bg-[var(--color-surface-container-high)] p-0.5',
+          : !isChip && 'gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] p-0.5 shadow-[var(--bevel-surface-pressed)]',
         layout === 'fill' && 'flex w-full',
         !isChip && SIZE_CLASSES[size],
         className,
@@ -132,7 +132,7 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(item.value)}
             className={cx(
               'inline-flex items-center justify-center font-medium whitespace-nowrap',
-              'transition-colors duration-150 cursor-pointer',
+              'transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out cursor-pointer',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               isChip ? CHIP_SIZE_CLASSES[size] : cx('h-full', SEGMENT_PADDING[size]),
@@ -143,8 +143,8 @@ export function SegmentedControl<T extends string>({
                   // The ink fill of the primary button, so the picked chip
                   // reads as the same "on" state as the page's main action.
                   selected
-                    ? 'border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]',
+                    ? 'control-bevel-cta border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
+                    : 'control-bevel border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]',
                 )
                 : appearance === 'underline'
                 ? cx(
@@ -155,11 +155,11 @@ export function SegmentedControl<T extends string>({
                 )
                 : cx(
                   'rounded-[var(--radius-sm)]',
-                  // `solid` and `raised` now share the lifted segment: a
+                  // `solid` and `raised` now share the lifted beveled segment: a
                   // terracotta-filled segment competed with the send key for
                   // "the one brand-colored thing on screen".
                   selected
-                    ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
+                    ? 'control-bevel bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
                     : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
                 ),
             )}

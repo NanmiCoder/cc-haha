@@ -34,9 +34,9 @@ export function TokenHero({ profile, totalTokens, activeDays, locale }: Props) {
   const dayLabel = t(activeDays === 1 ? 'settings.activity.activeDaysOne' : 'settings.activity.activeDaysOther', { count: activeDays })
 
   return (
-    <div className="group/activity-profile flex flex-wrap items-end justify-between gap-x-10 gap-y-8">
+    <div className="group/activity-profile flex flex-wrap items-end justify-between gap-x-10 gap-y-8 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] p-5 shadow-[var(--bevel-surface-rest)]">
       <div className="flex w-full min-w-0 items-center gap-4 @[560px]:w-auto @[560px]:gap-6">
-        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--color-surface)] shadow-[0_0_0_6px_var(--color-surface),0_0_0_7px_var(--color-outline)] @[560px]:h-32 @[560px]:w-32">
+        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--color-surface)] shadow-[0_0_0_6px_var(--color-surface-container),0_0_0_7px_var(--color-outline)] @[560px]:h-32 @[560px]:w-32">
           <img
             src={avatarSrc}
             alt={t('settings.activity.avatarAlt', { name: displayName })}
@@ -79,12 +79,12 @@ export function TokenHero({ profile, totalTokens, activeDays, locale }: Props) {
         </div>
       </div>
 
-      <div className="ml-auto text-right" title={tokenAmountTitle(totalTokens, locale)}>
-        <div className="font-mono text-xs text-[var(--color-text-tertiary)]">
+      <div className="ml-auto text-right tabular-nums" title={tokenAmountTitle(totalTokens, locale)}>
+        <div className="font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
           {t('settings.activity.totalTokens')} · {dayLabel}
         </div>
-        <div className="mt-1.5 flex items-baseline justify-end">
-          <span data-testid="token-total-value" className="token-hero-number text-[var(--color-text-primary)]">{total.value}</span>
+        <div className="mt-1.5 flex items-baseline justify-end tabular-nums">
+          <span data-testid="token-total-value" className="token-hero-number tabular-nums text-[var(--color-text-primary)]">{total.value}</span>
           {total.unit ? (
             <span data-testid="token-total-unit" className="token-hero-unit ml-2.5 text-[var(--color-brand)]">{total.unit}</span>
           ) : null}

@@ -5,18 +5,19 @@ import { cx } from '@/lib/cx'
 export type CardProps = HTMLAttributes<HTMLElement> & {
   radius?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   /** Which surface layer this card sits on. */
-  surface?: 'base' | 'low' | 'lowest' | 'high' | 'container' | 'none'
+  surface?: 'base' | 'low' | 'lowest' | 'high' | 'container' | 'glass' | 'group' | 'none'
   border?: 'solid' | 'dashed' | 'none'
   padding?: 'none' | 'sm' | 'md' | 'lg'
   /**
-   * Elevation, from the handoff's three-step shadow scale.
+   * Elevation, from the shadow scale.
    *
+   * `bevel` applies the 1px tactile bottom bevel / dark top specular rim;
    * `card` is the resting lift for content cards; `composer` is the heavier one
    * reserved for the input dock and for cards lifting on hover. Kept as a prop
    * rather than a `className` because two `shadow-[…]` values do not compose —
    * Tailwind picks a winner by sorting, not by argument order.
    */
-  shadow?: 'none' | 'card' | 'composer'
+  shadow?: 'none' | 'bevel' | 'card' | 'composer'
   /** Adds hover and focus affordances for cards that are themselves clickable. */
   interactive?: boolean
   /** Raises the card 2px on hover. Only meaningful with `interactive`. */
@@ -36,6 +37,7 @@ const RADIUS = {
 
 const SHADOW = {
   none: '',
+  bevel: 'shadow-[var(--bevel-surface-rest)]',
   card: 'shadow-[var(--shadow-card)]',
   composer: 'shadow-[var(--shadow-composer)]',
 } as const
@@ -46,12 +48,20 @@ const SURFACE = {
   lowest: 'bg-[var(--color-surface-container-lowest)]',
   high: 'bg-[var(--color-surface-container-high)]',
   container: 'bg-[var(--color-surface-container)]',
+  glass: 'surface-glass',
+  group: 'bg-[var(--color-surface-container-low)] bg-clip-padding',
   none: '',
 } as const
 
 const BORDER = {
   solid: 'border border-[var(--color-border)]',
   dashed: 'border border-dashed border-[var(--color-border)]',
+  none: '',
+} as const
+
+const GLASS_BORDER = {
+  solid: 'border border-[var(--color-surface-glass-border)]',
+  dashed: 'border border-dashed border-[var(--color-surface-glass-border)]',
   none: '',
 } as const
 
@@ -93,7 +103,7 @@ export function Card({
       className={cx(
         RADIUS[radius],
         SURFACE[surface],
-        BORDER[border],
+        surface === 'glass' ? GLASS_BORDER[border] : BORDER[border],
         PADDING[padding],
         // A lifting card animates its own shadow on hover, so it must not also
         // carry a resting one — the two `shadow-[…]` values would not compose.

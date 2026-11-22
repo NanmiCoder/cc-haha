@@ -21,7 +21,11 @@ vi.mock('../../pages/ScheduledTasks', () => ({
 }))
 
 vi.mock('../../pages/Settings', () => ({
-  Settings: () => <div data-testid="settings-page" />,
+  Settings: () => (
+    <div data-testid="settings-page">
+      <button type="button" data-testid="settings-inner-last">Settings action</button>
+    </div>
+  ),
 }))
 
 vi.mock('../../pages/Market', () => ({
@@ -357,6 +361,54 @@ describe('ContentRouter tab surfaces', () => {
     act(() => useTabStore.getState().setActiveTab('session-1'))
     expect(screen.getByTestId('active-session')).toBe(conversation)
     expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
+  })
+
+  it('renders Settings inline in the main pane on desktop instead of a floating modal dialog', () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: 'session-1',
+    })
+
+    const { container } = render(<ContentRouter />)
+    const conversation = screen.getByTestId('active-session')
+
+    act(() => useTabStore.getState().setActiveTab(SETTINGS_TAB_ID))
+    const settingsPage = screen.getByTestId('settings-page')
+    expect(container).toContainElement(settingsPage)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-route-modal')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-tab-panel')).toHaveClass('opacity-0')
+    expect(screen.getByTestId('session-tab-panel')).toHaveAttribute('inert')
+    expect(conversation).toBeInTheDocument()
+
+    act(() => useTabStore.getState().setActiveTab('session-1'))
+    expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-tab-panel')).toHaveClass('opacity-100')
+    expect(screen.getByTestId('session-tab-panel')).not.toHaveAttribute('inert')
+  })
+
+  it('keeps Settings inline on mobile H5 shells and touch-H5 documents', () => {
+    useTabStore.setState({
+      tabs: [{ sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' }],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    const { container, unmount } = render(<ContentRouter homePage={<div data-testid="mobile-home" />} />)
+    expect(container).toContainElement(screen.getByTestId('settings-page'))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    unmount()
+
+    document.documentElement.setAttribute('data-touch-h5', '')
+    try {
+      const rendered = render(<ContentRouter />)
+      expect(rendered.container).toContainElement(screen.getByTestId('settings-page'))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
   })
 })
 

@@ -5,9 +5,9 @@
  * menus again.
  */
 
-/** White sheet, hairline, card corner, dropdown shadow, 4px inset. */
+/** Frosted glass sheet, hairline rim, card corner, dropdown glass shadow, 4px inset. */
 export const COMPOSER_POPOVER =
-  'rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  'dropdown-glass popover-motion rounded-[var(--radius-lg)] p-1'
 
 /** A menu row: 32px minimum, the row corner, 13px. Hover doubles as highlight. */
 export const COMPOSER_MENU_ITEM =

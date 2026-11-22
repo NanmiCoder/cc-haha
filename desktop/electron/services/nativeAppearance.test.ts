@@ -31,8 +31,8 @@ const WARM_LIGHT = '#F6F0E1'
 function appearance(overrides: Partial<AppliedAppearance> = {}): AppliedAppearance {
   return {
     isDark: false,
-    background: '#FFFFFF',
-    lightBackground: '#FFFFFF',
+    background: LIGHT_WINDOW_BACKGROUND,
+    lightBackground: LIGHT_WINDOW_BACKGROUND,
     darkBackground: DARK_WINDOW_BACKGROUND,
     followSystem: false,
     ...overrides,
@@ -234,6 +234,25 @@ describe('applyAppliedAppearance', () => {
     expect(JSON.parse(readFileSync(appearanceStatePath(app, env), 'utf-8'))).toEqual(state)
   })
 
+  it('repaints every live window cleanly for OLED dark and cold porcelain light themes', () => {
+    const { app, env } = makeApp()
+    const win = fakeWindow()
+
+    applyAppliedAppearance(
+      appearance({ isDark: true, background: '#000000', lightBackground: '#FCFCFC', darkBackground: '#000000' }),
+      { app, windows: () => [win], env },
+    )
+    expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#000000')
+    expect(startupWindowBackground(readAppearanceState(app, env), true)).toBe('#000000')
+
+    applyAppliedAppearance(
+      appearance({ isDark: false, background: '#FCFCFC', lightBackground: '#FCFCFC', darkBackground: '#000000' }),
+      { app, windows: () => [win], env },
+    )
+    expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#FCFCFC')
+    expect(startupWindowBackground(readAppearanceState(app, env), false)).toBe('#FCFCFC')
+  })
+
   it('skips windows that were already torn down', () => {
     // quit/quitAndInstall can leave destroyed windows in the list; touching
     // one throws "Object has been destroyed".
@@ -267,8 +286,10 @@ describe('window background constants', () => {
     // CSS and bootstrapScript.test.ts binds it to index.html, but the main
     // process had its own copies. Without this, changing the palette would
     // leave the pre-paint window color silently behind.
+    expect(LIGHT_WINDOW_BACKGROUND).toBe('#FCFCFC')
+    expect(DARK_WINDOW_BACKGROUND).toBe('#000000')
     expect(LIGHT_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.white)
-    expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.dark)
+    expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS['neutral-dark'])
     // The defaults of each half — what a first launch paints before the
     // renderer has reported a preference.
     expect(THEME_BACKGROUNDS[DEFAULT_LIGHT_THEME]).toBe(LIGHT_WINDOW_BACKGROUND)

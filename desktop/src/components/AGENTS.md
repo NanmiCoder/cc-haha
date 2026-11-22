@@ -38,6 +38,8 @@
 | 确认 / 删除确认 | `ConfirmDialog` | `ui/ConfirmDialog.tsx` |
 | 移动端底部弹层 | `MobileBottomSheet` | `ui/MobileBottomSheet.tsx` |
 | 悬浮提示 | `Tooltip` | `ui/Tooltip.tsx` |
+| 快捷键键帽 | `Kbd` / `KbdGroup` | `ui/Kbd.tsx` |
+| 自动隐藏滚动条与边缘渐隐容器 | `ScrollArea` | `ui/ScrollArea.tsx` |
 | 复制按钮 | `CopyButton` | `ui/CopyButton.tsx` |
 | 目录选择 | `DirectoryPicker` | `composite/DirectoryPicker.tsx` |
 | 「用 X 打开」菜单 | `OpenWithMenu` | `composite/OpenWithMenu.tsx` |

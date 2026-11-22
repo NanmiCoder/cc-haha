@@ -246,6 +246,7 @@ Thanks to the following open-source projects and community practices for referen
 - [Electron](https://github.com/electron/electron): cross-platform desktop app capabilities and engineering practices.
 - [agent-desktop](https://github.com/vercel-labs/agent-desktop) by Vercel Labs: a reference and directly reused native implementation for Windows / Linux Computer Use. Pinned to **1.0.2**, commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d), with the [Apache-2.0 license](native/agent-desktop/LICENSE), [provenance and file hashes](native/agent-desktop/UPSTREAM.json), and [local changes](native/agent-desktop/PATCHES.md) retained.
 - [cc-switch](https://github.com/farion1231/cc-switch): reference for model provider configuration.
+- [t3code](https://github.com/pingdotgg/t3code): visual texture and interaction design reference for the desktop UI.
 - [LINUX DO](https://linux.do/): a new ideal developer community.
 - [AtomGit](https://atomgit.com/NanmiCoder/cc-haha): code hosting for this project in China.
 

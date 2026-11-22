@@ -51,8 +51,8 @@ export function DayOfWeekPicker({ selected, onChange }: Props) {
                 // reads the same here as in every other chip row. The old
                 // terracotta wash made a selected weekday look like the brand
                 // action.
-                ? 'border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]'
+                ? 'control-bevel-cta border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
+                : 'control-bevel border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]'
               }
             `}
           >

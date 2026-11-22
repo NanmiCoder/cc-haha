@@ -35,20 +35,20 @@ export type AttachmentPreview = {
 }
 
 const FILE_ICON_ACCENTS: Record<string, string> = {
-  picture_as_pdf: '#d14343',
-  docs: '#3f6ecf',
-  markdown: '#4d6b8a',
-  text_snippet: '#667085',
-  table_chart: '#24845b',
-  slideshow: '#c85b2b',
-  folder_zip: '#a46a17',
-  code: '#7656b5',
-  audio_file: '#ad477c',
-  video_file: '#6655b8',
-  html: '#c05d2c',
-  image: '#24899a',
-  folder: '#a46a17',
-  insert_drive_file: '#667085',
+  picture_as_pdf: 'var(--color-error)',
+  docs: 'var(--color-info)',
+  markdown: 'var(--color-code-property)',
+  text_snippet: 'var(--color-text-secondary)',
+  table_chart: 'var(--color-success)',
+  slideshow: 'var(--color-warning)',
+  folder_zip: 'var(--color-warning)',
+  code: 'var(--color-code-keyword)',
+  audio_file: 'var(--color-brand)',
+  video_file: 'var(--color-code-function)',
+  html: 'var(--color-warning)',
+  image: 'var(--color-tertiary)',
+  folder: 'var(--color-warning)',
+  insert_drive_file: 'var(--color-text-secondary)',
 }
 
 function fileIconAccent(icon: string): string {
@@ -212,7 +212,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   isLastOddItem ? 'col-span-2' : '',
                 ].join(' ')}
               >
-                <span className="relative block h-28 overflow-hidden bg-[var(--color-surface)]">
+                <span className="relative block h-28 overflow-hidden bg-[var(--color-surface)] after:pointer-events-none after:absolute after:inset-0 after:ring-1 after:ring-inset after:ring-[var(--color-border)]">
                   <img
                     src={src}
                     alt=""
@@ -254,7 +254,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
         ref={isComposer ? composerTrayRef : undefined}
         data-testid={isComposer ? 'composer-attachment-tray' : undefined}
         className={isComposer
-          ? '-m-1 flex max-h-[min(188px,24dvh)] flex-wrap items-center gap-2 overflow-y-auto overscroll-contain p-1'
+          ? 'scrollbar-autohide -m-1 flex max-h-[min(188px,24dvh)] flex-wrap items-center gap-2 overflow-y-auto overscroll-contain p-1'
           : 'flex max-w-full flex-wrap justify-end gap-2'}
       >
         {attachments.map((attachment, index) => {
@@ -275,8 +275,8 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   onClick={() => setActiveImageIndex(images.findIndex((image) => image.src === src))}
                   className={
                     isComposer
-                      ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]'
-                      : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left transition-[border-color] hover:border-[var(--color-outline)] motion-reduce:transition-none'
+                      ? 'relative overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:ring-1 after:ring-inset after:ring-[var(--color-border)]'
+                      : 'relative overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] text-left after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:ring-1 after:ring-inset after:ring-[var(--color-border)] hover:after:ring-[var(--color-outline)] motion-reduce:transition-none'
                   }
                 >
                   <img

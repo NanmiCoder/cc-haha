@@ -34,11 +34,7 @@ describe('Modal', () => {
     expect(document.body.contains(dialog)).toBe(true)
   })
 
-  it('carries an opaque panel rather than the blur-dependent glass fill', () => {
-    // `.glass-panel` only hides what is behind it when `backdrop-filter` runs.
-    // Where it does not, the blur is skipped without error and the page reads
-    // through the panel — which is how the provider list stayed legible behind
-    // the provider form. Dialogs are too large and too long-lived to bet on it.
+  it('carries the frosted dialog-panel surface with popover motion rather than glass-panel', () => {
     render(
       <Modal open onClose={vi.fn()} title="Provider">
         <span>Provider form</span>
@@ -46,11 +42,11 @@ describe('Modal', () => {
     )
 
     const dialog = screen.getByRole('dialog', { name: 'Provider' })
-    expect(dialog).toHaveClass('dialog-panel')
+    expect(dialog).toHaveClass('dialog-panel', 'popover-motion')
     expect(dialog).not.toHaveClass('glass-panel')
   })
 
-  it('sits on the modal scrim, not the lighter non-modal one', () => {
+  it('sits on the blurred dialog-backdrop scrim, not the lightbox scrim', () => {
     render(
       <Modal open onClose={vi.fn()} title="Provider">
         <span>Provider form</span>
@@ -58,7 +54,7 @@ describe('Modal', () => {
     )
 
     const backdrop = screen.getByRole('dialog', { name: 'Provider' }).previousElementSibling
-    expect(backdrop).toHaveClass('bg-[var(--color-modal-scrim)]')
+    expect(backdrop).toHaveClass('dialog-backdrop')
   })
 
   it('gives media a viewport stage instead of wrapping it in a dialog card', () => {

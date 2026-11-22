@@ -142,13 +142,13 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   const stateTone = STATE_TONE[plan.state]
 
   return (
-    <section aria-label={t('teamPlan.title')} className="@container min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+    <section aria-label={t('teamPlan.title')} className="@container min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--bevel-surface-rest)]">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <UsersRound size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         <div className="min-w-0 flex-1 basis-40">
           <p className="text-[11px] text-[var(--color-text-tertiary)]">{t('teamPlan.title')}</p>
           <h3 className="mt-0.5 truncate text-[13px] font-medium text-[var(--color-text-primary)]" title={plan.teamName}>{plan.teamName}</h3>
-          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-secondary)]" role="status">
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs tabular-nums text-[var(--color-text-secondary)]" role="status">
             <StatusDot tone={stateTone} pulse={stateTone === 'warning'} />
             <span className="min-w-0 [overflow-wrap:anywhere]">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</span>
           </p>
@@ -189,7 +189,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
             <Badge tone={stateTone} size="sm">{stateLabel}</Badge>
           </div>
           {/* A member that crashed while starting reports its own output, line by line. */}
-          {plan.launch?.error && <p role="alert" data-testid="team-plan-launch-error" className="mb-4 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
+          {plan.launch?.error && <p role="alert" data-testid="team-plan-launch-error" className="scrollbar-autohide mb-4 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
           {entry.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{entry.error}</p>}
           {plan.state === 'review_pending' && invalidNames.length > 0 && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{t('teamPlan.invalidMemberNames', { names: invalidNames.join(', ') })}</p>}
           {entry.conflict && <div role="alert" className="mb-4 space-y-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] p-3 text-[var(--color-on-warning-container)]">
@@ -202,7 +202,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
           <div className="grid min-w-0 gap-6 @min-[760px]:grid-cols-[244px_minmax(0,1fr)] @min-[760px]:gap-8">
             <aside className="min-w-0 @min-[760px]:border-r @min-[760px]:border-[var(--color-border-separator)] @min-[760px]:pr-6">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.roster')} <span className="ml-1 font-mono text-[var(--color-text-tertiary)]">{members.length}</span></h4>
+                <h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.roster')} <span className="ml-1 font-mono tabular-nums text-[var(--color-text-tertiary)]">{members.length}</span></h4>
                 {plan.state === 'review_pending' && <Checkbox size="sm" label={t('teamPlan.selectAll')} labelHidden checked={members.length > 0 && members.every(member => selected.includes(member.id))} indeterminate={selected.length > 0 && !members.every(member => selected.includes(member.id))} disabled={!editable} onChange={event => setSelected(event.target.checked ? members.map(member => member.id) : [])} />}
               </div>
               <nav aria-label={t('teamPlan.roster')} className="grid min-w-0 gap-1.5">
@@ -262,7 +262,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 </details>
               </section>}
               <section className="mt-6" aria-label={t('teamPlan.allTasks')}>
-                <div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.allTasks')}</h4><span className="font-mono text-xs text-[var(--color-text-tertiary)]">{tasks.length}</span></div>
+                <div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.allTasks')}</h4><span className="font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">{tasks.length}</span></div>
                 {tasks.length === 0 && <p className="py-5 text-sm text-[var(--color-text-tertiary)]">{t('teamPlan.noTasks')}</p>}
                 <div className="divide-y divide-[var(--color-border-separator)]">
                   {tasks.map((task, index) => {

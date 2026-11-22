@@ -107,7 +107,7 @@ function categoryTagClass(category: FeedCategory): string {
   if (category === 'system') {
     return 'border-transparent bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
   }
-  return 'border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]'
+  return 'border-[var(--color-outline)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
 }
 
 function categoryAccent(category: FeedCategory): string {
@@ -291,10 +291,10 @@ export function AgentTeamsCommunicationFeed({
                 aria-pressed={selected}
                 onClick={() => setFilter(option.key)}
                 className={[
-                  'inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold outline-none transition-[transform,background-color,border-color,color] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]',
+                  'inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold outline-none transition-[transform,background-color,border-color,color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
                   selected
-                    ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-surface)]'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
+                    ? 'control-bevel-cta border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-surface)]'
+                    : 'control-bevel border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
                 ].join(' ')}
               >
                 {option.label}
@@ -304,7 +304,7 @@ export function AgentTeamsCommunicationFeed({
         </div>
       </div>
 
-      <div ref={reveal.scrollRootRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={reveal.scrollRootRef} className="scrollbar-autohide min-h-0 flex-1 overflow-y-auto">
         {visibleRows.length === 0 ? (
           <div className="flex min-h-28 items-center justify-center px-6 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
             {t('agentTeams.communication.empty')}
@@ -484,7 +484,7 @@ const FeedRow = memo(function FeedRow({
             className="inline-flex min-w-0 flex-1 items-center gap-1.5"
             title={recipient}
           >
-            <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]">
+            <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
               <Megaphone size={11} strokeWidth={2} aria-hidden="true" />
             </span>
             <span className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--color-text-secondary)]">

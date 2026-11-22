@@ -163,3 +163,21 @@ it.each([true, false])('shows beta details on focus without overflowing narrow f
   expect(description).toHaveTextContent('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1')
   expect(description.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
 })
+
+it('renders a clean desktop page header and autohide scroller without modal-close padding workarounds', () => {
+  render(<H5Settings />)
+  const header = screen.getByTestId('h5-settings-desktop-header')
+  expect(header).toHaveTextContent('Settings')
+  expect(header.className).toContain('md:flex')
+  expect(header.className).not.toContain('pr-10')
+  expect(screen.getByTestId('h5-settings-scroll').className).toContain('scrollbar-autohide')
+})
+
+it('keeps H5Settings and its subpages on opaque paper surfaces', async () => {
+  render(<H5Settings />)
+  expect(screen.getByTestId('h5-settings-scroll')).toHaveClass('bg-[var(--color-surface)]')
+  expect(screen.getByTestId('h5-settings-scroll')).not.toHaveClass('bg-transparent')
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
+  expect(await screen.findByTestId('h5-settings-subpage')).toHaveClass('bg-[var(--color-surface)]')
+  expect(screen.getByTestId('h5-settings-subpage')).not.toHaveClass('bg-transparent')
+})

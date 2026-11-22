@@ -870,7 +870,7 @@ function TerminalHelpHint({
       <span
         id={tooltipId}
         role="tooltip"
-        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} absolute left-0 top-full z-[var(--z-tooltip)] mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] shadow-[var(--shadow-dropdown)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
+        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} dropdown-glass popover-motion absolute left-0 top-full z-[var(--z-tooltip)] mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-md)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
       >
         {t('settings.terminal.description')}
       </span>

@@ -68,15 +68,19 @@ export function ThinkingBlock({
           if (disclosureKey) setDisclosure(disclosureKey, next)
         }}
         aria-expanded={expanded}
-        className="-mx-2 flex h-7 w-[calc(100%+1rem)] min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        className={[
+          '-mx-1.5 flex min-h-6 w-[calc(100%+0.75rem)] min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
+          isActive ? 'border-b border-[var(--color-info-container)]' : '',
+        ].filter(Boolean).join(' ')}
       >
-        <Brain
-          size={15}
-          strokeWidth={1.75}
-          aria-hidden="true"
-          className="shrink-0"
-        />
-        <span className="shrink-0 font-medium text-[var(--color-text-secondary)]">
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center">
+          <Brain
+            size={14}
+            strokeWidth={1.75}
+            className={isActive ? 'text-[var(--color-info)]' : 'text-[var(--color-text-tertiary)]'}
+          />
+        </span>
+        <span className={`shrink-0 font-medium text-[var(--color-text-secondary)] ${isActive ? 'animate-stepped-pulse' : ''}`}>
           {label}
         </span>
         {preview ? (
@@ -99,7 +103,7 @@ export function ThinkingBlock({
         <div
           ref={contentRef}
           data-thinking-content="expanded"
-          className="relative mb-1.5 ml-[7px] mt-1 max-h-[300px] overflow-y-auto border-l border-[var(--color-outline)] py-0.5 pl-[15px] text-[var(--color-text-secondary)]"
+          className="scrollbar-autohide scroll-edge-fade relative mb-1.5 ml-3 mt-1 max-h-[300px] overflow-y-auto border-l border-[var(--color-border)] py-0.5 pl-4 text-[var(--color-text-secondary)]"
         >
           {isActive ? (
             <StreamingThinkingMarkdown content={displayContent} />

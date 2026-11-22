@@ -1874,4 +1874,40 @@ describe('AskUserQuestion', () => {
       expect(screen.getByText('Ship it?')).toBeTruthy()
     })
   })
+
+  it('shows platform-aware submit shortcut keycap label', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get')
+    const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get')
+
+    try {
+      platformSpy.mockReturnValue('Win32')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+
+      const { rerender } = render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
+          }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: 'Submit' }).textContent).toContain('Ctrl+↵')
+
+      platformSpy.mockReturnValue('MacIntel')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
+
+      rerender(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
+          }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: 'Submit' }).textContent).toContain('⌘↵')
+    } finally {
+      platformSpy.mockRestore()
+      userAgentSpy.mockRestore()
+    }
+  })
 })
