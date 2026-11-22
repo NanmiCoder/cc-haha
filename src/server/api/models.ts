@@ -182,6 +182,7 @@ function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {
     name: model.label,
     description: model.description,
     context: model.contextWindow ? String(model.contextWindow) : '',
+    ...(model.maxContextWindow ? { maxContext: String(model.maxContextWindow) } : {}),
     ...(model.reasoningEffort && { defaultReasoningEffort: model.reasoningEffort }),
     ...(model.supportsReasoningEffort === false
       ? { supportedReasoningEfforts: [] }

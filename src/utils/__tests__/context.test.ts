@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, hasKnownContextWindow, modelSupports1M } from '../context.js'
+import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, hasKnownContextWindow, isModelWindowKnownForAutoCompact, modelSupports1M } from '../context.js'
 
 describe('calculateCurrentContextTokenTotal', () => {
   test('includes assistant output tokens in the current context total', () => {
@@ -108,4 +108,29 @@ test('Opus 5 uses its native context and output limits', () => {
   expect(getContextWindowForModel('claude-opus-5')).toBe(1_000_000)
   expect(getContextWindowForModel('anthropic/claude-opus-5')).toBe(1_000_000)
   expect(getModelMaxOutputTokens('claude-opus-5')).toEqual({ default: 64_000, upperLimit: 128_000 })
+})
+
+test('Grok models resolve to their official 500K context window and honor explicit overrides', () => {
+  expect(getContextWindowForModel('grok-4.7')).toBe(500_000)
+  expect(getContextWindowForModel('grok-4.7-build-fast')).toBe(500_000)
+  expect(getContextWindowForModel('grok-4.6')).toBe(500_000)
+  expect(getContextWindowForModel('grok-4.5')).toBe(500_000)
+  expect(hasKnownContextWindow('grok-4.7')).toBe(true)
+  expect(isModelWindowKnownForAutoCompact('grok-4.7')).toBe(true)
+
+  const originalWindows = process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+  const originalDisable1m = process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT
+  try {
+    process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS = JSON.stringify({ 'grok-4.7': 256_000 })
+    expect(getContextWindowForModel('grok-4.7')).toBe(256_000)
+
+    delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+    process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT = '1'
+    expect(getContextWindowForModel('grok-4.7')).toBe(200_000)
+  } finally {
+    if (originalWindows === undefined) delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+    else process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS = originalWindows
+    if (originalDisable1m === undefined) delete process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT
+    else process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT = originalDisable1m
+  }
 })

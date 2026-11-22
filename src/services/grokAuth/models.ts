@@ -12,6 +12,8 @@ export type GrokModelCatalogEntry = {
   label: string
   description: string
   contextWindow?: number
+  /** Maximum context window a user override may set when upstream states one. */
+  maxContextWindow?: number
   source?: 'official' | 'cli'
   supportsReasoningEffort?: boolean
   reasoningEffort?: string
@@ -106,12 +108,16 @@ function parseRuntimeModelCatalog(raw: string | undefined): GrokModelCatalogEntr
       if (record.contextWindow !== undefined && (
         typeof record.contextWindow !== 'number' || !Number.isFinite(record.contextWindow) || record.contextWindow <= 0
       )) return undefined
+      if (record.maxContextWindow !== undefined && (
+        typeof record.maxContextWindow !== 'number' || !Number.isFinite(record.maxContextWindow) || record.maxContextWindow <= 0
+      )) return undefined
       if (record.source !== undefined && record.source !== 'official' && record.source !== 'cli') return undefined
       models.push({
         value: record.value,
         label: record.label ?? record.value,
         description: record.description ?? '',
         ...(record.contextWindow !== undefined && { contextWindow: record.contextWindow }),
+        ...(record.maxContextWindow !== undefined && { maxContextWindow: record.maxContextWindow }),
         ...(record.source !== undefined && { source: record.source }),
         ...(record.supportsReasoningEffort !== undefined && { supportsReasoningEffort: record.supportsReasoningEffort }),
         ...(record.reasoningEffort !== undefined && { reasoningEffort: record.reasoningEffort }),
@@ -151,9 +157,46 @@ export function resolveGrokModel(modelId: string): string {
   return requested
 }
 
-export function getGrokContextWindowForModel(modelId: string): number | null {
-  const resolved = resolveGrokModel(modelId)
-  return GROK_MODEL_CATALOG.find((model) => model.value === resolved)?.contextWindow ?? null
+const LEGACY_GROK_CONTEXT_WINDOWS: Record<string, number> = {
+  'grok-build-0.1': 256_000,
+  'grok-4.3': 1_000_000,
+  'grok-4.20': 1_000_000,
+  'grok-4.20-reasoning': 1_000_000,
+  'grok-4.20-non-reasoning': 1_000_000,
+}
+
+export function getGrokModelCatalogEntry(
+  modelId: string,
+  catalog: readonly GrokModelCatalogEntry[] = GROK_MODEL_CATALOG,
+): GrokModelCatalogEntry | undefined {
+  const normalized = modelId.trim().toLowerCase()
+  if (!normalized) return undefined
+  return (
+    catalog.find((entry) => entry.value.toLowerCase() === normalized) ??
+    GROK_MODEL_CATALOG.find((entry) => entry.value.toLowerCase() === normalized)
+  )
+}
+
+export function getGrokContextWindowForModel(
+  modelId: string,
+  catalog?: readonly GrokModelCatalogEntry[],
+): number | null {
+  // Never read the process-global mutable `runtimeCatalog` when no explicit
+  // catalog is supplied: in the desktop server process it belongs to whichever
+  // Grok account refreshed last and would leak across logout or other providers.
+  // A Grok OAuth CLI subprocess still sees its own process-scoped launch snapshot.
+  const effectiveCatalog =
+    catalog ??
+    (readProviderEnv('CC_HAHA_GROK_OAUTH_PROVIDER') === '1'
+      ? parseRuntimeModelCatalog(process.env[GROK_MODEL_CATALOG_ENV_KEY])
+      : undefined) ??
+    GROK_MODEL_CATALOG
+  const entry = getGrokModelCatalogEntry(modelId, effectiveCatalog)
+  if (entry?.contextWindow !== undefined) {
+    return entry.contextWindow
+  }
+  const normalized = modelId.trim().toLowerCase()
+  return LEGACY_GROK_CONTEXT_WINDOWS[normalized] ?? null
 }
 
 /**

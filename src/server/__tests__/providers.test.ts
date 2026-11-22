@@ -21,7 +21,9 @@ import {
 } from '../services/traceCaptureService.js'
 import type { CreateProviderInput } from '../types/provider.js'
 import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
-import { GROK_MODEL_CATALOG, setGrokRuntimeModelCatalog } from '../../services/grokAuth/models.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
+import { getDesktopGrokModelCatalog } from '../services/grokModelCatalog.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -834,10 +836,26 @@ describe('ProviderService', () => {
     describe('Grok Official provider metadata', () => {
       test('keeps discovered capabilities in launch env and removes stale snapshots from settings', async () => {
         const catalog = [{
-          value: 'grok-future-release', label: 'Future', description: '',
+          value: 'grok-future-release', label: 'Future', description: '', contextWindow: 750_000, source: 'official' as const,
           supportsReasoningEffort: true, reasoningEffort: 'low', reasoningEfforts: ['low', 'xhigh', 'max'],
         }]
-        setGrokRuntimeModelCatalog(catalog)
+        clearGrokModelCatalogCache()
+        await hahaGrokOAuthService.saveTokens({
+          accessToken: 'grok-fixture-token', refreshToken: null, expiresAt: null, email: null,
+        })
+        await getDesktopGrokModelCatalog({
+          forceRefresh: true,
+          fetchOverride: async () => Response.json({
+            models: [{
+              id: 'grok-future-release',
+              name: 'Future',
+              context_window: 750_000,
+              supportsReasoningEffort: true,
+              reasoningEffort: 'low',
+              reasoningEfforts: ['low', 'xhigh', 'max'],
+            }],
+          }),
+        })
         try {
           const svc = new ProviderService()
           await svc.updateManagedSettings({ env: {
@@ -847,14 +865,24 @@ describe('ProviderService', () => {
           const persistedEnv = (await readSettings()).env as Record<string, string>
           expect(persistedEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
           expect(persistedEnv.USER_CUSTOM_ENV).toBe('preserved')
+          // Account-specific live catalog windows stay in launch env, never persisted to settings.json.
+          const persistedWindows = JSON.parse(persistedEnv[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
+          expect(persistedWindows['grok-future-release']).toBeUndefined()
+          expect(persistedWindows['grok-4.7']).toBe(500_000)
+
           const runtimeEnv = await svc.getProviderRuntimeEnv('grok-official')
           expect(JSON.parse(runtimeEnv.CC_HAHA_GROK_MODEL_CATALOG!)).toEqual(catalog)
+          expect(JSON.parse(runtimeEnv[MODEL_CONTEXT_WINDOWS_ENV_KEY]!)['grok-future-release']).toBe(750_000)
+
+          await hahaGrokOAuthService.deleteTokens()
+          const afterLogout = readActiveProviderManagedEnv(tmpDir)
+          expect(JSON.parse(afterLogout![MODEL_CONTEXT_WINDOWS_ENV_KEY]!)['grok-future-release']).toBeUndefined()
 
           await svc.updateManagedSettings({ env: { ...persistedEnv, CC_HAHA_GROK_MODEL_CATALOG: 'stale-catalog' } })
           await svc.activateOfficial()
           expect(((await readSettings()).env as Record<string, string>).CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
         } finally {
-          setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+          clearGrokModelCatalogCache()
         }
       })
 
@@ -4491,14 +4519,44 @@ describe('ChatGPT Official context window overrides', () => {
     expect(tooSmall.status).toBe(400)
   })
 
-  test('only ChatGPT Official accepts window overrides', async () => {
-    for (const id of ['grok-official', 'claude-official', 'deepseek-account']) {
+  test('only ChatGPT Official and Grok Official accept window overrides', async () => {
+    for (const id of ['claude-official', 'deepseek-account']) {
       const response = await putModels(id, { models: mapping, modelContextWindows: { 'some-model': 300_000 } })
       expect(response.status).toBe(400)
     }
     // An empty map is a no-op everywhere, so a shared client can always send it.
-    const empty = await putModels('grok-official', { models: mapping, modelContextWindows: {} })
+    const empty = await putModels('claude-official', { models: mapping, modelContextWindows: {} })
     expect(empty.status).toBe(200)
+  })
+
+  test('saves and applies per-model context window overrides for Grok Official', async () => {
+    const svc = new ProviderService()
+    const grokMapping = { main: 'grok-4.7', haiku: 'grok-4.7-build-fast', sonnet: 'grok-4.6', opus: 'grok-4.7' }
+    const response = await putModels('grok-official', {
+      models: grokMapping,
+      modelContextWindows: { 'grok-4.7': 256_000 },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      models: grokMapping,
+      modelContextWindows: { 'grok-4.7': 256_000 },
+    })
+    await svc.activateProvider('grok-official')
+
+    const windows = runtimeWindows(readActiveProviderManagedEnv(tmpDir))
+    expect(windows['grok-4.7']).toBe(256_000)
+    expect(windows['grok-4.7-build-fast']).toBe(500_000)
+    expect(windows['grok-4.6']).toBe(500_000)
+    expect(windows['grok-4.5']).toBe(500_000)
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['grok-4.7']).toBe(256_000)
+    expect((await svc.getProvider('grok-official')).modelContextWindows?.['grok-4.7']).toBe(256_000)
+    expect(runtimeWindows(await svc.getProviderRuntimeEnv('grok-official'))['grok-4.7']).toBe(256_000)
+
+    const cleared = await putModels('grok-official', { models: grokMapping, modelContextWindows: {} })
+    expect(cleared.status).toBe(200)
+    expect(await cleared.json()).toEqual({ models: grokMapping, modelContextWindows: {} })
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['grok-4.7']).toBe(500_000)
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['grok-4.7']).toBe(500_000)
   })
 
   test('GET returns the saved overrides next to the mapping', async () => {
