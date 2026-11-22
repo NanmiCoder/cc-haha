@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, type ApiRequestOptions } from './client'
 import type { MessageEntry } from '../types/session'
 import type { AgentTaskNotification } from '../types/chat'
 
@@ -81,17 +81,15 @@ export function readAgentIdRef(ref: string): string {
 }
 
 export const subagentsApi = {
-  getRunByAgent(sessionId: string, agentId: string) {
-    return api.get<SubagentRunResponse>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/by-agent/${encodeURIComponent(agentId)}`,
-    )
+  getRunByAgent(sessionId: string, agentId: string, options?: ApiRequestOptions) {
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/subagents/by-agent/${encodeURIComponent(agentId)}`
+    return options ? api.get<SubagentRunResponse>(path, options) : api.get<SubagentRunResponse>(path)
   },
 
-  getRunByTool(sessionId: string, toolUseId: string, taskId?: string) {
+  getRunByTool(sessionId: string, toolUseId: string, taskId?: string, options?: ApiRequestOptions) {
     const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''
-    return api.get<SubagentRunResponse>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/by-tool/${encodeURIComponent(toolUseId)}${query}`,
-    )
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/subagents/by-tool/${encodeURIComponent(toolUseId)}${query}`
+    return options ? api.get<SubagentRunResponse>(path, options) : api.get<SubagentRunResponse>(path)
   },
 
   sendMessage(sessionId: string, toolUseId: string, content: string, taskId?: string) {

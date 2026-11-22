@@ -726,6 +726,17 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
   ): void => {
     const sourceCount = progress ? progress.indexed : options.index.countSources()
     const resolved = resolvedProgress(progress, sourceCount)
+    const existingState = options.index.getBackfillState(options.scope)
+    if (
+      existingState &&
+      existingState.state === resolved.state &&
+      existingState.discovered === resolved.discovered &&
+      existingState.indexed === resolved.indexed &&
+      existingState.degraded === resolved.degraded &&
+      existingState.lastErrorCode === resolved.lastErrorCode
+    ) {
+      return
+    }
     options.database.transaction(writer => {
       assertActive()
       writeBackfillState(writer, options.scope, watermark, resolved, now())

@@ -560,6 +560,7 @@ function statusFromResolution(
 async function resolveTranscript(
   sessionId: string,
   candidates: Array<string | null | undefined>,
+  signal?: AbortSignal,
 ): Promise<{
   agentId: string | null
   messages: MessageEntry[]
@@ -568,10 +569,11 @@ async function resolveTranscript(
 }> {
   const seen = new Set<string>()
   for (const candidate of candidates) {
+    signal?.throwIfAborted()
     const agentId = normalizeAgentIdHint(candidate ?? undefined)
     if (!agentId || seen.has(agentId)) continue
     seen.add(agentId)
-    const transcript = await sessionService.getSubagentTranscript(sessionId, agentId, { bounded: true })
+    const transcript = await sessionService.getSubagentTranscript(sessionId, agentId, { bounded: true, signal })
     if (transcript.messages.length > 0 || transcript.taskNotifications.length > 0 || transcript.historyComplete === false) {
       return { agentId, ...transcript }
     }
@@ -584,6 +586,7 @@ async function resolveRunFromToolRef(
   rootMessages: MessageEntry[],
   toolRef: string,
   rootComplete = true,
+  signal?: AbortSignal,
 ): Promise<{
   historyComplete: boolean
   resolution: SubagentRunResolution
@@ -616,7 +619,7 @@ async function resolveRunFromToolRef(
     const parentTranscript = await sessionService.getSubagentTranscript(
       sessionId,
       strictParentAgentId,
-      { bounded: true, toolUseId: nestedRef.leafToolUseId },
+      { bounded: true, toolUseId: nestedRef.leafToolUseId, signal },
     )
     const nestedResolution = resolveSubagentRunFromMessages(
       parentTranscript.messages,
@@ -644,7 +647,7 @@ async function resolveRunFromToolRef(
   const fragments = await sessionService.getSubagentTranscriptFragmentsByAgentType(
     sessionId,
     teammateName,
-    { bounded: true, toolUseId: nestedRef.leafToolUseId },
+    { bounded: true, toolUseId: nestedRef.leafToolUseId, signal },
   )
   for (let index = fragments.length - 1; index >= 0; index -= 1) {
     const fragment = fragments[index]!
@@ -703,11 +706,14 @@ function notificationForToolRef(
 export async function getSubagentRunByAgentId(
   sessionId: string,
   agentId: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SubagentRunResponse | null> {
+  const signal = options.signal
+  signal?.throwIfAborted()
   const normalized = normalizeAgentIdHint(agentId)
   if (!normalized) return null
 
-  const transcript = await resolveTranscript(sessionId, [normalized])
+  const transcript = await resolveTranscript(sessionId, [normalized], signal)
   if (!transcript.agentId) return null
 
   const messages = transcript.messages
@@ -767,13 +773,16 @@ export async function getSubagentRunByTool(
   sessionId: string,
   toolUseId: string,
   liveTaskId?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SubagentRunResponse | null> {
+  const signal = options.signal
+  signal?.throwIfAborted()
   // Only the root-level `Agent` tool call is resolved here — its child
   // transcript is read separately below. Pulling the merged view instead would
   // re-materialize every linked subagent on each card open.
-  const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId)
+  const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId, undefined, signal)
   const { messages: parentMessages, taskNotifications } = parentLookup
-  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false)
+  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false, signal)
   if (!resolvedToolRef) return null
   const { resolution, lookupToolUseId, expectedOwnerAgentId } = resolvedToolRef
 
@@ -787,31 +796,36 @@ export async function getSubagentRunByTool(
     ? resolution.agentId.split('@')[0]
     : undefined
   const teammateFragments = teammateName
-    ? await sessionService.getSubagentTranscriptFragmentsByAgentType(sessionId, teammateName, { bounded: true })
+    ? await sessionService.getSubagentTranscriptFragmentsByAgentType(sessionId, teammateName, { bounded: true, signal })
     : []
-  // Sidecar metadata is written before the agent starts, so it is the only
-  // hint that exists while the run is still streaming. The other candidates
-  // are all recovered from the completion result.
-  const metadataAgentId = normalizeAgentIdHint(
-    (await sessionService.findSubagentAgentIdByToolUseId(
-      sessionId,
-      lookupToolUseId,
-      expectedOwnerAgentId,
-    )) ?? undefined,
-  )
-  const transcript = teammateFragments.length > 0
+  let transcript = teammateFragments.length > 0
     ? {
         historyComplete: teammateFragments.every(fragment => fragment.historyComplete !== false),
         agentId: teammateFragments[teammateFragments.length - 1]!.agentId,
         messages: mergeTeammateTranscriptFragments(teammateFragments),
         taskNotifications: mergeTeammateTranscriptTaskNotifications(teammateFragments),
       }
-    : await resolveTranscript(sessionId, [
-        metadataAgentId,
-        resolution.agentId,
-        safeLiveTaskId,
-        notification?.taskId,
-      ])
+    : await resolveTranscript(
+        sessionId,
+        [resolution.agentId, safeLiveTaskId, notification?.taskId],
+        signal,
+      )
+  // Sidecar metadata is written before the agent starts, so it is the only
+  // hint that exists while the run is still streaming. Skip the full directory
+  // scan once direct candidates or teammate fragments already resolved a run.
+  const metadataAgentId = transcript.agentId
+    ? undefined
+    : normalizeAgentIdHint(
+        (await sessionService.findSubagentAgentIdByToolUseId(
+          sessionId,
+          lookupToolUseId,
+          expectedOwnerAgentId,
+          signal,
+        )) ?? undefined,
+      )
+  if (!transcript.agentId && metadataAgentId) {
+    transcript = await resolveTranscript(sessionId, [metadataAgentId], signal)
+  }
   const activity = teammateFragments.length > 0
     ? mergeTeammateActivityFragments(teammateFragments)
     : transcript.agentId
