@@ -9,6 +9,13 @@ import { sessionsApi } from '../api/sessions'
 import { useUIStore } from '../stores/uiStore'
 import { useContextUsageStore } from '../stores/contextUsageStore'
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../api/skills', () => ({
   skillsApi: {
     list: vi.fn(async () => ({ skills: [] })),
@@ -75,6 +82,7 @@ vi.mock('../api/sessions', async (importOriginal) => {
 
 // Import all pages
 import { EmptySession } from '../pages/EmptySession'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, setComposerText } from '../components/chat/composerTestUtils'
 import { ActiveSession } from '../pages/ActiveSession'
 import { ScheduledTasks } from '../pages/ScheduledTasks'
@@ -92,6 +100,7 @@ import { useTabStore } from '../stores/tabStore'
 import { useTaskStore } from '../stores/taskStore'
 
 beforeEach(() => {
+  clearComposerPromptHistoryCacheForTesting()
   useContextUsageStore.setState({ bySession: {} })
   useSettingsStore.setState({ locale: 'en' })
   useProviderStore.setState({
@@ -641,10 +650,10 @@ describe('Content-only pages render without errors', () => {
     expect(screen.getByText('Slash commands')).toBeInTheDocument()
     expect(screen.getByText('/compact')).toBeInTheDocument()
     expect(screen.getByText('/cost')).toBeInTheDocument()
-    // 14 extras + 8 ungrouped fallback commands, minus `/btw` (a blank session
+    // 14 extras + 9 ungrouped fallback commands, minus `/btw` (a blank session
     // has nothing to fork) and the 12 listed under "More".
     expect(screen.queryByText('/btw')).not.toBeInTheDocument()
-    expect(screen.getByText('9 more commands available. Type / to search the full command list.')).toBeInTheDocument()
+    expect(screen.getByText('10 more commands available. Type / to search the full command list.')).toBeInTheDocument()
 
     resetPageStores()
   })

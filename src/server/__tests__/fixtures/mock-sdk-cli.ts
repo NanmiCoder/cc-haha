@@ -51,6 +51,7 @@ let initSent = false
 let firstUserExitScheduled = false
 let releaseReconnectStream: (() => void) | undefined
 const sideQuestions = new Map<string, { requestId: string; timer: ReturnType<typeof setTimeout> }>()
+const promptOptimizations = new Map<string, { requestId: string; timer: ReturnType<typeof setTimeout> }>()
 let guideReplayInitial: any | undefined
 let guideReplayInputs: string[] = []
 
@@ -431,6 +432,29 @@ ws.addEventListener('message', (event) => {
           clearTimeout(pending.timer)
           sideQuestions.delete(parsed.request.question_id)
           emit(ws, { type: 'control_response', response: { subtype: 'error', request_id: pending.requestId, error: 'Side question cancelled' }, session_id: sessionId })
+        }
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: { cancelled: Boolean(pending) } }, session_id: sessionId })
+        continue
+      }
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'optimize_prompt') {
+        const { request_id: optimizeId, prompt } = parsed.request
+        const key = optimizeId ?? parsed.request_id
+        const timer = setTimeout(() => {
+          promptOptimizations.delete(key)
+          emit(ws, { type: 'control_response', response: {
+            subtype: 'success', request_id: parsed.request_id,
+            response: { optimizedPrompt: `Optimized: ${prompt} (main ${normalRunning ? 'running' : 'idle'})` },
+          }, session_id: sessionId })
+        }, typeof prompt === 'string' && prompt.startsWith('MOCK_SLOW') ? 30_000 : 100)
+        promptOptimizations.set(key, { requestId: parsed.request_id, timer })
+        continue
+      }
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'cancel_optimize_prompt') {
+        const pending = promptOptimizations.get(parsed.request.request_id)
+        if (pending) {
+          clearTimeout(pending.timer)
+          promptOptimizations.delete(parsed.request.request_id)
+          emit(ws, { type: 'control_response', response: { subtype: 'error', request_id: pending.requestId, error: 'Prompt optimization cancelled' }, session_id: sessionId })
         }
         emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: { cancelled: Boolean(pending) } }, session_id: sessionId })
         continue

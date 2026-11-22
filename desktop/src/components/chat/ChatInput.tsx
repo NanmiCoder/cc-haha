@@ -24,7 +24,7 @@ import {
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { teamRuntimeControlKey, teamRuntimeScope, useTeamRuntimeControlStore } from '@/stores/teamRuntimeControlStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -43,6 +43,7 @@ import type { AttachmentRef } from '../../types/chat'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { SlashCommandOption } from '../../types/slashCommand'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
@@ -82,6 +83,7 @@ import {
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { executeFastSlashCommand } from '../../lib/fastModeCommand'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
@@ -102,9 +104,15 @@ import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
 import { useSessionStopOffer } from '../../hooks/useSessionStopOffer'
 import { useSessionGitInfo } from '../../hooks/useSessionGitInfo'
+import {
+  extractSessionPromptHistory,
+  useComposerPromptHistory,
+} from '@/hooks/useComposerPromptHistory'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
+import { PromptOptimizeButton } from './PromptOptimizeButton'
+import { isOptimizablePrompt, usePromptOptimize } from './usePromptOptimize'
 
 type Attachment = ComposerAttachment
 
@@ -298,6 +306,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
+  const isAntigravity = runtimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
   const currentModel = useSettingsStore((state) => state.currentModel)
   const chatSendBehavior = useSettingsStore((state) => state.chatSendBehavior)
   const runtimeSelectionKey = runtimeSelection
@@ -307,7 +316,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const sideChat = useSideChatStore(state => activeTabId ? state.entries[activeTabId] : undefined)
   const listedSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
   const activeSession = listedSession ?? (sideChat ? { ...sideChat, id: sideChat.sessionId, workDirExists: true, workspaceState: 'available' as const, messageCount: 1, projectRoot: sideChat.workDir } : null)
-  const isLean = listedSession?.agentProfile === 'lean'
+  const isLean = !isAntigravity && listedSession?.agentProfile === 'lean'
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -443,8 +452,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const hasWorkspaceReferences = !isMemberSession && workspaceReferences.length > 0
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
-  const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
-  const sideChatAvailable = !isLean && (Boolean(sideChat) || messageCount > 0)
+  const showLaunchControls = !isAntigravity && !isMemberSession && !sideChat && messageCount === 0
+  const sideChatAvailable = !isAntigravity && !isLean && (Boolean(sideChat) || messageCount > 0)
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -453,6 +462,63 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const fitsAtLeast = (minWidth: number) => shellWidth === null ? !compact : shellWidth >= minWidth
   const useCompactControls = isMobileComposer || !fitsAtLeast(TOOLBAR_LOCATION_MIN_WIDTH)
   const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
+  const sessionPromptHistoryEntries = useMemo(
+    () => extractSessionPromptHistory(sessionState?.messages),
+    [sessionState?.messages],
+  )
+  const promptHistory = useComposerPromptHistory({
+    sessionId: activeTabId,
+    projectPath: activeLaunchWorkDir || resolvedWorkDir || null,
+    projectRoot: activeSession?.projectRoot ?? null,
+    sessionEntries: sessionPromptHistoryEntries,
+    includeProjectHistory: !isMemberSession,
+    getCurrentDraft: () => ({ text: inputRef.current, mentions: mentionsRef.current }),
+    applyEntry: (entry, cursor) => {
+      const nextMentions = entry.mentions ?? []
+      composerRef.current?.replaceContent(entry.text, nextMentions, cursor)
+      setComposerInput(entry.text, nextMentions)
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setAtFilter('')
+      setAtCursorPos(-1)
+    },
+  })
+  const applyOptimizedDraft = useCallback((
+    text: string,
+    nextMentions: ComposerMention[],
+    options?: { flash?: boolean },
+  ) => {
+    promptHistory.resetHistory()
+    if (composerRef.current) {
+      composerRef.current.replaceContentWithHistory(text, nextMentions, options)
+    } else {
+      setComposerInput(text, nextMentions)
+    }
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    setAtFilter('')
+    setAtCursorPos(-1)
+    requestAnimationFrame(() => {
+      if (visible) composerRef.current?.focus()
+    })
+  }, [promptHistory.resetHistory, setComposerInput, visible])
+  const getPromptOptimizeDraft = useCallback(
+    () => ({ text: inputRef.current, mentions: mentionsRef.current }),
+    [],
+  )
+  const promptOptimize = usePromptOptimize({
+    sessionId: !isMemberSession ? (activeTabId ?? null) : null,
+    disabled: composerDisabled || dictationLive || (showLaunchControls && !launchReady),
+    getDraft: getPromptOptimizeDraft,
+    applyDraft: applyOptimizedDraft,
+  })
+  const canOptimizePrompt =
+    !isMemberSession &&
+    Boolean(activeTabId) &&
+    !composerDisabled &&
+    !dictationLive &&
+    (!showLaunchControls || launchReady) &&
+    isOptimizablePrompt(input)
   const referenceCwd = activeLaunchWorkDir || resolvedWorkDir || ''
   const referenceProviderId = mentionProviderId(runtimeSelection)
   const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}\0${referenceProviderId ?? ''}\0${isLean ? 'lean' : 'standard'}`
@@ -460,7 +526,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(reference => isComposerReferenceVisible(reference) && (!isLean || reference.kind === 'skill')), [referenceCurrent?.items, isLean])
   useEffect(() => {
     let active = true
-    if (isMemberSession) return
+    if (isMemberSession || isAntigravity) return
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
     void composerReferencesApi.list(referenceCwd || undefined, referenceProviderId, isLean ? 'lean' : undefined).then(data => {
       useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
@@ -469,7 +535,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, referenceCwd, referenceProviderId, isLean, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
+  }, [referenceContext, referenceCwd, referenceProviderId, isAntigravity, isLean, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -492,7 +558,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // second line on columns with hundreds of pixels to spare.
   const showLocationInToolbar = !useCompactControls && !isMemberSession
   const embedLaunchControlsInToolbar = showLocationInToolbar && showLaunchControls
-  const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
+  const pendingSlashUiAction = !isAntigravity && !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
     : null
   const canSubmit = !isWorkspaceMissing &&
@@ -639,6 +705,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashFilter('')
     setAtFilter('')
     setAtCursorPos(-1)
+    promptHistory.resetHistory()
 
     requestAnimationFrame(() => {
       if (visible) composerRef.current?.focus()
@@ -653,6 +720,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     clearComposerPrefill,
     clearWorkspaceReferences,
     composerPrefill,
+    promptHistory.resetHistory,
     setComposerAttachments,
     setComposerInput,
     visible,
@@ -675,6 +743,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashMenuOpen(false)
     setAtFilter('')
     setAtCursorPos(-1)
+    promptHistory.resetHistory()
     clearComposerInsertion(activeTabId, composerInsertion.nonce)
 
     requestAnimationFrame(() => {
@@ -688,6 +757,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     composerInsertion,
     visible,
     isMemberSession,
+    promptHistory.resetHistory,
     setComposerInput,
   ])
 
@@ -826,6 +896,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // A lean session's own list already passed the lean runtime rule.
   const listedSlashCommandNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands])
   const allSlashCommands = useMemo(() => {
+    if (isAntigravity) return []
     if (isMemberSession) {
       if (!memberCliSessionId) return []
       // The member's CLI reports its own commands and skills; the fallback keeps
@@ -844,7 +915,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     // `/btw` forks the conversation so far; a blank session has none to fork.
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedSlashCommandNames)) && (sideChatAvailable || command.name !== 'btw'))
-  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isLean, isMemberSession, memberCliSessionId, memberSlashCommands, t])
+  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isAntigravity, isLean, isMemberSession, memberCliSessionId, memberSlashCommands, t])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
@@ -853,7 +924,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const filteredCommands = filteredCommandGroups.ordered
   // A member page lists only what its CLI can run, and nothing without one.
   const isSlashMenuVisible = slashMenuOpen && filteredCommands.length > 0
-  const isReferenceMenuVisible = !isMemberSession && fileSearchOpen
+  const isReferenceMenuVisible = !isAntigravity && !isMemberSession && fileSearchOpen
   // The predicted next prompt only shows on an idle desktop composer with
   // nothing else claiming the empty draft. The touch composer has no Tab key.
   const promptSuggestionGhost =
@@ -933,8 +1004,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [])
 
   const handleComposerChange = (text: string, nextMentions: ComposerMention[]) => {
+    promptHistory.resetHistory()
+    promptOptimize.notifyDraftChanged()
     setComposerInput(text, nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? text.length
+    if (isAntigravity) return
     if (isMemberSession) {
       // A command typed here goes to the member's own CLI as is; files and
       // references stay out of member messages.
@@ -946,6 +1020,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }
 
   const selectSlashCommand = useCallback((command: string) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
@@ -968,7 +1043,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       composerRef.current?.focus()
       composerRef.current?.setSelectionOffsets(nextCursor)
     })
-  }, [input, mentions, allSlashCommands, composerReferences, setComposerInput])
+  }, [input, mentions, allSlashCommands, composerReferences, promptHistory.resetHistory, setComposerInput])
 
   const replaceEmptySession = useCallback(async (
     workDir: string,
@@ -1062,9 +1137,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       return
     }
 
+    if (isAntigravity && (attachments.some((attachment) => attachment.type !== 'image' || !attachment.data) ||
+      workspaceReferences.some((reference) => reference.kind !== 'chat-selection'))) {
+      useUIStore.getState().addToast({ type: 'info', message: t('settings.providers.antigravity.imagesOnly') })
+      return
+    }
+
     // Immediate local command: never enter the main turn, launch flow or queue.
-    const sideQuestion = !isMemberSession ? parseSideQuestionCommand(text) : null
+    const sideQuestion = !isAntigravity && !isMemberSession ? parseSideQuestionCommand(text) : null
     if (sideQuestion !== null && activeTabId) {
+      promptHistory.recordSubmission({ text: input, mentions })
       void openSideChat(sideChat?.parentSessionId ?? activeTabId, { question: sideQuestion || undefined, submit: true })
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1074,6 +1156,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'panel') {
+      promptHistory.recordSubmission({ text: input, mentions })
       setLocalSlashPanel(pendingSlashUiAction.command as LocalSlashCommandName)
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1083,6 +1166,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'settings') {
+      promptHistory.recordSubmission({ text: input, mentions })
       useUIStore.getState().setPendingSettingsTab(pendingSlashUiAction.tab)
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
       setComposerInput('', [])
@@ -1093,6 +1177,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     if (pendingSlashUiAction?.type === 'model') {
+      promptHistory.recordSubmission({ text: input, mentions })
       modelSelectorRef.current?.open()
       setComposerInput('', [])
       setSlashMenuOpen(false)
@@ -1101,7 +1186,22 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       return
     }
 
+    if (pendingSlashUiAction?.type === 'fast') {
+      promptHistory.recordSubmission({ text: input, mentions })
+      setComposerInput('', [])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      await executeFastSlashCommand({
+        mode: pendingSlashUiAction.mode,
+        runtimeKey: activeTabId ?? DRAFT_RUNTIME_SELECTION_KEY,
+        t,
+      })
+      return
+    }
+
     if (showLaunchControls && (!launchReady || launchTransitioning)) return
+    promptOptimize.notifyDraftChanged()
 
     const workspaceReferencePrompt = !isMemberSession
       ? formatWorkspaceReferencePrompt(workspaceReferences)
@@ -1109,8 +1209,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // Inline @-mentions travel as the `@"absolute path"` text the CLI already
     // parses. Serialized from the live document — only the doc knows which
     // `@label` is a pill and which is literal text the user typed.
-    const sessionReferences = getSessionReferences(input, mentions)
-    const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
+    const sessionReferences = isAntigravity ? [] : getSessionReferences(input, mentions)
+    const serializedText = isAntigravity ? text : (composerRef.current?.getModelContent() ?? input).trim()
     const joinedContent = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
     // Agent Team armed in the + menu: the model gets the team instruction, the
     // bubble keeps what the user typed.
@@ -1262,6 +1362,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         displayAttachments: visibleAttachmentPayload,
       })
     }
+    if (text) {
+      promptHistory.recordSubmission(
+        { text: input, mentions },
+        {
+          sessionId: targetSessionId,
+          projectPath: activeLaunchWorkDir || resolvedWorkDir || null,
+          projectRoot: activeSession?.projectRoot ?? null,
+        },
+      )
+    } else {
+      promptHistory.resetHistory()
+    }
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
     // The send can wait for the launch branch to be read again. If the user moved
@@ -1294,7 +1406,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (composingRef.current || event.isComposing || event.keyCode === 229) return false
 
     // Route reference selection and directory navigation to the unified menu
-    if (fileSearchOpen) {
+    if (isReferenceMenuVisible) {
       const key = event.key
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'ArrowRight' || key === 'Enter' || key === 'Tab' || key === 'Escape') {
         event.preventDefault()
@@ -1317,6 +1429,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         setLocalSlashPanel(null)
         return true
       }
+    }
+
+    if (promptOptimize.isOptimizing && event.key === 'Escape' && !slashMenuOpen) {
+      event.preventDefault()
+      promptOptimize.cancel()
+      return true
     }
 
     if (slashMenuOpen && filteredCommands.length > 0) {
@@ -1377,6 +1495,31 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         event.preventDefault()
         dismissPromptSuggestion(activeTabId)
         return true
+      }
+    }
+
+    if (
+      !composerDisabled &&
+      !dictationLive &&
+      !localSlashPanel &&
+      !plusMenuOpen &&
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    ) {
+      if (event.key === 'ArrowUp' && composerRef.current?.isSelectionAtBoundary('up')) {
+        if (promptHistory.onHistoryUp()) {
+          event.preventDefault()
+          return true
+        }
+      }
+      if (
+        event.key === 'ArrowDown' &&
+        promptHistory.isNavigating() &&
+        composerRef.current?.isSelectionAtBoundary('down')
+      ) {
+        if (promptHistory.onHistoryDown()) {
+          event.preventDefault()
+          return true
+        }
       }
     }
 
@@ -1492,6 +1635,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const insertSlashCommand = () => {
     if (isMemberSession) return
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const replacement = replaceSlashToken(input, cursorPos, '', { trailingSpace: false })
     setComposerInput(replacement.value)
@@ -1508,6 +1652,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // actions; these handlers are only the composer-local edits (mention badge,
   // slash text, prompt seed) plus the surfaces this composer already opens.
   const insertSelectedFileMention = (mention: NewComposerMention) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
     const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
     setComposerInput(inserted.text, inserted.mentions)
@@ -1526,13 +1671,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }
   const mobileComposerSettings: MobileComposerSetting[] = isMobileComposer && !isMemberSession
     ? [
-      {
+      ...(!isAntigravity ? [{
         key: 'permission',
         icon: <ShieldCheck size={16} strokeWidth={1.75} aria-hidden="true" />,
         label: t('permMode.executionPermissions'),
         value: t(PERMISSION_MODE_LABEL_KEYS[resolvedPermissionMode]),
         onSelect: () => openFromComposerSheet(() => permissionSelectorRef.current?.open()),
-      },
+      }] : []),
       ...(activeTabId ? [
         {
           key: 'model',
@@ -1565,7 +1710,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // Desktop: the quiet glyph (or, once writes run unattended, the named chip)
   // sits first in the trailing group. A phone keeps it after the chips, where
   // it only appears when some writes run unattended.
-  const permissionSelector = isMemberSession ? null : (
+  const permissionSelector = isMemberSession || isAntigravity ? null : (
     <PermissionModeSelector
       lean={isLean}
       ref={permissionSelectorRef}
@@ -1608,6 +1753,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const capabilityMenu = useCapabilityMenu({
     open: plusMenuOpen && !isMemberSession,
+    attachmentsOnly: isAntigravity,
     cwd: referenceCwd,
     references: composerReferences,
     lean: isLean,
@@ -1616,6 +1762,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     agentProfile: isLean && !isMobileComposer ? { value: 'lean' } : undefined,
     handlers: {
       onInsertMention: (reference) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
         const mention = composerReferenceToMention(reference)
         const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
@@ -1626,6 +1773,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         })
       },
       onInsertSlashText: (command) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
         const replacement = replaceSlashToken(inputRef.current, cursorPos, command)
         setComposerInput(replacement.value)
@@ -1725,7 +1873,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             />
           )}
 
-          {!isMemberSession && fileSearchOpen && (
+          {isReferenceMenuVisible && (
             <ComposerReferenceMenu
               ref={fileSearchRef}
               id={referenceMenuId}
@@ -1738,6 +1886,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               compact={isMobileComposer}
               onNavigate={(relativePath) => {
                 if (atCursorPos < 0) return
+                promptHistory.resetHistory()
                 const replacement = `@${relativePath}`
                 const tokenEnd = atCursorPos + 1 + atFilter.length
                 const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
@@ -1751,6 +1900,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               }}
               onSelect={(mention) => {
                 if (atCursorPos < 0) return
+                promptHistory.resetHistory()
                 const tokenEnd = atCursorPos + 1 + atFilter.length
                 const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
                 setComposerInput(inserted.text, inserted.mentions)
@@ -1765,7 +1915,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             />
           )}
 
-          {!isMemberSession && localSlashPanel && (
+          {!isAntigravity && !isMemberSession && localSlashPanel && (
             <div ref={slashMenuRef}>
               <LocalSlashCommandPanel
                 command={localSlashPanel}
@@ -2035,7 +2185,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                         cwd={referenceCwd}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={insertSelectedFileMention}
+                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
                         id={capabilityMenuId}
                         sections={capabilityMenu.sections}
                         onAction={capabilityMenu.onAction}
@@ -2052,7 +2202,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                         cwd={referenceCwd}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={insertSelectedFileMention}
+                        onSelectFile={isAntigravity ? undefined : insertSelectedFileMention}
                         onAction={capabilityMenu.onAction}
                       />
                     )}
@@ -2135,7 +2285,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   }
                 />
               )}
-              {isMobileComposer && (
+              {isMobileComposer && !isAntigravity && (
                 <AgentProfileControl
                   ref={agentProfileRef}
                   value={isLean ? 'lean' : 'standard'}
@@ -2162,6 +2312,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 />
               )}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
+              {!isMemberSession && activeTabId && (
+                <PromptOptimizeButton
+                  controller={promptOptimize}
+                  canOptimize={canOptimizePrompt}
+                  mobile={isMobileComposer}
+                />
+              )}
               {stopOffer === 'background' ? (
                 // Stopping background work while the composer can still send:
                 // the same ink stop circle as a running turn, beside the send key.
@@ -2224,13 +2381,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           <p>{t('agentTeams.runtime.memberMessageHint')}</p>
         </div>}
 
-        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+        <input ref={fileInputRef} type="file" multiple accept={isAntigravity ? 'image/*' : undefined} className="hidden" onChange={handleFileSelect} />
 
         {/* On a phone, a session under way names its project in the top bar;
             only a session still choosing where to run needs the picker here. */}
         {!isMemberSession && !showLocationInToolbar && !(isMobileComposer && messageCount > 0) && (
           <div className={useCompactControls ? 'mt-2 flex min-w-0 px-1' : 'mt-3 px-1'}>
-            {messageCount > 0 ? (
+            {!showLaunchControls ? (
               <ProjectContextChip
                 workDir={resolvedWorkDir}
                 projectRoot={activeSession?.projectRoot}

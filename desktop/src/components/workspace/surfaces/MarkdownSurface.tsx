@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { clearWindowSelection, useSelectionPopoverDismiss } from '@/hooks/useSelectionPopoverDismiss'
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer'
-import { createWorkspaceMarkdownImageResolver } from '@/lib/markdownImages'
+import { createWorkspaceMarkdownAudioResolver, createWorkspaceMarkdownImageResolver } from '@/lib/markdownImages'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { FloatingSelectionMenu } from './FloatingSelectionMenu'
 import {
@@ -34,6 +34,15 @@ export function MarkdownSurface({
   // assistant Markdown gets no resolver and keeps the blob:/data:-only policy.
   const resolveImageSrc = useMemo(
     () => createWorkspaceMarkdownImageResolver({
+      baseUrl: getServerBaseUrl(),
+      sessionId,
+      filePath: path,
+      workDir,
+    }),
+    [path, sessionId, workDir],
+  )
+  const resolveAudioSrc = useMemo(
+    () => createWorkspaceMarkdownAudioResolver({
       baseUrl: getServerBaseUrl(),
       sessionId,
       filePath: path,
@@ -94,6 +103,7 @@ export function MarkdownSurface({
           content={value}
           variant="document"
           resolveImageSrc={resolveImageSrc}
+          resolveAudioSrc={resolveAudioSrc}
           className="workspace-markdown-preview prose-p:text-[14px] prose-p:leading-7 prose-h1:text-[22px] prose-h2:text-[18px] prose-h3:text-[15px] prose-code:text-[12px] prose-pre:my-4"
         />
       </div>

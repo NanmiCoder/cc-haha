@@ -95,6 +95,8 @@ export type CreateSessionRequest = {
   workDir?: string
   repository?: CreateSessionRepositoryOptions
   permissionMode?: PermissionMode
+  /** For creation-time compatibility checks only; runtime is still set separately. */
+  launchProviderId?: string
 }
 export type BranchSessionRequest = {
   targetMessageId: string
@@ -856,5 +858,23 @@ export const sessionsApi = {
     return api.post<SessionRewindResponse>(`/api/sessions/${sessionId}/rewind`, body, {
       timeout: 60_000,
     })
+  },
+
+  optimizePrompt(
+    sessionId: string,
+    body: { requestId: string; prompt: string },
+    signal?: AbortSignal,
+  ) {
+    return api.post<{ requestId: string; optimizedPrompt: string }>(
+      `/api/sessions/${sessionId}/optimize-prompt`,
+      body,
+      { timeout: 120_000, signal },
+    )
+  },
+
+  cancelOptimizePrompt(sessionId: string, requestId: string) {
+    return api.delete<{ requestId: string; cancelled: boolean }>(
+      `/api/sessions/${sessionId}/optimize-prompt/${requestId}`,
+    )
   },
 }

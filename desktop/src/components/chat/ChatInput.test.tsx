@@ -56,6 +56,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/workspace/openSideChat', () => ({ openSideChat: mocks.sideOpen }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../../api/sessions', () => ({
   sessionsApi: {
     create: mocks.create,
@@ -155,6 +162,7 @@ vi.mock('../controls/ModelSelector', async () => {
 })
 
 import { ChatInput } from './ChatInput'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, getComposerText, getComposerView, setComposerSelection, setComposerText } from './composerTestUtils'
 import { useVoiceInputStore } from '../../stores/voiceInputStore'
 import { useChatStore, type RepositoryLaunchDraftState } from '../../stores/chatStore'
@@ -257,6 +265,7 @@ describe('ChatInput file mentions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     localStorage.removeItem(RECENT_SKILLS_STORAGE_KEY)
     localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
     useSideChatStore.setState({ entries: {} })
@@ -439,6 +448,37 @@ describe('ChatInput file mentions', () => {
       'This temporary workspace was cleaned up. Start a new session in the original project to continue.',
     )
     expect(editor).toHaveAttribute('contenteditable', 'false')
+  })
+
+  it('keeps Antigravity on its own composer controls and leaves inline images on the normal send path', async () => {
+    useSessionRuntimeStore.setState({ selections: { [sessionId]: { providerId: 'antigravity-acp', modelId: 'agent-default' } } })
+    const image = { id: 'image-1', name: 'shot.png', type: 'image' as const, mimeType: 'image/png', data: 'data:image/png;base64,iVBORw0KGgo=' }
+    const file = { id: 'file-1', name: 'notes.txt', type: 'file' as const, path: '/repo/notes.txt' }
+    useChatStore.getState().setComposerDraft(sessionId, { input: '', attachments: [image, file] })
+    try {
+      render(<ChatInput />)
+      expect(screen.queryByTestId('permission-mode-selector')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+      expect(screen.getByText('Add images')).toBeInTheDocument()
+      expect(screen.queryByText('Agent Teams', { exact: true })).not.toBeInTheDocument()
+      expect(screen.queryByText('Slash commands', { exact: true })).not.toBeInTheDocument()
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      setComposerText('/btw question', 13)
+      expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+      expect(mocks.wsSend).not.toHaveBeenCalled()
+      expect(useUIStore.getState().toasts.at(-1)?.message).toContain('only supports inline images')
+      fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+      expect(mocks.sideOpen).not.toHaveBeenCalled()
+      expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+        type: 'user_message', content: '/btw question',
+        attachments: [expect.objectContaining({ type: 'image', mimeType: 'image/png', data: image.data })],
+      })
+    } finally {
+      act(() => useSessionRuntimeStore.setState({ selections: {} }))
+    }
   })
 
   it('passes diff metadata to the composer card and clears the reference after send', async () => {

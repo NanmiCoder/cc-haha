@@ -48,6 +48,7 @@ import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
+import { CyberRiskInstructionSettings } from './CyberRiskInstructionSettings'
 import { PreventSleepSettings } from './PreventSleepSettings'
 import { IdlePowerSettings } from './IdlePowerSettings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
@@ -91,6 +92,8 @@ export function GeneralSettings() {
     setEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    fastMode,
+    setFastMode,
     workflowKeywordTriggerEnabled,
     setWorkflowKeywordTriggerEnabled,
     nextPromptSuggestionsEnabled,
@@ -1088,6 +1091,16 @@ export function GeneralSettings() {
             checked={thinkingEnabled}
             onChange={(enabled) => void setThinkingEnabled(enabled)}
           />
+          <SettingsSwitchRow
+            title={t('settings.general.fastModeTitle')}
+            description={t('settings.general.fastModeDescription')}
+            checked={fastMode}
+            onChange={(enabled) => {
+              void setFastMode(enabled).catch(() => {
+                addToast({ type: 'error', message: t('slashCmd.fast.saveFailed') })
+              })
+            }}
+          />
           <SettingsRow
             title={t('settings.general.outputStyleTitle')}
             description={selectedOutputStyleDescription || t('settings.general.outputStyleDescription')}
@@ -1155,6 +1168,7 @@ export function GeneralSettings() {
             </SettingsRow>
           )}
           <LeanModeSettings />
+          <CyberRiskInstructionSettings />
           <SettingsSwitchRow
             title={t('settings.general.workflowKeywordEnabled')}
             description={t('settings.general.workflowKeywordDescription')}

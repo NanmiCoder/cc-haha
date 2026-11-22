@@ -400,7 +400,9 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'error':
       runtime.state = 'idle'
       runtime.verb = undefined
+      streamDelivery.clear(chatId)
       accumulatedThinkingText.delete(chatId)
+      tgImageWatchers.delete(chatId)
       // Auto-recover from stale thinking block signatures by creating a fresh session.
       // This happens when the API key or provider changed since the session was created.
       if (msg.message && /Invalid.*signature.*thinking/i.test(msg.message)) {

@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const apiGetMock = vi.hoisted(() => vi.fn())
 const apiPutMock = vi.hoisted(() => vi.fn())
+const apiPostMock = vi.hoisted(() => vi.fn())
 
 vi.mock('./client', () => ({
-  api: { get: apiGetMock, put: apiPutMock },
+  api: { get: apiGetMock, put: apiPutMock, post: apiPostMock },
 }))
 
 import { providersApi } from './providers'
@@ -17,6 +18,11 @@ describe('providersApi.authStatus', () => {
   it('asks about the global default when no provider is named', () => {
     providersApi.authStatus()
     expect(apiGetMock).toHaveBeenCalledWith('/api/providers/auth-status')
+  })
+
+  it('checks Antigravity on the fixed discovery endpoint without credentials or paths', () => {
+    providersApi.discoverAntigravity()
+    expect(apiPostMock).toHaveBeenCalledExactlyOnceWith('/api/providers/antigravity-acp/discover')
   })
 
   it('asks about one provider when the composer chose it', () => {

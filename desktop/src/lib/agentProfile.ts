@@ -13,7 +13,7 @@ import type { SlashCommandOption } from '@/types/slashCommand'
  * src/utils/agentProfile.ts), for the built-ins the desktop lists on its own.
  * src/server/__tests__/skills.test.ts fails when the two tables differ.
  */
-export const LEAN_LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set(['clear', 'compact', 'cost', 'context', 'help', 'model', 'permissions', 'status'])
+export const LEAN_LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set(['clear', 'compact', 'cost', 'context', 'fast', 'help', 'model', 'permissions', 'status'])
 
 /** Capabilities lean omits; typed without any list entry, say so instead of sending. */
 const LEAN_UNAVAILABLE_INPUT_NAMES = new Set(['btw', 'agent', 'team', 'plan', 'workflow'])

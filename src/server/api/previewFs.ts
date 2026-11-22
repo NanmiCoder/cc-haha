@@ -36,7 +36,11 @@ const CONTENT_TYPES: Record<string, string> = {
   // Audio.
   mp3: 'audio/mpeg',
   wav: 'audio/wav',
+  m4a: 'audio/mp4',
   ogg: 'audio/ogg',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  opus: 'audio/ogg',
 }
 
 export function contentTypeForPath(filePath: string): string {

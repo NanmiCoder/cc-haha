@@ -1068,7 +1068,7 @@ async function checkPermissionsAndCallTool(
 
     // Add image blocks at top level (not inside tool_result, which rejects non-text with is_error)
     const rejectContentBlocks =
-      permissionDecision.behavior === 'ask'
+      'contentBlocks' in permissionDecision
         ? permissionDecision.contentBlocks
         : undefined
     if (rejectContentBlocks?.length) {

@@ -247,7 +247,7 @@ export function isLeanCompatibleSkill(command: {
 }
 
 /** Local commands must not activate runtimes or tools omitted by lean. */
-const leanLocalCommands = new Set(['clear', 'compact', 'cost', 'context', 'help', 'model', 'permissions', 'status'])
+const leanLocalCommands = new Set(['clear', 'compact', 'cost', 'context', 'fast', 'help', 'model', 'permissions', 'status'])
 
 export function isAgentProfileCommandSupported(command: {
   name: string, type: string, context?: string, source?: string, loadedFrom?: string,

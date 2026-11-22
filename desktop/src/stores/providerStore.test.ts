@@ -12,6 +12,7 @@ const {
 } = vi.hoisted(() => ({
   providersApiMock: {
     list: vi.fn(),
+    discoverAntigravity: vi.fn(),
     authStatus: vi.fn(),
     getSettings: vi.fn(),
     updateSettings: vi.fn(),
@@ -100,6 +101,27 @@ describe('providerStore presets', () => {
       expect.objectContaining({ id: 'custom' }),
       expect.objectContaining({ id: 'deepseek' }),
     ]))
+  })
+})
+
+describe('providerStore Antigravity discovery', () => {
+  it('keeps discovery results when an older provider list resolves afterward', async () => {
+    const { useProviderStore } = await import('./providerStore')
+    const initial = useProviderStore.getState()
+    const agent = { id: 'antigravity-acp', kind: 'acp' } as const
+    const ready = { ...agent, status: 'ready', models: [{ id: 'agy:1', name: 'AGY model' }] }
+    let resolveList!: (value: unknown) => void
+    providersApiMock.list.mockReturnValueOnce(new Promise(resolve => { resolveList = resolve }))
+    providersApiMock.discoverAntigravity.mockResolvedValueOnce(ready)
+    try {
+      const fetching = initial.fetchProviders()
+      await initial.discoverAntigravity()
+      resolveList({ providers: [], activeId: null, localAgent: { ...agent, status: 'unchecked', models: [] } })
+      await fetching
+      expect(useProviderStore.getState().localAgent).toEqual(ready)
+    } finally {
+      useProviderStore.setState(initial, true)
+    }
   })
 })
 

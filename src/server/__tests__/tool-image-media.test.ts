@@ -148,6 +148,60 @@ describe('history with media=ref', () => {
     expect((await api(`${base}?variant=huge`)).status).toBe(400)
     expect((await api(`/api/sessions/${sessionId}/tool-images/toolu_shot_2/x`)).status).toBe(400)
   })
+
+  it('projects and serves top-level sibling image blocks alongside tool_result in media=ref history', async () => {
+    const sessionId = 'a1b2c3d4-0000-4000-8000-000000000003'
+    const encoded = png.toString('base64')
+    const at = (n: number) => `2026-10-30T15:00:${String(n).padStart(2, '0')}.000Z`
+    const entries: Json[] = [
+      { type: 'user', uuid: 'prompt', timestamp: at(0), message: { role: 'user', content: 'Review this layout' } },
+      {
+        type: 'assistant',
+        uuid: 'ask-use',
+        timestamp: at(1),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_ask_1', name: 'AskUserQuestion', input: { questions: [{ question: 'Pick one?', options: [{ label: 'A' }] }] } }],
+        },
+      },
+      {
+        type: 'user',
+        uuid: 'ask-result',
+        timestamp: at(2),
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_ask_1', is_error: true, content: 'The user wants to clarify or discuss your questions before answering.' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: encoded } },
+            { type: 'text', text: '[Image source: /tmp/uploads/ask-ref.png]' },
+          ],
+        },
+      },
+      { type: 'assistant', uuid: 'done', timestamp: at(3), message: { role: 'assistant', content: [{ type: 'text', text: 'Got it' }] } },
+    ]
+    const dir = path.join(tmpDir, 'projects', '-tmp-ask-shots')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, `${sessionId}.jsonl`), entries.map(entry => JSON.stringify(entry)).join('\n') + '\n')
+
+    const response = await api(`/api/sessions/${sessionId}/messages?media=ref`)
+    const text = await response.text()
+    expect(text).not.toContain(encoded.slice(0, 64))
+    const page = JSON.parse(text) as Json
+    expect(page.messages.map((message: Json) => message.id)).toEqual(['prompt', 'ask-use', 'ask-result', 'done'])
+    const askResult = page.messages.find((message: Json) => message.id === 'ask-result')
+    expect(askResult.content[1].source).toMatchObject({
+      type: 'ref',
+      media_type: 'image/png',
+      url: `/api/sessions/${sessionId}/tool-images/toolu_ask_1/0`,
+      width: 900,
+      height: 600,
+    })
+
+    const full = await api(`/api/sessions/${sessionId}/tool-images/toolu_ask_1/0?variant=full`)
+    expect(full.status).toBe(200)
+    expect(full.headers.get('Content-Type')).toBe('image/png')
+    expect(Buffer.from(await full.arrayBuffer()).equals(png)).toBe(true)
+  })
 })
 
 function makeClientSocket(sessionId: string, mediaRefs: boolean) {
@@ -194,5 +248,40 @@ describe('live tool results', () => {
 
     ws.handleWebSocket.close(desktop, 1000, '')
     ws.handleWebSocket.close(phone, 1000, '')
+  })
+
+  it('projects inline base64 attachments on structured live AskUserQuestion tool_results for media=ref clients', async () => {
+    const sessionId = `live-ask-images-${crypto.randomUUID()}`
+    const data = png.toString('base64')
+    const projected = media.projectLiveToolResult({
+      type: 'tool_result',
+      toolUseId: 'toolu_ask_live',
+      content: {
+        handedOff: true,
+        message: 'The user wants to clarify or discuss your questions before answering.',
+        attachments: [
+          {
+            type: 'image',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            data: `data:image/png;base64,${data}`,
+          },
+        ],
+      },
+      isError: true,
+    }, sessionId)
+
+    expect(JSON.stringify(projected)).not.toContain(data.slice(0, 64))
+    expect((projected.content as Json).attachments).toEqual([
+      {
+        type: 'image',
+        name: 'shot.png',
+        mimeType: 'image/png',
+        previewUrl: `/api/sessions/${sessionId}/tool-images/toolu_ask_live/0`,
+      },
+    ])
+
+    const full = await media.loadRenderedToolImage(sessionId, 'toolu_ask_live', 0, 'full', async () => null)
+    expect(full?.bytes.equals(png)).toBe(true)
   })
 })
