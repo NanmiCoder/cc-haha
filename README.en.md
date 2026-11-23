@@ -126,12 +126,12 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
-        <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">
+        <a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5306">
           <img src="docs/images/sponsors/dynadot-logo.png" width="180" alt="Dynadot">
         </a>
       </td>
       <td valign="middle">
-        Dynadot is an ICANN-accredited domain registrar, ranks among the world's top five registrars by domains under management, and is a leading international domain marketplace. It offers quality domain-focused services, including domain registration, trading, management, business email, and website building. All users can access a variety of domain promotions and submit domain backorder requests for free. Visit the <a href="https://www.dynadot.com/zh/market?utm_source=github&amp;utm_medium=display&amp;utm_campaign=dm&amp;drefid=5638">Dynadot domain marketplace</a>, featuring a wide selection of domains, low commissions, installment payments, and no-reserve listings, to find your ideal domain.
+        Dynadot is an ICANN-accredited domain registrar, ranks among the world's top five registrars by domains under management, and is a leading international domain marketplace. It offers quality domain-focused services, including domain registration, trading, management, business email, and website building. All users can access a variety of domain promotions and submit domain backorder requests for free. The <a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5306">Dynadot Black Friday sale</a> is live! Explore our official deals page to register domains at single-digit prices and get website builders and Professional Email at 50% off.
       </td>
     </tr>
     <tr>
