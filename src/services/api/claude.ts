@@ -2093,6 +2093,7 @@ async function* queryModel(
     const message: AssistantMessage = {
       message: {
         ...result,
+        role: result.role || 'assistant',
         usage: normalizeUsage(result.usage),
         content: normalizeContentFromAPI(
           truncatedToolUse ? result.content.filter(block => block.type !== 'tool_use') : result.content,
@@ -2509,7 +2510,12 @@ async function* queryModel(
 
         switch (part.type) {
           case "message_start": {
-            partialMessage = part.message;
+            partialMessage = part.message
+              ? {
+                  ...part.message,
+                  role: part.message.role || "assistant",
+                }
+              : part.message;
             ttftMs = Date.now() - start;
             usage = updateUsage(usage, part.message?.usage);
             // Capture research from message_start if available (internal only).

@@ -546,6 +546,22 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
   accumulateAdvisorUsage(state, entry, timestamp.date, usage)
 }
 
+export function resolveEntryMessageRole(
+  entry: { type?: string; message?: { role?: string } | null },
+): string | undefined {
+  const message = entry.message
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return undefined
+  }
+  if (typeof message.role === 'string' && message.role.trim().length > 0) {
+    return message.role
+  }
+  if (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system') {
+    return entry.type
+  }
+  return undefined
+}
+
 function applyEntry(state: ReducerState, entry: ReducerEntry): void {
   if (entry.entrypoint === 'claude-desktop-team-worker') state.isTeamWorker = true
   applyActivityEntry(state, entry)
@@ -556,7 +572,7 @@ function applyEntry(state: ReducerState, entry: ReducerEntry): void {
 
   if (
     (entry.type === 'user' || entry.type === 'assistant') &&
-    entry.message?.role
+    resolveEntryMessageRole(entry)
   ) {
     state.messageCount += 1
     if (!entry.isMeta) {
@@ -628,9 +644,9 @@ function applyEntry(state: ReducerState, entry: ReducerEntry): void {
     !state.firstUserTitle &&
     entry.type === 'user' &&
     !entry.isMeta &&
-    entry.message?.role === 'user'
+    resolveEntryMessageRole(entry) === 'user'
   ) {
-    state.firstUserTitle = extractTranscriptUserTitle(entry.message.content)
+    state.firstUserTitle = extractTranscriptUserTitle(entry.message?.content)
   }
 }
 
