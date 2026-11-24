@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultSessionState, useChatStore } from './chatStore'
 import { useTabStore } from './tabStore'
 import { wsManager } from '@/api/websocket'
+import { sessionsApi } from '@/api/sessions'
 
 const SESSION_RECONNECT = 'session-1991-reconnect'
 const SESSION_RECONNECT_BG = 'session-1991-reconnect-bg'
+const SESSION_RECONNECT_ERROR = 'session-1991-reconnect-error'
 const SESSION_WORKER_ALLOW = 'session-1991-worker-perm-allow'
 const SESSION_WORKER_CANCEL = 'session-1991-worker-perm-cancel'
 const SESSION_WORKER_MULTI = 'session-1991-worker-perm-multi'
 const SESSION_WORKER_REMOTE = 'session-1991-worker-perm-remote'
+const SESSION_WORKER_RECONNECT_LOCAL = 'session-1991-worker-reconnect-local'
+const SESSION_WORKER_STATUS_IDLE = 'session-1991-worker-status-idle'
+const SESSION_WORKER_ATTACHMENT_RETRY = 'session-1991-worker-attachment-retry'
 const SESSION_MAIN_PERM = 'session-1991-main-perm'
 
 describe('Issue #1991 Part 2 — Sidebar spinner stuck running after task completion', () => {
@@ -22,10 +27,14 @@ describe('Issue #1991 Part 2 — Sidebar spinner stuck running after task comple
     for (const id of [
       SESSION_RECONNECT,
       SESSION_RECONNECT_BG,
+      SESSION_RECONNECT_ERROR,
       SESSION_WORKER_ALLOW,
       SESSION_WORKER_CANCEL,
       SESSION_WORKER_MULTI,
       SESSION_WORKER_REMOTE,
+      SESSION_WORKER_RECONNECT_LOCAL,
+      SESSION_WORKER_STATUS_IDLE,
+      SESSION_WORKER_ATTACHMENT_RETRY,
       SESSION_MAIN_PERM,
     ]) {
       const session = useChatStore.getState().sessions[id]
@@ -358,7 +367,14 @@ describe('Issue #1991 Part 2 — Sidebar spinner stuck running after task comple
       computerUseRequestIds: [],
       turnActive: false,
     })
+    // Real reconnect immediately follows with sync_state -> session_state(idle).
+    store.handleServerMessage(SESSION_WORKER_REMOTE, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
     expect(useChatStore.getState().sessions[SESSION_WORKER_REMOTE]?.chatState).toBe('permission_pending')
+    expect(useChatStore.getState().sessions[SESSION_WORKER_REMOTE]?.pendingPermissions).toHaveProperty('req-worker-remote')
 
     // Another client approves the delegated worker permission.
     store.handleServerMessage(SESSION_WORKER_REMOTE, {
@@ -373,6 +389,245 @@ describe('Issue #1991 Part 2 — Sidebar spinner stuck running after task comple
     expect(session?.chatState).toBe('idle')
     expect(session?.elapsedTimer).toBeNull()
     expect(tab?.status).toBe('idle')
+  })
+
+  it('keeps delegated worker permission and returns to idle on local approval across full reconnect snapshot + session_state(idle) + reloadHistory', async () => {
+    const getFullHistorySpy = vi.spyOn(sessionsApi, 'getFullHistory').mockResolvedValue({
+      messages: [],
+      page: {
+        hasMore: false,
+        nextCursor: null,
+        historyComplete: true,
+        scannedBytes: 0,
+        omittedOversizedEntries: 0,
+        sourceVersion: 'v1',
+      },
+    })
+
+    useTabStore.setState({
+      tabs: [{
+        sessionId: SESSION_WORKER_RECONNECT_LOCAL,
+        title: 'Agent Team Lead',
+        type: 'session',
+        status: 'running',
+      }],
+      activeTabId: SESSION_WORKER_RECONNECT_LOCAL,
+    })
+
+    const timer = setInterval(() => {}, 1000)
+    useChatStore.setState({
+      sessions: {
+        [SESSION_WORKER_RECONNECT_LOCAL]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyHydrated: true,
+          historyStatus: 'ready',
+          historyBootstrapDisabled: false,
+          chatState: 'idle',
+          elapsedTimer: timer,
+          backgroundAgentTasks: {},
+        },
+      },
+    })
+
+    const store = useChatStore.getState()
+    // 1. Reconnect replays pending delegated worker permission + snapshot(turnActive: false)
+    store.handleServerMessage(SESSION_WORKER_RECONNECT_LOCAL, {
+      type: 'permission_request',
+      requestId: 'req-worker-reconnect-local',
+      toolName: 'Bash',
+      toolUseId: 'tool-worker-reconnect-local',
+      displayName: 'builder',
+      input: { command: 'npm test' },
+    })
+    store.handleServerMessage(SESSION_WORKER_RECONNECT_LOCAL, {
+      type: 'permission_requests_snapshot',
+      toolRequestIds: ['req-worker-reconnect-local'],
+      computerUseRequestIds: [],
+      turnActive: false,
+    })
+    // 2. sync_state returns session_state(idle), which also triggers reloadHistory
+    store.handleServerMessage(SESSION_WORKER_RECONNECT_LOCAL, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+    await vi.runAllTimersAsync()
+    expect(getFullHistorySpy).toHaveBeenCalled()
+
+    let session = useChatStore.getState().sessions[SESSION_WORKER_RECONNECT_LOCAL]
+    expect(session?.chatState).toBe('permission_pending')
+    expect(session?.pendingPermissions).toHaveProperty('req-worker-reconnect-local')
+    expect(session?.pendingPermission?.requestId).toBe('req-worker-reconnect-local')
+    expect(useTabStore.getState().tabs.find((t) => t.sessionId === SESSION_WORKER_RECONNECT_LOCAL)?.status).toBe('idle')
+
+    // 3. Local user clicks Allow -> must return to idle, not stick in tool_executing
+    store.respondToPermission(SESSION_WORKER_RECONNECT_LOCAL, 'req-worker-reconnect-local', true)
+    session = useChatStore.getState().sessions[SESSION_WORKER_RECONNECT_LOCAL]
+    expect(session?.chatState).toBe('idle')
+    expect(session?.elapsedTimer).toBeNull()
+    expect(useTabStore.getState().tabs.find((t) => t.sessionId === SESSION_WORKER_RECONNECT_LOCAL)?.status).toBe('idle')
+  })
+
+  it('preserves delegated worker permission invariant when status(idle) arrives while waiting for approval', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: SESSION_WORKER_STATUS_IDLE,
+        title: 'Agent Team Lead',
+        type: 'session',
+        status: 'running',
+      }],
+      activeTabId: SESSION_WORKER_STATUS_IDLE,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [SESSION_WORKER_STATUS_IDLE]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyHydrated: true,
+          historyStatus: 'ready',
+          historyBootstrapDisabled: true,
+          chatState: 'thinking',
+          backgroundAgentTasks: {},
+        },
+      },
+    })
+
+    const store = useChatStore.getState()
+    store.handleServerMessage(SESSION_WORKER_STATUS_IDLE, {
+      type: 'permission_request',
+      requestId: 'req-worker-status-idle',
+      toolName: 'Bash',
+      toolUseId: 'tool-worker-status-idle',
+      displayName: 'builder',
+      input: { command: 'ls' },
+    })
+    store.handleServerMessage(SESSION_WORKER_STATUS_IDLE, {
+      type: 'status',
+      state: 'idle',
+    })
+
+    expect(useChatStore.getState().sessions[SESSION_WORKER_STATUS_IDLE]?.chatState).toBe('permission_pending')
+    expect(useTabStore.getState().tabs.find((t) => t.sessionId === SESSION_WORKER_STATUS_IDLE)?.status).toBe('idle')
+
+    store.respondToPermission(SESSION_WORKER_STATUS_IDLE, 'req-worker-status-idle', true)
+    expect(useChatStore.getState().sessions[SESSION_WORKER_STATUS_IDLE]?.chatState).toBe('idle')
+  })
+
+  it('preserves tab.status error across idle reconnect reconciliation and delegated permission resolution', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: SESSION_RECONNECT_ERROR,
+        title: 'Errored Lead',
+        type: 'session',
+        status: 'error',
+      }],
+      activeTabId: SESSION_RECONNECT_ERROR,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [SESSION_RECONNECT_ERROR]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyHydrated: true,
+          historyStatus: 'ready',
+          historyBootstrapDisabled: true,
+          awaitingReconnectSync: true,
+          chatState: 'idle',
+          backgroundAgentTasks: {},
+        },
+      },
+    })
+
+    const store = useChatStore.getState()
+    store.handleServerMessage(SESSION_RECONNECT_ERROR, {
+      type: 'permission_requests_snapshot',
+      toolRequestIds: [],
+      computerUseRequestIds: [],
+      turnActive: false,
+    })
+    store.handleServerMessage(SESSION_RECONNECT_ERROR, {
+      type: 'session_state',
+      turnState: 'idle',
+      activeBackgroundTaskIds: [],
+    })
+    expect(useTabStore.getState().tabs.find((t) => t.sessionId === SESSION_RECONNECT_ERROR)?.status).toBe('error')
+
+    // Delegated worker permission arriving and resolving on an errored tab must also keep error indicator.
+    store.handleServerMessage(SESSION_RECONNECT_ERROR, {
+      type: 'permission_request',
+      requestId: 'req-worker-on-error',
+      toolName: 'Bash',
+      toolUseId: 'tool-worker-on-error',
+      displayName: 'builder',
+      input: { command: 'pwd' },
+    })
+    store.respondToPermission(SESSION_RECONNECT_ERROR, 'req-worker-on-error', true)
+    expect(useChatStore.getState().sessions[SESSION_RECONNECT_ERROR]?.chatState).toBe('idle')
+    expect(useTabStore.getState().tabs.find((t) => t.sessionId === SESSION_RECONNECT_ERROR)?.status).toBe('error')
+  })
+
+  it('restores restoreIdleAfterPermissions when a delegated worker AskUserQuestion recovers from ATTACHMENT_PROCESSING_FAILED', () => {
+    useTabStore.setState({
+      tabs: [{
+        sessionId: SESSION_WORKER_ATTACHMENT_RETRY,
+        title: 'Agent Team Lead',
+        type: 'session',
+        status: 'idle',
+      }],
+      activeTabId: SESSION_WORKER_ATTACHMENT_RETRY,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [SESSION_WORKER_ATTACHMENT_RETRY]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyHydrated: true,
+          historyStatus: 'ready',
+          historyBootstrapDisabled: true,
+          chatState: 'idle',
+          backgroundAgentTasks: {},
+        },
+      },
+    })
+
+    const store = useChatStore.getState()
+    store.handleServerMessage(SESSION_WORKER_ATTACHMENT_RETRY, {
+      type: 'permission_request',
+      requestId: 'req-worker-ask-attach',
+      toolName: 'AskUserQuestion',
+      toolUseId: 'tool-worker-ask-attach',
+      displayName: 'builder',
+      input: { questions: [] },
+    })
+
+    // First submission with attachment stashes the delegated permission and returns to idle.
+    store.respondToPermission(SESSION_WORKER_ATTACHMENT_RETRY, 'req-worker-ask-attach', true, {
+      attachments: [{
+        type: 'image',
+        name: 'screenshot.png',
+        mimeType: 'image/png',
+        data: 'ZmFrZQ==',
+      }],
+    })
+    expect(useChatStore.getState().sessions[SESSION_WORKER_ATTACHMENT_RETRY]?.chatState).toBe('idle')
+
+    // Server rejects attachment processing -> stashed permission is restored with restoreIdleAfterPermissions.
+    store.handleServerMessage(SESSION_WORKER_ATTACHMENT_RETRY, {
+      type: 'error',
+      code: 'ATTACHMENT_PROCESSING_FAILED',
+      permissionRequestId: 'req-worker-ask-attach',
+      message: 'Failed to process image',
+    })
+    expect(useChatStore.getState().sessions[SESSION_WORKER_ATTACHMENT_RETRY]?.chatState).toBe('permission_pending')
+    expect(useChatStore.getState().sessions[SESSION_WORKER_ATTACHMENT_RETRY]?.pendingPermissions).toHaveProperty('req-worker-ask-attach')
+
+    // Retrying approval must return to idle (not stick in tool_executing).
+    store.respondToPermission(SESSION_WORKER_ATTACHMENT_RETRY, 'req-worker-ask-attach', true)
+    expect(useChatStore.getState().sessions[SESSION_WORKER_ATTACHMENT_RETRY]?.chatState).toBe('idle')
   })
 
   it('preserves main-session permission transitions to tool_executing and thinking when no displayName is set', () => {
