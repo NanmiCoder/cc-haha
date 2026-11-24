@@ -275,4 +275,146 @@ describe('anthropicToBedrockConverse', () => {
     expect(novaSampling.inferenceConfig?.topP).toBe(0.9)
     expect(novaSampling.additionalModelResponseFieldPaths).toBeUndefined()
   })
+
+  test('covers parallelTools disabled tool_choice variants, adaptive thinking, structured output, OpenAI Bedrock models, search_result, and all image/document source variants', () => {
+    const tools = [{ name: 'Read', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }]
+
+    // 1) Claude disable_parallel_tool_use with auto, any, and named tool + adaptive thinking + structured output + stop_sequences
+    const claudeAny = anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 1024,
+      stop_sequences: ['END'],
+      thinking: { type: 'adaptive' },
+      tools,
+      tool_choice: { type: 'any', disable_parallel_tool_use: true },
+      output_config: { format: { type: 'json_schema', schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } },
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 't1', name: 'Read', input: '{"path":"a.ts"}' as unknown as Record<string, unknown> },
+            { type: 'tool_use', id: 't2', name: 'Read', input: 'not-json' as unknown as Record<string, unknown> },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: 'ok1' },
+            { type: 'tool_result', tool_use_id: 't2', content: 'ok2' },
+          ],
+        },
+      ],
+    })
+    expect(claudeAny.inferenceConfig?.stopSequences).toEqual(['END'])
+    expect(claudeAny.additionalModelRequestFields).toMatchObject({
+      tool_choice: { type: 'any', disable_parallel_tool_use: true },
+      thinking: { type: 'adaptive' },
+      output_config: { format: { type: 'json_schema', schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } },
+    })
+    expect(claudeAny.messages[1]!.content).toEqual([
+      { toolUse: { toolUseId: 't1', name: 'Read', input: { path: 'a.ts' } } },
+      { toolUse: { toolUseId: 't2', name: 'Read', input: {} } },
+    ])
+
+    const claudeTool = anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 512,
+      tools,
+      tool_choice: { type: 'tool', name: 'Read', disable_parallel_tool_use: true },
+      messages: [{ role: 'user', content: 'go' }],
+    })
+    expect(claudeTool.additionalModelRequestFields?.tool_choice).toEqual({
+      type: 'tool',
+      name: 'Read',
+      disable_parallel_tool_use: true,
+    })
+
+    const claudeAuto = anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 512,
+      tools,
+      tool_choice: { type: 'auto', disable_parallel_tool_use: true },
+      messages: [{ role: 'user', content: 'go' }],
+    })
+    expect(claudeAuto.additionalModelRequestFields?.tool_choice).toEqual({
+      type: 'auto',
+      disable_parallel_tool_use: true,
+    })
+
+    // 2) OpenAI models on Bedrock (gpt-oss vs reasoning) strip stopSequences and map reasoning effort
+    const gptOss = anthropicToBedrockConverse({
+      model: 'openai.gpt-oss-120b-1:0',
+      max_tokens: 512,
+      temperature: 0.5,
+      stop_sequences: ['STOP'],
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'solve' }],
+    }, { passSamplingParams: true })
+    expect(gptOss.additionalModelRequestFields).toEqual({ reasoning_effort: 'high' })
+    expect(gptOss.inferenceConfig?.stopSequences).toBeUndefined()
+    expect(gptOss.inferenceConfig?.temperature).toBe(0.5)
+
+    const openaiOther = anthropicToBedrockConverse({
+      model: 'openai.o3-mini-v1:0',
+      max_tokens: 512,
+      temperature: 0.5,
+      top_p: 0.8,
+      stop_sequences: ['STOP'],
+      output_config: { effort: 'medium' },
+      messages: [{ role: 'user', content: 'solve' }],
+    }, { passSamplingParams: true })
+    expect(openaiOther.additionalModelRequestFields).toEqual({ reasoning: { effort: 'medium' } })
+    expect(openaiOther.inferenceConfig?.temperature).toBeUndefined()
+    expect(openaiOther.inferenceConfig?.topP).toBeUndefined()
+
+    // 3) Search results, duplicate document titles, unsupported media formats, URL/file/text/content sources
+    const rich = anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 512,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'search_result', title: 'Docs', source: 'https://example.test', content: [{ type: 'text', text: 'Found it' }] },
+            { type: 'image', source: { type: 'base64', media_type: 'image/svg+xml', data: 'PHN2Zz4=' } },
+            { type: 'image', source: { type: 'url', url: 'https://example.test/a.png' } },
+            { type: 'image', source: { type: 'file', file_id: 'file_123' } },
+            { type: 'document', title: 'report.pdf', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } },
+            { type: 'document', title: 'report.pdf', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } },
+            { type: 'document', title: 'empty.pdf', source: { type: 'base64', media_type: 'application/pdf', data: '' } },
+            { type: 'document', title: 'archive.zip', source: { type: 'base64', media_type: 'application/zip', data: 'UEsDBAo=' } },
+            { type: 'document', title: 'notes.txt', source: { type: 'text', media_type: 'text/plain', data: 'Plain text note' } },
+            { type: 'document', title: 'inline-str', source: { type: 'content', content: 'Inline doc string' } },
+            {
+              type: 'document',
+              title: 'inline-blocks',
+              source: {
+                type: 'content',
+                content: [
+                  { type: 'text', text: 'Caption' },
+                  { type: 'image', source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_BASE64 } },
+                ],
+              },
+            },
+            { type: 'document', title: 'remote.pdf', context: 'ctx', source: { type: 'url', url: 'https://example.test/remote.pdf' } },
+            { type: 'document', title: 'uploaded.pdf', source: { type: 'file', file_id: 'file_doc_1' } },
+          ],
+        },
+      ],
+    })
+    const serialized = JSON.stringify(rich.messages[0]!.content)
+    expect(serialized).toContain('Found it')
+    expect(serialized).toContain('unsupported Bedrock image format image/svg+xml')
+    expect(serialized).toContain('https://example.test/a.png')
+    expect(serialized).toContain('file-based image source')
+    expect(serialized).toContain('"name":"report (2)"')
+    expect(serialized).toContain('empty base64 payload')
+    expect(serialized).toContain('unsupported Bedrock document type application/zip')
+    expect(serialized).toContain('Plain text note')
+    expect(serialized).toContain('Inline doc string')
+    expect(serialized).toContain('Caption')
+    expect(serialized).toContain('https://example.test/remote.pdf')
+    expect(serialized).toContain('file-based source')
+  })
 })

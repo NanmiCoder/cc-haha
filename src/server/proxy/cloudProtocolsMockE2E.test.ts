@@ -528,6 +528,41 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
       expect(traceCall?.request.headers['x-custom-secret']).toBe('[redacted]')
       expect(traceCall?.request.headers['Authorization']).toBe('[redacted]')
       expect(traceCall?.request.headers['X-Vertex-AI-LLM-Shared-Request-Type']).toBe('flex')
+
+      // Non-streaming Vertex Anthropic Claude (`rawPredict`) + upstream error trace capture
+      const vcNonStreamRes = await handleProxyRequest(
+        new Request(vcProxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': vcSessionId },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 256,
+            stream: false,
+            messages: [{ role: 'user', content: 'Non-stream Vertex Claude' }],
+          }),
+        }),
+        new URL(vcProxyUrl),
+      )
+      expect(vcNonStreamRes.status).toBe(200)
+      const vcNonStreamJson = await vcNonStreamRes.json() as { type: string; content: Array<{ text: string }> }
+      expect(vcNonStreamJson.type).toBe('message')
+      expect(vcNonStreamJson.content[0]?.text).toBe('ok')
+
+      const vcErrRes = await handleProxyRequest(
+        new Request(vcProxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': vcSessionId },
+          body: JSON.stringify({
+            model: 'claude-unknown-404',
+            max_tokens: 128,
+            stream: false,
+            messages: [{ role: 'user', content: 'Trigger 404' }],
+          }),
+        }),
+        new URL(vcProxyUrl),
+      )
+      expect(vcErrRes.status).toBe(404)
+      await drainTraceCaptureForTests()
       await updateTraceCaptureSettings({ enabled: false })
     } finally {
       vertexServer.stop(true)
@@ -795,12 +830,14 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
         else process.env.AWS_BEARER_TOKEN_BEDROCK = previousAwsBearer
       }
 
-      // 3) Multi-turn binary EventStream E2E with thinking, signature, redacted_thinking, tool_use, and images
+      // 3) Multi-turn binary EventStream E2E with trace capture enabled, thinking, signature, redacted_thinking, tool_use, and images
+      await updateTraceCaptureSettings({ enabled: true })
+      const bedrockSessionId = 'bedrock-converse-trace-session'
       const proxyUrl = `http://127.0.0.1/proxy/providers/${sigv4Provider.id}/v1/messages`
       const turn1Res = await handleProxyRequest(
         new Request(proxyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': bedrockSessionId },
           body: JSON.stringify({
             model: 'us.anthropic.claude-sonnet-4-6-v1:0',
             max_tokens: 4096,
@@ -890,6 +927,56 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
       const toolResultBlock = sentMsgs[2]!.content[0]!.toolResult as { content: Array<Record<string, unknown>> }
       expect(toolResultBlock.content[1]).toEqual({ image: { format: 'png', source: { bytes: TINY_PNG_TOOL } } })
       expect(sentMsgs[2]!.content.some((c) => (c.image as { source?: { bytes?: string } } | undefined)?.source?.bytes === TINY_PNG_USER)).toBe(true)
+
+      // Non-streaming Bedrock Converse + upstream 403 error path through proxy handler
+      const nonStreamBedrockRes = await handleProxyRequest(
+        new Request(proxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': bedrockSessionId },
+          body: JSON.stringify({
+            model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+            max_tokens: 256,
+            stream: false,
+            messages: [{ role: 'user', content: 'Non-stream Bedrock' }],
+          }),
+        }),
+        new URL(proxyUrl),
+      )
+      expect(nonStreamBedrockRes.status).toBe(200)
+      const nonStreamBedrockJson = await nonStreamBedrockRes.json() as { id: string; type: string; content: Array<{ text: string }> }
+      expect(nonStreamBedrockJson.id).toBe('msg_amzn-converse-1')
+      expect(nonStreamBedrockJson.content[0]?.text).toBe('ok')
+
+      const badKeyBedrockProvider = await providerService.addProvider({
+        presetId: 'custom',
+        name: 'AWS Bedrock Bad Key',
+        baseUrl: origin,
+        apiKey: 'ABSKinvalid-key',
+        apiFormat: 'bedrock_converse',
+        models: {
+          main: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          haiku: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          sonnet: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          opus: 'us.anthropic.claude-sonnet-4-6-v1:0',
+        },
+      })
+      const badBedrockUrl = `http://127.0.0.1/proxy/providers/${badKeyBedrockProvider.id}/v1/messages`
+      const badBedrockRes = await handleProxyRequest(
+        new Request(badBedrockUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': bedrockSessionId },
+          body: JSON.stringify({
+            model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+            max_tokens: 128,
+            stream: false,
+            messages: [{ role: 'user', content: 'Trigger auth error' }],
+          }),
+        }),
+        new URL(badBedrockUrl),
+      )
+      expect(badBedrockRes.status).toBe(403)
+      await drainTraceCaptureForTests()
+      await updateTraceCaptureSettings({ enabled: false })
     } finally {
       bedrockServer.stop(true)
     }

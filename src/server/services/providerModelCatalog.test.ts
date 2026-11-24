@@ -731,8 +731,43 @@ describe('fetchProviderModels', () => {
       'https://aiplatform.googleapis.com/v1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/models',
     ])
+    expect(buildModelsUrlCandidates('https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google', { apiFormat: 'google_vertex' })).toEqual([
+      'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models',
+    ])
 
+    // Azure OpenAI / Foundry model URL candidates across /openai/v1, /openai, and bare host
+    expect(buildModelsUrlCandidates('https://my-res.services.ai.azure.com/openai/v1', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.services.ai.azure.com/openai/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://my-res.openai.azure.com/openai', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.openai.azure.com/openai/v1/models',
+      'https://my-res.openai.azure.com/openai/models?api-version=2024-10-21',
+    ])
+    expect(buildModelsUrlCandidates('https://my-res.openai.azure.com', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.openai.azure.com/openai/v1/models',
+      'https://my-res.openai.azure.com/openai/models?api-version=2024-10-21',
+    ])
+
+    // Ambient Bedrock model discovery fails cleanly with auth-failed when no AWS env vars exist
     const previousBearer = process.env.AWS_BEARER_TOKEN_BEDROCK
+    const previousAccessKey = process.env.AWS_ACCESS_KEY_ID
+    const previousSecretKey = process.env.AWS_SECRET_ACCESS_KEY
+    delete process.env.AWS_BEARER_TOKEN_BEDROCK
+    delete process.env.AWS_ACCESS_KEY_ID
+    delete process.env.AWS_SECRET_ACCESS_KEY
+    try {
+      const missingAuth = await fetchProviderModels({
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: '',
+        apiFormat: 'bedrock_converse',
+      })
+      expect(missingAuth).toMatchObject({ ok: false, errorCode: 'auth-failed' })
+    } finally {
+      if (previousAccessKey !== undefined) process.env.AWS_ACCESS_KEY_ID = previousAccessKey
+      if (previousSecretKey !== undefined) process.env.AWS_SECRET_ACCESS_KEY = previousSecretKey
+      if (previousBearer !== undefined) process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
+    }
+
     process.env.AWS_BEARER_TOKEN_BEDROCK = 'ABSK-ambient-env-token'
     try {
       stubFetchSequence([() => jsonResponse({
