@@ -695,3 +695,34 @@ describe('file tree open actions', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })
+
+describe('large directory windowing and truncation', () => {
+  it('announces when a directory listing is truncated and keeps keyboard Home/End working across virtualized rows', async () => {
+    const entryCount = 600
+    mocks.getWorkspaceTree.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      truncated: true,
+      totalCount: 5_000,
+      entries: Array.from({ length: entryCount }, (_, index) => ({
+        name: `item-${String(index).padStart(4, '0')}.ts`,
+        path: `item-${String(index).padStart(4, '0')}.ts`,
+        isDirectory: false,
+      })),
+    })
+
+    await renderPane()
+
+    expect(screen.getByRole('status')).toHaveTextContent('Showing the first 600 of 5000 items in Project root')
+    expect(screen.getAllByRole('treeitem').length).toBeLessThan(100)
+
+    const first = screen.getByTestId('workspace-tree-row-item-0000.ts')
+    focusRow(first)
+    fireEvent.keyDown(first, { key: 'End' })
+    const last = await screen.findByTestId('workspace-tree-row-item-0599.ts')
+    expect(document.activeElement).toBe(last)
+
+    fireEvent.keyDown(last, { key: 'Home' })
+    expect(document.activeElement).toBe(await screen.findByTestId('workspace-tree-row-item-0000.ts'))
+  })
+})

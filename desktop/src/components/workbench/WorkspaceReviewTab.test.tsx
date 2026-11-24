@@ -1028,4 +1028,17 @@ describe('review content parity', () => {
     expect(toolbar.nextElementSibling).toContainElement(screen.getByTestId('workspace-tree-sidebar'))
     expect(screen.getByTestId('workspace-review-bulk-bar')).toHaveClass('absolute', 'rounded-full')
   })
+
+  it('locates a faraway file inside a virtualized review list without mounting every section', async () => {
+    const files = Array.from({ length: 240 }, (_, index) =>
+      file(`dir-${String(Math.floor(index / 20)).padStart(2, '0')}/f-${String(index).padStart(3, '0')}.ts`),
+    )
+    const targetPath = files[220]!.path
+    reviewApi.getStatus.mockResolvedValue(status({ files, untracked: [] }))
+    const view = await renderReview({ path: targetPath })
+
+    expect(view.container.querySelectorAll('section[data-testid^="workspace-review-section-"]').length).toBeLessThan(80)
+    expect(await screen.findByTestId(`workspace-review-section-${targetPath}`)).toBeInTheDocument()
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
 })

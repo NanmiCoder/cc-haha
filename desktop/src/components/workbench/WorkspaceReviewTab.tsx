@@ -44,6 +44,7 @@ import { splitReviewHunks } from '@/lib/workspace/reviewHunks'
 import { workspaceOpen } from '@/lib/workspace/openTarget'
 import { useMenuKeyboard } from './menuKeyboard'
 import { useRovingTree } from './treeKeyboard'
+import { useFixedVirtualWindow, useVariableVirtualWindow } from './useVirtualWindow'
 import { useWorkspaceReviewRefresh } from '@/lib/workspace/useWorkspaceReviewRefresh'
 import { useWorkspaceReviewStore } from '../../stores/workspaceReviewStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -226,9 +227,49 @@ export function WorkspaceReviewTab({
   const [operationError, setOperationError] = useState<string | null>(null)
   const sourceMenuRef = useRef<HTMLDivElement>(null)
   const sourceTriggerRef = useRef<HTMLButtonElement>(null)
+  const cardsScrollRef = useRef<HTMLDivElement>(null)
+  const changeTreeScrollRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef(new Map<string, HTMLElement>())
   const locatedRequest = useRef<string | null>(null)
+  const reachedViewCallbacks = useRef(new Map<Element, () => void>())
+  const sharedObserverRef = useRef<IntersectionObserver | null>(null)
   const fieldIds = useId()
+
+  useEffect(() => {
+    if (typeof IntersectionObserver !== 'function') return
+    const observer = new IntersectionObserver((entries) => {
+      for (const item of entries) {
+        if (!item.isIntersecting) continue
+        const callback = reachedViewCallbacks.current.get(item.target)
+        if (callback) {
+          reachedViewCallbacks.current.delete(item.target)
+          observer.unobserve(item.target)
+          callback()
+        }
+      }
+    })
+    sharedObserverRef.current = observer
+    for (const element of reachedViewCallbacks.current.keys()) {
+      observer.observe(element)
+    }
+    return () => {
+      observer.disconnect()
+      if (sharedObserverRef.current === observer) sharedObserverRef.current = null
+    }
+  }, [])
+
+  const observeSection = useCallback((element: Element, onReached: () => void) => {
+    if (typeof IntersectionObserver !== 'function') {
+      onReached()
+      return () => {}
+    }
+    reachedViewCallbacks.current.set(element, onReached)
+    sharedObserverRef.current?.observe(element)
+    return () => {
+      reachedViewCallbacks.current.delete(element)
+      sharedObserverRef.current?.unobserve(element)
+    }
+  }, [])
 
   const source = tab.source
   useWorkspaceReviewRefresh(sessionId, source, active)
@@ -338,6 +379,29 @@ export function WorkspaceReviewTab({
     return query ? files.filter((file) => file.path.toLowerCase().includes(query)) : files
   }, [files, filter])
 
+  const visibleFileKeys = useMemo(
+    () => visibleFiles.map((file) => `${reviewScope}:${file.path}`),
+    [reviewScope, visibleFiles],
+  )
+  const estimateCardHeight = useCallback((index: number) => {
+    const file = visibleFiles[index]
+    if (!file) return 240
+    const isOpen = openByScope[reviewScope]?.[file.path] ?? !entry.viewedPaths.includes(file.path)
+    return isOpen ? 240 : 44
+  }, [entry.viewedPaths, openByScope, reviewScope, visibleFiles])
+
+  const cardsWindow = useVariableVirtualWindow({
+    keys: visibleFileKeys,
+    estimateHeight: estimateCardHeight,
+    gap: 12,
+    overscan: 6,
+    threshold: 80,
+    scrollRef: cardsScrollRef,
+  })
+  const renderedFiles = cardsWindow.virtualized
+    ? visibleFiles.slice(cardsWindow.startIndex, cardsWindow.endIndex)
+    : visibleFiles
+
   // Requested per section as it scrolls into view. Fetching every file on mount
   // meant a 200-file review issued 200 requests at once, each spawning several
   // `git` processes.
@@ -349,11 +413,19 @@ export function WorkspaceReviewTab({
   const locate = useCallback((path: string) => {
     setFileOpen(path, true)
     // jsdom implements no scrolling at all, and a section can be unmounted by
-    // an in-flight filter, so both the node and the method are optional.
+    // an in-flight filter or virtual window, so scroll the window to it first
+    // when needed.
     const section = sectionRefs.current.get(path)
-    section?.scrollIntoView?.({ block: 'start' })
-    return !!section
-  }, [setFileOpen])
+    if (section) {
+      section.scrollIntoView?.({ block: 'start' })
+      return true
+    }
+    if (cardsWindow.virtualized) {
+      const targetIndex = visibleFiles.findIndex((file) => file.path === path)
+      if (targetIndex >= 0) cardsWindow.scrollToIndex(targetIndex)
+    }
+    return false
+  }, [cardsWindow, setFileOpen, visibleFiles])
 
   useEffect(() => {
     if (!selectedPath) {
@@ -362,7 +434,7 @@ export function WorkspaceReviewTab({
     }
     const request = JSON.stringify([sessionId, tab.id, reviewSourceKey(source), selectedPath])
     if (locatedRequest.current !== request && locate(selectedPath)) locatedRequest.current = request
-  }, [locate, selectedPath, entry.status, visibleFiles, sessionId, source, tab.id])
+  }, [locate, selectedPath, entry.status, visibleFiles, cardsWindow.startIndex, cardsWindow.endIndex, sessionId, source, tab.id])
 
   const runWrite = useCallback(async (
     operation: 'stage' | 'unstage' | 'revert',
@@ -398,6 +470,16 @@ export function WorkspaceReviewTab({
     () => buildChangeRows(visibleFiles, collapsedDirs),
     [collapsedDirs, visibleFiles],
   )
+  const changeTreeWindow = useFixedVirtualWindow({
+    itemCount: changeRows.length,
+    itemHeight: 26,
+    overscan: 15,
+    threshold: 200,
+    scrollRef: changeTreeScrollRef,
+  })
+  const visibleChangeRows = changeTreeWindow.virtualized
+    ? changeRows.slice(changeTreeWindow.startIndex, changeTreeWindow.endIndex)
+    : changeRows
 
   const toggleDirectory = useCallback((path: string) => {
     setCollapsedDirs((current) => {
@@ -411,6 +493,7 @@ export function WorkspaceReviewTab({
   const selectFile = useCallback((path: string) => {
     // Always select rather than toggle: with the content no longer filtered,
     // clicking a row again means "take me back there".
+    locatedRequest.current = null
     useWorkspaceStore.getState().setReviewSelectedPath(sessionId, tab.id, path)
     locate(path)
   }, [locate, sessionId, tab.id])
@@ -427,7 +510,11 @@ export function WorkspaceReviewTab({
       else selectFile(row.path)
     },
     onToggleDirectory: (row) => toggleDirectory(row.path),
+    onEnsureVisible: changeTreeWindow.ensureIndexVisible,
   })
+  const visibleChangeActivePath = visibleChangeRows.some((row) => row.path === activePath)
+    ? activePath
+    : visibleChangeRows[0]?.path ?? null
 
   const totals = entry.status?.totals
 
@@ -613,7 +700,11 @@ export function WorkspaceReviewTab({
 
           {/* The cards scroll vertically here; each card's diff scrolls sideways
               on its own so a long line never pushes the card frames apart. */}
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden p-3 pb-20">
+          <div
+            ref={cardsScrollRef}
+            onScroll={(event) => cardsWindow.onScroll(event.currentTarget.scrollTop)}
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden p-3 pb-20"
+          >
             {entry.loading && !entry.status ? (
               <div className="flex items-center justify-center py-8">
                 <Spinner size={18} label={t('common.loading')} />
@@ -629,52 +720,65 @@ export function WorkspaceReviewTab({
             ) : visibleFiles.length === 0 ? (
               <PanelMessage icon={CircleCheck} message={t('workspace.review.empty')} />
             ) : (
-              visibleFiles.map((file) => (
-                <ReviewFileSection
-                  key={`${reviewScope}:${file.path}`}
-                  file={file}
-                  diffMode={diffMode}
-                  wrapLines={wrapLines}
-                  open={openByScope[reviewScope]?.[file.path] ?? !entry.viewedPaths.includes(file.path)}
-                  onToggleOpen={() => setFileOpen(file.path, !(openByScope[reviewScope]?.[file.path] ?? !entry.viewedPaths.includes(file.path)))}
-                  onOpenFile={line => workspaceOpen.file(sessionId, file.path, { line, preview: false })}
-                  onAddComment={(selection, note) => useWorkspaceChatContextStore.getState().addReference(sessionId, {
-                    kind: 'code-comment', path: file.path, name: file.path.split('/').pop() ?? file.path,
-                    diffSide: selection.side, lineStart: selection.lineStart, lineEnd: selection.lineEnd,
-                    hunkId: `${reviewSourceKey(source)}:${selection.hunkId}`, quote: selection.quote, note,
-                    ...(source.kind === 'turn' ? { messageId: source.turnKey } : {}),
-                  })}
-                  registerSection={(node) => {
-                    if (node) sectionRefs.current.set(file.path, node)
-                    else sectionRefs.current.delete(file.path)
-                  }}
-                  untracked={untracked.has(file.path)}
-                  writable={writable && !entry.stale && !entry.loading}
-                  source={source}
-                  viewed={entry.viewedPaths.includes(file.path)}
-                  diff={entry.diffsByPath[file.path]?.diff}
-                  diffUnavailable={entry.diffsByPath[file.path]?.state === 'missing' || entry.diffsByPath[file.path]?.state === 'error'}
-                  diffTruncated={entry.diffsByPath[file.path]?.truncated}
-                  diffBytes={entry.diffsByPath[file.path]?.bytes}
-                  diffLoading={entry.diffLoadingByPath[file.path] === true}
-                  onReachedView={() => requestDiff(file)}
-                  onStage={() => { void runWrite('stage', [file.path]) }}
-                  onUnstage={() => { void runWrite('unstage', [file.path]) }}
-                  onRevert={() => setPendingRevert([file.path])}
-                  onHunk={async (patch) => {
-                    const result = await useWorkspaceReviewStore.getState()[source.kind === 'staged' ? 'unstageHunk' : 'stageHunk'](sessionId, source, patch)
-                    if (result.state !== 'stale' && result.state !== 'refused' && result.error) setOperationError(result.error)
-                  }}
-                  onToggleViewed={() => {
-                    // Let the viewed mark supply the default so a new snapshot
-                    // that invalidates that mark also reveals the changed diff.
-                    setFileOpen(file.path, undefined)
-                    const store = useWorkspaceReviewStore.getState()
-                    store.toggleViewed(sessionId, source, file.path)
-                    useWorkspaceStore.getState().setReviewViewedPaths(sessionId, tab.id, store.getEntry(sessionId, source).viewedPaths, store.getEntry(sessionId, source).viewedSnapshot ?? undefined)
-                  }}
-                />
-              ))
+              <>
+                {cardsWindow.topSpacer > 0 ? (
+                  <div aria-hidden="true" className="shrink-0" style={{ height: cardsWindow.topSpacer }} />
+                ) : null}
+                {renderedFiles.map((file) => (
+                  <ReviewFileSection
+                    key={`${reviewScope}:${file.path}`}
+                    file={file}
+                    diffMode={diffMode}
+                    wrapLines={wrapLines}
+                    open={openByScope[reviewScope]?.[file.path] ?? !entry.viewedPaths.includes(file.path)}
+                    onToggleOpen={() => setFileOpen(file.path, !(openByScope[reviewScope]?.[file.path] ?? !entry.viewedPaths.includes(file.path)))}
+                    onOpenFile={line => workspaceOpen.file(sessionId, file.path, { line, preview: false })}
+                    onAddComment={(selection, note) => useWorkspaceChatContextStore.getState().addReference(sessionId, {
+                      kind: 'code-comment', path: file.path, name: file.path.split('/').pop() ?? file.path,
+                      diffSide: selection.side, lineStart: selection.lineStart, lineEnd: selection.lineEnd,
+                      hunkId: `${reviewSourceKey(source)}:${selection.hunkId}`, quote: selection.quote, note,
+                      ...(source.kind === 'turn' ? { messageId: source.turnKey } : {}),
+                    })}
+                    registerSection={(node) => {
+                      if (node) {
+                        sectionRefs.current.set(file.path, node)
+                        cardsWindow.measureItem(`${reviewScope}:${file.path}`, node)
+                      } else {
+                        sectionRefs.current.delete(file.path)
+                      }
+                    }}
+                    observeSection={observeSection}
+                    untracked={untracked.has(file.path)}
+                    writable={writable && !entry.stale && !entry.loading}
+                    source={source}
+                    viewed={entry.viewedPaths.includes(file.path)}
+                    diff={entry.diffsByPath[file.path]?.diff}
+                    diffUnavailable={entry.diffsByPath[file.path]?.state === 'missing' || entry.diffsByPath[file.path]?.state === 'error'}
+                    diffTruncated={entry.diffsByPath[file.path]?.truncated}
+                    diffBytes={entry.diffsByPath[file.path]?.bytes}
+                    diffLoading={entry.diffLoadingByPath[file.path] === true}
+                    onReachedView={() => requestDiff(file)}
+                    onStage={() => { void runWrite('stage', [file.path]) }}
+                    onUnstage={() => { void runWrite('unstage', [file.path]) }}
+                    onRevert={() => setPendingRevert([file.path])}
+                    onHunk={async (patch) => {
+                      const result = await useWorkspaceReviewStore.getState()[source.kind === 'staged' ? 'unstageHunk' : 'stageHunk'](sessionId, source, patch)
+                      if (result.state !== 'stale' && result.state !== 'refused' && result.error) setOperationError(result.error)
+                    }}
+                    onToggleViewed={() => {
+                      // Let the viewed mark supply the default so a new snapshot
+                      // that invalidates that mark also reveals the changed diff.
+                      setFileOpen(file.path, undefined)
+                      const store = useWorkspaceReviewStore.getState()
+                      store.toggleViewed(sessionId, source, file.path)
+                      useWorkspaceStore.getState().setReviewViewedPaths(sessionId, tab.id, store.getEntry(sessionId, source).viewedPaths, store.getEntry(sessionId, source).viewedSnapshot ?? undefined)
+                    }}
+                  />
+                ))}
+                {cardsWindow.bottomSpacer > 0 ? (
+                  <div aria-hidden="true" className="shrink-0" style={{ height: cardsWindow.bottomSpacer }} />
+                ) : null}
+              </>
             )}
           </div>
 
@@ -731,71 +835,75 @@ export function WorkspaceReviewTab({
             />
           </div>
           <div
+            ref={changeTreeScrollRef}
+            onScroll={(event) => changeTreeWindow.onScroll(event.currentTarget.scrollTop)}
             className="min-h-0 flex-1 overflow-auto px-2 pb-2"
             role="tree"
             aria-label={t('workspace.review.changeTree')}
           >
-            {changeRows.map((row) => {
-              const selected = !row.isDirectory && selectedPath === row.path
-              return (
-                <div
-                  key={row.path}
-                  ref={registerRow(row.path)}
-                  role="treeitem"
-                  tabIndex={row.path === activePath ? 0 : -1}
-                  aria-level={row.depth + 1}
-                  aria-expanded={row.isDirectory ? row.expanded : undefined}
-                  aria-selected={row.isDirectory ? undefined : selected}
-                  // The selection locates a section rather than filtering the
-                  // panel, so it is "the one you are looking at", not "the one
-                  // shown".
-                  aria-current={selected ? 'true' : undefined}
-                  data-testid={row.isDirectory
-                    ? `workspace-review-dir-${row.path}`
-                    : `workspace-review-file-${row.path}`}
-                  onFocus={() => setFocusedPath(row.path)}
-                  onClick={() => {
-                    setFocusedPath(row.path)
-                    if (row.isDirectory) toggleDirectory(row.path)
-                    else selectFile(row.path)
-                  }}
-                  onKeyDown={(event) => handleTreeKeyDown(event, row)}
-                  style={{ paddingLeft: 2 + row.depth * 16 }}
-                  className={[
-                    'flex h-[26px] cursor-default items-center gap-1.5 rounded-[var(--radius-xs)] pr-1.5 text-left text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
-                    selected
-                      ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
-                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
-                  ].join(' ')}
-                >
-                  {row.isDirectory ? (
-                    <>
-                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
+            <div style={changeTreeWindow.virtualized ? { paddingTop: changeTreeWindow.topSpacer, paddingBottom: changeTreeWindow.bottomSpacer } : undefined}>
+              {visibleChangeRows.map((row) => {
+                const selected = !row.isDirectory && selectedPath === row.path
+                return (
+                  <div
+                    key={row.path}
+                    ref={registerRow(row.path)}
+                    role="treeitem"
+                    tabIndex={row.path === visibleChangeActivePath ? 0 : -1}
+                    aria-level={row.depth + 1}
+                    aria-expanded={row.isDirectory ? row.expanded : undefined}
+                    aria-selected={row.isDirectory ? undefined : selected}
+                    // The selection locates a section rather than filtering the
+                    // panel, so it is "the one you are looking at", not "the one
+                    // shown".
+                    aria-current={selected ? 'true' : undefined}
+                    data-testid={row.isDirectory
+                      ? `workspace-review-dir-${row.path}`
+                      : `workspace-review-file-${row.path}`}
+                    onFocus={() => setFocusedPath(row.path)}
+                    onClick={() => {
+                      setFocusedPath(row.path)
+                      if (row.isDirectory) toggleDirectory(row.path)
+                      else selectFile(row.path)
+                    }}
+                    onKeyDown={(event) => handleTreeKeyDown(event, row)}
+                    style={{ paddingLeft: 2 + row.depth * 16 }}
+                    className={[
+                      'flex h-[26px] cursor-default items-center gap-1.5 rounded-[var(--radius-xs)] pr-1.5 text-left text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                      selected
+                        ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
+                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
+                    ].join(' ')}
+                  >
+                    {row.isDirectory ? (
+                      <>
+                        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
+                          {row.expanded
+                            ? <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+                            : <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />}
+                        </span>
                         {row.expanded
-                          ? <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
-                          : <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />}
-                      </span>
-                      {row.expanded
-                        ? <FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-                        : <FolderClosed size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
-                    </>
-                  ) : row.file ? (() => {
-                    const { letter, tone } = changeLetter(row.file, untracked.has(row.file.path))
-                    return (
-                      <span data-testid={`workspace-review-status-${row.path}`} className={`flex w-3.5 shrink-0 justify-center font-mono text-[11px] font-medium ${tone}`}>
-                        {letter}
-                      </span>
-                    )
-                  })() : null}
-                  <span className="min-w-0 flex-1 truncate" title={row.path}>
-                    {row.name}
-                  </span>
-                  {row.file?.conflicted ? (
-                    <Circle size={8} aria-hidden="true" className="shrink-0 fill-[var(--color-error)] text-[var(--color-error)]" />
-                  ) : null}
-                </div>
-              )
-            })}
+                          ? <FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                          : <FolderClosed size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
+                      </>
+                    ) : row.file ? (() => {
+                      const { letter, tone } = changeLetter(row.file, untracked.has(row.file.path))
+                      return (
+                        <span data-testid={`workspace-review-status-${row.path}`} className={`flex w-3.5 shrink-0 justify-center font-mono text-[11px] font-medium ${tone}`}>
+                          {letter}
+                        </span>
+                      )
+                    })() : null}
+                    <span className="min-w-0 flex-1 truncate" title={row.path}>
+                      {row.name}
+                    </span>
+                    {row.file?.conflicted ? (
+                      <Circle size={8} aria-hidden="true" className="shrink-0 fill-[var(--color-error)] text-[var(--color-error)]" />
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
           </div>
           </div>
         </WorkspaceTreeSidebar>
@@ -835,6 +943,7 @@ export function WorkspaceReviewTab({
 function ReviewFileSection({
   file,
   registerSection,
+  observeSection,
   untracked,
   writable,
   source,
@@ -859,6 +968,7 @@ function ReviewFileSection({
 }: {
   file: ReviewFile
   registerSection: (node: HTMLElement | null) => void
+  observeSection: (element: Element, onReached: () => void) => () => void
   untracked: boolean
   writable: boolean
   source: WorkspaceReviewSource
@@ -897,26 +1007,13 @@ function ReviewFileSection({
       ?? 1
   }, [diff])
 
-  // Ask for this file's diff when its section reaches the screen. Fetching every
-  // file on mount meant a 200-file review issued 200 requests at once, each
-  // spawning several `git` processes.
+  // Ask for this file's diff when its section reaches the screen using the
+  // tab's single shared IntersectionObserver.
   useEffect(() => {
     const element = sectionRef.current
     if (!element || !open) return
-    // jsdom has no IntersectionObserver; requesting immediately there keeps the
-    // component testable without pretending the browser path ran.
-    if (typeof IntersectionObserver !== 'function') {
-      onReachedView()
-      return
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return
-      onReachedView()
-      observer.disconnect()
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [onReachedView, open])
+    return observeSection(element, onReachedView)
+  }, [observeSection, onReachedView, open])
 
   return (
     <section

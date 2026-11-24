@@ -759,6 +759,98 @@ describe('WorkspaceService', () => {
       { path: 'b.txt', oldPath: undefined, status: 'modified', additions: 2, deletions: 3 },
     ])
   })
+
+  it('returns lightweight metadata without running git status or transcript scans when includeChangedFiles is false', async () => {
+    const repoDir = await createGitWorkspace()
+    const gitCalls: string[][] = []
+    let messagesCalled = false
+    let snapshotsCalled = false
+    const service = new WorkspaceService(
+      async () => repoDir,
+      async () => { messagesCalled = true; return [] },
+      async () => { snapshotsCalled = true; return [] },
+    ) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+      }>
+    }
+    const realRunGit = service.runGit.bind(service)
+    service.runGit = async (workDir, args) => {
+      gitCalls.push(args)
+      return realRunGit(workDir, args)
+    }
+
+    const result = await service.getStatus('session-1', { includeChangedFiles: false })
+
+    expect(result).toMatchObject({
+      state: 'ok',
+      workDir: repoDir,
+      repoName: path.basename(repoDir),
+      isGitRepo: true,
+      changedFiles: [],
+    })
+    expect(result.branch).toBeTruthy()
+    expect(messagesCalled).toBe(false)
+    expect(snapshotsCalled).toBe(false)
+    expect(gitCalls.some((args) => args[0] === 'status' || args[0] === 'diff')).toBe(false)
+  })
+
+  it('caps git error output and strips NUL bytes on maxBuffer or giant stdout failures', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        errorCode?: string
+        maxBufferExceeded?: boolean
+      }>
+    }
+
+    let failStatusWithGiantStdout = false
+    service.runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return { stdout: `${workDir}\n`, stderr: '', code: 0 }
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return { stdout: 'main\n', stderr: '', code: 0 }
+      }
+      if (args[0] === 'diff') {
+        return {
+          stdout: `${'?? giant-path\0'.repeat(50_000)}`,
+          stderr: '',
+          code: 1,
+          errorCode: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+          maxBufferExceeded: true,
+        }
+      }
+      if (args[0] === 'status') {
+        if (!failStatusWithGiantStdout) {
+          return { stdout: ' M tracked.txt\0', stderr: '', code: 0 }
+        }
+        return {
+          stdout: `${'bad\0output '.repeat(5_000)}`,
+          stderr: '',
+          code: 128,
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 }
+    }
+
+    const diffResult = await service.getDiff('session-1', 'tracked.txt')
+    expect(diffResult.state).toBe('error')
+    expect(diffResult.error).toContain('exceeded buffer limit')
+    expect(diffResult.error?.length ?? 0).toBeLessThan(1_500)
+    expect(diffResult.error).not.toContain('\0')
+
+    failStatusWithGiantStdout = true
+    const statusResult = await service.getStatus('session-1')
+    expect(statusResult.state).toBe('error')
+    expect(statusResult.error?.length ?? 0).toBeLessThan(1_500)
+    expect(statusResult.error).not.toContain('\0')
+  })
 })
 
 describe('WorkspaceService document previews', () => {

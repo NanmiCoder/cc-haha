@@ -8,6 +8,7 @@ if (typeof (vi as HoistedVi).hoisted !== 'function') {
 const mocks = vi.hoisted(() => ({
   getWorkspaceFile: vi.fn(),
   getWorkspaceTree: vi.fn(),
+  getWorkspaceMeta: vi.fn(),
   getWorkspaceStatus: vi.fn(),
 }))
 
@@ -15,6 +16,7 @@ vi.mock('../api/sessions', () => ({
   sessionsApi: {
     getWorkspaceFile: mocks.getWorkspaceFile,
     getWorkspaceTree: mocks.getWorkspaceTree,
+    getWorkspaceMeta: mocks.getWorkspaceMeta,
     getWorkspaceStatus: mocks.getWorkspaceStatus,
   },
 }))
@@ -54,6 +56,7 @@ beforeEach(() => {
   })
   mocks.getWorkspaceFile.mockReset()
   mocks.getWorkspaceTree.mockReset()
+  mocks.getWorkspaceMeta.mockReset()
   mocks.getWorkspaceStatus.mockReset()
 })
 
@@ -411,20 +414,21 @@ describe('session lifetime', () => {
     expect(store().getFile('session-b', 'a.ts')).toMatchObject({ state: 'ok' })
   })
 
-  it('probes the Git status once so the launcher can explain itself', async () => {
-    mocks.getWorkspaceStatus.mockResolvedValue({
+  it('probes lightweight workspace metadata once so the launcher can explain itself without calling heavy getWorkspaceStatus', async () => {
+    mocks.getWorkspaceMeta.mockResolvedValue({
       state: 'ok', workDir: '/repo', repoName: null, branch: null, isGitRepo: false, changedFiles: [],
     })
 
     await store().loadStatus(SESSION)
     await store().loadStatus(SESSION)
 
-    expect(mocks.getWorkspaceStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getWorkspaceMeta).toHaveBeenCalledTimes(1)
+    expect(mocks.getWorkspaceStatus).not.toHaveBeenCalled()
     expect(useWorkspaceContentStore.getState().statusBySession[SESSION]).toMatchObject({ isGitRepo: false })
   })
 
   it('leaves the launcher alone when the status probe fails', async () => {
-    mocks.getWorkspaceStatus.mockRejectedValue(new Error('offline'))
+    mocks.getWorkspaceMeta.mockRejectedValue(new Error('offline'))
     await store().loadStatus(SESSION)
     expect(useWorkspaceContentStore.getState().statusBySession[SESSION]).toBeUndefined()
   })
@@ -433,7 +437,7 @@ describe('session lifetime', () => {
 describe('status probe', () => {
   it('does not share a status probe with a file named status', async () => {
     const pending = deferred<unknown>()
-    mocks.getWorkspaceStatus.mockReturnValueOnce(pending.promise)
+    mocks.getWorkspaceMeta.mockReturnValueOnce(pending.promise)
     mocks.getWorkspaceFile.mockResolvedValueOnce({ state: 'ok', path: 'status', content: 'file' })
     const probe = store().loadStatus(SESSION)
     await store().loadFile(SESSION, 'status')
@@ -444,7 +448,7 @@ describe('status probe', () => {
   })
 
   it('does not re-request after a failure on every remount', async () => {
-    mocks.getWorkspaceStatus.mockRejectedValue(new Error('offline'))
+    mocks.getWorkspaceMeta.mockRejectedValue(new Error('offline'))
 
     await store().loadStatus(SESSION)
     await store().loadStatus(SESSION)
@@ -452,22 +456,35 @@ describe('status probe', () => {
 
     // A failed probe caches nothing, so guarding only the *result* would fire a
     // fresh request every time the file tab mounted.
-    expect(mocks.getWorkspaceStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getWorkspaceMeta).toHaveBeenCalledTimes(1)
   })
 
   it('retries when the caller explicitly forces it', async () => {
-    mocks.getWorkspaceStatus.mockRejectedValue(new Error('offline'))
+    mocks.getWorkspaceMeta.mockRejectedValue(new Error('offline'))
     await store().loadStatus(SESSION)
     await store().loadStatus(SESSION, { force: true })
-    expect(mocks.getWorkspaceStatus).toHaveBeenCalledTimes(2)
+    expect(mocks.getWorkspaceMeta).toHaveBeenCalledTimes(2)
   })
 
   it('probes again for a session that was closed and reopened', async () => {
-    mocks.getWorkspaceStatus.mockRejectedValue(new Error('offline'))
+    mocks.getWorkspaceMeta.mockRejectedValue(new Error('offline'))
     await store().loadStatus(SESSION)
     store().clearSession(SESSION)
     await store().loadStatus(SESSION)
-    expect(mocks.getWorkspaceStatus).toHaveBeenCalledTimes(2)
+    expect(mocks.getWorkspaceMeta).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not force-refetch git status or metadata during watch refreshes', async () => {
+    mocks.getWorkspaceMeta.mockResolvedValue({
+      state: 'ok', workDir: '/repo', repoName: 'repo', branch: 'main', isGitRepo: true, changedFiles: [],
+    })
+    await store().loadStatus(SESSION)
+    mocks.getWorkspaceMeta.mockClear()
+
+    await store().refreshWatchedPaths(SESSION, ['src/a.ts'], ['src'], new AbortController().signal)
+
+    expect(mocks.getWorkspaceStatus).not.toHaveBeenCalled()
+    expect(mocks.getWorkspaceMeta).not.toHaveBeenCalled()
   })
 })
 

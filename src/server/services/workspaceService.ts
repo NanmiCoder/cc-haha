@@ -31,10 +31,42 @@ import {
 const MAX_PREVIEW_BYTES = 1024 * 1024
 export const MAX_WORKSPACE_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const MAX_UNTRACKED_STAT_BYTES = 256 * 1024
+const MAX_UNTRACKED_STAT_CONCURRENCY = 16
+const MAX_UNTRACKED_LINE_COUNT_FILES = 500
+const MAX_STATUS_ENTRIES = 2_000
+const MAX_TREE_ENTRIES = 1_000
+const MAX_GIT_ERROR_DETAIL_CHARS = 1_024
 const GIT_TIMEOUT_MS = 5_000
 const MAX_GIT_BUFFER_BYTES = 2_000_000
 const VCS_METADATA_DIRECTORY_NAMES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'])
 const execFile = promisify(execFileCallback)
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return []
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  let failed = false
+  const workerCount = Math.min(Math.max(1, limit), items.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (!failed) {
+        const index = nextIndex++
+        if (index >= items.length) return
+        try {
+          results[index] = await worker(items[index]!, index)
+        } catch (error) {
+          failed = true
+          throw error
+        }
+      }
+    }),
+  )
+  return results
+}
 
 function isVcsMetadataDirectoryName(name: string): boolean {
   return VCS_METADATA_DIRECTORY_NAMES.has(name.toLowerCase())
@@ -115,7 +147,14 @@ export type WorkspaceStatusResult = {
   branch: string | null
   isGitRepo: boolean
   changedFiles: WorkspaceChangedFile[]
+  truncated?: boolean
+  totalChangedFiles?: number
   error?: string
+}
+
+export type WorkspaceStatusOptions = {
+  /** When false, return lightweight repository metadata without scanning git status or history. */
+  includeChangedFiles?: boolean
 }
 
 export type WorkspaceReadFileResult = {
@@ -165,6 +204,8 @@ export type WorkspaceTreeResult = {
   state: 'ok' | 'missing' | 'error'
   path: string
   entries: WorkspaceTreeEntry[]
+  truncated?: boolean
+  totalCount?: number
   error?: string
 }
 
@@ -240,6 +281,9 @@ type GitCommandResult = {
   stdout: string
   stderr: string
   code: number
+  errorCode?: string
+  maxBufferExceeded?: boolean
+  timedOut?: boolean
 }
 
 type DiffStatsResult =
@@ -257,6 +301,7 @@ type DiffStatsByRepoPathResult =
   | {
       kind: 'ok'
       statsByRepoPath: Map<string, { additions: number; deletions: number }>
+      truncated?: boolean
     }
   | {
       kind: 'error'
@@ -307,7 +352,11 @@ export class WorkspaceService {
     ) => Promise<FileHistorySnapshot[]> = async () => [],
   ) {}
 
-  async getStatus(sessionId: string): Promise<WorkspaceStatusResult> {
+  async getStatus(
+    sessionId: string,
+    options?: WorkspaceStatusOptions,
+  ): Promise<WorkspaceStatusResult> {
+    const includeChangedFiles = options?.includeChangedFiles !== false
     const workDir = await this.requireWorkDir(sessionId)
     const workspaceInfo = await this.getWorkspaceRoot(workDir)
     if (workspaceInfo.kind === 'missing') {
@@ -333,6 +382,38 @@ export class WorkspaceService {
     }
 
     const repoInfo = await this.getGitRepoInfo(workDir)
+    if (!includeChangedFiles) {
+      if (repoInfo.kind === 'not_git_repo') {
+        return {
+          state: 'ok',
+          workDir,
+          repoName: path.basename(workspaceInfo.workspaceRoot),
+          branch: null,
+          isGitRepo: false,
+          changedFiles: [],
+        }
+      }
+      if (repoInfo.kind === 'error') {
+        return {
+          state: 'error',
+          workDir,
+          repoName: null,
+          branch: null,
+          isGitRepo: false,
+          changedFiles: [],
+          error: repoInfo.message,
+        }
+      }
+      return {
+        state: 'ok',
+        workDir,
+        repoName: path.basename(repoInfo.repoRoot),
+        branch: repoInfo.branch,
+        isGitRepo: true,
+        changedFiles: [],
+      }
+    }
+
     // Inside a repository git status is authoritative and recorded session
     // evidence only adds paths git cannot see, so evidence past its viewing
     // budget is dropped. Without git it is the only evidence, and an
@@ -394,7 +475,11 @@ export class WorkspaceService {
       repoInfo.repoRoot,
       workspaceInfo.canonicalWorkspaceRoot,
     )
-    const trackedStats = await this.getTrackedDiffStats(repoInfo.repoRoot, scopedEntries)
+    const totalScopedEntries = scopedEntries.length
+    const limitedEntries = scopedEntries.length > MAX_STATUS_ENTRIES
+      ? scopedEntries.slice(0, MAX_STATUS_ENTRIES)
+      : scopedEntries
+    const trackedStats = await this.getTrackedDiffStats(repoInfo.repoRoot, limitedEntries)
     if (trackedStats.kind === 'error') {
       return {
         state: 'error',
@@ -407,17 +492,32 @@ export class WorkspaceService {
       }
     }
 
-    const changedFiles = await Promise.all(
-      scopedEntries.map(async (entry) => {
-        const stats = entry.status === 'untracked'
-          ? await this.getDiffStats(repoInfo.repoRoot, entry)
-          : {
-              kind: 'ok' as const,
-              ...(trackedStats.statsByRepoPath.get(entry.repoPath) ?? {
-                additions: 0,
-                deletions: 0,
-              }),
-            }
+    let untrackedOrdinal = 0
+    const untrackedOrdinalByIndex = new Map<number, number>()
+    for (let index = 0; index < limitedEntries.length; index++) {
+      if (limitedEntries[index]?.status === 'untracked') {
+        untrackedOrdinalByIndex.set(index, untrackedOrdinal++)
+      }
+    }
+    const untrackedLineStatsTruncated = untrackedOrdinal > MAX_UNTRACKED_LINE_COUNT_FILES
+
+    const changedFiles = await mapWithConcurrency(
+      limitedEntries,
+      MAX_UNTRACKED_STAT_CONCURRENCY,
+      async (entry, index) => {
+        let stats: DiffStatsResult
+        if (entry.status === 'untracked') {
+          const countLines = (untrackedOrdinalByIndex.get(index) ?? 0) < MAX_UNTRACKED_LINE_COUNT_FILES
+          stats = await this.getUntrackedEntryStats(entry, countLines)
+        } else {
+          stats = {
+            kind: 'ok' as const,
+            ...(trackedStats.statsByRepoPath.get(entry.repoPath) ?? {
+              additions: 0,
+              deletions: 0,
+            }),
+          }
+        }
 
         if (stats.kind === 'error') {
           throw new Error(stats.message)
@@ -430,7 +530,7 @@ export class WorkspaceService {
           additions: stats.additions,
           deletions: stats.deletions,
         } satisfies WorkspaceChangedFile
-      }),
+      },
     ).catch((error) => error as Error)
 
     if (changedFiles instanceof Error) {
@@ -460,6 +560,12 @@ export class WorkspaceService {
     }
     const mergedChangedFiles = [...changedFileByPath.values()]
       .sort((a, b) => a.path.localeCompare(b.path))
+    const truncated = Boolean(
+      statusEntries.truncated
+      || scopedEntries.length > MAX_STATUS_ENTRIES
+      || trackedStats.truncated
+      || untrackedLineStatsTruncated,
+    )
 
     return {
       state: 'ok',
@@ -468,6 +574,7 @@ export class WorkspaceService {
       branch: repoInfo.branch,
       isGitRepo: true,
       changedFiles: mergedChangedFiles,
+      ...(truncated ? { truncated: true, totalChangedFiles: Math.max(totalScopedEntries, mergedChangedFiles.length) } : {}),
     }
   }
 
@@ -902,7 +1009,7 @@ export class WorkspaceService {
         ),
       }
     }
-    const visibleEntries = entries
+    const sortedEntries = entries
       .filter((entry) => !(entry.isDirectory() && isVcsMetadataDirectoryName(entry.name)))
       .sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) {
@@ -910,21 +1017,25 @@ export class WorkspaceService {
         }
         return a.name.localeCompare(b.name)
       })
-      .map((entry) => ({
-        name: entry.name,
-        path: this.normalizeRelativePath(
-          path.relative(
-            resolvedPath.workspaceRoot,
-            path.join(resolvedPath.absolutePath, entry.name),
-          ),
+    const totalCount = sortedEntries.length
+    const truncated = totalCount > MAX_TREE_ENTRIES
+    const limitedEntries = truncated ? sortedEntries.slice(0, MAX_TREE_ENTRIES) : sortedEntries
+    const visibleEntries = limitedEntries.map((entry) => ({
+      name: entry.name,
+      path: this.normalizeRelativePath(
+        path.relative(
+          resolvedPath.workspaceRoot,
+          path.join(resolvedPath.absolutePath, entry.name),
         ),
-        isDirectory: entry.isDirectory(),
-      }))
+      ),
+      isDirectory: entry.isDirectory(),
+    }))
 
     return {
       state: 'ok',
       path: resolvedPath.relativePath,
       entries: visibleEntries,
+      ...(truncated ? { truncated: true, totalCount } : {}),
     }
   }
 
@@ -1807,34 +1918,27 @@ export class WorkspaceService {
     }
   }
 
-  private async getStatusEntries(
-    workDir: string,
-  ): Promise<{ kind: 'ok'; entries: StatusEntry[] } | { kind: 'error'; message: string }> {
-    const result = await this.runGit(workDir, [
-      'status',
-      '--porcelain=v1',
-      '-z',
-      '--untracked-files=all',
-    ])
-
-    if (result.code !== 0) {
-      return {
-        kind: 'error',
-        message: this.formatGitError(
-          'Failed to read git status',
-          ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
-          workDir,
-          result,
-        ),
-      }
-    }
-
-    const parts = result.stdout.split('\0')
+  private parseStatusPorcelain(
+    stdout: string,
+    completeRecordsOnly: boolean,
+  ): { entries: StatusEntry[]; truncated: boolean } {
+    const safeStdout = completeRecordsOnly
+      ? (() => {
+          const lastTerminator = stdout.lastIndexOf('\0')
+          return lastTerminator >= 0 ? stdout.slice(0, lastTerminator + 1) : ''
+        })()
+      : stdout
+    const parts = safeStdout.split('\0')
     const entries: StatusEntry[] = []
+    let truncated = false
 
     for (let i = 0; i < parts.length; i++) {
       const record = parts[i]
       if (!record) continue
+      if (entries.length >= MAX_STATUS_ENTRIES) {
+        truncated = true
+        break
+      }
 
       const code = record.slice(0, 2)
       const currentPath = this.normalizeRelativePath(record.slice(3))
@@ -1858,7 +1962,72 @@ export class WorkspaceService {
       })
     }
 
-    return { kind: 'ok', entries }
+    return { entries, truncated }
+  }
+
+  private async getStatusEntries(
+    workDir: string,
+  ): Promise<{ kind: 'ok'; entries: StatusEntry[]; truncated?: boolean } | { kind: 'error'; message: string }> {
+    const args = ['status', '--porcelain=v1', '-z', '--untracked-files=all']
+    const result = await this.runGit(workDir, args)
+
+    if (result.code === 0) {
+      const parsed = this.parseStatusPorcelain(result.stdout, false)
+      return { kind: 'ok', entries: parsed.entries, truncated: parsed.truncated }
+    }
+
+    // Huge untracked trees can exceed MAX_GIT_BUFFER_BYTES (2MB) or timeout under
+    // `--untracked-files=all`. Retry with `--untracked-files=normal` (collapsing
+    // untracked directories) before gracefully falling back to buffered records.
+    if (result.maxBufferExceeded || result.timedOut) {
+      const fallbackArgs = ['status', '--porcelain=v1', '-z', '--untracked-files=normal']
+      const fallback = await this.runGit(workDir, fallbackArgs)
+      if (fallback.code === 0) {
+        const parsed = this.parseStatusPorcelain(fallback.stdout, false)
+        return { kind: 'ok', entries: parsed.entries, truncated: true }
+      }
+      if (fallback.maxBufferExceeded) {
+        const parsed = this.parseStatusPorcelain(fallback.stdout, true)
+        return { kind: 'ok', entries: parsed.entries, truncated: true }
+      }
+      return {
+        kind: 'error',
+        message: this.formatGitError(
+          'Failed to read git status',
+          fallbackArgs,
+          workDir,
+          fallback,
+        ),
+      }
+    }
+
+    return {
+      kind: 'error',
+      message: this.formatGitError(
+        'Failed to read git status',
+        args,
+        workDir,
+        result,
+      ),
+    }
+  }
+
+  private async getUntrackedEntryStats(
+    entry: ScopedStatusEntry,
+    countLines: boolean,
+  ): Promise<DiffStatsResult> {
+    const validatedPath = await this.validateCanonicalWorkspacePath(
+      entry.canonicalWorkspaceRoot,
+      entry.absolutePath,
+      entry.path,
+    )
+    if (validatedPath.kind === 'error') {
+      return { kind: 'error', message: validatedPath.message }
+    }
+    if (!countLines) {
+      return { kind: 'ok', additions: 0, deletions: 0 }
+    }
+    return this.getUntrackedStats(validatedPath.canonicalTargetPath)
   }
 
   private async getDiffStats(
@@ -1942,7 +2111,7 @@ export class WorkspaceService {
       '--',
     ])
 
-    if (result.code !== 0) {
+    if (result.code !== 0 && !result.maxBufferExceeded && !result.timedOut) {
       return {
         kind: 'error',
         message: this.formatGitError(
@@ -1962,7 +2131,10 @@ export class WorkspaceService {
     }
 
     const statsByRepoPath = new Map<string, { additions: number; deletions: number }>()
-    for (const line of result.stdout.trim().split('\n')) {
+    const rawStdout = result.maxBufferExceeded && !result.stdout.endsWith('\n')
+      ? result.stdout.slice(0, Math.max(0, result.stdout.lastIndexOf('\n')))
+      : result.stdout
+    for (const line of rawStdout.trim().split('\n')) {
       if (!line) continue
       const [additions, deletions, repoPath] = line.split('\t')
       if (!repoPath) continue
@@ -1972,7 +2144,11 @@ export class WorkspaceService {
       })
     }
 
-    return { kind: 'ok', statsByRepoPath }
+    return {
+      kind: 'ok',
+      statsByRepoPath,
+      ...(result.code !== 0 ? { truncated: true } : {}),
+    }
   }
 
   private async getUntrackedStats(
@@ -2076,7 +2252,10 @@ export class WorkspaceService {
         stdout?: string | Buffer
         stderr?: string | Buffer
         code?: number | string
+        killed?: boolean
+        signal?: string | null
       }
+      const errorCode = typeof err.code === 'string' ? err.code : undefined
 
       return {
         stdout:
@@ -2092,6 +2271,9 @@ export class WorkspaceService {
               ? err.stderr.toString('utf8')
               : '',
         code: typeof err.code === 'number' ? err.code : 1,
+        errorCode,
+        maxBufferExceeded: errorCode === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        timedOut: Boolean(err.killed && err.signal),
       }
     }
   }
@@ -2168,13 +2350,29 @@ export class WorkspaceService {
     return `${prefix} (${targetPath}): ${code}${err.message || 'unknown error'}`
   }
 
+  private sanitizeGitErrorDetail(raw: string): string {
+    const cleaned = raw.replace(/\0/g, ' ').trim()
+    if (!cleaned) return ''
+    if (cleaned.length <= MAX_GIT_ERROR_DETAIL_CHARS) return cleaned
+    return `${cleaned.slice(0, MAX_GIT_ERROR_DETAIL_CHARS - 1)}…`
+  }
+
   private formatGitError(
     prefix: string,
     args: string[],
     workDir: string,
     result: GitCommandResult,
   ): string {
-    const stderr = result.stderr.trim() || result.stdout.trim() || 'unknown git failure'
-    return `${prefix} (git ${args.join(' ')} in ${workDir}): ${stderr}`
+    let detail: string
+    if (result.maxBufferExceeded || result.errorCode === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      detail = `git output exceeded buffer limit (${MAX_GIT_BUFFER_BYTES} bytes)`
+    } else if (result.timedOut) {
+      detail = `git command timed out after ${GIT_TIMEOUT_MS}ms`
+    } else {
+      detail = this.sanitizeGitErrorDetail(result.stderr)
+        || this.sanitizeGitErrorDetail(result.stdout)
+        || 'unknown git failure'
+    }
+    return `${prefix} (git ${args.join(' ')} in ${workDir}): ${detail}`
   }
 }

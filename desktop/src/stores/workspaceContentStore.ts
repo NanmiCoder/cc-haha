@@ -206,7 +206,12 @@ export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get)
     statusRequests.add(sessionId)
     const request = nextRequest(statusLoads, sessionId, options?.signal)
     try {
-      const result = await sessionsApi.getWorkspaceStatus(sessionId, options?.signal)
+      // File reading, launcher hints, and breadcrumbs only need lightweight
+      // metadata (`workDir`, `repoName`, `branch`, `isGitRepo`), never a full
+      // `git status` + untracked file scan.
+      const fetchMeta = sessionsApi.getWorkspaceMeta
+      if (typeof fetchMeta !== 'function') return
+      const result = await fetchMeta(sessionId, options?.signal)
       if (options?.signal?.aborted || !isCurrent(statusLoads, sessionId, request)) return
       set((state) => ({ statusBySession: { ...state.statusBySession, [sessionId]: result } }))
     } catch {
@@ -414,7 +419,6 @@ export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get)
         reads.push(get().loadTree(sessionId, path, { force: true, signal }))
       }
     }
-    reads.push(get().loadStatus(sessionId, { force: true, signal }))
     await Promise.allSettled(reads)
   },
 
