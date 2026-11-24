@@ -202,6 +202,19 @@ describe('buildModelsUrlCandidates', () => {
     ).toEqual(['https://api.example.com/v1/models'])
   })
 
+  test('derives Gemini /v1beta/models candidates from bare, versioned, and /models roots', () => {
+    expect(buildModelsUrlCandidates('https://generativelanguage.googleapis.com', { apiFormat: 'gemini' })).toEqual([
+      'https://generativelanguage.googleapis.com/v1beta/models',
+      'https://generativelanguage.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('http://127.0.0.1:3425/v1beta', { apiFormat: 'gemini' })).toEqual([
+      'http://127.0.0.1:3425/v1beta/models',
+    ])
+    expect(buildModelsUrlCandidates('http://127.0.0.1:3425/v1beta/models', { apiFormat: 'gemini' })).toEqual([
+      'http://127.0.0.1:3425/v1beta/models',
+    ])
+  })
+
   test('throws on an empty base URL', () => {
     expect(() => buildModelsUrlCandidates('')).toThrow(/Base URL is required/)
     expect(() => buildModelsUrlCandidates('   ')).toThrow(/Base URL is required/)
@@ -673,5 +686,72 @@ describe('fetchProviderModels', () => {
 
     expect(result).toMatchObject({ ok: true, endpoint: 'https://custom.example.com/catalog' })
     expect(calls.map(call => call.url)).toEqual(['https://custom.example.com/catalog'])
+  })
+
+  test('fetches Gemini catalogs with x-goog-api-key, strips models/ prefix, and filters non-generative models', async () => {
+    stubFetchSequence([() => jsonResponse({
+      models: [
+        { name: 'models/devin/gemini-4-neon', supportedGenerationMethods: ['generateContent', 'streamGenerateContent'] },
+        { name: 'models/gemini-2.5-pro', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+        { name: 'models/custom-gateway-model' },
+      ],
+    })])
+
+    const result = await fetchProviderModels({
+      baseUrl: 'http://127.0.0.1:3425',
+      apiKey: 'magpie-test-key',
+      apiFormat: 'gemini',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: 'custom-gateway-model' },
+        { id: 'devin/gemini-4-neon' },
+        { id: 'gemini-2.5-pro' },
+      ],
+      endpoint: 'http://127.0.0.1:3425/v1beta/models',
+    })
+    expect(calls).toHaveLength(1)
+    expect(new Headers(calls[0]!.init?.headers).get('x-goog-api-key')).toBe('magpie-test-key')
+    expect(authHeaderOf(calls[0]!)).toBeNull()
+  })
+
+  test('derives Vertex AI publisher model catalog URLs for bare aiplatform roots and supports ambient AWS credentials', async () => {
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com/v1', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'gemini' })).toEqual([
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+
+    const previousBearer = process.env.AWS_BEARER_TOKEN_BEDROCK
+    process.env.AWS_BEARER_TOKEN_BEDROCK = 'ABSK-ambient-env-token'
+    try {
+      stubFetchSequence([() => jsonResponse({
+        modelSummaries: [{ modelId: 'us.anthropic.claude-sonnet-4-6-v1:0', providerName: 'Anthropic' }],
+      })])
+      const result = await fetchProviderModels({
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: '',
+        apiFormat: 'bedrock_converse',
+      })
+      expect(result).toEqual({
+        ok: true,
+        models: [{ id: 'us.anthropic.claude-sonnet-4-6-v1:0', ownedBy: 'Anthropic' }],
+        endpoint: 'https://bedrock.us-east-1.amazonaws.com/foundation-models',
+      })
+      expect(authHeaderOf(calls[0]!)).toBe('Bearer ABSK-ambient-env-token')
+    } finally {
+      if (previousBearer === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK
+      else process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
+    }
   })
 })

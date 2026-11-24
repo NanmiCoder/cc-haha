@@ -20,7 +20,7 @@ describe('model reasoning capability pass-through', () => {
       'mimo-v2.5-pro[1m]',
       'future-model',
     ]
-    const apiFormats = ['anthropic', 'openai_chat', 'openai_responses'] as const
+    const apiFormats = ['anthropic', 'openai_chat', 'openai_responses', 'gemini'] as const
     const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
     for (const modelId of modelIds) {
@@ -50,6 +50,12 @@ describe('model reasoning capability pass-through', () => {
       'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
     )
     expect(getClaudeCodeModelCapabilities('gpt-5.6-sol', 'openai_responses')).toBe(
+      'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+    )
+    expect(getClaudeCodeModelCapabilities('devin/gemini-4-neon', 'gemini')).toBe(
+      'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+    )
+    expect(getClaudeCodeModelCapabilities('gemini-2.5-pro', 'gemini')).toBe(
       'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
     )
   })

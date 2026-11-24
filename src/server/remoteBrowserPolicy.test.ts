@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
-import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, replaceRemoteCompatibility, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
 import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
 
 test('remote image settings preserve the protocol while redacting image credentials', () => {
@@ -112,4 +112,25 @@ test('remote projections drop nested and unknown fields and tolerate malformed b
   expect(projectRemoteWorkflows({ workflows: [{ name: 'w', filePath: '/p', script: 'code' }] })).toEqual({ workflows: [{ name: 'w' }] })
   expect(projectRemoteWorkflows({ workflows: 'nope' })).toEqual({ workflows: [] })
   expect(projectRemoteAgents({ activeAgents: [{ agentType: 'a', systemPrompt: 's', baseDir: '/b' }] })).toEqual({ activeAgents: [{ agentType: 'a' }], allAgents: [] })
+})
+
+test('remote provider policy preserves and updates requestCompatibility.serviceTier', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'vertex-remote',
+    presetId: 'custom',
+    name: 'Vertex Remote',
+    apiKey: 'fake-key',
+    baseUrl: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1',
+    apiFormat: 'google_vertex',
+    requestCompatibility: { serviceTier: 'priority', maxOutputTokens: 8192 },
+    models: { main: 'gemini-3-pro', haiku: '', sonnet: '', opus: '' },
+  })
+  expect(projectRemoteProvider(provider).requestCompatibility).toEqual({
+    serviceTier: 'priority',
+    maxOutputTokens: 8192,
+  })
+  expect(replaceRemoteCompatibility(
+    { serviceTier: 'priority', maxOutputTokens: 8192 },
+    { serviceTier: 'flex', maxOutputTokens: 8192 },
+  )).toEqual({ serviceTier: 'flex', maxOutputTokens: 8192 })
 })

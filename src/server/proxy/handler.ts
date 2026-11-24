@@ -13,6 +13,19 @@ import { getOpenAIPolicyError } from '../../services/openaiAuth/policyError.js'
 import { INVALID_PROVIDER_KEY_HEADER, isInvalidSavedProviderKey } from '../../shared/providerCredentialError.js'
 import { inspectProviderUsageError } from '../../shared/providerUsageLimit.js'
 import { buildOpenaiEndpoint } from './openaiEndpoint.js'
+import { buildBedrockConverseEndpoint } from './bedrockEndpoint.js'
+import {
+  buildBedrockRequestHeaders,
+  buildOpenaiAuthHeaders,
+  buildVertexServiceTierHeaders,
+  resolveVertexAuthHeaders,
+} from './cloudAuth.js'
+import {
+  buildGeminiEndpoint,
+  buildVertexAnthropicEndpoint,
+  isVertexAnthropicTarget,
+  isVertexEndpointUrl,
+} from './geminiEndpoint.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { buildProviderMediaFetch } from '../../services/api/providerMedia/fetch.js'
 import { brotliDecompressSync, createGunzip, createInflate, gunzipSync, inflateSync } from 'node:zlib'
@@ -44,6 +57,8 @@ import { openaiChatStreamToAnthropic } from './streaming/openaiChatStreamToAnthr
 import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStreamToAnthropic.js'
 import { anthropicToGemini, type GeminiRequest } from './transform/anthropicToGemini.js'
 import { GeminiUpstreamError, geminiErrorMessage, geminiResponseToAnthropic, geminiStreamToAnthropic } from './streaming/geminiStreamToAnthropic.js'
+import { anthropicToBedrockConverse } from './transform/anthropicToBedrockConverse.js'
+import { bedrockConverseResponseToAnthropic, bedrockConverseStreamToAnthropic } from './streaming/bedrockConverseToAnthropic.js'
 import type { AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
@@ -461,13 +476,100 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
       })
       return await handleAnthropicCompatible(body, upstreamBaseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext, upstreamHeaders, hoistNestedMedia, req.signal)
     }
+    if (apiFormat === 'google_vertex') {
+      if (isVertexAnthropicTarget(upstreamBaseUrl, body.model)) {
+        return await handleVertexAnthropic(
+          body,
+          upstreamBaseUrl,
+          config.apiKey,
+          config.authStrategy,
+          req.headers,
+          isStream,
+          networkSettings,
+          traceContext,
+          requestOptions,
+          upstreamHeaders,
+          config.supportsNestedToolResultMedia,
+          req.signal,
+        )
+      }
+      return await handleGemini(
+        body,
+        upstreamBaseUrl,
+        config.apiKey,
+        config.authStrategy === 'api_key',
+        isStream,
+        networkSettings,
+        traceContext,
+        requestOptions,
+        upstreamHeaders,
+        config.supportsNestedToolResultMedia,
+        req.signal,
+        { isVertex: true, authStrategy: config.authStrategy },
+      )
+    }
     if (apiFormat === 'gemini') {
-      return await handleGemini(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, req.signal)
+      return await handleGemini(
+        body,
+        upstreamBaseUrl,
+        config.apiKey,
+        config.authStrategy === 'api_key',
+        isStream,
+        networkSettings,
+        traceContext,
+        requestOptions,
+        upstreamHeaders,
+        config.supportsNestedToolResultMedia,
+        req.signal,
+        { isVertex: false, authStrategy: config.authStrategy },
+      )
     }
-    if (apiFormat === 'openai_chat') {
-      return await handleOpenaiChat(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, undefined, new Set(), req.signal)
+    if (apiFormat === 'bedrock_converse') {
+      return await handleBedrockConverse(
+        body,
+        upstreamBaseUrl,
+        config.apiKey,
+        config.authStrategy === 'api_key',
+        isStream,
+        networkSettings,
+        traceContext,
+        requestOptions,
+        upstreamHeaders,
+        config.supportsNestedToolResultMedia,
+        req.signal,
+      )
     }
-    return await handleOpenaiResponses(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, promptCacheKey, requestOptions, upstreamHeaders, req.signal)
+    if (apiFormat === 'openai_chat' || apiFormat === 'azure_openai') {
+      return await handleOpenaiChat(
+        body,
+        upstreamBaseUrl,
+        config.apiKey,
+        config.authStrategy === 'api_key',
+        isStream,
+        networkSettings,
+        traceContext,
+        requestOptions,
+        upstreamHeaders,
+        undefined,
+        new Set(),
+        req.signal,
+        { forceAzure: apiFormat === 'azure_openai', authStrategy: config.authStrategy },
+      )
+    }
+    return await handleOpenaiResponses(
+      body,
+      upstreamBaseUrl,
+      config.apiKey,
+      config.authStrategy === 'api_key',
+      isStream,
+      networkSettings,
+      traceContext,
+      promptCacheKey,
+      requestOptions,
+      upstreamHeaders,
+      req.signal,
+      config.authStrategy,
+    )
   } catch (err) {
     if (traceContext && !wasTraceErrorRecorded(err) && !recordedTraceErrorContexts.has(traceContext)) {
       void recordProxyTrace({
@@ -935,10 +1037,16 @@ async function handleOpenaiChat(
   imageContentModeOverride?: OpenAIChatImageContentMode,
   rejectedReasoningFields: ReadonlySet<OpenAIChatReasoningField> = new Set(),
   downstreamSignal?: AbortSignal,
+  options?: { forceAzure?: boolean; authStrategy?: ProviderAuthStrategy },
 ): Promise<Response> {
+  const forceAzure = options?.forceAzure === true
+  const protocol = forceAzure ? 'azure_openai' : 'openai_chat'
   const knownDeepSeekHost = shouldUseDeepSeekReasoningCompat(baseUrl)
-  const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
-  const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
+  const reasoningProfile = resolveModelReasoningProfile(body.model, protocol)
+  const url = buildOpenaiEndpoint(baseUrl, 'chat/completions', {
+    modelId: body.model,
+    forceAzure,
+  })
   const imageContentMode = imageContentModeOverride ?? getOpenAIChatImageContentMode(url, body.model)
   const unsupportedReasoningFields = new Set([
     ...getOpenAIChatUnsupportedReasoningFields(url, body.model),
@@ -946,21 +1054,27 @@ async function handleOpenaiChat(
   ])
   let transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
+    protocol,
     roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
     passThinkingToggle: knownDeepSeekHost && !unsupportedReasoningFields.has('thinking'),
     passReasoningEffort: !unsupportedReasoningFields.has('reasoning_effort'),
     imageContentMode,
   })
   if (traceContext) {
-    traceContext.protocolTrace = new ProtocolTraceObserver('openai_chat', transformed,
-      resolveRequestCompatibility(body, { ...requestOptions, protocol: 'openai_chat' }).outputBudget)
+    traceContext.protocolTrace = new ProtocolTraceObserver(protocol, transformed,
+      resolveRequestCompatibility(body, { ...requestOptions, protocol }).outputBudget)
   }
-  // Preset-declared headers first: `Authorization` is applied last so a preset can
+  // Preset-declared headers first: credentials are applied last so a preset can
   // never shadow the credential, and the resolver already drops framing headers.
   const upstreamRequestHeaders: Record<string, string> = {}
   applyUpstreamHeaders(upstreamRequestHeaders, upstreamHeaders)
   upstreamRequestHeaders['Content-Type'] = 'application/json'
-  upstreamRequestHeaders.Authorization = `Bearer ${apiKey}`
+  Object.assign(upstreamRequestHeaders, buildOpenaiAuthHeaders({
+    url,
+    apiKey,
+    authStrategy: options?.authStrategy,
+    forceAzure,
+  }))
   const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
@@ -1031,7 +1145,7 @@ async function handleOpenaiChat(
       }
       const resent = await handleOpenaiChat(
         body, baseUrl, apiKey, isSavedApiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, 'text_only',
-        unsupportedReasoningFields, downstreamSignal,
+        unsupportedReasoningFields, downstreamSignal, options,
       )
       if (resent.ok) {
         rememberOpenAIChatTextOnlyModel(url, body.model)
@@ -1066,7 +1180,7 @@ async function handleOpenaiChat(
       }
       const resent = await handleOpenaiChat(
         body, baseUrl, apiKey, isSavedApiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders,
-        imageContentMode, new Set([...unsupportedReasoningFields, rejectedField]), downstreamSignal,
+        imageContentMode, new Set([...unsupportedReasoningFields, rejectedField]), downstreamSignal, options,
       )
       if (resent.ok) {
         rememberOpenAIChatUnsupportedReasoningField(url, body.model, rejectedField)
@@ -1243,19 +1357,24 @@ async function handleOpenaiResponses(
   requestOptions: RequestCompatibilityOptions = {},
   upstreamHeaders: Record<string, string> = {},
   downstreamSignal?: AbortSignal,
+  authStrategy?: ProviderAuthStrategy,
 ): Promise<Response> {
   let transformed = anthropicToOpenaiResponses(body, { ...requestOptions, cacheKey: promptCacheKey })
   if (traceContext) {
     traceContext.protocolTrace = new ProtocolTraceObserver('openai_responses', transformed,
       resolveRequestCompatibility(body, { ...requestOptions, protocol: 'openai_responses' }).outputBudget)
   }
-  const url = buildOpenaiEndpoint(baseUrl, 'responses')
-  // Preset-declared headers first: `Authorization` is applied last so a preset can
+  const url = buildOpenaiEndpoint(baseUrl, 'responses', { modelId: body.model })
+  // Preset-declared headers first: credentials are applied last so a preset can
   // never shadow the credential, and the resolver already drops framing headers.
   const upstreamRequestHeaders: Record<string, string> = {}
   applyUpstreamHeaders(upstreamRequestHeaders, upstreamHeaders)
   upstreamRequestHeaders['Content-Type'] = 'application/json'
-  upstreamRequestHeaders.Authorization = `Bearer ${apiKey}`
+  Object.assign(upstreamRequestHeaders, buildOpenaiAuthHeaders({
+    url,
+    apiKey,
+    authStrategy,
+  }))
   const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
@@ -1450,9 +1569,10 @@ async function handleOpenaiResponses(
 }
 
 /**
- * Google `generateContent`, as OpenCode Go serves its Gemini models. A response
- * Gemini splits across requests is followed here by resending the same body
- * with the continuation token, so the client still receives one message.
+ * Google `generateContent` proxy handler (standalone Gemini providers and
+ * multi-protocol gateways). A response Gemini splits across requests is
+ * followed here by resending the same body with the continuation token, so the
+ * client still receives one message.
  */
 async function handleGemini(
   body: AnthropicRequest,
@@ -1464,18 +1584,39 @@ async function handleGemini(
   traceContext: ProxyTraceContext | null,
   requestOptions: RequestCompatibilityOptions = {},
   upstreamHeaders: Record<string, string> = {},
+  supportsNestedToolResultMedia = true,
   downstreamSignal?: AbortSignal,
+  options?: { isVertex?: boolean; authStrategy?: ProviderAuthStrategy },
 ): Promise<Response> {
-  const transformed = anthropicToGemini(body, requestOptions)
-  const model = encodeURIComponent(body.model)
-  const url = isStream
-    ? `${baseUrl}/models/${model}:streamGenerateContent?alt=sse`
-    : `${baseUrl}/models/${model}:generateContent`
-  // Preset-declared headers first, so the credential always wins over them.
+  const isVertex = options?.isVertex === true || isVertexEndpointUrl(baseUrl)
+  const protocol = options?.isVertex ? 'google_vertex' : 'gemini'
+  const transformed = anthropicToGemini(body, {
+    ...requestOptions,
+    supportsNestedToolResultMedia,
+    isVertex,
+  })
+  if (traceContext) {
+    traceContext.protocolTrace = new ProtocolTraceObserver(
+      protocol,
+      transformed,
+      resolveRequestCompatibility(body, { ...requestOptions, protocol }).outputBudget,
+    )
+  }
+  const url = buildGeminiEndpoint(baseUrl, body.model, isStream, { isVertex })
+  // Preset-declared headers first, so credentials and service-tier headers win.
   const upstreamRequestHeaders: Record<string, string> = {}
   applyUpstreamHeaders(upstreamRequestHeaders, upstreamHeaders)
-  upstreamRequestHeaders['Content-Type'] = 'application/json'
-  upstreamRequestHeaders['x-goog-api-key'] = apiKey
+  applyUpstreamHeaders(upstreamRequestHeaders, { 'Content-Type': 'application/json' })
+  if (isVertex) {
+    applyUpstreamHeaders(
+      upstreamRequestHeaders,
+      buildVertexServiceTierHeaders(requestOptions.requestCompatibility?.serviceTier),
+    )
+    const authHeaders = await resolveVertexAuthHeaders(apiKey, options?.authStrategy, baseUrl)
+    applyUpstreamHeaders(upstreamRequestHeaders, authHeaders)
+  } else if (apiKey) {
+    applyUpstreamHeaders(upstreamRequestHeaders, { 'x-goog-api-key': apiKey })
+  }
   const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
   const send = (request: GeminiRequest) => fetchUpstreamWithTimeout(url, {
     method: 'POST',
@@ -1533,7 +1674,7 @@ async function handleGemini(
     }
     const errorBody = {
       type: 'error',
-      error: { type: 'api_error', message: invalidProviderKey ? formatUpstreamErrorMessage(upstream.status, errText) : `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}` },
+      error: { type: 'api_error', message: formatUpstreamErrorMessage(upstream.status, errText) },
     }
     trace({
       responseStatus: upstream.status,
@@ -1580,7 +1721,11 @@ async function handleGemini(
         onAbortUpstream: lease.abortUpstream,
         onCleanup: lease.dispose,
       })
-    const anthropicStream = geminiStreamToAnthropic(idle(upstreamLease), body.model, async (token) => {
+    const initialBody = idle(upstreamLease)
+    const observedBody = traceContext?.protocolTrace
+      ? observeProtocolStream(initialBody, traceContext.protocolTrace, downstreamSignal)
+      : initialBody
+    const anthropicStream = geminiStreamToAnthropic(observedBody, body.model, async (token) => {
       const lease = await resend(token)
       if (!lease.response.body) {
         lease.dispose()
@@ -1655,6 +1800,432 @@ async function handleGemini(
     responseHeaders: upstream.headers,
   })
   return Response.json(anthropicResponse, { status })
+}
+
+/**
+ * Google Vertex AI Anthropic (`rawPredict` / `streamRawPredict`) proxy handler.
+ *
+ * Follows `@ai-sdk/google-vertex/anthropic`: strips `model` from the Messages
+ * payload, injects `anthropic_version: 'vertex-2023-10-16'`, authenticates via
+ * GCP Vertex OAuth2 / Service Account JSON / ADC, and forwards Anthropic SSE /
+ * JSON responses natively.
+ */
+async function handleVertexAnthropic(
+  body: AnthropicRequest,
+  baseUrl: string,
+  apiKey: string,
+  authStrategy: ProviderAuthStrategy,
+  incomingHeaders: Headers,
+  isStream: boolean,
+  networkSettings: NetworkSettings,
+  traceContext: ProxyTraceContext | null,
+  requestOptions: RequestCompatibilityOptions = {},
+  upstreamHeaders: Record<string, string> = {},
+  supportsNestedToolResultMedia = true,
+  downstreamSignal?: AbortSignal,
+): Promise<Response> {
+  const prepared = supportsNestedToolResultMedia === false
+    ? hoistToolResultMediaForCompatibility(body)
+    : body
+  const { model: _model, ...rest } = prepared
+  const transformed: Record<string, unknown> = {
+    ...rest,
+    anthropic_version: 'vertex-2023-10-16',
+  }
+  const url = buildVertexAnthropicEndpoint(baseUrl, body.model, isStream)
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+
+  const headers: Record<string, string> = {}
+  const deny = hopByHopDenySet(incomingHeaders)
+  for (const [name, value] of incomingHeaders.entries()) {
+    const lower = name.toLowerCase()
+    if (deny.has(lower) || isInternalClientHeader(lower, value)) continue
+    if (lower === 'host' || lower === 'content-type' || lower === 'content-length') continue
+    if (
+      lower === 'x-api-key' ||
+      lower === 'authorization' ||
+      lower === 'anthropic-version' ||
+      lower === 'x-goog-api-key' ||
+      lower === 'x-vertex-ai-llm-request-type' ||
+      lower === 'x-vertex-ai-llm-shared-request-type'
+    ) continue
+    if (value) headers[name] = value
+  }
+  applyUpstreamHeaders(headers, upstreamHeaders)
+  applyUpstreamHeaders(headers, { 'Content-Type': 'application/json' })
+  applyUpstreamHeaders(
+    headers,
+    buildVertexServiceTierHeaders(requestOptions.requestCompatibility?.serviceTier),
+  )
+  applyUpstreamHeaders(headers, await resolveVertexAuthHeaders(apiKey, authStrategy, baseUrl))
+
+  const traceHeaders = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => {
+      const lower = name.toLowerCase()
+      return [
+        name,
+        lower === 'content-type' ||
+        lower === 'anthropic-version' ||
+        lower === 'anthropic-beta' ||
+        lower === 'x-vertex-ai-llm-request-type' ||
+        lower === 'x-vertex-ai-llm-shared-request-type'
+          ? value
+          : '[redacted]',
+      ]
+    }),
+  )
+
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
+  const traceCallId = traceContext
+    ? startProxyTraceCall({
+        context: traceContext,
+        model: body.model,
+        upstreamUrl: url,
+        upstreamRequest: transformed,
+        requestHeaders: traceHeaders,
+        startedAt,
+      })
+    : undefined
+
+  const recordTraceError = (err: unknown): void => {
+    if (!traceContext) return
+    recordProxyTraceInBackground({
+      callId: traceCallId,
+      context: traceContext,
+      model: body.model,
+      upstreamUrl: url,
+      upstreamRequest: transformed,
+      requestHeaders: traceHeaders,
+      startedAt,
+      startedAtMs,
+      error: err,
+    })
+    markTraceErrorRecorded(err)
+    recordedTraceErrorContexts.add(traceContext)
+  }
+
+  let upstreamLease: UpstreamFetchLease
+  try {
+    upstreamLease = await fetchUpstreamWithTimeout(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(transformed),
+      decompress: false,
+      ...proxyOptions,
+    }, networkSettings.aiRequestTimeoutMs, isStream, undefined, downstreamSignal)
+  } catch (err) {
+    recordTraceError(err)
+    throw err
+  }
+  const upstream = upstreamLease.response
+
+  try {
+    if (!upstream.ok) {
+      const errBody = await upstream.arrayBuffer()
+      upstreamLease.dispose()
+      const responseHeaders = stripHopByHopHeaders(upstream.headers)
+      if (traceContext) {
+        recordProxyTraceInBackground({
+          callId: traceCallId,
+          context: traceContext,
+          model: body.model,
+          upstreamUrl: url,
+          upstreamRequest: transformed,
+          requestHeaders: traceHeaders,
+          startedAt,
+          startedAtMs,
+          responseStatus: upstream.status,
+          upstreamResponseBody: decodeTraceResponseBody(errBody, upstream.headers),
+          responseHeaders: upstream.headers,
+        })
+      }
+      return new Response(errBody, {
+        status: upstream.status,
+        headers: responseHeaders,
+      })
+    }
+
+    if (isStream) {
+      if (!upstream.body) {
+        upstreamLease.dispose()
+        if (traceContext) {
+          recordProxyTraceInBackground({
+            callId: traceCallId,
+            context: traceContext,
+            model: body.model,
+            upstreamUrl: url,
+            upstreamRequest: transformed,
+            requestHeaders: traceHeaders,
+            startedAt,
+            startedAtMs,
+            error: new Error('Upstream returned no body for stream'),
+          })
+        }
+        return Response.json(
+          { type: 'error', error: { type: 'api_error', message: 'Upstream returned no body for stream' } },
+          { status: 502 },
+        )
+      }
+      const responseHeaders = stripHopByHopHeaders(upstream.headers)
+      responseHeaders.set('Content-Type', 'text/event-stream')
+      responseHeaders.set('Cache-Control', 'no-cache')
+      responseHeaders.set('Connection', 'keep-alive')
+      const anthropicStream = withStreamIdleTimeout(upstream.body, networkSettings.aiRequestTimeoutMs, {
+        downstreamSignal,
+        onAbortUpstream: upstreamLease.abortUpstream,
+        onCleanup: upstreamLease.dispose,
+      })
+      const tracedStream = traceContext
+        ? captureTraceStream(anthropicStream, async (bodySnapshot, error, protocolTraceEnd) => {
+            await recordProxyTrace({
+              callId: traceCallId,
+              context: traceContext,
+              model: body.model,
+              upstreamUrl: url,
+              upstreamRequest: transformed,
+              requestHeaders: traceHeaders,
+              startedAt,
+              startedAtMs,
+              responseStatus: 200,
+              responseBodySnapshot: bodySnapshot,
+              protocolTraceEnd,
+              responseHeaders: upstream.headers,
+              ...(error ? { error } : {}),
+            })
+          }, upstream.headers.get('content-encoding') ?? undefined, downstreamSignal)
+        : anthropicStream
+      return new Response(tracedStream, {
+        status: 200,
+        headers: responseHeaders,
+      })
+    }
+
+    const responseBody = await upstream.arrayBuffer()
+    upstreamLease.dispose()
+    if (traceContext) {
+      recordProxyTraceInBackground({
+        callId: traceCallId,
+        context: traceContext,
+        model: body.model,
+        upstreamUrl: url,
+        upstreamRequest: transformed,
+        requestHeaders: traceHeaders,
+        startedAt,
+        startedAtMs,
+        responseStatus: upstream.status,
+        upstreamResponseBody: decodeTraceResponseBody(responseBody, upstream.headers),
+        responseHeaders: upstream.headers,
+      })
+    }
+    return new Response(responseBody, {
+      status: upstream.status,
+      headers: stripHopByHopHeaders(upstream.headers),
+    })
+  } catch (err) {
+    upstreamLease.dispose()
+    recordTraceError(err)
+    throw err
+  }
+}
+
+/**
+ * AWS Bedrock Runtime Converse / ConverseStream proxy handler.
+ *
+ * Authenticates with AWS Bedrock API Key (Bearer token) or AWS SigV4 signing
+ * (`@smithy/signature-v4`), transforms Anthropic Messages to Bedrock Converse
+ * JSON, and decodes AWS binary EventStream (`application/vnd.amazon.eventstream`)
+ * or JSON responses back to Anthropic Messages.
+ */
+async function handleBedrockConverse(
+  body: AnthropicRequest,
+  baseUrl: string,
+  apiKey: string,
+  isSavedApiKey: boolean,
+  isStream: boolean,
+  networkSettings: NetworkSettings,
+  traceContext: ProxyTraceContext | null,
+  requestOptions: RequestCompatibilityOptions = {},
+  upstreamHeaders: Record<string, string> = {},
+  supportsNestedToolResultMedia = true,
+  downstreamSignal?: AbortSignal,
+): Promise<Response> {
+  const transformed = anthropicToBedrockConverse(body, {
+    ...requestOptions,
+    supportsNestedToolResultMedia,
+  })
+  if (traceContext) {
+    traceContext.protocolTrace = new ProtocolTraceObserver(
+      'bedrock_converse',
+      transformed,
+      resolveRequestCompatibility(body, { ...requestOptions, protocol: 'bedrock_converse' }).outputBudget,
+    )
+  }
+  const url = buildBedrockConverseEndpoint(baseUrl, body.model, isStream)
+  const serialized = JSON.stringify(transformed)
+  const baseHeaders: Record<string, string> = {}
+  applyUpstreamHeaders(baseHeaders, upstreamHeaders)
+  baseHeaders['Content-Type'] = 'application/json'
+  if (isStream) baseHeaders.Accept = 'application/vnd.amazon.eventstream'
+  const upstreamRequestHeaders = await buildBedrockRequestHeaders({
+    url,
+    method: 'POST',
+    body: serialized,
+    rawCredential: apiKey,
+    baseHeaders,
+  })
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
+  const traceCallId = traceContext
+    ? startProxyTraceCall({
+        context: traceContext,
+        model: body.model,
+        upstreamUrl: url,
+        upstreamRequest: transformed,
+        requestHeaders: upstreamRequestHeaders,
+        startedAt,
+      })
+    : undefined
+  const trace = (fields: Partial<RecordProxyTraceInput>) => {
+    if (!traceContext) return
+    recordProxyTraceInBackground({
+      callId: traceCallId,
+      context: traceContext,
+      model: body.model,
+      upstreamUrl: url,
+      upstreamRequest: transformed,
+      requestHeaders: upstreamRequestHeaders,
+      startedAt,
+      startedAtMs,
+      ...fields,
+    })
+  }
+
+  let upstreamLease: UpstreamFetchLease
+  try {
+    upstreamLease = await fetchUpstreamWithTimeout(url, {
+      method: 'POST',
+      headers: upstreamRequestHeaders,
+      body: serialized,
+      ...proxyOptions,
+    }, networkSettings.aiRequestTimeoutMs, isStream, undefined, downstreamSignal)
+  } catch (err) {
+    trace({ error: err })
+    if (traceContext) markTraceErrorRecorded(err)
+    throw err
+  }
+  const upstream = upstreamLease.response
+
+  if (!upstream.ok) {
+    const errText = await upstream.text().catch(() => '')
+    upstreamLease.dispose()
+    let invalidProviderKey = false
+    if (isSavedApiKey && (upstream.status === 401 || upstream.status === 403) && errText.length <= MAX_CREDENTIAL_ERROR_BYTES) {
+      try {
+        invalidProviderKey = isInvalidSavedProviderKey(upstream.status, JSON.parse(errText))
+      } catch {
+        // Keep upstream error text as-is.
+      }
+    }
+    const errorBody = {
+      type: 'error',
+      error: { type: 'api_error', message: formatUpstreamErrorMessage(upstream.status, errText) },
+    }
+    trace({
+      responseStatus: upstream.status,
+      upstreamResponseBody: errText,
+      anthropicResponseBody: errorBody,
+      responseHeaders: upstream.headers,
+    })
+    return Response.json(errorBody, {
+      status: upstream.status,
+      ...(invalidProviderKey && { headers: { [INVALID_PROVIDER_KEY_HEADER]: 'true', 'x-should-retry': 'false' } }),
+    })
+  }
+
+  const requestId = upstream.headers.get('x-amzn-requestid') ?? undefined
+
+  if (isStream) {
+    if (!upstream.body) {
+      upstreamLease.dispose()
+      trace({ error: new Error('Upstream returned no body for stream') })
+      return Response.json(
+        { type: 'error', error: { type: 'api_error', message: 'Upstream returned no body for stream' } },
+        { status: 502 },
+      )
+    }
+    const upstreamBody = withStreamIdleTimeout(upstream.body, networkSettings.aiRequestTimeoutMs, {
+      downstreamSignal,
+      onAbortUpstream: upstreamLease.abortUpstream,
+      onCleanup: upstreamLease.dispose,
+    })
+    const observer = traceContext?.protocolTrace
+    const observedBinary = observer
+      ? upstreamBody.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            observer.observeEvent('', {}, chunk.byteLength)
+            controller.enqueue(chunk)
+          },
+        }))
+      : upstreamBody
+    const anthropicStream = bedrockConverseStreamToAnthropic(observedBinary, body.model, {
+      requestId,
+      ...(observer
+        ? {
+            onEvent: (eventType, payload) => {
+              observer.observeEvent(eventType, payload)
+            },
+          }
+        : {}),
+    })
+    const tracedStream = traceContext
+      ? captureTraceStream(anthropicStream, async (bodySnapshot, error, protocolTraceEnd) => {
+          await recordProxyTrace({
+            callId: traceCallId,
+            context: traceContext,
+            model: body.model,
+            upstreamUrl: url,
+            upstreamRequest: transformed,
+            requestHeaders: upstreamRequestHeaders,
+            startedAt,
+            startedAtMs,
+            responseStatus: 200,
+            responseBodySnapshot: bodySnapshot,
+            protocolTraceEnd,
+            responseHeaders: upstream.headers,
+            ...(error ? { error } : {}),
+          })
+        }, undefined, downstreamSignal)
+      : anthropicStream
+    return new Response(tracedStream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  }
+
+  let responseBody: unknown
+  try {
+    responseBody = await upstream.json()
+  } catch (err) {
+    trace({ error: err })
+    if (traceContext) markTraceErrorRecorded(err)
+    throw err
+  } finally {
+    upstreamLease.dispose()
+  }
+  const anthropicResponse = bedrockConverseResponseToAnthropic(responseBody, body.model, requestId)
+  trace({
+    responseStatus: 200,
+    upstreamResponseBody: responseBody,
+    anthropicResponseBody: anthropicResponse,
+    responseHeaders: upstream.headers,
+  })
+  return Response.json(anthropicResponse, { status: 200 })
 }
 
 function buildProxyTraceContext(

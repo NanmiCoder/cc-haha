@@ -281,4 +281,264 @@ describe('anthropicToGemini', () => {
     expect(decodeGeminiThoughtSignature(encodeGeminiThoughtSignature(''))).toBeUndefined()
     expect(decodeGeminiThoughtSignature(undefined)).toBeUndefined()
   })
+
+  test('uses thinkingBudget for Gemini 2.x models and omits thinkingConfig when disabled', () => {
+    expect(anthropicToGemini(request({
+      model: 'gemini-2.5-pro',
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    })).generationConfig?.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: 24576 })
+
+    expect(anthropicToGemini(request({
+      model: 'google/gemini-2.5-flash',
+      thinking: { type: 'enabled', budget_tokens: 4096 },
+    })).generationConfig?.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: 4096 })
+
+    // Gemini 2.5 Pro rejects thinkingBudget: 0, so disabled thinking omits thinkingConfig.
+    expect(anthropicToGemini(request({
+      model: 'gemini-2.5-pro',
+      thinking: { type: 'disabled' },
+    }), { budgetSource: 'default' }).generationConfig).toBeUndefined()
+
+    // Explicit effort='none' must not silently fall back to thinkingLevel='low'.
+    expect(anthropicToGemini(request({
+      output_config: { effort: 'none' },
+    }), { budgetSource: 'default' }).generationConfig).toBeUndefined()
+
+    // Disabled thinking paired with explicit low effort (e.g. title completion) keeps minimal budget/level.
+    expect(anthropicToGemini(request({
+      thinking: { type: 'disabled' },
+      output_config: { effort: 'low' },
+    }), { budgetSource: 'default' }).generationConfig?.thinkingConfig).toEqual({ thinkingLevel: 'low' })
+    expect(anthropicToGemini(request({
+      model: 'gemini-2.5-flash',
+      thinking: { type: 'disabled' },
+      output_config: { effort: 'low' },
+    }), { budgetSource: 'default' }).generationConfig?.thinkingConfig).toEqual({ thinkingBudget: 1024 })
+  })
+
+  test('hoists tool_result media for Gemini 2.x, audio/video, or when nested media is disabled', () => {
+    const png = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: 'AAAA' } }
+    const audio = { type: 'document' as const, source: { type: 'base64' as const, media_type: 'audio/wav', data: 'UklG' } }
+
+    // Gemini 2.5 rejects functionResponse.parts, so images are hoisted into a follow-up user turn.
+    const g2 = anthropicToGemini(request({
+      model: 'gemini-2.5-pro',
+      messages: [
+        { role: 'user', content: 'take screenshot' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'shot', name: 'Screenshot', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'shot', content: [png] }] },
+      ],
+    }))
+    expect(g2.contents[2]).toEqual({
+      role: 'user',
+      parts: [{
+        functionResponse: {
+          id: 'shot',
+          name: 'Screenshot',
+          response: { output: 'Media result attached after this tool result.' },
+        },
+      }],
+    })
+    expect(g2.contents[3]).toEqual({
+      role: 'user',
+      parts: [
+        { text: '[Media content for tool call shot]' },
+        { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
+      ],
+    })
+
+    // Image-only tool_result on Gemini 3+/4+ fills a non-empty output description alongside nested parts.
+    const g4ImageOnly = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: 'take screenshot' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'shot', name: 'Screenshot', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'shot', content: [png] }] },
+      ],
+    }))
+    expect(g4ImageOnly.contents[2]).toEqual({
+      role: 'user',
+      parts: [{
+        functionResponse: {
+          id: 'shot',
+          name: 'Screenshot',
+          response: { output: 'Binary content provided.' },
+          parts: [{ inlineData: { mimeType: 'image/png', data: 'AAAA' } }],
+        },
+      }],
+    })
+
+    // Explicit opt-out forces hoisting even on Gemini 3+/4+.
+    const optedOut = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: 'take screenshot' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'shot', name: 'Screenshot', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'shot', content: [{ type: 'text', text: 'ok' }, png] }] },
+      ],
+    }), { supportsNestedToolResultMedia: false })
+    expect(optedOut.contents[2]!.parts[0]!.functionResponse?.parts).toBeUndefined()
+    expect(optedOut.contents[3]).toEqual({
+      role: 'user',
+      parts: [
+        { text: '[Media content for tool call shot]' },
+        { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
+      ],
+    })
+
+    // Audio inside tool_result is hoisted even on Gemini 3+/4+.
+    const withAudio = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: 'record' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'rec', name: 'Record', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'rec', content: [png, audio] }] },
+      ],
+    }))
+    expect(withAudio.contents[2]!.parts[0]!.functionResponse?.parts).toEqual([
+      { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
+    ])
+    expect(withAudio.contents[3]).toEqual({
+      role: 'user',
+      parts: [
+        { text: '[Media content for tool call rec]' },
+        { inlineData: { mimeType: 'audio/wav', data: 'UklG' } },
+      ],
+    })
+  })
+
+  test('orders functionResponse parts to match model calls, coalesces same-role turns, and guards empty base64', () => {
+    const body = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'first' }] },
+        { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '' } }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: encodeGeminiThoughtSignature('sig-empty-thought') },
+            { type: 'tool_use', id: 'call_a', name: 'Read', input: { file_path: 'a.ts' } },
+            { type: 'tool_use', id: 'call_b', name: 'Read', input: { file_path: 'b.ts' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            // Out-of-order relative to model turn: must be sorted back to [call_a, call_b].
+            { type: 'tool_result', tool_use_id: 'call_b', content: 'B' },
+            { type: 'tool_result', tool_use_id: 'call_a', content: 'A' },
+          ],
+        },
+      ],
+    }))
+    expect(body.contents[0]).toEqual({
+      role: 'user',
+      parts: [
+        { text: 'first' },
+        { text: '[Image omitted: empty base64 image payload.]' },
+      ],
+    })
+    expect(body.contents[1]).toEqual({
+      role: 'model',
+      parts: [
+        { functionCall: { id: 'call_a', name: 'Read', args: { file_path: 'a.ts' } }, thoughtSignature: 'sig-empty-thought' },
+        { functionCall: { id: 'call_b', name: 'Read', args: { file_path: 'b.ts' } } },
+      ],
+    })
+    expect(body.contents[2]!.parts.map(part => part.functionResponse?.id)).toEqual(['call_a', 'call_b'])
+  })
+
+  test('normalizes structured output schema for Gemini and attaches trailing redacted_thinking to text', () => {
+    const body = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'redacted_thinking', data: encodeGeminiThoughtSignature('sig-text-turn') },
+            { type: 'text', text: 'answer' },
+          ],
+        },
+      ],
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            type: 'object',
+            properties: { count: { type: 'integer', minimum: 0, exclusiveMinimum: true } },
+            required: ['count', 'missing_field'],
+          },
+        },
+      },
+    }), { budgetSource: 'default' })
+    expect(body.contents[1]).toEqual({
+      role: 'model',
+      parts: [{ text: 'answer', thoughtSignature: 'sig-text-turn' }],
+    })
+    expect(body.generationConfig?.responseJsonSchema).toEqual({
+      type: 'object',
+      properties: { count: { type: 'integer', exclusiveMinimum: 0 } },
+      required: ['count'],
+    })
+  })
+
+  test('omits functionCall/functionResponse ids on Vertex AI while preserving parallel response ordering, and preserves non-object structured output roots', () => {
+    const body = anthropicToGemini(request({
+      messages: [
+        { role: 'user', content: 'read both files' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'Read', input: { file_path: 'a.ts' } },
+            { type: 'tool_use', id: 'call_b', name: 'Read', input: { file_path: 'b.ts' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'call_b', content: 'content-B' },
+            { type: 'tool_result', tool_use_id: 'call_a', content: 'content-A' },
+          ],
+        },
+      ],
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'integer' },
+            ],
+          },
+        },
+      },
+    }), { isVertex: true })
+
+    // Vertex AI v1 rejects `id` inside functionCall / functionResponse.
+    expect(body.contents[1]).toEqual({
+      role: 'model',
+      parts: [
+        { functionCall: { name: 'Read', args: { file_path: 'a.ts' } }, thoughtSignature: 'skip_thought_signature_validator' },
+        { functionCall: { name: 'Read', args: { file_path: 'b.ts' } }, thoughtSignature: 'skip_thought_signature_validator' },
+      ],
+    })
+    for (const part of body.contents[1]!.parts) {
+      expect('id' in (part.functionCall ?? {})).toBe(false)
+    }
+
+    // Parallel tool responses are still reordered to match model call order [call_a, call_b].
+    expect(body.contents[2]).toEqual({
+      role: 'user',
+      parts: [
+        { functionResponse: { name: 'Read', response: { output: 'content-A' } } },
+        { functionResponse: { name: 'Read', response: { output: 'content-B' } } },
+      ],
+    })
+    for (const part of body.contents[2]!.parts) {
+      expect('id' in (part.functionResponse ?? {})).toBe(false)
+    }
+
+    // Non-object top-level structured output schema (anyOf) must not have `type: "object"` injected.
+    expect(body.generationConfig?.responseJsonSchema).toEqual({
+      anyOf: [{ type: 'string' }, { type: 'integer' }],
+    })
+  })
 })

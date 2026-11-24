@@ -10,6 +10,7 @@ import {
   ChevronUp,
   CircleAlert,
   CircleCheck,
+  Cloud,
   CloudDownload,
   Download,
   Eye,
@@ -20,6 +21,7 @@ import {
   Key,
   KeyRound,
   KeySquare,
+  Layers,
   Link,
   MapPin,
   MessagesSquare,
@@ -28,6 +30,7 @@ import {
   Route,
   Search,
   SearchX,
+  Server,
   Shrink,
   Star,
   Wrench,
@@ -223,7 +226,12 @@ function providerSubtitle(provider: SavedProvider): string {
 function providerFormatBadge(provider: SavedProvider, preset: ProviderPreset | undefined, t: Translate): string | null {
   if (preset?.modelApiFormats?.length) return t('settings.providers.multiProtocolBadge')
   if (!provider.apiFormat || provider.apiFormat === 'anthropic') return null
-  return provider.apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses'
+  if (provider.apiFormat === 'openai_chat') return 'OpenAI Chat'
+  if (provider.apiFormat === 'openai_responses') return 'OpenAI Responses'
+  if (provider.apiFormat === 'google_vertex') return 'Vertex AI'
+  if (provider.apiFormat === 'bedrock_converse') return 'Bedrock'
+  if (provider.apiFormat === 'azure_openai') return 'Azure OpenAI'
+  return 'Gemini'
 }
 
 /** What a saved provider is searched by. The API key never is. */
@@ -1642,7 +1650,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     setModelsErrorCode(null)
     setModelsErrorMessage(null)
     setIsFetchingModels(false)
-  }, [baseUrl, apiKey])
+  }, [baseUrl, apiKey, apiFormat])
 
   const handlePresetChange = (preset: ProviderPreset) => {
     if (preset.id === MAGPIE_PRESET_ID && onPickMagpie) {
@@ -1681,7 +1689,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     setTestResult(null)
   }
 
-  const requiresApiKey = selectedPreset.needsApiKey !== false
+  const allowsAmbientCloudCredential =
+    apiFormat === 'google_vertex' || apiFormat === 'bedrock_converse'
+  const requiresApiKey = selectedPreset.needsApiKey !== false && !allowsAmbientCloudCredential
   const autoCompactWindowErrorKey = getAutoCompactWindowErrorKey(autoCompactWindow)
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
@@ -1731,6 +1741,26 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       value: 'openai_responses' as const,
       label: t('settings.providers.apiFormatOpenaiResponses'),
       icon: <Route size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'gemini' as const,
+      label: t('settings.providers.apiFormatGemini'),
+      icon: <Layers size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'google_vertex' as const,
+      label: t('settings.providers.apiFormatGoogleVertex'),
+      icon: <Cloud size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'bedrock_converse' as const,
+      label: t('settings.providers.apiFormatBedrockConverse'),
+      icon: <Server size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'azure_openai' as const,
+      label: t('settings.providers.apiFormatAzureOpenai'),
+      icon: <Globe size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
   ]
   const selectedApiFormatLabel = apiFormatItems.find((item) => item.value === apiFormat)?.label ?? t('settings.providers.apiFormatAnthropic')
@@ -1917,7 +1947,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
   const hasModelsBaseUrl = Boolean(baseUrl.trim())
   const hasModelsApiKey = Boolean(apiKey.trim())
-  const canFetchModels = hasModelsBaseUrl && hasModelsApiKey
+  const canFetchModels = hasModelsBaseUrl && (hasModelsApiKey || allowsAmbientCloudCredential)
   const handleFetchModels = async () => {
     if (!canFetchModels || isFetchingModels) return
     const requestId = modelsRequestRef.current + 1
@@ -1934,7 +1964,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         : proxyMode === 'manual' && isValidHttpProxyUrl(proxyUrl.trim())
           ? { mode: proxyMode, url: proxyUrl.trim() }
           : undefined
-      const result = await fetchModels({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), ...(probeProxy && { proxy: probeProxy }) })
+      const result = await fetchModels({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        ...((apiFormat === 'gemini' || apiFormat === 'google_vertex' || apiFormat === 'bedrock_converse' || apiFormat === 'azure_openai') && { apiFormat }),
+        ...(probeProxy && { proxy: probeProxy }),
+      })
       // The form moved on while we were probing — this answer describes a base
       // URL or key the user no longer has typed in.
       if (modelsRequestRef.current !== requestId) return
@@ -1986,6 +2021,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       openai_chat: '/chat/completions',
       openai_responses: '/responses',
       gemini: ':generateContent',
+      google_vertex: 'Vertex AI',
+      bedrock_converse: '/converse',
+      azure_openai: 'Azure OpenAI',
     }
     return groupProviderModels(
       models.map((model) => ({
@@ -2148,7 +2186,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         if (requiresApiKey && !apiKey.trim()) return
         result = await testConfig({
           baseUrl: baseUrl.trim(),
-          apiKey: apiKey.trim() || selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || 'local',
+          apiKey: apiKey.trim() || (allowsAmbientCloudCredential ? '' : selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || 'local'),
           modelId: models.main.trim(),
           authStrategy,
           apiFormat,
@@ -2272,6 +2310,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               className="absolute right-1.5 top-1/2 -translate-y-1/2"
             />
           </div>
+          {apiFormat === 'google_vertex' && (
+            <p className={FORM_HINT}>{t('settings.providers.apiKeyHintGoogleVertex')}</p>
+          )}
+          {apiFormat === 'bedrock_converse' && (
+            <p className={FORM_HINT}>{t('settings.providers.apiKeyHintBedrockConverse')}</p>
+          )}
         </div>
 
         {(apiKeyUrl || promoText) && (
@@ -2319,7 +2363,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               {t('settings.providers.fetchModels')}
             </Button>}
           </div>
-          {browserMode ? null : !hasModelsApiKey ? (
+          {browserMode ? null : (!hasModelsApiKey && !allowsAmbientCloudCredential) ? (
             <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsApiKeyHint')}</p>
           ) : !hasModelsBaseUrl ? (
             <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsHint')}</p>

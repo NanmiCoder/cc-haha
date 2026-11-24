@@ -72,6 +72,7 @@ export class GeminiToAnthropicConverter {
   private readonly events: AnthropicEvent[] = []
   private started = false
   private openBlock: { type: 'text' | 'thinking'; index: number; signature?: string } | undefined
+  private pendingSignature: string | undefined
   private nextIndex = 0
   private emittedContent = false
   private hasToolCalls = false
@@ -88,8 +89,12 @@ export class GeminiToAnthropicConverter {
   constructor(private readonly model: string) {}
 
   push(chunk: unknown): void {
-    const body = record(chunk)
-    if (!body) throw new GeminiUpstreamError('Gemini upstream sent a malformed response')
+    const raw = record(chunk)
+    if (!raw) throw new GeminiUpstreamError('Gemini upstream sent a malformed response')
+    const wrapped = raw.candidates === undefined && raw.error === undefined && raw.promptFeedback === undefined
+      ? record(raw.response)
+      : undefined
+    const body = wrapped ?? raw
     const errorMessage = geminiErrorMessage(body)
     if (errorMessage) {
       const code = record(body.error)?.code
@@ -131,6 +136,7 @@ export class GeminiToAnthropicConverter {
   /** Close the message, or throw when the upstream did not finish it usably. */
   finish(): void {
     this.closeBlock()
+    this.pendingSignature = undefined
     const reason = this.finishReason
     let stopReason: string
     if (reason === undefined) {
@@ -174,24 +180,51 @@ export class GeminiToAnthropicConverter {
       ? part.thoughtSignature : undefined
     const call = record(part.functionCall)
     if (call) {
-      this.pushFunctionCall(call, signature)
+      const effectiveSignature = signature ?? this.pendingSignature
+      this.pendingSignature = undefined
+      this.pushFunctionCall(call, effectiveSignature)
       return
     }
-    // Inline data, code execution and other part kinds are outside this contract.
-    if (typeof part.text !== 'string') return
     if (part.thought === true) {
-      if (part.text) {
+      if (typeof part.text === 'string' && part.text) {
         this.ensureBlock('thinking')
         this.emitDelta({ type: 'thinking_delta', thinking: part.text })
       }
-      if (signature && this.openBlock?.type === 'thinking') this.openBlock.signature = signature
+      if (signature) {
+        if (this.openBlock?.type === 'thinking') this.openBlock.signature = signature
+        else this.pendingSignature = signature
+      }
       return
+    }
+    // Inline data, code execution and other part kinds are outside this contract,
+    // except a signature-only or empty-text part carrying a thoughtSignature
+    // ahead of a following functionCall or text block.
+    if (typeof part.text !== 'string' || !part.text) {
+      if (signature) {
+        if (this.openBlock?.type === 'thinking') this.openBlock.signature = signature
+        else this.pendingSignature = signature
+      }
+      return
+    }
+    if (this.pendingSignature && this.openBlock?.type !== 'text') {
+      this.emitRedactedThinking(this.pendingSignature)
+      this.pendingSignature = undefined
     }
     // A signature on visible text is optional to replay (Gemini validates only
     // function calls) and an Anthropic text block has no field to carry it.
-    if (!part.text) return
     this.ensureBlock('text')
     this.emitDelta({ type: 'text_delta', text: part.text })
+  }
+
+  private emitRedactedThinking(signature: string): void {
+    this.closeBlock()
+    const index = this.nextIndex++
+    this.emit('content_block_start', {
+      type: 'content_block_start',
+      index,
+      content_block: { type: 'redacted_thinking', data: encodeGeminiThoughtSignature(signature) },
+    })
+    this.emit('content_block_stop', { type: 'content_block_stop', index })
   }
 
   private pushFunctionCall(call: Record<string, unknown>, signature: string | undefined): void {
@@ -208,13 +241,7 @@ export class GeminiToAnthropicConverter {
 
     if (signature) {
       // Kept ahead of its call: the request side attaches it to the next call.
-      const index = this.nextIndex++
-      this.emit('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'redacted_thinking', data: encodeGeminiThoughtSignature(signature) },
-      })
-      this.emit('content_block_stop', { type: 'content_block_stop', index })
+      this.emitRedactedThinking(signature)
     }
     const index = this.nextIndex++
     this.emit('content_block_start', {
@@ -364,9 +391,11 @@ export function geminiStreamToAnthropic(
         while (true) {
           for await (const data of readSseData(reader)) {
             if (cancelled) return
+            const trimmed = data.trim()
+            if (!trimmed || trimmed === '[DONE]') continue
             let chunk: unknown
             try {
-              chunk = JSON.parse(data)
+              chunk = JSON.parse(trimmed)
             } catch {
               throw new Error('Gemini upstream sent malformed SSE JSON')
             }

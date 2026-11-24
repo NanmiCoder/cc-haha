@@ -32,6 +32,7 @@ export type OpenAIChatTransformOptions = RequestCompatibilityOptions & {
   passReasoningEffort?: boolean
   passSamplingParams?: boolean
   imageContentMode?: OpenAIChatImageContentMode
+  protocol?: 'openai_chat' | 'azure_openai'
 }
 
 // Synthetic degradation text carries its own separators: the parts are
@@ -49,7 +50,10 @@ export function anthropicToOpenaiChat(
   body: AnthropicRequest,
   options: OpenAIChatTransformOptions = {},
 ): OpenAIChatRequest {
-  const compatibility = resolveRequestCompatibility(body, { ...options, protocol: 'openai_chat' })
+  const compatibility = resolveRequestCompatibility(body, {
+    ...options,
+    protocol: options.protocol ?? 'openai_chat',
+  })
   const messages: OpenAIChatMessage[] = []
 
   // Convert system prompt, minus the leading billing attribution: its
@@ -148,6 +152,9 @@ export function anthropicToOpenaiChat(
 
   if (compatibility.parallelToolCalls !== undefined && result.tools?.length) {
     result.parallel_tool_calls = compatibility.parallelToolCalls
+  }
+  if (compatibility.serviceTier) {
+    result.service_tier = compatibility.serviceTier
   }
   if (compatibility.structuredOutput) {
     const { type, ...jsonSchema } = compatibility.structuredOutput
