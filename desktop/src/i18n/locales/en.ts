@@ -1066,6 +1066,7 @@ export const en = {
   'workspace.files.projectRoot': 'Project root',
   'workspace.files.directoryMissing': 'Directory not found: {path}',
   'workspace.files.directoryError': 'Unable to read directory: {path}',
+  'workspace.files.directoryTruncated': 'Showing the first {shown} of {total} items in {path}. Use filter to find others.',
   'workspace.files.hidePreview': 'Hide preview',
   'workspace.files.showPreview': 'Show preview',
   'workspace.files.toggleTree': 'Toggle file tree',

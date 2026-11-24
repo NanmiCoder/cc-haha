@@ -695,3 +695,59 @@ describe('file tree open actions', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })
+
+describe('large directory windowing and truncation', () => {
+  it('announces when a directory listing is truncated and keeps keyboard Home/End working across virtualized rows', async () => {
+    const entryCount = 600
+    mocks.getWorkspaceTree.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      truncated: true,
+      totalCount: 5_000,
+      entries: Array.from({ length: entryCount }, (_, index) => ({
+        name: `item-${String(index).padStart(4, '0')}.ts`,
+        path: `item-${String(index).padStart(4, '0')}.ts`,
+        isDirectory: false,
+      })),
+    })
+
+    await renderPane()
+
+    expect(screen.getByRole('status')).toHaveTextContent('Showing the first 600 of 5000 items in Project root')
+    expect(screen.getAllByRole('treeitem').length).toBeLessThan(100)
+
+    const first = screen.getByTestId('workspace-tree-row-item-0000.ts')
+    focusRow(first)
+    fireEvent.keyDown(first, { key: 'End' })
+    const last = await screen.findByTestId('workspace-tree-row-item-0599.ts')
+    expect(document.activeElement).toBe(last)
+
+    fireEvent.keyDown(last, { key: 'Home' })
+    expect(document.activeElement).toBe(await screen.findByTestId('workspace-tree-row-item-0000.ts'))
+  })
+
+  it('keeps a faraway selectedPath mounted after passive effects settle on a pre-cached large tree and syncs scrollTop', async () => {
+    const entryCount = 600
+    const entries = Array.from({ length: entryCount }, (_, index) => ({
+      name: `item-${String(index).padStart(4, '0')}.ts`,
+      path: `item-${String(index).padStart(4, '0')}.ts`,
+      isDirectory: false,
+    }))
+    useWorkspaceContentStore.setState({
+      treeByKey: {
+        [`${SESSION}::`]: { state: 'ok', path: '', entries },
+      },
+      treeViewBySession: {
+        [SESSION]: { filter: '', mode: 'all', scrollTop: 0, open: true },
+      },
+    })
+
+    const targetPath = 'item-0500.ts'
+    render(<WorkspaceFileTreePane sessionId={SESSION} selectedPath={targetPath} onOpen={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByTestId(`workspace-tree-row-${targetPath}`)).toHaveAttribute('aria-selected', 'true')
+    expect(useWorkspaceContentStore.getState().treeViewBySession[SESSION]?.scrollTop).toBeGreaterThan(0)
+    expect(screen.getByRole('tree').scrollTop).toBeGreaterThan(0)
+  })
+})

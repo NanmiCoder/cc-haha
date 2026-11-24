@@ -1067,6 +1067,7 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.files.projectRoot': 'プロジェクトルート',
   'workspace.files.directoryMissing': 'ディレクトリが見つかりません: {path}',
   'workspace.files.directoryError': 'ディレクトリを読み込めません: {path}',
+  'workspace.files.directoryTruncated': '{path} の {total} 件中、最初の {shown} 件を表示しています。残りは絞り込みで検索してください。',
   'workspace.files.hidePreview': 'プレビューを非表示',
   'workspace.files.showPreview': 'プレビューを表示',
   'workspace.files.toggleTree': 'ファイルツリーの表示切り替え',
