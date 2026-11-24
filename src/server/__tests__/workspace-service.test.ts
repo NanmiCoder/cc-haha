@@ -851,6 +851,93 @@ describe('WorkspaceService', () => {
     expect(statusResult.error?.length ?? 0).toBeLessThan(1_500)
     expect(statusResult.error).not.toContain('\0')
   })
+
+  it('scopes getDiff to the requested file path and scopes nested workDir getStatus before truncating', async () => {
+    const { repoDir, workDir } = await createNestedGitWorkspace()
+    const siblingDir = path.join(repoDir, 'aaa-noisy-sibling')
+    await fs.mkdir(siblingDir, { recursive: true })
+    // Put >2,000 untracked files in an alphabetically earlier sibling directory so any
+    // repo-wide pre-scope truncation would starve `subdir/sub.txt`.
+    const totalSiblingFiles = 2_100
+    for (let batch = 0; batch < totalSiblingFiles; batch += 300) {
+      const writes: Promise<void>[] = []
+      const end = Math.min(batch + 300, totalSiblingFiles)
+      for (let i = batch; i < end; i++) {
+        writes.push(fs.writeFile(path.join(siblingDir, `n-${String(i).padStart(4, '0')}.txt`), 'x\n'))
+      }
+      await Promise.all(writes)
+    }
+
+    const nestedService = new WorkspaceService(async () => workDir)
+    const nestedStatus = await nestedService.getStatus('session-1')
+    expect(nestedStatus.state).toBe('ok')
+    expect(nestedStatus.truncated).toBeUndefined()
+    expect(nestedStatus.changedFiles.map((file) => file.path)).toEqual(['sub.txt'])
+
+    // Even from repo root with >2,000 changed files, getDiff for a file past index 2,000
+    // queries that single pathspec directly and returns its real diff.
+    const rootService = new WorkspaceService(async () => repoDir)
+    const rootDiff = await rootService.getDiff('session-1', 'subdir/sub.txt')
+    expect(rootDiff.state).toBe('ok')
+    expect(rootDiff.diff).toContain('+sub changed')
+
+    // Repo-root getStatus caps changedFiles at 2,000 while reporting true totalChangedFiles > 2,000.
+    const rootStatus = await rootService.getStatus('session-1')
+    expect(rootStatus.state).toBe('ok')
+    expect(rootStatus.truncated).toBe(true)
+    expect(rootStatus.changedFiles).toHaveLength(2_000)
+    expect(rootStatus.totalChangedFiles).toBeGreaterThan(2_000)
+  }, 30_000)
+
+  it('drops split rename records on truncated status output and strips incomplete trailing numstat lines on timeout', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        maxBufferExceeded?: boolean
+        timedOut?: boolean
+      }>
+    }
+
+    service.runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return { stdout: `${workDir}\n`, stderr: '', code: 0 }
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return { stdout: 'main\n', stderr: '', code: 0 }
+      }
+      if (args[0] === 'status' && args.includes('--untracked-files=all')) {
+        return { stdout: '', stderr: '', code: 1, maxBufferExceeded: true }
+      }
+      if (args[0] === 'status' && args.includes('--untracked-files=normal')) {
+        // Complete tracked file + collapsed untracked dir + truncated rename missing its second NUL oldPath record.
+        return {
+          stdout: ' M tracked.txt\0?? untracked-dir/\0R  renamed-new.txt\0',
+          stderr: '',
+          code: 1,
+          maxBufferExceeded: true,
+        }
+      }
+      if (args[0] === 'diff' && args.includes('--numstat')) {
+        return {
+          stdout: '3\t1\ttracked.txt\n9\t2\ttruncated-path-without-newline',
+          stderr: '',
+          code: 1,
+          timedOut: true,
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 }
+    }
+
+    const result = await service.getStatus('session-1')
+    expect(result.state).toBe('ok')
+    expect(result.truncated).toBe(true)
+    expect(result.changedFiles).toEqual([
+      { path: 'tracked.txt', oldPath: undefined, status: 'modified', additions: 3, deletions: 1 },
+    ])
+  })
 })
 
 describe('WorkspaceService document previews', () => {

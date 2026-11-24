@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  getWorkspaceMeta: vi.fn(),
   getWorkspaceStatus: vi.fn(),
   getWorkspaceTree: vi.fn(),
   getWorkspaceFile: vi.fn(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../api/sessions', () => ({
   sessionsApi: {
+    getWorkspaceMeta: mocks.getWorkspaceMeta,
     getWorkspaceStatus: mocks.getWorkspaceStatus,
     getWorkspaceTree: mocks.getWorkspaceTree,
     getWorkspaceFile: mocks.getWorkspaceFile,
@@ -101,6 +103,7 @@ beforeEach(() => {
   useWorkspaceReviewStore.setState({ byKey: {} })
   useWorkspaceStore.setState({ bySession: {}, sideWidth: 860, bottomHeight: 420 })
 
+  mocks.getWorkspaceMeta.mockReset()
   mocks.getWorkspaceStatus.mockReset()
   mocks.getWorkspaceTree.mockReset()
   mocks.getWorkspaceFile.mockReset()
@@ -108,14 +111,16 @@ beforeEach(() => {
   mocks.reviewGetStatus.mockReset()
   mocks.reviewGetDiff.mockReset()
 
-  mocks.getWorkspaceStatus.mockResolvedValue({
-    state: 'ok',
+  const workspaceMetaPayload = {
+    state: 'ok' as const,
     workDir: '/giant-repo',
     repoName: 'giant-repo',
     branch: 'main',
     isGitRepo: true,
     changedFiles: [],
-  })
+  }
+  mocks.getWorkspaceMeta.mockResolvedValue(workspaceMetaPayload)
+  mocks.getWorkspaceStatus.mockResolvedValue(workspaceMetaPayload)
   mocks.getWorkspaceTree.mockResolvedValue({
     state: 'ok',
     path: '',
@@ -137,16 +142,24 @@ afterEach(() => {
 })
 
 describe('Issue #1989 frontend bottlenecks (repro)', () => {
-  it('Bottleneck 1a: opening WorkspaceFileTab should not unconditionally call heavy getWorkspaceStatus (changedFiles is unused)', async () => {
+  it('Bottleneck 1a: opening WorkspaceFileTab should load lightweight metadata without calling heavy getWorkspaceStatus', async () => {
     render(<WorkspaceFileTab sessionId={SESSION} tab={createFileTab('')} />)
     await act(async () => { await Promise.resolve() })
 
     const statusCalls = mocks.getWorkspaceStatus.mock.calls.length
+    const metaCalls = mocks.getWorkspaceMeta.mock.calls.length
     const treeCalls = mocks.getWorkspaceTree.mock.calls.length
-    console.info(`[repro-1989][1a] WorkspaceFileTab mount: getWorkspaceStatusCalls=${statusCalls} getWorkspaceTreeCalls=${treeCalls}`)
+    console.info(`[repro-1989][1a] WorkspaceFileTab mount: getWorkspaceStatusCalls=${statusCalls} getWorkspaceMetaCalls=${metaCalls} getWorkspaceTreeCalls=${treeCalls}`)
 
-    // Expected healthy behavior: opening the file reader should not trigger full git status/untracked scan.
+    // Expected healthy behavior: opening the file reader loads lightweight metadata
+    // (`workDir`, `repoName`, `isGitRepo`) and never triggers full git status/untracked scan.
     expect(statusCalls).toBe(0)
+    expect(metaCalls).toBe(1)
+    expect(useWorkspaceContentStore.getState().statusBySession[SESSION]).toMatchObject({
+      workDir: '/giant-repo',
+      repoName: 'giant-repo',
+      isGitRepo: true,
+    })
   })
 
   it('Bottleneck 1b: watch refreshWatchedPaths should not force-refetch heavy getWorkspaceStatus on every ready/change event', async () => {
@@ -175,10 +188,12 @@ describe('Issue #1989 frontend bottlenecks (repro)', () => {
       .refreshWatchedPaths(SESSION, [], [''], new AbortController().signal)
 
     const statusCalls = mocks.getWorkspaceStatus.mock.calls.length
-    console.info(`[repro-1989][1b] refreshWatchedPaths: forcedGetWorkspaceStatusCalls=${statusCalls}`)
+    const metaCalls = mocks.getWorkspaceMeta.mock.calls.length
+    console.info(`[repro-1989][1b] refreshWatchedPaths: forcedGetWorkspaceStatusCalls=${statusCalls} forcedGetWorkspaceMetaCalls=${metaCalls}`)
 
     // Expected healthy behavior: file-watch ready/change in the file reader must not force full git status.
     expect(statusCalls).toBe(0)
+    expect(metaCalls).toBe(0)
   })
 
   it('Bottleneck 3b: WorkspaceFileTreePane should virtualize large directory listings instead of mounting every row in DOM', async () => {
@@ -261,8 +276,10 @@ describe('Issue #1989 frontend bottlenecks (repro)', () => {
       `mountedTreeItems=${mountedTreeItems} intersectionObservers=${observerCount} renderMs=${elapsedMs}`,
     )
 
-    // Expected healthy behavior: large review lists must be virtualized instead of mounting all sections & tree rows.
+    // Expected healthy behavior: large review lists must be virtualized with a single shared observer
+    // instead of mounting all sections, observers & tree rows.
     expect(mountedSections).toBeLessThan(200)
     expect(mountedTreeItems).toBeLessThan(200)
+    expect(observerCount).toBe(1)
   }, 20_000)
 })

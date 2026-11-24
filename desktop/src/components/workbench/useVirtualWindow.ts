@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
 const DEFAULT_VIEWPORT_HEIGHT = 600
 
@@ -8,7 +8,12 @@ export type FixedVirtualWindowOptions = {
   overscan?: number
   threshold?: number
   scrollRef: RefObject<HTMLElement | null>
+  /** Restored scroll position for the current `resetKey`. */
   initialScrollTop?: number
+  /** Only re-sync `scrollTop` from `initialScrollTop` when this key changes. */
+  resetKey?: string
+  /** Notified whenever programmatic jumps (`ensureIndexVisible`) move the scroll box. */
+  onScrollTopChange?: (nextScrollTop: number) => void
 }
 
 export type FixedVirtualWindow = {
@@ -36,14 +41,29 @@ export function useFixedVirtualWindow({
   threshold = 400,
   scrollRef,
   initialScrollTop = 0,
+  resetKey = '',
+  onScrollTopChange,
 }: FixedVirtualWindowOptions): FixedVirtualWindow {
   const virtualized = itemCount > threshold
   const [scrollTop, setScrollTop] = useState(initialScrollTop)
   const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT_HEIGHT)
+  const scrollTopRef = useRef(scrollTop)
+  scrollTopRef.current = scrollTop
+  const onScrollTopChangeRef = useRef(onScrollTopChange)
+  onScrollTopChangeRef.current = onScrollTopChange
+  const previousResetKeyRef = useRef(resetKey)
 
-  useEffect(() => {
+  // Sync from `initialScrollTop` synchronously on key transitions (session/filter change)
+  // rather than via a passive effect on `[initialScrollTop]`, so mount-time layout
+  // reveals (`ensureIndexVisible`) can never be overwritten back to 0.
+  useLayoutEffect(() => {
+    if (previousResetKeyRef.current === resetKey) return
+    previousResetKeyRef.current = resetKey
     setScrollTop(initialScrollTop)
-  }, [initialScrollTop])
+    if (scrollRef.current && scrollRef.current.scrollTop !== initialScrollTop) {
+      scrollRef.current.scrollTop = initialScrollTop
+    }
+  }, [initialScrollTop, resetKey, scrollRef])
 
   useEffect(() => {
     if (!virtualized) return
@@ -70,7 +90,7 @@ export function useFixedVirtualWindow({
     const itemTop = index * itemHeight
     const itemBottom = itemTop + itemHeight
     const container = scrollRef.current
-    const currentTop = container ? container.scrollTop : scrollTop
+    const currentTop = container ? container.scrollTop : scrollTopRef.current
     let nextTop = currentTop
     if (itemTop < currentTop) {
       nextTop = itemTop
@@ -80,8 +100,11 @@ export function useFixedVirtualWindow({
     if (container && container.scrollTop !== nextTop) {
       container.scrollTop = nextTop
     }
-    setScrollTop(nextTop)
-  }, [effectiveHeight, itemCount, itemHeight, scrollRef, scrollTop, virtualized])
+    setScrollTop((prev) => (prev === nextTop ? prev : nextTop))
+    if (nextTop !== currentTop) {
+      onScrollTopChangeRef.current?.(nextTop)
+    }
+  }, [effectiveHeight, itemCount, itemHeight, scrollRef, virtualized])
 
   if (!virtualized) {
     return {
@@ -122,6 +145,10 @@ export type VariableVirtualWindowOptions = {
   overscan?: number
   threshold?: number
   scrollRef: RefObject<HTMLElement | null>
+  /** Resets scrollTop to 0 when scope or filter changes. */
+  resetKey?: string
+  /** Clears cached measured heights when switching comparison scope. */
+  cacheKey?: string
 }
 
 export type VariableVirtualWindow = {
@@ -131,7 +158,8 @@ export type VariableVirtualWindow = {
   topSpacer: number
   bottomSpacer: number
   onScroll: (scrollTop: number) => void
-  measureItem: (key: string, node: HTMLElement | null) => void
+  /** Stable ref-registration callback; attaches a shared ResizeObserver on mount. */
+  observeItem: (key: string, node: HTMLElement | null) => void
   scrollToIndex: (index: number) => void
 }
 
@@ -160,12 +188,34 @@ export function useVariableVirtualWindow({
   overscan = 6,
   threshold = 80,
   scrollRef,
+  resetKey = '',
+  cacheKey = '',
 }: VariableVirtualWindowOptions): VariableVirtualWindow {
   const virtualized = keys.length > threshold
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT_HEIGHT)
   const [measureVersion, setMeasureVersion] = useState(0)
   const measuredHeights = useRef(new Map<string, number>())
+  const keyByElement = useRef(new Map<Element, string>())
+  const elementByKey = useRef(new Map<string, Element>())
+  const itemObserverRef = useRef<ResizeObserver | null>(null)
+  const previousResetKeyRef = useRef(resetKey)
+  const previousCacheKeyRef = useRef(cacheKey)
+
+  useLayoutEffect(() => {
+    if (previousCacheKeyRef.current !== cacheKey) {
+      previousCacheKeyRef.current = cacheKey
+      measuredHeights.current.clear()
+      setMeasureVersion((version) => version + 1)
+    }
+    if (previousResetKeyRef.current !== resetKey) {
+      previousResetKeyRef.current = resetKey
+      setScrollTop(0)
+      if (scrollRef.current && scrollRef.current.scrollTop !== 0) {
+        scrollRef.current.scrollTop = 0
+      }
+    }
+  }, [cacheKey, resetKey, scrollRef])
 
   useEffect(() => {
     if (!virtualized) return
@@ -181,12 +231,52 @@ export function useVariableVirtualWindow({
     return () => observer.disconnect()
   }, [scrollRef, virtualized])
 
+  useEffect(() => {
+    if (!virtualized || typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver((entries) => {
+      let changed = false
+      for (const entry of entries) {
+        const itemKey = keyByElement.current.get(entry.target)
+        if (!itemKey) continue
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+        if (height <= 0) continue
+        const previous = measuredHeights.current.get(itemKey)
+        if (previous === undefined || Math.abs(previous - height) >= 2) {
+          measuredHeights.current.set(itemKey, height)
+          changed = true
+        }
+      }
+      if (changed) setMeasureVersion((version) => version + 1)
+    })
+    itemObserverRef.current = observer
+    for (const element of keyByElement.current.keys()) {
+      observer.observe(element)
+    }
+    return () => {
+      observer.disconnect()
+      if (itemObserverRef.current === observer) itemObserverRef.current = null
+    }
+  }, [virtualized])
+
   const onScroll = useCallback((nextScrollTop: number) => {
     setScrollTop((prev) => (prev === nextScrollTop ? prev : nextScrollTop))
   }, [])
 
-  const measureItem = useCallback((itemKey: string, node: HTMLElement | null) => {
+  const observeItem = useCallback((itemKey: string, node: HTMLElement | null) => {
+    const previousNode = elementByKey.current.get(itemKey)
+    if (previousNode && previousNode !== node) {
+      itemObserverRef.current?.unobserve(previousNode)
+      keyByElement.current.delete(previousNode)
+      elementByKey.current.delete(itemKey)
+    }
     if (!node) return
+    elementByKey.current.set(itemKey, node)
+    keyByElement.current.set(node, itemKey)
+    if (itemObserverRef.current) {
+      itemObserverRef.current.observe(node)
+      return
+    }
+    // Fallback when ResizeObserver is unavailable (e.g. jsdom).
     const height = node.offsetHeight
     if (height <= 0) return
     const previous = measuredHeights.current.get(itemKey)
@@ -227,7 +317,7 @@ export function useVariableVirtualWindow({
       topSpacer: 0,
       bottomSpacer: 0,
       onScroll,
-      measureItem,
+      observeItem,
       scrollToIndex,
     }
   }
@@ -239,8 +329,12 @@ export function useVariableVirtualWindow({
   const lastVisible = Math.min(keys.length, lowerBound(layout, clampedScrollTop + effectiveHeight) + 1)
   const startIndex = Math.max(0, firstVisible - overscan)
   const endIndex = Math.min(keys.length, Math.max(firstVisible + 1, lastVisible + overscan))
+  // Flex `gap` adds one gap after `topSpacer` and one gap before `bottomSpacer`:
+  // - rendered items start at `topSpacer + gap`, so `topSpacer = layout[startIndex] - gap`
+  // - `layout[endIndex]` already includes the trailing gap after item `endIndex - 1`,
+  //   so `bottomSpacer` starts at `layout[endIndex]` and needs exact remaining height.
   const topSpacer = startIndex > 0 ? Math.max(0, (layout[startIndex] ?? 0) - gap) : 0
-  const bottomSpacer = endIndex < keys.length ? Math.max(0, totalHeight - (layout[endIndex] ?? totalHeight) - gap) : 0
+  const bottomSpacer = endIndex < keys.length ? Math.max(0, totalHeight - (layout[endIndex] ?? totalHeight)) : 0
 
   return {
     virtualized: true,
@@ -249,7 +343,7 @@ export function useVariableVirtualWindow({
     topSpacer,
     bottomSpacer,
     onScroll,
-    measureItem,
+    observeItem,
     scrollToIndex,
   }
 }

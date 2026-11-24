@@ -237,6 +237,10 @@ export function WorkspaceFileTreePane({
     return out
   }, [expanded, filter, search, sessionId, treeByKey])
 
+  const syncTreeScrollTop = useCallback((nextScrollTop: number) => {
+    setTreeView(sessionId, { scrollTop: nextScrollTop })
+  }, [sessionId, setTreeView])
+
   const treeWindow = useFixedVirtualWindow({
     itemCount: rows.length,
     itemHeight: 28,
@@ -244,6 +248,8 @@ export function WorkspaceFileTreePane({
     threshold: 400,
     scrollRef,
     initialScrollTop: treeView.scrollTop,
+    resetKey: `${sessionId}::${filter}`,
+    onScrollTopChange: syncTreeScrollTop,
   })
   const visibleRows = treeWindow.virtualized
     ? rows.slice(treeWindow.startIndex, treeWindow.endIndex)
@@ -254,7 +260,9 @@ export function WorkspaceFileTreePane({
   }, [filter, selectedTreePath, sessionId])
 
   useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = treeView.scrollTop
+    if (scrollRef.current && scrollRef.current.scrollTop !== treeView.scrollTop) {
+      scrollRef.current.scrollTop = treeView.scrollTop
+    }
   }, [rows, sessionId, treeView.scrollTop])
 
   useLayoutEffect(() => {

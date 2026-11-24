@@ -80,9 +80,12 @@ describe('Issue #1989 large-repo workspace bottlenecks (repro)', () => {
       `[repro-1989][2a] files=${fileCount} state=${result.state} changedFiles=${result.changedFiles.length} errorLength=${result.error?.length ?? 0} elapsedMs=${elapsedMs}`,
     )
 
-    // Expected healthy behavior: large untracked trees must not fail getStatus() with a ~2MB stdout dump.
+    // Expected healthy behavior: large untracked trees must not fail getStatus() with a ~2MB stdout dump,
+    // and collapsed untracked directory markers (`dir/`) must not leak as clickable files.
     expect(result.error?.length ?? 0).toBeLessThan(4_096)
     expect(result.state).toBe('ok')
+    expect(result.truncated).toBe(true)
+    expect(result.changedFiles.every((file) => !file.path.endsWith('/'))).toBe(true)
   }, 30_000)
 
   it('Bottleneck 2b: getStatus() should bound concurrent realpath/stat/readFile calls for untracked files instead of unbounded Promise.all', async () => {
@@ -199,5 +202,7 @@ describe('Issue #1989 large-repo workspace bottlenecks (repro)', () => {
     expect(result.state).toBe('ok')
     // Expected healthy behavior: readTree() caps or paginates giant directories instead of returning all 5,000 entries unfiltered.
     expect(result.entries.length).toBeLessThanOrEqual(1_000)
+    expect(result.truncated).toBe(true)
+    expect(result.totalCount).toBe(entryCount)
   }, 30_000)
 })

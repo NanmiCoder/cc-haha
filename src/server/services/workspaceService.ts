@@ -458,7 +458,13 @@ export class WorkspaceService {
       }
     }
 
-    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot)
+    const workspaceRepoRelPath = this.toRepoRelativePath(
+      repoInfo.repoRoot,
+      workspaceInfo.canonicalWorkspaceRoot,
+    )
+    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot, {
+      pathspec: workspaceRepoRelPath || undefined,
+    })
     if (statusEntries.kind === 'error') {
       return {
         state: 'error',
@@ -1082,7 +1088,13 @@ export class WorkspaceService {
       }
     }
 
-    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot)
+    const repoRelativePath = this.toRepoRelativePath(
+      repoInfo.repoRoot,
+      resolvedPath.canonicalTargetPath,
+    )
+    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot, {
+      pathspec: repoRelativePath || undefined,
+    })
     if (statusEntries.kind === 'error') {
       const storedDiff = await this.getStoredWorkspaceDiff(
         sessionId,
@@ -1102,10 +1114,6 @@ export class WorkspaceService {
       statusEntries.entries,
       repoInfo.repoRoot,
       resolvedPath.canonicalWorkspaceRoot,
-    )
-    const repoRelativePath = this.toRepoRelativePath(
-      repoInfo.repoRoot,
-      resolvedPath.canonicalTargetPath,
     )
 
     const statusEntry = scopedEntries.find(
@@ -1935,17 +1943,28 @@ export class WorkspaceService {
     for (let i = 0; i < parts.length; i++) {
       const record = parts[i]
       if (!record) continue
-      if (entries.length >= MAX_STATUS_ENTRIES) {
-        truncated = true
-        break
-      }
 
       const code = record.slice(0, 2)
-      const currentPath = this.normalizeRelativePath(record.slice(3))
+      const rawPath = record.slice(3)
       const status = parseStatus(code)
 
+      // `--untracked-files=normal` collapses untracked directories into `?? dir/` entries.
+      // Never emit collapsed directory markers as clickable file changes; mark truncated instead.
+      if (status === 'untracked' && rawPath.endsWith('/')) {
+        truncated = true
+        continue
+      }
+
+      const currentPath = this.normalizeRelativePath(rawPath)
+
       if (status === 'renamed' || status === 'copied') {
-        const oldPath = this.normalizeRelativePath(parts[++i] || '')
+        const rawOldPath = parts[++i]
+        if (!rawOldPath) {
+          // A buffered 2MB truncation can split between the new and old NUL records.
+          truncated = true
+          break
+        }
+        const oldPath = this.normalizeRelativePath(rawOldPath)
         entries.push({
           path: currentPath,
           oldPath,
@@ -1967,8 +1986,10 @@ export class WorkspaceService {
 
   private async getStatusEntries(
     workDir: string,
+    options?: { pathspec?: string },
   ): Promise<{ kind: 'ok'; entries: StatusEntry[]; truncated?: boolean } | { kind: 'error'; message: string }> {
-    const args = ['status', '--porcelain=v1', '-z', '--untracked-files=all']
+    const pathspecArgs = options?.pathspec ? ['--', options.pathspec] : []
+    const args = ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...pathspecArgs]
     const result = await this.runGit(workDir, args)
 
     if (result.code === 0) {
@@ -1980,13 +2001,13 @@ export class WorkspaceService {
     // `--untracked-files=all`. Retry with `--untracked-files=normal` (collapsing
     // untracked directories) before gracefully falling back to buffered records.
     if (result.maxBufferExceeded || result.timedOut) {
-      const fallbackArgs = ['status', '--porcelain=v1', '-z', '--untracked-files=normal']
+      const fallbackArgs = ['status', '--porcelain=v1', '-z', '--untracked-files=normal', ...pathspecArgs]
       const fallback = await this.runGit(workDir, fallbackArgs)
       if (fallback.code === 0) {
         const parsed = this.parseStatusPorcelain(fallback.stdout, false)
         return { kind: 'ok', entries: parsed.entries, truncated: true }
       }
-      if (fallback.maxBufferExceeded) {
+      if (fallback.maxBufferExceeded || fallback.timedOut) {
         const parsed = this.parseStatusPorcelain(fallback.stdout, true)
         return { kind: 'ok', entries: parsed.entries, truncated: true }
       }
@@ -2131,7 +2152,7 @@ export class WorkspaceService {
     }
 
     const statsByRepoPath = new Map<string, { additions: number; deletions: number }>()
-    const rawStdout = result.maxBufferExceeded && !result.stdout.endsWith('\n')
+    const rawStdout = (result.maxBufferExceeded || result.timedOut) && !result.stdout.endsWith('\n')
       ? result.stdout.slice(0, Math.max(0, result.stdout.lastIndexOf('\n')))
       : result.stdout
     for (const line of rawStdout.trim().split('\n')) {

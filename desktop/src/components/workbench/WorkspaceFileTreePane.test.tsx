@@ -725,4 +725,29 @@ describe('large directory windowing and truncation', () => {
     fireEvent.keyDown(last, { key: 'Home' })
     expect(document.activeElement).toBe(await screen.findByTestId('workspace-tree-row-item-0000.ts'))
   })
+
+  it('keeps a faraway selectedPath mounted after passive effects settle on a pre-cached large tree and syncs scrollTop', async () => {
+    const entryCount = 600
+    const entries = Array.from({ length: entryCount }, (_, index) => ({
+      name: `item-${String(index).padStart(4, '0')}.ts`,
+      path: `item-${String(index).padStart(4, '0')}.ts`,
+      isDirectory: false,
+    }))
+    useWorkspaceContentStore.setState({
+      treeByKey: {
+        [`${SESSION}::`]: { state: 'ok', path: '', entries },
+      },
+      treeViewBySession: {
+        [SESSION]: { filter: '', mode: 'all', scrollTop: 0, open: true },
+      },
+    })
+
+    const targetPath = 'item-0500.ts'
+    render(<WorkspaceFileTreePane sessionId={SESSION} selectedPath={targetPath} onOpen={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByTestId(`workspace-tree-row-${targetPath}`)).toHaveAttribute('aria-selected', 'true')
+    expect(useWorkspaceContentStore.getState().treeViewBySession[SESSION]?.scrollTop).toBeGreaterThan(0)
+    expect(screen.getByRole('tree').scrollTop).toBeGreaterThan(0)
+  })
 })

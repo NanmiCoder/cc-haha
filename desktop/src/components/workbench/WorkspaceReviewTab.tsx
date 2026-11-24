@@ -397,10 +397,21 @@ export function WorkspaceReviewTab({
     overscan: 6,
     threshold: 80,
     scrollRef: cardsScrollRef,
+    resetKey: `${reviewScope}::${filter.trim().toLowerCase()}`,
+    cacheKey: reviewScope,
   })
   const renderedFiles = cardsWindow.virtualized
     ? visibleFiles.slice(cardsWindow.startIndex, cardsWindow.endIndex)
     : visibleFiles
+
+  const handleRegisterSection = useCallback((filePath: string, itemKey: string, node: HTMLElement | null) => {
+    if (node) {
+      sectionRefs.current.set(filePath, node)
+    } else {
+      sectionRefs.current.delete(filePath)
+    }
+    cardsWindow.observeItem(itemKey, node)
+  }, [cardsWindow.observeItem])
 
   // Requested per section as it scrolls into view. Fetching every file on mount
   // meant a 200-file review issued 200 requests at once, each spawning several
@@ -476,6 +487,7 @@ export function WorkspaceReviewTab({
     overscan: 15,
     threshold: 200,
     scrollRef: changeTreeScrollRef,
+    resetKey: `${reviewScope}::${filter.trim().toLowerCase()}`,
   })
   const visibleChangeRows = changeTreeWindow.virtualized
     ? changeRows.slice(changeTreeWindow.startIndex, changeTreeWindow.endIndex)
@@ -724,9 +736,13 @@ export function WorkspaceReviewTab({
                 {cardsWindow.topSpacer > 0 ? (
                   <div aria-hidden="true" className="shrink-0" style={{ height: cardsWindow.topSpacer }} />
                 ) : null}
-                {renderedFiles.map((file) => (
+                {renderedFiles.map((file) => {
+                  const sectionKey = `${reviewScope}:${file.path}`
+                  return (
                   <ReviewFileSection
-                    key={`${reviewScope}:${file.path}`}
+                    key={sectionKey}
+                    sectionKey={sectionKey}
+                    snapshot={entry.status?.snapshot ?? ''}
                     file={file}
                     diffMode={diffMode}
                     wrapLines={wrapLines}
@@ -739,14 +755,7 @@ export function WorkspaceReviewTab({
                       hunkId: `${reviewSourceKey(source)}:${selection.hunkId}`, quote: selection.quote, note,
                       ...(source.kind === 'turn' ? { messageId: source.turnKey } : {}),
                     })}
-                    registerSection={(node) => {
-                      if (node) {
-                        sectionRefs.current.set(file.path, node)
-                        cardsWindow.measureItem(`${reviewScope}:${file.path}`, node)
-                      } else {
-                        sectionRefs.current.delete(file.path)
-                      }
-                    }}
+                    onRegisterSection={handleRegisterSection}
                     observeSection={observeSection}
                     untracked={untracked.has(file.path)}
                     writable={writable && !entry.stale && !entry.loading}
@@ -757,7 +766,7 @@ export function WorkspaceReviewTab({
                     diffTruncated={entry.diffsByPath[file.path]?.truncated}
                     diffBytes={entry.diffsByPath[file.path]?.bytes}
                     diffLoading={entry.diffLoadingByPath[file.path] === true}
-                    onReachedView={() => requestDiff(file)}
+                    onReachedView={requestDiff}
                     onStage={() => { void runWrite('stage', [file.path]) }}
                     onUnstage={() => { void runWrite('unstage', [file.path]) }}
                     onRevert={() => setPendingRevert([file.path])}
@@ -774,7 +783,8 @@ export function WorkspaceReviewTab({
                       useWorkspaceStore.getState().setReviewViewedPaths(sessionId, tab.id, store.getEntry(sessionId, source).viewedPaths, store.getEntry(sessionId, source).viewedSnapshot ?? undefined)
                     }}
                   />
-                ))}
+                  )
+                })}
                 {cardsWindow.bottomSpacer > 0 ? (
                   <div aria-hidden="true" className="shrink-0" style={{ height: cardsWindow.bottomSpacer }} />
                 ) : null}
@@ -941,8 +951,10 @@ export function WorkspaceReviewTab({
 }
 
 function ReviewFileSection({
+  sectionKey,
+  snapshot,
   file,
-  registerSection,
+  onRegisterSection,
   observeSection,
   untracked,
   writable,
@@ -966,8 +978,10 @@ function ReviewFileSection({
   onOpenFile,
   onAddComment,
 }: {
+  sectionKey: string
+  snapshot: string
   file: ReviewFile
-  registerSection: (node: HTMLElement | null) => void
+  onRegisterSection: (filePath: string, itemKey: string, node: HTMLElement | null) => void
   observeSection: (element: Element, onReached: () => void) => () => void
   untracked: boolean
   writable: boolean
@@ -979,7 +993,7 @@ function ReviewFileSection({
   diffUnavailable?: boolean
   diffBytes?: number
   diffLoading: boolean
-  onReachedView: () => void
+  onReachedView: (file: ReviewFile) => void
   onStage: () => void
   onUnstage: () => void
   onRevert: () => void
@@ -999,6 +1013,10 @@ function ReviewFileSection({
   const display = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path
   const { head, tail } = splitForStartTruncation(display)
   const sectionRef = useRef<HTMLElement | null>(null)
+  const fileRef = useRef(file)
+  fileRef.current = file
+  const onReachedViewRef = useRef(onReachedView)
+  onReachedViewRef.current = onReachedView
   const contentId = useId()
   const firstChangeLine = useMemo(() => {
     const rows = parseWorkspaceDiff(diff ?? '').flatMap(item => item.rows)
@@ -1007,20 +1025,24 @@ function ReviewFileSection({
       ?? 1
   }, [diff])
 
+  const setSectionNode = useCallback((node: HTMLElement | null) => {
+    sectionRef.current = node
+    onRegisterSection(file.path, sectionKey, node)
+  }, [file.path, onRegisterSection, sectionKey])
+
   // Ask for this file's diff when its section reaches the screen using the
-  // tab's single shared IntersectionObserver.
+  // tab's single shared IntersectionObserver. Dependencies exclude inline
+  // callbacks so scrolling never triggers unobserve/observe churn, while a new
+  // snapshot after Refresh cleanly re-observes visible cards.
   useEffect(() => {
     const element = sectionRef.current
     if (!element || !open) return
-    return observeSection(element, onReachedView)
-  }, [observeSection, onReachedView, open])
+    return observeSection(element, () => onReachedViewRef.current(fileRef.current))
+  }, [file.path, observeSection, open, sectionKey, snapshot])
 
   return (
     <section
-      ref={(node) => {
-        sectionRef.current = node
-        registerSection(node)
-      }}
+      ref={setSectionNode}
       data-testid={`workspace-review-section-${file.path}`}
       // `overflow-clip`, not `overflow-hidden`: the rounded frame must clip its
       // corners without becoming the scroll box its sticky header pins against.
