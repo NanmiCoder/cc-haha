@@ -2087,12 +2087,23 @@ async function* queryModel(
       : undefined
   }
 
+  const normalizeAssistantRole = (role: unknown): BetaMessage['role'] => {
+    if (typeof role === 'string') {
+      const trimmed = role.trim()
+      if (trimmed.length > 0) {
+        return trimmed as BetaMessage['role']
+      }
+    }
+    return 'assistant'
+  }
+
   function* commitFallbackResponse(result: BetaMessage): Generator<AssistantMessage> {
     const outputLimit = result.stop_reason === 'max_tokens' || result.stop_reason === 'model_context_window_exceeded'
     const truncatedToolUse = outputLimit && result.content.some(block => block.type === 'tool_use')
     const message: AssistantMessage = {
       message: {
         ...result,
+        role: normalizeAssistantRole(result.role),
         usage: normalizeUsage(result.usage),
         content: normalizeContentFromAPI(
           truncatedToolUse ? result.content.filter(block => block.type !== 'tool_use') : result.content,
@@ -2509,7 +2520,12 @@ async function* queryModel(
 
         switch (part.type) {
           case "message_start": {
-            partialMessage = part.message;
+            partialMessage = part.message
+              ? {
+                  ...part.message,
+                  role: normalizeAssistantRole(part.message.role),
+                }
+              : part.message;
             ttftMs = Date.now() - start;
             usage = updateUsage(usage, part.message?.usage);
             // Capture research from message_start if available (internal only).
