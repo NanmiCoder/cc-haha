@@ -22,6 +22,7 @@ import type { AppState } from '../state/AppState.js'
 import type { ToolUseContext } from '../Tool.js'
 import type { SessionId } from '../types/ids.js'
 import { execPromptHook } from '../utils/hooks/execPromptHook.js'
+import { enableConfigs } from '../utils/config.js'
 import { createCommandInputMessage, createUserInterruptionMessage } from '../utils/messages.js'
 import { get3PModelCapabilityOverride } from '../utils/model/modelSupportOverrides.js'
 import {
@@ -1146,13 +1147,20 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
   describe('Chain 3: evaluator thinking compatibility, upstream API error preservation, and no infinite continuation loop', () => {
     it('3A: execPromptHook thinking matrix omits thinking:disabled on non-1P relays, caps required manual thinking to 1024, and preserves HTTP 400 errors', async () => {
       const savedEnv = {
+        NODE_ENV: process.env.NODE_ENV,
+        HOME: process.env.HOME,
         ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
         ANTHROPIC_SMALL_FAST_MODEL: process.env.ANTHROPIC_SMALL_FAST_MODEL,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
         ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES:
           process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES,
         CC_HAHA_SEND_DISABLED_THINKING: process.env.CC_HAHA_SEND_DISABLED_THINKING,
+        CLAUDE_CODE_DISABLE_THINKING: process.env.CLAUDE_CODE_DISABLE_THINKING,
+        CLAUDE_CODE_USE_BEDROCK: process.env.CLAUDE_CODE_USE_BEDROCK,
+        CLAUDE_CODE_USE_VERTEX: process.env.CLAUDE_CODE_USE_VERTEX,
+        CLAUDE_CODE_USE_FOUNDRY: process.env.CLAUDE_CODE_USE_FOUNDRY,
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
       }
       const sandbox = createIsolatedSandbox('chain3-unit')
@@ -1179,11 +1187,20 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
       const evalThreadId = `repro-1933-eval-${crypto.randomUUID()}`
       try {
         testGlobals.MACRO = { BUILD_TIME: '' }
+        // Disable VCR fixture interception so in-process loopback server handles API calls.
+        process.env.NODE_ENV = 'production'
+        process.env.HOME = sandbox.home
         process.env.CLAUDE_CONFIG_DIR = sandbox.configDir
+        enableConfigs()
         process.env.ANTHROPIC_BASE_URL = server.url
         process.env.ANTHROPIC_API_KEY = 'mock-api-key'
+        delete process.env.ANTHROPIC_AUTH_TOKEN
         delete process.env.ANTHROPIC_SMALL_FAST_MODEL
         delete process.env.CC_HAHA_SEND_DISABLED_THINKING
+        delete process.env.CLAUDE_CODE_DISABLE_THINKING
+        delete process.env.CLAUDE_CODE_USE_BEDROCK
+        delete process.env.CLAUDE_CODE_USE_VERTEX
+        delete process.env.CLAUDE_CODE_USE_FOUNDRY
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'loomy/DeepSeek-V4.1-Flash[1M]'
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES = 'thinking,effort'
         get3PModelCapabilityOverride.cache.clear?.()
@@ -1280,12 +1297,19 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
 
     it('3B: handleStopHooks clears broken goal and emits Goal cleared local_command output with upstream HTTP 400 without looping', async () => {
       const savedEnv = {
+        NODE_ENV: process.env.NODE_ENV,
+        HOME: process.env.HOME,
         ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
         ANTHROPIC_SMALL_FAST_MODEL: process.env.ANTHROPIC_SMALL_FAST_MODEL,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
         ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES:
           process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES,
+        CLAUDE_CODE_DISABLE_THINKING: process.env.CLAUDE_CODE_DISABLE_THINKING,
+        CLAUDE_CODE_USE_BEDROCK: process.env.CLAUDE_CODE_USE_BEDROCK,
+        CLAUDE_CODE_USE_VERTEX: process.env.CLAUDE_CODE_USE_VERTEX,
+        CLAUDE_CODE_USE_FOUNDRY: process.env.CLAUDE_CODE_USE_FOUNDRY,
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
       }
       const prevInteractive = getIsInteractive()
@@ -1306,10 +1330,19 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
         testGlobals.MACRO = { BUILD_TIME: '' }
         setIsInteractive(false)
         switchSession(threadId)
+        // Disable VCR fixture interception so in-process loopback server handles API calls.
+        process.env.NODE_ENV = 'production'
+        process.env.HOME = sandbox.home
         process.env.CLAUDE_CONFIG_DIR = sandbox.configDir
+        enableConfigs()
         process.env.ANTHROPIC_BASE_URL = server.url
         process.env.ANTHROPIC_API_KEY = 'mock-api-key'
+        delete process.env.ANTHROPIC_AUTH_TOKEN
         delete process.env.ANTHROPIC_SMALL_FAST_MODEL
+        delete process.env.CLAUDE_CODE_DISABLE_THINKING
+        delete process.env.CLAUDE_CODE_USE_BEDROCK
+        delete process.env.CLAUDE_CODE_USE_VERTEX
+        delete process.env.CLAUDE_CODE_USE_FOUNDRY
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'loomy/DeepSeek-V4.1-Flash[1M]'
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES = 'thinking,effort'
         get3PModelCapabilityOverride.cache.clear?.()

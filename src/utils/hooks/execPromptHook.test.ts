@@ -139,6 +139,51 @@ describe('execPromptHook goal failures', () => {
     }
   })
 
+  test('formats top-level JSON message, plain text, and fallback API error details for goal and ordinary prompt hooks', async () => {
+    queryModelWithoutStreamingMock.mockImplementationOnce(async () => ({
+      isApiErrorMessage: true,
+      message: {
+        content: [{ type: 'text', text: 'HTTP 400 {"message":"relay rejected thinking"}' }],
+      },
+    }))
+    const topLevelResult = await execPromptHook(
+      goalHook,
+      'Stop',
+      'Stop',
+      '{}',
+      new AbortController().signal,
+      makeContext(),
+    )
+    expect(topLevelResult.outcome).toBe('non_blocking_error')
+    if (topLevelResult.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(topLevelResult.message.attachment.stderr).toBe(
+        'Goal evaluator API error: HTTP 400 relay rejected thinking',
+      )
+    }
+
+    queryModelWithoutStreamingMock.mockImplementationOnce(async () => ({
+      isApiErrorMessage: true,
+      apiError: 'gateway timeout',
+      message: {
+        content: [{ type: 'text', text: '' }],
+      },
+    }))
+    const fallbackResult = await execPromptHook(
+      ordinaryHook,
+      'Stop',
+      'Stop',
+      '{}',
+      new AbortController().signal,
+      makeContext(),
+    )
+    expect(fallbackResult.outcome).toBe('non_blocking_error')
+    if (fallbackResult.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(fallbackResult.message.attachment.stderr).toBe(
+        'Prompt hook API error: gateway timeout',
+      )
+    }
+  })
+
   test('keeps ordinary prompt hook invalid JSON as a non-blocking hook error', async () => {
     const result = await execPromptHook(
       ordinaryHook,

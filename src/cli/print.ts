@@ -1436,6 +1436,21 @@ function runHeadlessStreaming(
     return clearedMessage
   }
 
+  const recordGoalClearedMessage = async (clearedMessage: Message | null) => {
+    if (!clearedMessage) return
+    pendingGoalClearedMessages.push(clearedMessage)
+    if (!askInFlight) {
+      await persistPendingGoalClearedMessages()
+    }
+  }
+
+  const resumeBackgroundTaskFollowUp = () => {
+    if (suppressBackgroundTaskFollowUp) {
+      cancelQueuedTaskNotifications()
+      suppressBackgroundTaskFollowUp = false
+    }
+  }
+
   // Ctrl+C in -p mode: abort the in-flight query, then shut down gracefully.
   // gracefulShutdown persists session state and flushes analytics, with a
   // failsafe timer that force-exits if cleanup hangs.
@@ -3421,12 +3436,7 @@ function runHeadlessStreaming(
           suggestionState.abortController = null
           suggestionState.lastEmitted = null
           suggestionState.pendingSuggestion = null
-          if (clearedMessage) {
-            pendingGoalClearedMessages.push(clearedMessage)
-            if (!askInFlight) {
-              await persistPendingGoalClearedMessages()
-            }
-          }
+          await recordGoalClearedMessage(clearedMessage)
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'end_session') {
           suppressBackgroundTaskFollowUp = true
@@ -4775,10 +4785,7 @@ function runHeadlessStreaming(
                     const fields = extractInboundMessageFields(msg)
                     if (!fields) return
                     const { content, uuid } = fields
-                    if (suppressBackgroundTaskFollowUp) {
-                      cancelQueuedTaskNotifications()
-                      suppressBackgroundTaskFollowUp = false
-                    }
+                    resumeBackgroundTaskFollowUp()
                     enqueue({
                       value: content,
                       mode: 'prompt' as const,
@@ -4798,12 +4805,7 @@ function runHeadlessStreaming(
                     cancelQueuedTaskNotifications()
                     const clearedMessage = clearGoalOnInterrupt()
                     abortController?.abort()
-                    if (clearedMessage) {
-                      pendingGoalClearedMessages.push(clearedMessage)
-                      if (!askInFlight) {
-                        void persistPendingGoalClearedMessages()
-                      }
-                    }
+                    void recordGoalClearedMessage(clearedMessage)
                   },
                   onSetModel(model) {
                     const resolved =
@@ -4972,10 +4974,7 @@ function runHeadlessStreaming(
       // the lead after this turn, alongside whatever the user now wants.
       leadMailboxPoll.held = false
       leadMailboxPoll.revision++
-      if (suppressBackgroundTaskFollowUp) {
-        cancelQueuedTaskNotifications()
-        suppressBackgroundTaskFollowUp = false
-      }
+      resumeBackgroundTaskFollowUp()
       enqueue({
         mode: 'prompt' as const,
         // file_attachments rides the protobuf catchall from the web composer.
