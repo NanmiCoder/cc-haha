@@ -198,13 +198,13 @@ describe('resolveShareTheme', () => {
     const style = document.createElement('style')
     style.textContent = `
       :root { --cc-bg: #111111; --cc-series-1: #aaaaaa; }
-      [data-theme="paper"] { --cc-bg: #fbf9f4; --cc-t1: #231d12; --cc-series-1: #3b7068; }`
+      [data-theme="dark"] { --cc-bg: #1b1a18; --cc-t1: #edeae4; --cc-series-1: #35a69d; }`
     document.head.appendChild(style)
     try {
-      expect(resolveShareTheme('paper').bg).toBe('#fbf9f4')
-      expect(resolveShareTheme('paper').series[0]).toBe('#3b7068')
+      expect(resolveShareTheme('dark').bg).toBe('#1b1a18')
+      expect(resolveShareTheme('dark').series[0]).toBe('#35a69d')
       expect(resolveShareTheme('current').bg).toBe('#111111')
-      expect(document.querySelectorAll('[data-theme="paper"]')).toHaveLength(0)
+      expect(document.querySelectorAll('[data-theme="dark"]')).toHaveLength(0)
       // A token the stylesheet does not define falls back instead of becoming an empty color.
       expect(resolveShareTheme('current').ac).toBe('#A24A2E')
     } finally {

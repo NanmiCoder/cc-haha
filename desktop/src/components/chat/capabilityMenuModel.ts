@@ -114,7 +114,6 @@ export type CapabilityMenuComputerUse = {
 } | null
 
 export type CapabilityMenuInput = {
-  attachmentsOnly?: boolean
   /** Skill mention candidates (kind 'skill'), already loaded for the composer. */
   skills: ComposerReferenceCandidate[]
   /** Plugin mention candidates (kind 'plugin'), already loaded for the composer. */
@@ -370,15 +369,6 @@ function buildAgentProfileItem(
 
 export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityMenuSection[] {
   const { t } = input
-  const attachment: CapabilityMenuItem = {
-    key: 'add-files',
-    label: t(input.attachmentsOnly ? 'settings.providers.antigravity.attachImage' : 'chat.addFiles'),
-    icon: { kind: 'lucide', icon: Paperclip },
-    action: { type: 'attachment' },
-  }
-  if (input.attachmentsOnly) {
-    return [{ id: 'use', title: t('chat.capabilities.sectionUse'), showTitle: false, items: [attachment] }]
-  }
 
   const connectorChildren = buildConnectorChildren(input)
   const skills: CapabilityMenuItem = {
@@ -489,7 +479,12 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
       items: [
         skills,
         connectors,
-        attachment,
+        {
+          key: 'add-files',
+          label: t('chat.addFiles'),
+          icon: { kind: 'lucide', icon: Paperclip },
+          action: { type: 'attachment' },
+        },
       ],
     },
     {

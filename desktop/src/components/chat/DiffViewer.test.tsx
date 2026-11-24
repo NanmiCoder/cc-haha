@@ -25,7 +25,7 @@ describe('DiffViewer', () => {
     useUIStore.setState({ theme: 'white' })
   })
 
-  it.each(['dark', 'ink-blue', 'neutral-dark'] as const)('uses the dark diff renderer on %s and returns to a light renderer', (theme) => {
+  it('uses the dark diff renderer on dark and returns to a light renderer', () => {
     const { rerender } = render(
       <DiffViewer filePath="src/example.ts" oldString="const a = 1" newString="const a = 2" />,
     )
@@ -33,7 +33,7 @@ describe('DiffViewer', () => {
     expect(screen.getByTestId('diff-viewer')).toHaveAttribute('data-dark-theme', 'false')
 
     act(() => {
-      useUIStore.setState({ theme })
+      useUIStore.setState({ theme: 'dark' })
     })
     rerender(<DiffViewer filePath="src/example.ts" oldString="const a = 1" newString="const a = 2" />)
 

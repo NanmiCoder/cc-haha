@@ -8,9 +8,9 @@ import { Text } from '../Text'
  * 锁屏本身不跟随 App 的明暗主题，所以这里的深色是固定的；琥珀/文字色取深色 token。
  * 只是示意（对读屏隐藏），内容随「锁屏上显示命令」开关变化，文案与真实活动一致。
  */
-const SCREEN = '#26251F'
-const PANEL = 'rgba(72,70,65,0.72)'
-const TEXT = '#F3F1EC'
+const SCREEN = '#1B1A18'
+const PANEL = 'rgba(46,44,41,0.78)'
+const TEXT = '#EDEAE4'
 const ISLAND = '#000000'
 const AMBER = dark.attn
 
@@ -97,7 +97,7 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
               justifyContent: 'center',
             }}
           >
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#1D1C1A' }}>允许</Text>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1918' }}>允许</Text>
           </View>
         </View>
         <Text style={{ fontSize: 12, color: 'rgba(243,241,236,0.6)', marginTop: 4 }}>

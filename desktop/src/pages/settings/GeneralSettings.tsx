@@ -349,12 +349,7 @@ export function GeneralSettings() {
 
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
     { value: 'white', label: t('settings.general.appearance.white') },
-    { value: 'paper', label: t('settings.general.appearance.paper') },
-    { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') },
-    { value: 'celadon', label: t('settings.general.appearance.celadon') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
-    { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
-    { value: 'neutral-dark', label: t('settings.general.appearance.neutralDark') },
   ]
   // Split by ground, in the order THEMES already lists them, so the two rows
   // shown while following the system stay consistent with the flat picker.
@@ -937,7 +932,7 @@ export function GeneralSettings() {
                   <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
                     {t('settings.general.appearance.lightThemeLabel')}
                   </p>
-                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                  <div className={`grid grid-cols-2 gap-3 ${THEME_GRID_WIDTH}`}>
                     {LIGHT_THEMES.map(({ value, label }) => (
                       <ThemeCard
                         key={value}
@@ -953,7 +948,7 @@ export function GeneralSettings() {
                   <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
                     {t('settings.general.appearance.darkThemeLabel')}
                   </p>
-                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                  <div className={`grid grid-cols-2 gap-3 ${THEME_GRID_WIDTH}`}>
                     {DARK_THEMES.map(({ value, label }) => (
                       <ThemeCard
                         key={value}
@@ -967,7 +962,7 @@ export function GeneralSettings() {
                 </div>
               </div>
             ) : (
-              <div className={`grid grid-cols-3 gap-3.5 ${THEME_GRID_WIDTH}`}>
+              <div className={`grid grid-cols-2 gap-3.5 ${THEME_GRID_WIDTH}`}>
                 {THEMES.map(({ value, label }) => (
                   <ThemeCard
                     key={value}

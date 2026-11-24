@@ -12,7 +12,7 @@
 
    Every dark ground is listed. Binding only the theme literally named `dark`
    would silently render the light branch on the other dark palettes. */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *, [data-theme="neutral-dark"], [data-theme="neutral-dark"] *));
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ─── Self-hosted fonts (no Google CDN dependency) ────────────── */
 
@@ -263,9 +263,7 @@
 
 /* On dark grounds a light thumb on a light track disappears; the brand
    rim keeps it legible. */
-[data-theme="dark"] .settings-zoom-control,
-[data-theme="ink-blue"] .settings-zoom-control,
-[data-theme="neutral-dark"] .settings-zoom-control {
+[data-theme="dark"] .settings-zoom-control {
   --settings-zoom-track-empty: var(--color-surface-container-highest);
   --settings-zoom-thumb-bg: var(--color-surface-bright);
   --settings-zoom-thumb-border: var(--color-brand);
@@ -610,9 +608,7 @@
   --color-terminal-ansi-bright-white: #FFFFFF;
 }
 
-[data-theme="dark"],
-[data-theme="ink-blue"],
-[data-theme="neutral-dark"] {
+[data-theme="dark"] {
   --color-terminal-ansi-black: #1F1F1F;
   --color-terminal-ansi-red: #FF6D67;
   --color-terminal-ansi-green: #7EF18A;
@@ -669,63 +665,62 @@
    the `:root` semantic layer below re-points every one of them at a
    `--cc-*` source variable, which is what actually varies per theme. */
 @theme {
-  --color-primary: #1D4ED8;
-  --color-primary-container: #1E40AF;
-  --color-primary-fixed: #EFF6FF;
-  --color-primary-fixed-dim: #BFDBFE;
+  --color-primary: #C25934;
+  --color-primary-container: #A94A28;
+  --color-primary-fixed: #FAF0EC;
+  --color-primary-fixed-dim: #EAC9BC;
 
   --color-on-primary: #FFFFFF;
   --color-on-primary-container: #FFFFFF;
-  --color-on-surface: #18181B;
-  --color-on-surface-variant: #3F3F46;
+  --color-on-surface: #1A1918;
+  --color-on-surface-variant: #4F4B46;
 
-  --color-surface: #FCFCFC;
-  --color-surface-bright: #FCFCFC;
-  --color-surface-dim: #EFEFF1;
-  --color-surface-container: #FFFFFF;
-  --color-surface-container-low: #F7F7F8;
-  --color-surface-container-high: #EFEFF1;
-  --color-surface-container-highest: #E4E4E7;
-  --color-surface-container-lowest: #FCFCFC;
-  --color-surface-variant: #F7F7F8;
+  --color-surface: #FFFFFF;
+  --color-surface-bright: #FFFFFF;
+  --color-surface-dim: #EEECE7;
+  --color-surface-container: #FAF9F7;
+  --color-surface-container-low: #F7F6F3;
+  --color-surface-container-high: #EEECE7;
+  --color-surface-container-highest: #E8E5DF;
+  --color-surface-container-lowest: #FFFFFF;
+  --color-surface-variant: #F7F6F3;
 
-  --color-background: #FCFCFC;
+  --color-background: #FFFFFF;
 
-  --color-outline: #D4D4D8;
-  --color-outline-variant: #E4E4E7;
+  --color-outline: #D6D1C7;
+  --color-outline-variant: #E8E5DF;
 
-  --color-secondary: #1D4ED8;
-  --color-secondary-container: #EFF6FF;
+  --color-secondary: #A94A28;
+  --color-secondary-container: #FAF0EC;
   --color-tertiary: #3B7068;
   --color-tertiary-container: #F1F5F4;
 
-  --color-error: #C42B3C;
+  --color-error: #C43232;
   --color-on-error: #FFFFFF;
-  --color-error-container: #FBE9EC;
-  --color-on-error-container: #B12636;
+  --color-error-container: #FCECEC;
+  --color-on-error-container: #AD2929;
 
-  --color-inverse-surface: #18181B;
-  --color-inverse-on-surface: #FCFCFC;
-  --color-inverse-primary: #BFDBFE;
+  --color-inverse-surface: #1A1918;
+  --color-inverse-on-surface: #FFFFFF;
+  --color-inverse-primary: #EAC9BC;
 
-  --color-success: #2E7D4F;
-  --color-success-container: #E7F3EB;
-  --color-on-success-container: #2A7148;
-  --color-info: #1D4ED8;
-  --color-info-container: #EFF6FF;
-  --color-on-info-container: #1E40AF;
-  --color-warning: #A5650F;
-  --color-warning-container: #FBF0DC;
-  --color-on-warning-container: #8A540C;
+  --color-success: #2D7A4D;
+  --color-success-container: #EBF5EE;
+  --color-on-success-container: #266B43;
+  --color-info: #A94A28;
+  --color-info-container: #FAF0EC;
+  --color-on-info-container: #9A4223;
+  --color-warning: #A86412;
+  --color-warning-container: #FCF3E3;
+  --color-on-warning-container: #8A510E;
 
-  /* Software chrome shares one sans-serif family. Keep the editorial serif
-     explicit for content that requests it, instead of inheriting it in tools. */
+  /* Software chrome shares a crisp modern geometric sans-serif family. */
   /* Latin runs in the self-hosted Inter (400–600); CJK falls through to the
      platform face. Weights above 600 are not shipped, so the UI tops out at
      semibold instead of letting the browser synthesize a smeared bold. */
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-headline: var(--font-body);
-  --font-serif: 'Noto Serif SC', 'Songti SC', Georgia, serif;
+  --font-headline: "Plus Jakarta Sans", "Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --font-serif: 'Songti SC', Georgia, serif;
   --font-label: var(--font-body);
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 
@@ -742,59 +737,54 @@
 }
 
 /* ─── Theme sources ───────────────────────────────────────────────
-   Six palettes from the 「纸 · 墨 · 印」 handoff. Each block carries only
+   Direction C (Warm Editorial Studio / 静谧书桌) 2-theme system:
+   Pure White (`white`) and Matte Charcoal (`dark`). Each block carries only
    raw color values; the semantic layer below turns them into the
-   `--color-*` tokens the components consume. Generated values
-   (`*-ink`, the heat ramp, the `*-rgb` triplets) are derived from these
-   sources — see the header comment on the semantic layer. */
+   `--color-*` tokens the components consume. */
 
-/* 纯白 pure-white — Cold Porcelain default */
+/* Light — Direction C Warm Editorial Studio (Pure White) */
 :root,
 [data-theme="white"] {
   color-scheme: light;
 
-  /* Crisp Cold Porcelain + Cold Cobalt accent: zinc-25 canvas (#FCFCFC),
-     cool porcelain sidebar (#F7F7F8), pure white cards (#FFFFFF), soft zinc
-     hover/selected (#EFEFF1), razor-thin zinc hairlines (#E4E4E7 / #D4D4D8),
-     and cobalt primary (#1D4ED8). */
-  --cc-bg: #FCFCFC;
-  --cc-s0: #F7F7F8;
-  --cc-s1: #EFEFF1;
-  --cc-s2: #FFFFFF;
-  --cc-bd: #E4E4E7;
-  --cc-bd2: #D4D4D8;
+  --cc-bg: #FFFFFF;
+  --cc-s0: #F7F6F3;
+  --cc-s1: #EEECE7;
+  --cc-s2: #FAF9F7;
+  --cc-bd: #E8E5DF;
+  --cc-bd2: #D6D1C7;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #71717A;
+  --cc-bd-strong: #857F75;
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D4D4D8;
-  --cc-tab-sep: #E0E0E5;
+  --cc-tab-edge: #D5D0C7;
+  --cc-tab-sep: #E0DBD2;
   /* Reading tiers calibrated for WCAG AAA on reading grounds and AA on
      every control surface. */
-  --cc-t1: #18181B;
-  --cc-t2: #3F3F46;
-  --cc-t3: #595962;
+  --cc-t1: #1A1918;
+  --cc-t2: #4F4B46;
+  --cc-t3: #66615A;
 
-  --cc-ac: #1D4ED8;
-  --cc-ac2: #1E40AF;
-  --cc-ac-soft: #EFF6FF;
-  --cc-ac-soft-hover: #DBEAFE;
-  --cc-ac-border: #BFDBFE;
-  --cc-ac-ink: #1E40AF;
+  --cc-ac: #C25934;
+  --cc-ac2: #A94A28;
+  --cc-ac-soft: #FAF0EC;
+  --cc-ac-soft-hover: #F4E1D9;
+  --cc-ac-border: #EAC9BC;
+  --cc-ac-ink: #A94A28;
   --cc-on-ac: #FFFFFF;
 
-  --cc-ok: #2E7D4F;
-  --cc-ok-soft: #E7F3EB;
-  --cc-ok-ink: #2A7148;
-  --cc-wn: #A5650F;
-  --cc-wn-soft: #FBF0DC;
-  --cc-wn-ink: #8A540C;
-  --cc-er: #C42B3C;
-  --cc-er-soft: #FBE9EC;
-  --cc-er-soft-hover: #F6D6DB;
-  --cc-er-ink: #B12636;
-  --cc-info: #1D4ED8;
-  --cc-info-soft: #EFF6FF;
-  --cc-info-ink: #1E40AF;
+  --cc-ok: #2D7A4D;
+  --cc-ok-soft: #EBF5EE;
+  --cc-ok-ink: #266B43;
+  --cc-wn: #A86412;
+  --cc-wn-soft: #FCF3E3;
+  --cc-wn-ink: #8A510E;
+  --cc-er: #C43232;
+  --cc-er-soft: #FCECEC;
+  --cc-er-soft-hover: #F6D8D8;
+  --cc-er-ink: #AD2929;
+  --cc-info: #A94A28;
+  --cc-info-soft: #FAF0EC;
+  --cc-info-ink: #9A4223;
 
   --cc-teal: #3B7068;
   --cc-teal-soft: #F1F5F4;
@@ -809,13 +799,13 @@
   --cc-diff-del-word: #F2CDC8;
   --cc-diff-mark: #F7F0E4;
   --cc-diff-mark-gutter: #EFE3CF;
-  --cc-code: #F4F4F5;
+  --cc-code: #F5F4F0;
 
-  --cc-heat-0: #EFEFF1;
-  --cc-heat-1: #DBEAFE;
-  --cc-heat-2: #93C5FD;
-  --cc-heat-3: #3B82F6;
-  --cc-heat-4: #1D4ED8;
+  --cc-heat-0: #EEECE7;
+  --cc-heat-1: #F3DCD3;
+  --cc-heat-2: #E2A994;
+  --cc-heat-3: #D17C5E;
+  --cc-heat-4: #C25934;
   /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
      Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
      neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
@@ -825,337 +815,83 @@
   --cc-series-4: #99732B;
   --cc-series-5: #A8A49C;
 
-  --cc-shadow-card: 0 1px 2px rgba(24, 24, 27, 0.04), 0 6px 20px -6px rgba(24, 24, 27, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(24, 24, 27, 0.05), 0 8px 28px -8px rgba(24, 24, 27, 0.08);
-  --cc-shadow-overlay: 0 2px 6px rgba(24, 24, 27, 0.06), 0 16px 40px -12px rgba(24, 24, 27, 0.14);
+  --cc-shadow-card: 0 1px 2px rgba(26, 25, 24, 0.04), 0 6px 20px -6px rgba(26, 25, 24, 0.06);
+  --cc-shadow-composer: 0 1px 2px rgba(26, 25, 24, 0.05), 0 8px 28px -8px rgba(26, 25, 24, 0.08);
+  --cc-shadow-overlay: 0 2px 6px rgba(26, 25, 24, 0.06), 0 16px 40px -12px rgba(26, 25, 24, 0.14);
 
-  --cc-bg-rgb: 252, 252, 252;
-  --cc-s1-rgb: 239, 239, 241;
-  --cc-t1-rgb: 24, 24, 27;
-  --cc-t2-rgb: 63, 63, 70;
-  --cc-bd2-rgb: 212, 212, 216;
-  --cc-ac-rgb: 29, 78, 216;
-  --cc-er-rgb: 196, 43, 60;
-  --cc-scrim-rgb: 24, 24, 27;
+  --cc-bg-rgb: 255, 255, 255;
+  --cc-s1-rgb: 238, 236, 231;
+  --cc-t1-rgb: 26, 25, 24;
+  --cc-t2-rgb: 79, 75, 70;
+  --cc-bd2-rgb: 214, 209, 199;
+  --cc-ac-rgb: 194, 89, 52;
+  --cc-er-rgb: 196, 50, 50;
+  --cc-scrim-rgb: 26, 25, 24;
 }
 
-/* 纸墨 paper */
-[data-theme="paper"] {
-  color-scheme: light;
-
-  --cc-bg: #FBF9F4;
-  --cc-s0: #F3EFE5;
-  --cc-s1: #ECE6D8;
-  --cc-s2: #F7F4EC;
-  --cc-bd: #E7E0CF;
-  --cc-bd2: #D5C9B0;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #938A76;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #DBCFB5;
-  --cc-tab-sep: #E5D9BE;
-  --cc-t1: #231D12;
-  --cc-t2: #6E6350;
-  --cc-t3: #796E5B;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F3E6DA;
-  --cc-ac-soft-hover: #EBD8C8;
-  --cc-ac-border: #E2C7B3;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #477C52;
-  --cc-ok-soft: #E8EFE1;
-  --cc-ok-ink: #43754D;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F6EED9;
-  --cc-wn-ink: #8E631A;
-  --cc-er: #C24532;
-  --cc-er-soft: #F7E7DF;
-  --cc-er-soft-hover: #F2D7CE;
-  --cc-er-ink: #B6412F;
-  --cc-info: #96442B;
-  --cc-info-soft: #F1E7E0;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #3B7068;
-  --cc-teal-soft: #EEEFEA;
-  --cc-teal-border: #BECDC7;
-  --cc-teal-icon: #E8EBE6;
-
-  --cc-diff-add: #E9EFDC;
-  --cc-diff-add-gutter: #DCE7C9;
-  --cc-diff-add-word: #E0E9CF;
-  --cc-diff-del: #F6E9E3;
-  --cc-diff-del-gutter: #F2DCD5;
-  --cc-diff-del-word: #ECCAC2;
-  --cc-diff-mark: #F0E8D8;
-  --cc-diff-mark-gutter: #E9DCC5;
-  --cc-code: #F5F1E4;
-
-  --cc-heat-0: #ECE6D8;
-  --cc-heat-1: #E5D1C8;
-  --cc-heat-2: #CFA99C;
-  --cc-heat-3: #B67E6B;
-  --cc-heat-4: #9C4F37;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
-  --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
-  --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
-
-  --cc-bg-rgb: 251, 249, 244;
-  --cc-s1-rgb: 236, 230, 216;
-  --cc-t1-rgb: 35, 29, 18;
-  --cc-t2-rgb: 110, 99, 80;
-  --cc-bd2-rgb: 213, 201, 176;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 194, 69, 50;
-  --cc-scrim-rgb: 21, 17, 11;
-}
-
-/* 经典暖色 warm-classic */
-[data-theme="warm-classic"] {
-  color-scheme: light;
-
-  --cc-bg: #F6F0E1;
-  --cc-s0: #EDE5D1;
-  --cc-s1: #E5DBC3;
-  --cc-s2: #F1EBDA;
-  --cc-bd: #DED2B8;
-  --cc-bd2: #C8B897;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #908369;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D6C5A2;
-  --cc-tab-sep: #E2CFAA;
-  --cc-t1: #251E11;
-  --cc-t2: #6E6146;
-  --cc-t3: #746951;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F0E1D0;
-  --cc-ac-soft-hover: #E8D2BE;
-  --cc-ac-border: #DFC0A8;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #3E8153;
-  --cc-ok-soft: #E8F2E9;
-  --cc-ok-ink: #3A784D;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F8F0DC;
-  --cc-wn-ink: #90641B;
-  --cc-er: #C74436;
-  --cc-er-soft: #FAECE8;
-  --cc-er-soft-hover: #F5DBD6;
-  --cc-er-ink: #BD4133;
-  --cc-info: #96442B;
-  --cc-info-soft: #ECDFCF;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #3E6B58;
-  --cc-teal-soft: #E9E7D7;
-  --cc-teal-border: #BBC5B5;
-  --cc-teal-icon: #E4E3D3;
-
-  --cc-diff-add: #E6ECD3;
-  --cc-diff-add-gutter: #D8E2BF;
-  --cc-diff-add-word: #DCE5C5;
-  --cc-diff-del: #F2E1D2;
-  --cc-diff-del-gutter: #EED4C6;
-  --cc-diff-del-word: #EAC3B5;
-  --cc-diff-mark: #ECE0C8;
-  --cc-diff-mark-gutter: #E5D5B6;
-  --cc-code: #EFE8D3;
-
-  --cc-heat-0: #E5DBC3;
-  --cc-heat-1: #E1CAB9;
-  --cc-heat-2: #CCA491;
-  --cc-heat-3: #B57B65;
-  --cc-heat-4: #9C4E36;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
-  --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
-  --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
-
-  --cc-bg-rgb: 246, 240, 225;
-  --cc-s1-rgb: 229, 219, 195;
-  --cc-t1-rgb: 37, 30, 17;
-  --cc-t2-rgb: 110, 97, 70;
-  --cc-bd2-rgb: 200, 184, 151;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 199, 68, 54;
-  --cc-scrim-rgb: 22, 18, 10;
-}
-
-/* 青瓷 celadon */
-[data-theme="celadon"] {
-  color-scheme: light;
-
-  --cc-bg: #F5F8F5;
-  --cc-s0: #EAF0EB;
-  --cc-s1: #E0E9E2;
-  --cc-s2: #F0F4F0;
-  --cc-bd: #DCE5DE;
-  --cc-bd2: #C6D4C9;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #818D84;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #C5D3C8;
-  --cc-tab-sep: #CEDCD1;
-  --cc-t1: #1C231D;
-  --cc-t2: #5D6B60;
-  --cc-t3: #667268;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F0E7DC;
-  --cc-ac-soft-hover: #E8DACB;
-  --cc-ac-border: #DFC9B6;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #3E8153;
-  --cc-ok-soft: #E3EFE5;
-  --cc-ok-ink: #39764C;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F8F0DC;
-  --cc-wn-ink: #90641B;
-  --cc-er: #C74436;
-  --cc-er-soft: #FAECE8;
-  --cc-er-soft-hover: #F5DBD6;
-  --cc-er-ink: #BD4133;
-  --cc-info: #96442B;
-  --cc-info-soft: #ECE6E1;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #2F6E63;
-  --cc-teal-soft: #E7EEEB;
-  --cc-teal-border: #B6CCC6;
-  --cc-teal-icon: #E1EAE6;
-
-  --cc-diff-add: #E4F0E5;
-  --cc-diff-add-gutter: #D4E6D7;
-  --cc-diff-add-word: #D9E9DB;
-  --cc-diff-del: #F1E8E4;
-  --cc-diff-del-gutter: #EEDBD6;
-  --cc-diff-del-word: #E9C9C3;
-  --cc-diff-mark: #EBE7D9;
-  --cc-diff-mark-gutter: #E4DBC6;
-  --cc-code: #EFF4F0;
-
-  --cc-heat-0: #E0E9E2;
-  --cc-heat-1: #E0D0C9;
-  --cc-heat-2: #CBA99C;
-  --cc-heat-3: #B47E6C;
-  --cc-heat-4: #9C4F37;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(28, 42, 32, 0.05), 0 6px 24px rgba(28, 42, 32, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(28, 42, 32, 0.05), 0 14px 44px rgba(28, 42, 32, 0.08);
-  --cc-shadow-overlay: 0 8px 24px rgba(28, 42, 32, 0.10), 0 24px 64px rgba(28, 42, 32, 0.15);
-
-  --cc-bg-rgb: 245, 248, 245;
-  --cc-s1-rgb: 224, 233, 226;
-  --cc-t1-rgb: 28, 35, 29;
-  --cc-t2-rgb: 93, 107, 96;
-  --cc-bd2-rgb: 198, 212, 201;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 199, 68, 54;
-  --cc-scrim-rgb: 17, 21, 17;
-}
-
-/* 墨夜 dark */
+/* Dark — Direction C Warm Editorial Studio (Matte Charcoal) */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --cc-bg: #201D17;
-  --cc-s0: #1A1813;
-  --cc-s1: #2B271F;
-  --cc-s2: #252119;
-  --cc-bd: #383226;
-  --cc-bd2: #4C4433;
+  --cc-bg: #1B1A18;
+  --cc-s0: #141413;
+  --cc-s1: #272522;
+  --cc-s2: #22211F;
+  --cc-bd: #2E2C29;
+  --cc-bd2: #413E39;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #756D5C;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. Both go
-     *lighter* than the trough here: an ink theme's paper is already so dark
-     that pure black is only 1.26:1 against it, so there is no room downward. */
-  --cc-tab-edge: #353024;
-  --cc-tab-sep: #2D281F;
-  /* Lift all reading tiers, including the small descriptions that previously
-     fell below 4.5:1 on the raised hover/dialog ground. */
-  --cc-t1: #F2EEE6;
-  --cc-t2: #C4BBA9;
-  --cc-t3: #AAA08E;
+  --cc-bd-strong: #78736A;
+  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
+  --cc-tab-edge: #35332F;
+  --cc-tab-sep: #2B2926;
+  /* Reading tiers calibrated for WCAG AAA on reading grounds and AA on
+     every control surface. */
+  --cc-t1: #EDEAE4;
+  --cc-t2: #BDB7AD;
+  --cc-t3: #A09A90;
 
-  --cc-ac: #D07B52;
-  --cc-ac2: #DE8F66;
-  --cc-ac-soft: #3B2A1E;
-  --cc-ac-soft-hover: #493424;
-  --cc-ac-border: #59402C;
-  --cc-ac-ink: #D2815B;
-  --cc-on-ac: #201D17;
+  --cc-ac: #E07A52;
+  --cc-ac2: #EB8C67;
+  --cc-ac-soft: #31231C;
+  --cc-ac-soft-hover: #3F2C23;
+  --cc-ac-border: #55392C;
+  --cc-ac-ink: #E88B66;
+  --cc-on-ac: #181614;
 
-  --cc-ok: #84B383;
-  --cc-ok-soft: #28301D;
-  --cc-ok-ink: #84B383;
-  --cc-wn: #D3A34C;
-  --cc-wn-soft: #332916;
-  --cc-wn-ink: #D3A34C;
-  --cc-er: #E06B52;
-  --cc-er-soft: #3A241B;
-  --cc-er-soft-hover: #552F24;
-  --cc-er-ink: #E17058;
-  --cc-info: #D07B52;
-  --cc-info-soft: #3C2C20;
-  --cc-info-ink: #D3845E;
+  --cc-ok: #6AC18C;
+  --cc-ok-soft: #1C2D23;
+  --cc-ok-ink: #74CA95;
+  --cc-wn: #E2B055;
+  --cc-wn-soft: #302717;
+  --cc-wn-ink: #E2B055;
+  --cc-er: #EA736A;
+  --cc-er-soft: #341E1C;
+  --cc-er-soft-hover: #4A2926;
+  --cc-er-ink: #EE7E75;
+  --cc-info: #E88B66;
+  --cc-info-soft: #31231C;
+  --cc-info-ink: #EC9471;
 
   --cc-teal: #7DD3C7;
-  --cc-teal-soft: #2B332C;
-  --cc-teal-border: #3C544C;
-  --cc-teal-icon: #313E37;
+  --cc-teal-soft: #22302C;
+  --cc-teal-border: #355049;
+  --cc-teal-icon: #283A35;
 
-  --cc-diff-add: #2B331E;
-  --cc-diff-add-gutter: #354026;
-  --cc-diff-add-word: #323C24;
-  --cc-diff-del: #3B281F;
-  --cc-diff-del-gutter: #462D23;
-  --cc-diff-del-word: #563328;
-  --cc-diff-mark: #39301E;
-  --cc-diff-mark-gutter: #443822;
-  --cc-code: #1A1813;
+  --cc-diff-add: #1E2E22;
+  --cc-diff-add-gutter: #263A2B;
+  --cc-diff-add-word: #2C4632;
+  --cc-diff-del: #35201E;
+  --cc-diff-del-gutter: #442724;
+  --cc-diff-del-word: #55302B;
+  --cc-diff-mark: #322A1B;
+  --cc-diff-mark-gutter: #3E3320;
+  --cc-code: #141413;
 
-  --cc-heat-0: #2B271F;
-  --cc-heat-1: #473224;
-  --cc-heat-2: #6D4631;
-  --cc-heat-3: #985D3F;
-  --cc-heat-4: #C5754E;
+  --cc-heat-0: #272522;
+  --cc-heat-1: #452E24;
+  --cc-heat-2: #6E4331;
+  --cc-heat-3: #A55D40;
+  --cc-heat-4: #E07A52;
   /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
      Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
      neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
@@ -1169,181 +905,14 @@
   --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
   --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
 
-  --cc-bg-rgb: 32, 29, 23;
-  --cc-s1-rgb: 43, 39, 31;
-  --cc-t1-rgb: 242, 238, 230;
-  --cc-t2-rgb: 196, 187, 169;
-  --cc-bd2-rgb: 76, 68, 51;
-  --cc-ac-rgb: 208, 123, 82;
-  --cc-er-rgb: 224, 107, 82;
+  --cc-bg-rgb: 27, 26, 24;
+  --cc-s1-rgb: 39, 37, 34;
+  --cc-t1-rgb: 237, 234, 228;
+  --cc-t2-rgb: 189, 183, 173;
+  --cc-bd2-rgb: 65, 62, 57;
+  --cc-ac-rgb: 224, 122, 82;
+  --cc-er-rgb: 234, 115, 106;
   --cc-scrim-rgb: 6, 6, 6;
-}
-
-/* 墨夜蓝 ink-blue */
-[data-theme="ink-blue"] {
-  color-scheme: dark;
-
-  --cc-bg: #1A1D24;
-  --cc-s0: #15181E;
-  --cc-s1: #252A35;
-  --cc-s2: #20242D;
-  --cc-bd: #2F3441;
-  --cc-bd2: #434A5B;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #6A707E;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. Both go
-     *lighter* than the trough here: an ink theme's paper is already so dark
-     that pure black is only 1.25:1 against it, so there is no room downward. */
-  --cc-tab-edge: #2C303C;
-  --cc-tab-sep: #252833;
-  --cc-t1: #E8EAF0;
-  --cc-t2: #9AA1B2;
-  --cc-t3: #858B97;
-
-  --cc-ac: #D07B52;
-  --cc-ac2: #DE8F66;
-  --cc-ac-soft: #37281F;
-  --cc-ac-soft-hover: #453326;
-  --cc-ac-border: #57402F;
-  --cc-ac-ink: #D17E56;
-  --cc-on-ac: #1A1D24;
-
-  --cc-ok: #6FB58C;
-  --cc-ok-soft: #213026;
-  --cc-ok-ink: #6FB58C;
-  --cc-wn: #D3A34C;
-  --cc-wn-soft: #2F2917;
-  --cc-wn-ink: #D3A34C;
-  --cc-er: #E0685E;
-  --cc-er-soft: #37211D;
-  --cc-er-soft-hover: #522C27;
-  --cc-er-ink: #E06A60;
-  --cc-info: #8FA8E8;
-  --cc-info-soft: #2D3343;
-  --cc-info-ink: #8FA8E8;
-
-  --cc-teal: #7DD3C7;
-  --cc-teal-soft: #263338;
-  --cc-teal-border: #385455;
-  --cc-teal-icon: #2C3E41;
-
-  --cc-diff-add: #233028;
-  --cc-diff-add-gutter: #2C3B31;
-  --cc-diff-add-word: #29382E;
-  --cc-diff-del: #36282C;
-  --cc-diff-del-gutter: #422C30;
-  --cc-diff-del-word: #513234;
-  --cc-diff-mark: #34302A;
-  --cc-diff-mark-gutter: #3F382C;
-  --cc-code: #15181E;
-
-  --cc-heat-0: #252A35;
-  --cc-heat-1: #42322E;
-  --cc-heat-2: #6A4638;
-  --cc-heat-3: #965D43;
-  --cc-heat-4: #C5754F;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #35A69D;
-  --cc-series-2: #AD644E;
-  --cc-series-3: #6177B6;
-  --cc-series-4: #99732B;
-  --cc-series-5: #B4B0A6;
-
-  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
-  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
-  --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
-
-  --cc-bg-rgb: 26, 29, 36;
-  --cc-s1-rgb: 37, 42, 53;
-  --cc-t1-rgb: 232, 234, 240;
-  --cc-t2-rgb: 154, 161, 178;
-  --cc-bd2-rgb: 67, 74, 91;
-  --cc-ac-rgb: 208, 123, 82;
-  --cc-er-rgb: 224, 104, 94;
-  --cc-scrim-rgb: 6, 6, 6;
-}
-
-/* 深灰 neutral-dark — True OLED black grounds and strictly achromatic reading tiers, with Cold Cobalt accent. */
-[data-theme="neutral-dark"] {
-  color-scheme: dark;
-
-  --cc-bg: #000000;
-  --cc-s0: #000000;
-  --cc-s1: #1C1C1C;
-  --cc-s2: #111111;
-  --cc-bd: #222222;
-  --cc-bd2: #303030;
-  --cc-bd-strong: #767676;
-  --cc-tab-edge: #262626;
-  --cc-tab-sep: #1E1E1E;
-  --cc-t1: #F5F5F5;
-  --cc-t2: #B8B8B8;
-  --cc-t3: #949494;
-
-  /* Cold Cobalt calibrated to clear WCAG AA 4.5:1 with #FFFFFF on both
-     primary and primary-container while keeping >= 3:1 against #111111 code. */
-  --cc-ac: #346BF1;
-  --cc-ac2: #2A5DE0;
-  --cc-ac-soft: #13203A;
-  --cc-ac-soft-hover: #1A2B4D;
-  --cc-ac-border: #264073;
-  --cc-ac-ink: #8CB4FF;
-  --cc-on-ac: #FFFFFF;
-
-  --cc-ok: #6FB58C;
-  --cc-ok-soft: #14261B;
-  --cc-ok-ink: #7AC498;
-  --cc-wn: #D3A34C;
-  --cc-wn-soft: #261F10;
-  --cc-wn-ink: #DEB05B;
-  --cc-er: #E0685E;
-  --cc-er-soft: #2E1815;
-  --cc-er-soft-hover: #45231E;
-  --cc-er-ink: #EA7A70;
-  --cc-info: #7DA8FA;
-  --cc-info-soft: #152138;
-  --cc-info-ink: #8EB4FC;
-
-  --cc-teal: #7DD3C7;
-  --cc-teal-soft: #142426;
-  --cc-teal-border: #244042;
-  --cc-teal-icon: #1A3033;
-
-  --cc-diff-add: #13241A;
-  --cc-diff-add-gutter: #1A3022;
-  --cc-diff-add-word: #1E3A28;
-  --cc-diff-del: #2B171A;
-  --cc-diff-del-gutter: #381D21;
-  --cc-diff-del-word: #4A2428;
-  --cc-diff-mark: #262116;
-  --cc-diff-mark-gutter: #332B1B;
-  --cc-code: #111111;
-
-  --cc-heat-0: #1C1C1C;
-  --cc-heat-1: #162544;
-  --cc-heat-2: #1E3A70;
-  --cc-heat-3: #2852A8;
-  --cc-heat-4: #346BF1;
-  --cc-series-1: #35A69D;
-  --cc-series-2: #AD644E;
-  --cc-series-3: #6177B6;
-  --cc-series-4: #99732B;
-  --cc-series-5: #B4B4B4;
-
-  --cc-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.55), 0 8px 24px -8px rgba(0, 0, 0, 0.72);
-  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.6), 0 14px 32px -18px rgba(0, 0, 0, 0.78);
-  --cc-shadow-overlay: 0 16px 40px -18px rgba(0, 0, 0, 0.78), 0 24px 64px -20px rgba(0, 0, 0, 0.85);
-
-  --cc-bg-rgb: 0, 0, 0;
-  --cc-s1-rgb: 28, 28, 28;
-  --cc-t1-rgb: 245, 245, 245;
-  --cc-t2-rgb: 184, 184, 184;
-  --cc-bd2-rgb: 48, 48, 48;
-  --cc-ac-rgb: 52, 107, 241;
-  --cc-er-rgb: 224, 104, 94;
-  --cc-scrim-rgb: 0, 0, 0;
 }
 
 /* ─── Semantic layer ──────────────────────────────────────────────
@@ -1363,9 +932,9 @@
   --motion-sidebar-easing: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* Procedural surface grain & tactile bevel tokens (Safari 15 safe, zero color-mix) */
-  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-  --surface-grain-size: 256px 256px;
+  /* Tactile bevel tokens (Safari 15 safe, zero color-mix). Surface grain removed for crisp studio surfaces. */
+  --surface-grain: none;
+  --surface-grain-size: auto;
   --bevel-surface-rest: 0 1px 0 rgba(0, 0, 0, 0.04);
   --bevel-surface-pressed: inset 0 1px 1px rgba(0, 0, 0, 0.06);
   --bevel-cta-rest: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(var(--cc-ac-rgb), 0.24);
@@ -1720,10 +1289,8 @@
   --radius-full: 9999px;
 }
 
-/* Dark themes: lift the syntax ramp off the paper values. */
-[data-theme="dark"],
-[data-theme="ink-blue"],
-[data-theme="neutral-dark"] {
+/* Dark theme: lift the syntax ramp off the light values. */
+[data-theme="dark"] {
   --color-file-typescript-container: #203B55;
   --color-on-file-typescript-container: #92CAF7;
   --color-file-javascript-container: #BFA453;
@@ -1797,18 +1364,9 @@ html, body, #root {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Procedural micro-grain baked onto body (not a full-viewport compositing
-   overlay) and opt-in for floating chrome via `.surface-grain`. */
-body {
-  background-image: var(--surface-grain);
-  background-repeat: repeat;
-  background-size: var(--surface-grain-size);
-}
-
+/* Surface grain removed for Direction C crisp studio surfaces. */
 .surface-grain {
-  background-image: var(--surface-grain);
-  background-repeat: repeat;
-  background-size: var(--surface-grain-size);
+  background-image: none;
 }
 
 /* Soften default 2px Lucide strokes to 1.75px for crisp dense chrome while
@@ -3394,9 +2952,7 @@ html[data-window-kind='pet'] #root {
   margin-bottom: 0;
 }
 
-html[data-theme='dark'] .pet-activity-card,
-html[data-theme='ink-blue'] .pet-activity-card,
-html[data-theme='neutral-dark'] .pet-activity-card {
+html[data-theme='dark'] .pet-activity-card {
   border-color: rgba(255, 255, 255, 0.12);
   background: rgba(24, 23, 30, 0.78);
   box-shadow:
@@ -3437,9 +2993,7 @@ html[data-theme='neutral-dark'] .pet-activity-card {
   transform: translateY(-4px);
 }
 
-html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'],
-html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listitem'],
-html[data-theme='neutral-dark'] .pet-session-list > [role='listitem'] + [role='listitem'] {
+html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'] {
   border-top-color: rgba(255, 255, 255, 0.07);
 }
 
@@ -3503,9 +3057,7 @@ html[data-theme='neutral-dark'] .pet-session-list > [role='listitem'] + [role='l
   outline-offset: -2px;
 }
 
-html[data-theme='dark'] .pet-session-row:hover,
-html[data-theme='ink-blue'] .pet-session-row:hover,
-html[data-theme='neutral-dark'] .pet-session-row:hover {
+html[data-theme='dark'] .pet-session-row:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -3577,17 +3129,13 @@ html[data-theme='neutral-dark'] .pet-session-row:hover {
   transform: translateX(50%) scale(0.94);
 }
 
-html[data-theme='dark'] .pet-panel-toggle,
-html[data-theme='ink-blue'] .pet-panel-toggle,
-html[data-theme='neutral-dark'] .pet-panel-toggle {
+html[data-theme='dark'] .pet-panel-toggle {
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(36, 39, 45, 0.82);
   color: rgba(239, 235, 246, 0.62);
 }
 
-html[data-theme='dark'] .pet-panel-toggle:hover,
-html[data-theme='ink-blue'] .pet-panel-toggle:hover,
-html[data-theme='neutral-dark'] .pet-panel-toggle:hover {
+html[data-theme='dark'] .pet-panel-toggle:hover {
   background: rgba(255, 255, 255, 0.09);
   color: rgba(255, 255, 255, 1);
 }

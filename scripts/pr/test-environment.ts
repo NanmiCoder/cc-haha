@@ -62,8 +62,6 @@ export function createSandboxedTestEnvironment(
 
   return createOfflineTestEnvironment({
     HOME: sandboxHome,
-    // 允许进程内服务端用例确认 Bun 启动时缓存的 homedir 也在沙箱中。
-    CC_HAHA_TEST_HOME: sandboxHome,
     USERPROFILE: sandboxHome,
     APPDATA: configHome,
     LOCALAPPDATA: join(sandboxHome, '.local'),

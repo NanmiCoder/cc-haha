@@ -52,6 +52,7 @@ import { SettingsPageHeader, SettingsPill } from '@/components/settings/Settings
 import { Dropdown } from '@/components/ui/Dropdown'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { ModelBrandIcon, resolveModelBrand } from '@/components/composite/ModelBrandIcon'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode, ProviderProxyMode } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
@@ -59,7 +60,6 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
-import { AntigravityProviderCard } from './AntigravityProviderCard'
 import {
   highlightSegments,
   initialProviderTab,
@@ -470,6 +470,13 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           dragLabel={t('settings.providers.dragToReorder')}
           dragDisabled={searching}
           onActivate={!isActive ? activate : undefined}
+          icon={(
+            <ModelBrandIcon
+              providerId={item.id}
+              size={15}
+              className={isActive ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-secondary)]'}
+            />
+          )}
           title={<HighlightedText text={t(official.title)} terms={terms} />}
           subtitle={<HighlightedText text={t(official.subtitle)} terms={terms} />}
           badges={isActive ? (
@@ -508,6 +515,15 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
         dragLabel={t('settings.providers.dragToReorder')}
         dragDisabled={searching}
         onActivate={!isActive ? () => handleActivate(provider.id) : undefined}
+        icon={(
+          <ModelBrandIcon
+            presetId={provider.presetId}
+            providerName={provider.name}
+            modelId={resolveModelBrand({ presetId: provider.presetId, providerName: provider.name }) ? undefined : provider.models.main}
+            size={15}
+            className={isActive ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-secondary)]'}
+          />
+        )}
         title={<HighlightedText text={provider.name} terms={terms} />}
         subtitle={<span className="font-mono text-[11px]"><HighlightedText text={providerSubtitle(provider)} terms={terms} /></span>}
         matchNote={match?.hiddenField ? (
@@ -591,7 +607,6 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
       />
 
       {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mt-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
-      <AntigravityProviderCard />
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <SegmentedControl
           as="tablist"
@@ -755,6 +770,7 @@ type SortableProviderCardProps = {
   dragLabel: string
   /** While searching the list is a filtered view, so it is not reorderable. */
   dragDisabled?: boolean
+  icon?: ReactNode
   title: ReactNode
   subtitle: ReactNode
   badges?: ReactNode
@@ -786,6 +802,7 @@ function SortableProviderCard({
   isActive,
   dragLabel,
   dragDisabled = false,
+  icon,
   title,
   subtitle,
   badges,
@@ -867,6 +884,7 @@ function SortableProviderCard({
         />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            {icon}
             <span className="min-w-0 truncate text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{title}</span>
             {badges}
           </span>

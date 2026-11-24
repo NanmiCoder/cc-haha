@@ -590,7 +590,13 @@ export function Group({
   return (
     <View
       style={[
-        { backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' },
+        {
+          backgroundColor: colors.card,
+          borderRadius: 16,
+          borderWidth: 1,
+          borderColor: colors.hair,
+          overflow: 'hidden',
+        },
         style,
       ]}
     >
@@ -607,7 +613,14 @@ export function Card({
   return (
     <View
       style={[
-        { backgroundColor: colors.card, borderRadius: 18, padding: 14, gap: 10 },
+        {
+          backgroundColor: colors.card,
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: colors.hair,
+          padding: 14,
+          gap: 10,
+        },
         style,
       ]}
     >

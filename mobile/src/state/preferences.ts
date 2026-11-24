@@ -64,12 +64,17 @@ export function migratePreferences(raw: string | null): Preferences {
     typeof input === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input)
       ? input
       : fallback
+  const normalizeAppearance = (input: unknown): Appearance => {
+    if (input === 'light' || input === 'dark' || input === 'system') return input
+    if (input === 'white' || input === 'paper' || input === 'warm-classic' || input === 'celadon')
+      return 'light'
+    if (input === 'ink-blue' || input === 'neutral-dark') return 'dark'
+    return 'system'
+  }
   return {
     ...value,
     version: 1,
-    appearance: ['light', 'dark', 'system'].includes(value.appearance)
-      ? value.appearance
-      : 'system',
+    appearance: normalizeAppearance(value.appearance),
     notifications: {
       ...notifications,
       decisions: notifications.decisions !== false,

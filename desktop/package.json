@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.7.9",
+  "version": "0.8.0",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/NanmiCoder/cc-haha",
   "author": {
@@ -67,7 +67,10 @@
       "target": "nsis",
       "icon": "src-tauri/icons/icon.ico",
       "extraResources": [
-        { "from": "src-tauri/icons/icon.ico", "to": "app-icon.ico" }
+        {
+          "from": "src-tauri/icons/icon.ico",
+          "to": "app-icon.ico"
+        }
       ]
     },
     "nsis": {
@@ -125,6 +128,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@lobehub/icons-static-svg": "^1.106.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/dompurify": "^3.2.0",
     "@xterm/addon-fit": "^0.11.0",

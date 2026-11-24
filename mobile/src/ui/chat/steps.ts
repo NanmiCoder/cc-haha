@@ -63,7 +63,7 @@ const pathOf = (step: ChatItem) => {
 
 /** 一类工具的摘要：返回 [归类 key, 文案, 图标]。同一类里按文件去重计数。 */
 function classify(step: ChatItem): { key: string; icon: IconName; dedupe?: string } {
-  if (step.type === 'thinking') return { key: 'thinking', icon: 'sparkle' }
+  if (step.type === 'thinking') return { key: 'thinking', icon: 'lightbulb' }
   const name = step.toolName ?? ''
   switch (name) {
     case 'Read':

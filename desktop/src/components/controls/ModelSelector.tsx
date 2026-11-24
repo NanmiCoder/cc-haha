@@ -9,7 +9,6 @@ import {
 } from '@/components/chat/composerMenuStyles'
 import { getBundledPresetReasoningProviderKind } from '../../config/providerPresets'
 import { OFFICIAL_MODELS } from '../../constants/modelCatalog'
-import { ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import {
   OPENAI_OFFICIAL_MODELS,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -47,6 +46,7 @@ import {
   buildDeepSeekAccountProvider,
 } from '../../constants/deepseekAccountProvider'
 import { Kbd } from '@/components/ui/Kbd'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { SearchField } from '@/components/ui/SearchField'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
@@ -369,7 +369,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     providers,
     activeId,
     deepSeekAccountModels,
-    localAgent,
     hasLoadedProviders,
     isLoading: providersLoading,
     fetchProviders,
@@ -415,21 +414,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     !isControlled &&
     (runtimeKey !== undefined || onRuntimeSelectionChange !== undefined)
   const canEditRuntimeEffort = runtimeKey !== undefined || effortEditable
-  const isAntigravitySelection = (controlledRuntimeSelection ?? runtimeSelection)?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
-  const isAntigravitySession = runtimeKey !== undefined && runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY && isAntigravitySelection
-  const hasAntigravity = !!localAgent && localAgent.status !== 'not_installed'
-  const allowsAntigravity = !savedProvidersOnly && runtimeChoices === undefined &&
-    (runtimeKey === DRAFT_RUNTIME_SELECTION_KEY || isAntigravitySession)
-
-  const antigravityChoice = useMemo<ModelProviderChoice>(() => ({
-    providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
-    providerName: t('settings.providers.antigravity.name'),
-    isDefault: false,
-    models: [
-      { id: ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, name: t('settings.providers.antigravity.defaultModel') },
-      ...(hasAntigravity ? localAgent.models.filter((model) => model.id !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID) : []),
-    ].map((model) => ({ ...model, description: '', context: '', supportedReasoningEfforts: [] })),
-  }), [hasAntigravity, localAgent, t])
 
   useEffect(() => {
     if (
@@ -444,7 +428,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   }, [fetchProviders, hasLoadedProviders, isRuntimeScoped, providersLoading, runtimeChoices])
 
   useEffect(() => {
-    if (runtimeChoices !== undefined || savedProvidersOnly || !isRuntimeScoped || isAntigravitySession || !open || requestedOAuthStatusRef.current) return
+    if (runtimeChoices !== undefined || savedProvidersOnly || !isRuntimeScoped || !open || requestedOAuthStatusRef.current) return
     requestedOAuthStatusRef.current = true
     void fetchClaudeOAuthStatus()
     void fetchOpenAIOAuthStatus()
@@ -455,7 +439,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     fetchDeepSeekOAuthStatus,
     fetchGrokOAuthStatus,
     fetchOpenAIOAuthStatus,
-    isAntigravitySession,
     isRuntimeScoped,
     runtimeChoices,
     savedProvidersOnly,
@@ -547,34 +530,26 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   ].filter(Boolean).join(' · '), [t])
 
   const providerChoices = useMemo(
-    () => {
-      if (isAntigravitySession) return hasAntigravity ? [antigravityChoice] : []
-      const choices = runtimeChoices ?? buildProviderChoices(
-        savedProvidersOnly
-          ? providers.filter((provider) => (provider.runtimeKind ?? 'anthropic_compatible') === 'anthropic_compatible')
-          : providers,
-        activeId,
-        availableModels,
-        t('settings.providers.officialName'),
-        t('settings.providers.openaiOfficialName'),
-        t('settings.providers.grokOfficialName'),
-        t('settings.providers.deepseekAccountName'),
-        deepSeekAccountModels,
-        roleLabels,
-        claudeOAuthStatus?.loggedIn === true && !savedProvidersOnly,
-        openAIOAuthStatus?.loggedIn === true && !savedProvidersOnly,
-        grokOAuthStatus?.loggedIn === true && !savedProvidersOnly,
-        deepSeekOAuthStatus?.loggedIn === true && !savedProvidersOnly,
-        magpieCatalog,
-        describeMagpieModel,
-      )
-      return [...(leadingChoices ?? []), ...choices, ...(allowsAntigravity && hasAntigravity ? [antigravityChoice] : [])]
-    },
+    () => [...(leadingChoices ?? []), ...(runtimeChoices ?? buildProviderChoices(
+      savedProvidersOnly
+        ? providers.filter((provider) => (provider.runtimeKind ?? 'anthropic_compatible') === 'anthropic_compatible')
+        : providers,
+      activeId,
+      availableModels,
+      t('settings.providers.officialName'),
+      t('settings.providers.openaiOfficialName'),
+      t('settings.providers.grokOfficialName'),
+      t('settings.providers.deepseekAccountName'),
+      deepSeekAccountModels,
+      roleLabels,
+      claudeOAuthStatus?.loggedIn === true && !savedProvidersOnly,
+      openAIOAuthStatus?.loggedIn === true && !savedProvidersOnly,
+      grokOAuthStatus?.loggedIn === true && !savedProvidersOnly,
+      deepSeekOAuthStatus?.loggedIn === true && !savedProvidersOnly,
+      magpieCatalog,
+      describeMagpieModel,
+    ))],
     [
-      allowsAntigravity,
-      antigravityChoice,
-      hasAntigravity,
-      isAntigravitySession,
       magpieCatalog,
       describeMagpieModel,
       leadingChoices,
@@ -646,7 +621,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
 
   const selectedProviderChoice = activeRuntimeSelection
     ? providerChoices.find((choice) => choice.providerId === activeRuntimeSelection.providerId)
-      ?? (activeRuntimeSelection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID ? antigravityChoice : undefined)
       ?? (activeRuntimeSelection.providerId === null
         ? officialChoices(null, mergeOfficialModels(activeId === null ? availableModels : []), activeId === null, t('settings.providers.officialName'))
         : activeRuntimeSelection.providerId === OPENAI_OFFICIAL_PROVIDER_ID
@@ -693,7 +667,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     : null
   const supportedRuntimeEfforts = selectedRuntimeModel?.supportedReasoningEfforts
   const requestedRuntimeEffort = activeRuntimeSelection?.effortLevel ?? effortLevel
-  const selectedRuntimeEffort = selectedRuntimeModel && !runtimeEffortSuppressedByProvider && !isAntigravitySelection
+  const selectedRuntimeEffort = selectedRuntimeModel && !runtimeEffortSuppressedByProvider
     ? supportedRuntimeEfforts?.length === 0
       ? undefined
       : supportedRuntimeEfforts === undefined || supportedRuntimeEfforts.includes(requestedRuntimeEffort)
@@ -741,10 +715,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const openSelector = useCallback(() => {
     if (disabled) return
     setEffortOpen(false)
-    if (isAntigravitySession) {
-      setOpen(true)
-      return
-    }
     // Magpie's catalog changes in Magpie; read it again (the server caches it briefly).
     if (useProviderStore.getState().providers.some(isMagpieProvider)) {
       void useMagpieStore.getState().refresh()
@@ -760,12 +730,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     const grokStatus = useHahaGrokOAuthStore.getState().status
     const deepSeekStatus = useHahaDeepSeekOAuthStore.getState().status
     const statuses = [claudeStatus, openAIStatus, grokStatus, deepSeekStatus]
-    const canPickAntigravity = () => {
-      const agent = useProviderStore.getState().localAgent
-      return allowsAntigravity && !!agent && agent.status !== 'not_installed'
-    }
     const providerState = useProviderStore.getState()
-    if (providerState.providers.length > 0 || canPickAntigravity()) {
+    if (providerState.providers.length > 0) {
       setOpen(true)
       return
     }
@@ -783,7 +749,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       if (!latestProviderState.hasLoadedProviders) {
         await latestProviderState.fetchProviders()
       }
-      if (useProviderStore.getState().providers.length > 0 || canPickAntigravity()) {
+      if (useProviderStore.getState().providers.length > 0) {
         setOpen(true)
         return
       }
@@ -801,16 +767,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         useHahaGrokOAuthStore.getState().status,
         useHahaDeepSeekOAuthStore.getState().status,
       ].some((status) => status?.loggedIn === true)
-      if (hasOfficialLogin || canPickAntigravity()) {
+      if (hasOfficialLogin) {
         setOpen(true)
       } else {
         navigateToProviderSettings()
       }
     })()
   }, [
-    allowsAntigravity,
     disabled,
-    isAntigravitySession,
     fetchClaudeOAuthStatus,
     fetchDeepSeekOAuthStatus,
     fetchGrokOAuthStatus,
@@ -913,19 +877,31 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             role="status"
             className={`flex items-center justify-center px-4 text-center text-[13px] text-[var(--color-text-tertiary)] ${isMobileBrowser ? 'min-h-28' : 'min-h-24'}`}
           >
-            {isAntigravitySession && !hasAntigravity
-              ? t('settings.providers.antigravity.status.not_installed')
-              : t('model.noMatches')}
+            {t('model.noMatches')}
           </div>
         )}
 
         {isRuntimeScoped ? (
           <div className="space-y-1">
-            {filteredProviderChoices.map((choice) => (
+            {filteredProviderChoices.map((choice) => {
+              const choiceProvider = choice.providerId
+                ? providers.find((provider) => provider.id === choice.providerId)
+                : undefined
+              const choiceBrandProviderId = choice.providerId === null ? 'claude-official' : choice.providerId
+              return (
               <div key={choice.providerId ?? 'official'}>
                 <div className={`flex items-center justify-between gap-2 ${COMPOSER_MENU_SECTION}`}>
-                  <span className="truncate">
-                    {choice.providerName}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <ModelBrandIcon
+                      providerId={choiceBrandProviderId}
+                      presetId={choiceProvider?.presetId}
+                      providerName={choice.providerName}
+                      size={12}
+                      className="text-[var(--color-text-tertiary)]"
+                    />
+                    <span className="truncate">
+                      {choice.providerName}
+                    </span>
                   </span>
                   {choice.isDefault && (
                     <span className="flex-shrink-0 font-normal">
@@ -1006,6 +982,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                         aria-current={isSelected || undefined}
                         className={`${COMPOSER_MENU_ITEM} ${isMobileBrowser ? 'min-h-[56px] py-3' : ''} ${isSelected ? COMPOSER_MENU_ITEM_ACTIVE : ''}`}
                       >
+                        <ModelBrandIcon
+                          modelId={model.id}
+                          providerId={choiceBrandProviderId}
+                          presetId={choiceProvider?.presetId}
+                          providerName={choice.providerName}
+                          size={14}
+                          className={isSelected ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'}
+                        />
                         <div className="grid min-w-0 flex-1 gap-px">
                           {/* Model ids are identifiers, so they sit in the
                               mono face alongside paths and token counts. */}
@@ -1027,7 +1011,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                   })}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         ) : (
           <div className="space-y-px">
@@ -1047,6 +1032,11 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                   aria-current={isSelected || undefined}
                   className={`${COMPOSER_MENU_ITEM} ${isMobileBrowser ? 'min-h-[56px] py-3' : ''} ${isSelected ? COMPOSER_MENU_ITEM_ACTIVE : ''}`}
                 >
+                  <ModelBrandIcon
+                    modelId={model.id}
+                    size={14}
+                    className={isSelected ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'}
+                  />
                   <div className="grid min-w-0 flex-1 gap-px">
                     <div className="truncate font-mono text-[13px] text-[var(--color-text-primary)]">{model.name}</div>
                     {model.description && (
@@ -1065,11 +1055,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           </div>
         )}
       </div>
-      {runtimeKey !== undefined && runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY && lockedProviderId === undefined && (hasAntigravity || isAntigravitySession) && (
-        <p className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
-          {t('settings.providers.antigravity.newChatRequired')}
-        </p>
-      )}
       {showDockedFooter && (
         <div
           data-testid="model-selector-docked-controls"
@@ -1220,10 +1205,20 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               : `rounded-l-[var(--radius-sm)] focus-visible:rounded-[var(--radius-sm)] pl-2 ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px]' : 'max-w-[220px]'} ${showEffortPill ? 'pr-1' : 'rounded-r-[var(--radius-sm)] pr-1.5'}`
           }`}
         >
+          {!needsProviderConfiguration && (selectedRuntimeModel?.id || selectedModel?.id) && (
+            <ModelBrandIcon
+              modelId={selectedRuntimeModel?.id ?? selectedModel?.id}
+              providerId={activeRuntimeSelection ? (activeRuntimeSelection.providerId ?? 'claude-official') : undefined}
+              presetId={selectedRuntimeProvider?.presetId}
+              providerName={buttonProviderLabel}
+              size={appearance === 'field' ? 15 : 13}
+              className="text-[var(--color-text-secondary)]"
+            />
+          )}
           <span className={`${appearance === 'field' ? 'text-[13px]' : 'text-xs'} min-w-0 flex-1 truncate text-[var(--color-text-primary)]`}>
             {buttonModelLabel}
           </span>
-          {(appearance === 'field' || !canEditRuntimeEffort || (isAntigravitySelection && activeRuntimeSelection?.modelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID)) && !compact && buttonProviderLabel && (
+          {(appearance === 'field' || !canEditRuntimeEffort) && !compact && buttonProviderLabel && (
             <span className="max-w-[108px] flex-shrink-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
               {buttonProviderLabel}
             </span>

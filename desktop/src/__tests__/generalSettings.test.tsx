@@ -456,40 +456,35 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Skip WebFetch domain preflight')).toBeInTheDocument()
   })
 
-  it('offers all seven palettes, light grounds before dark ones', () => {
+  it('offers only Light and Dark palettes in order', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    // The picker order is load-bearing: the four paper grounds come first, then
-    // the three dark ones, so the list reads light-to-dark rather than shuffled.
-    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']
-      .map((name) => screen.getByRole('button', { name }))
+    const lightBtn = screen.getByRole('button', { name: 'Light' })
+    const darkBtn = screen.getByRole('button', { name: 'Dark' })
+    expect((lightBtn.compareDocumentPosition(darkBtn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
 
-    for (const [index, chip] of order.slice(0, -1).entries()) {
-      const next = order[index + 1]!
-      expect(
-        (chip.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-        `${order[index + 1]} should follow ${order[index]}`,
-      ).toBe(true)
+    for (const retired of ['Paper', 'Warm Classic', 'Celadon', 'Ink Blue', 'Neutral Dark']) {
+      expect(screen.queryByRole('button', { name: retired })).not.toBeInTheDocument()
     }
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pure White' }))
+    fireEvent.click(lightBtn)
     expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('white')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ink Blue' }))
-    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('ink-blue')
+    fireEvent.click(darkBtn)
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('dark')
   })
 
-  it('offers a neutral dark palette and marks it selected after choosing it', () => {
+  it('marks the dark palette selected after choosing it', () => {
     render(<Settings />)
     fireEvent.click(screen.getByText('General'))
 
-    const neutralDark = screen.getByRole('button', { name: 'Neutral Dark' })
-    fireEvent.click(neutralDark)
+    const darkBtn = screen.getByRole('button', { name: 'Dark' })
+    fireEvent.click(darkBtn)
 
-    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('neutral-dark')
-    expect(neutralDark).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('dark')
+    expect(darkBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('gives the settings rail the handoff width and a rounded selected item', () => {
@@ -522,14 +517,14 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'General' })).toBeInTheDocument()
   })
 
-  it('marks the pure white appearance theme as selected', () => {
+  it('marks the light appearance theme as selected', () => {
     useUIStore.setState({ theme: 'white' })
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Warm Classic' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('offers a switch for following the system appearance', () => {
@@ -546,56 +541,27 @@ describe('Settings > General tab', () => {
   })
 
   it('splits the picker into one row per ground while following the system', () => {
-    // The OS picks the ground; what is left to choose is the palette on each
-    // one, so both rows are offered rather than only the light half.
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'celadon', darkTheme: 'ink-blue', theme: 'ink-blue' })
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'dark', theme: 'dark' })
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
     expect(screen.getByText('Use in light mode')).toBeInTheDocument()
     expect(screen.getByText('Use in dark mode')).toBeInTheDocument()
-    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']) {
-      expect(screen.getByRole('button', { name: label }), label).toBeInTheDocument()
-    }
-  })
-
-  it('marks each ground preference rather than the applied palette', () => {
-    // Evening: the app is on ink-blue, but the light row is asking which
-    // palette to return to in the morning — that is warm classic, not ink-blue.
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'warm-classic', darkTheme: 'ink-blue', theme: 'ink-blue' })
-    render(<Settings />)
-
-    fireEvent.click(screen.getByText('General'))
-
-    expect(screen.getByRole('button', { name: 'Warm Classic' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('selects neutral dark as the dark preference while following a light system', () => {
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'neutral-dark', theme: 'white' })
-    render(<Settings />)
-    fireEvent.click(screen.getByText('General'))
-
-    expect(screen.getByRole('button', { name: 'Neutral Dark' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('keeps the theme swatches at preview size on a wide settings frame', () => {
-    // The settings frame is fluid up to 1120px; the swatch grid must not grow
-    // with it, in either picker layout.
     render(<Settings />)
     fireEvent.click(screen.getByText('General'))
-    expect(screen.getByRole('button', { name: 'Pure White' }).parentElement).toHaveClass('grid-cols-3', 'max-w-[600px]')
+    expect(screen.getByRole('button', { name: 'Light' }).parentElement).toHaveClass('grid-cols-2', 'max-w-[600px]')
     cleanup()
 
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'celadon', darkTheme: 'ink-blue', theme: 'ink-blue', activeSettingsTab: 'general' })
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'dark', theme: 'dark', activeSettingsTab: 'general' })
     render(<Settings />)
-    for (const label of ['Pure White', 'Ink Night']) {
-      expect(screen.getByRole('button', { name: label }).parentElement, label).toHaveClass('grid-cols-4', 'max-w-[600px]')
+    for (const label of ['Light', 'Dark']) {
+      expect(screen.getByRole('button', { name: label }).parentElement, label).toHaveClass('grid-cols-2', 'max-w-[600px]')
     }
   })
 
@@ -608,28 +574,24 @@ describe('Settings > General tab', () => {
   })
 
   it('highlights the theme on screen after the OS flipped it and the switch is released', () => {
-    // Going through the real transition, not a hand-set state: the OS turned
-    // dark during the session, then the user releases the switch to freeze it.
-    // The picker must point at the palette that is actually rendered.
     useUIStore.setState({
       followSystemTheme: true,
       lightTheme: 'white',
-      darkTheme: 'ink-blue',
+      darkTheme: 'dark',
       theme: 'white',
     })
     render(<Settings />)
     fireEvent.click(screen.getByText('General'))
 
     act(() => {
-      // Stand in for the OS flip the media-query listener would deliver.
-      useUIStore.setState({ theme: 'ink-blue' })
+      useUIStore.setState({ theme: 'dark' })
     })
     act(() => {
       useUIStore.getState().setFollowSystemTheme(false)
     })
 
-    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('groups General settings into topic sections in a stable order', () => {

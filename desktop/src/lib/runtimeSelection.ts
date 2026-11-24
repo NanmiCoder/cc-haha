@@ -1,5 +1,4 @@
 import { OFFICIAL_DEFAULT_MODEL_ID } from '../constants/modelCatalog'
-import { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import {
   OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
   OPENAI_OFFICIAL_MODELS,
@@ -151,10 +150,6 @@ export function reconcileRuntimeSelection(
     defaultEffortLevel?: RuntimeSelection['effortLevel']
   },
 ): RuntimeSelection {
-  // ACP is session-only and isn't in the saved provider list. Even an
-  // uninstalled agent must fail on that runtime, never send on a different one.
-  if (selection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) return normalizeRuntimeSelection(selection)
-
   const provider = context.providers.find((entry) => entry.id === selection.providerId)
   const isOfficial = selection.providerId === null ||
     selection.providerId === OPENAI_OFFICIAL_PROVIDER_ID ||
@@ -186,11 +181,6 @@ export function normalizeRuntimeSelection(
   apiFormat?: ModelReasoningApiFormat,
   providerKind?: ModelReasoningProviderKind,
 ): RuntimeSelection {
-  if (selection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
-    if (selection.effortLevel === undefined && selection.openAIFastMode === undefined) return selection
-    return { providerId: selection.providerId, modelId: selection.modelId }
-  }
-
   if (selection.openAIFastMode !== undefined && (
     selection.providerId !== OPENAI_OFFICIAL_PROVIDER_ID ||
     typeof selection.openAIFastMode !== 'boolean'
