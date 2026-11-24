@@ -3,6 +3,7 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { findToolByName, type ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { all } from '../../utils/generators.js'
+import { createDuplicateToolResult, duplicateToolUseIds } from './duplicateToolUse.js'
 import { type MessageUpdateLazy, runToolUse } from './toolExecution.js'
 
 function getMaxToolUseConcurrency(): number {
@@ -23,8 +24,31 @@ export async function* runTools(
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdate, void> {
   let currentContext = toolUseContext
+  // A degenerate model response can repeat a call verbatim in one message. The
+  // repeats cannot have seen a result yet, so run the first and answer the rest
+  // with a skip result instead of repeating side effects like a plan submit.
+  const duplicateIds = duplicateToolUseIds(toolUseMessages)
+  if (duplicateIds.size > 0) {
+    for (const block of toolUseMessages) {
+      if (!duplicateIds.has(block.id)) continue
+      const assistant = assistantMessages.find(message =>
+        message.message.content.some(
+          content => content.type === 'tool_use' && content.id === block.id,
+        ),
+      )
+      if (!assistant) continue
+      yield {
+        message: createDuplicateToolResult(block, assistant),
+        newContext: currentContext,
+      }
+    }
+  }
+  const executable =
+    duplicateIds.size > 0
+      ? toolUseMessages.filter(block => !duplicateIds.has(block.id))
+      : toolUseMessages
   for (const { isConcurrencySafe, blocks } of partitionToolCalls(
-    toolUseMessages,
+    executable,
     currentContext,
   )) {
     if (isConcurrencySafe) {
