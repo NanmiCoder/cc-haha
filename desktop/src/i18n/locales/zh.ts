@@ -1066,6 +1066,7 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.files.projectRoot': '项目根目录',
   'workspace.files.directoryMissing': '目录不存在：{path}',
   'workspace.files.directoryError': '无法读取目录：{path}',
+  'workspace.files.directoryTruncated': '{path} 共 {total} 项，当前仅展示前 {shown} 项，可通过筛选查找其余文件。',
   'workspace.files.hidePreview': '隐藏预览',
   'workspace.files.showPreview': '显示预览',
   'workspace.files.toggleTree': '显示/隐藏文件树',

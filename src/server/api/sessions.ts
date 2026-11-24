@@ -837,8 +837,12 @@ async function handleSessionWorkspaceRoute(
   switch (workspaceResource) {
     case 'watch':
       return handleWorkspaceWatchRoute(req, sessionId, url, workspaceService)
-    case 'status':
-      return Response.json(await workspaceService.getStatus(sessionId))
+    case 'meta':
+      return Response.json(await workspaceService.getStatus(sessionId, { includeChangedFiles: false }))
+    case 'status': {
+      const includeChangedFiles = url.searchParams.get('includeChangedFiles') !== '0'
+      return Response.json(await workspaceService.getStatus(sessionId, { includeChangedFiles }))
+    }
     case 'tree':
       return await runWorkspaceRequest(() => workspaceService.readTree(
         sessionId,
