@@ -1791,8 +1791,18 @@ async function* queryModel(
         !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
     )
     const modelCanThink = modelSupportsThinking(options.model)
+    // Prompt-hook evaluators are internal JSON checks, not explicit user
+    // thinking disables. Omit `thinking: { type: 'disabled' }` on non-1P
+    // endpoints unless the provider explicitly opts in, so relays that reject
+    // disabled reasoning do not fail with HTTP 400.
+    const isThirdPartyPromptHook =
+      options.querySource === 'hook_prompt' &&
+      !isFirstPartyAnthropicBaseUrl() &&
+      !shouldSendExplicitDisabledThinking()
     const sendsExplicitDisabledThinking =
-      !hasThinking && (modelCanThink || shouldSendExplicitDisabledThinking())
+      !hasThinking &&
+      !isThirdPartyPromptHook &&
+      (modelCanThink || shouldSendExplicitDisabledThinking())
 
     const outputConfig: BetaOutputConfig = {
       ...((extraBodyParams.output_config as BetaOutputConfig) ?? {}),
@@ -1865,6 +1875,14 @@ async function* queryModel(
           thinkingConfig.budgetTokens !== undefined
         ) {
           thinkingBudget = thinkingConfig.budgetTokens;
+        } else if (
+          options.querySource === 'hook_prompt' &&
+          thinkingConfig.type === 'disabled'
+        ) {
+          // Prompt-hook evaluators only return a small JSON object; when a
+          // model requires manual thinking, keep its budget at the 1024-token
+          // minimum to preserve output headroom and avoid heavy reasoning cost.
+          thinkingBudget = Math.min(thinkingBudget, 1024);
         }
         thinkingBudget = Math.min(maxOutputTokens - 1, thinkingBudget);
         thinking = {

@@ -233,7 +233,9 @@ import {
   resetSessionFilePointer,
   doesMessageExistInSession,
   findUnresolvedToolUse,
+  flushSessionStorage,
   recordAttributionSnapshot,
+  recordTranscript,
   saveAgentSetting,
   saveMode,
   saveAiGeneratedTitle,
@@ -297,7 +299,16 @@ import {
   toInternalMessages,
   toSDKRateLimitInfo,
 } from 'src/utils/messages/mappers.js'
-import { createModelSwitchBreadcrumbs, createUserMessage } from 'src/utils/messages.js'
+import {
+  clearThreadGoalHook,
+  ensureThreadGoalHookFromTranscript,
+  getThreadGoal,
+} from 'src/goals/goalState.js'
+import {
+  createCommandInputMessage,
+  createModelSwitchBreadcrumbs,
+  createUserMessage,
+} from 'src/utils/messages.js'
 import { PrintPartialOutputTracker } from './partialOutput.js'
 import { collectContextData, collectContextSummary } from 'src/commands/context/context-noninteractive.js'
 import { getSessionUsageSnapshot } from 'src/cost-tracker.js'
@@ -1355,6 +1366,12 @@ function runHeadlessStreaming(
   const teamFinishedReminder: TeamFinishedReminderState = {}
   let heldBackResult: StdoutMessage | null = null
   const deferredAgentNotifications = new TaskNotificationFollowUpBatch()
+  // After a user-issued interrupt / team_plan_pause, suppress queued or late
+  // background task notifications from starting a new model turn until the
+  // next real user message arrives. Lifecycle events still publish normally.
+  let suppressBackgroundTaskFollowUp = false
+  let askInFlight = false
+  const pendingGoalClearedMessages: Message[] = []
   let abortController: AbortController | undefined
   // Same queue sendRequest() enqueues to — one FIFO for everything.
   const output = structuredIO.outbound
@@ -1367,6 +1384,72 @@ function runHeadlessStreaming(
     publish: publishTaskNotification,
     unsubscribe: unsubscribeTaskNotifications,
   } = bindBackgroundTaskNotifications(structuredIO)
+
+  const cancelQueuedTaskNotifications = () => {
+    deferredAgentNotifications.clear()
+    const cancelled = dequeueAllMatching(
+      cmd =>
+        cmd.agentId === undefined &&
+        (cmd.mode === 'task-notification' ||
+          cmd.origin?.kind === 'task-notification'),
+    )
+    for (const cmd of cancelled) {
+      if (cmd.mode === 'task-notification') {
+        publishTaskNotification(cmd)
+      }
+      if (cmd.uuid) {
+        notifyCommandLifecycle(cmd.uuid, 'completed')
+      }
+    }
+  }
+
+  const persistPendingGoalClearedMessages = async () => {
+    if (pendingGoalClearedMessages.length === 0) return
+    const toPersist = pendingGoalClearedMessages.splice(0)
+    mutableMessages.push(...toPersist)
+    if (!isSessionPersistenceDisabled()) {
+      try {
+        await recordTranscript(mutableMessages)
+        await flushSessionStorage()
+      } catch (error) {
+        logError(error)
+      }
+    }
+  }
+
+  const clearGoalOnInterrupt = (): Message | null => {
+    const threadId = getSessionId()
+    const activeGoal =
+      getThreadGoal(threadId) ??
+      ensureThreadGoalHookFromTranscript({ setAppState }, threadId, mutableMessages)
+    const clearedGoal = clearThreadGoalHook({ setAppState }, threadId) ?? activeGoal
+    if (!clearedGoal) return null
+    const clearedContent = `<local-command-stdout>Goal cleared: ${clearedGoal.objective}</local-command-stdout>`
+    const clearedMessage = createCommandInputMessage(clearedContent)
+    output.enqueue({
+      type: 'system',
+      subtype: 'local_command_output',
+      content: clearedContent,
+      uuid: clearedMessage.uuid,
+      session_id: threadId,
+    } as StdoutMessage)
+    return clearedMessage
+  }
+
+  const recordGoalClearedMessage = async (clearedMessage: Message | null) => {
+    if (!clearedMessage) return
+    pendingGoalClearedMessages.push(clearedMessage)
+    if (!askInFlight) {
+      await persistPendingGoalClearedMessages()
+    }
+  }
+
+  const resumeBackgroundTaskFollowUp = () => {
+    if (suppressBackgroundTaskFollowUp) {
+      cancelQueuedTaskNotifications()
+      suppressBackgroundTaskFollowUp = false
+    }
+  }
 
   // Ctrl+C in -p mode: abort the in-flight query, then shut down gracefully.
   // gracefulShutdown persists session state and flushes analytics, with a
@@ -2518,6 +2601,12 @@ function runHeadlessStreaming(
             const notification = parseTaskNotificationXml(notificationText)
 
             publishTaskNotification(command)
+            if (suppressBackgroundTaskFollowUp) {
+              for (const uuid of batchUuids) {
+                notifyCommandLifecycle(uuid, 'completed')
+              }
+              continue
+            }
             if (
               !shouldForwardTaskNotificationToModel(notification, {
                 structuredOutput: options.outputFormat === 'stream-json',
@@ -2587,6 +2676,8 @@ function runHeadlessStreaming(
           const requiredComputerUse = requiresComputerUse(cmd) && !isPendingSessionMessage(cmd.uuid)
             ? { unavailableMessage: computerUseUnavailableMessage(computerUseMcp.unavailableReason()) }
             : undefined
+          askInFlight = true
+          try {
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               commands: uniqBy(
@@ -2667,6 +2758,12 @@ function runHeadlessStreaming(
               forwardMessagesToBridge()
 
               if (message.type === 'result') {
+                // Persist any Goal cleared anchor queued during an in-flight
+                // interrupt AFTER QueryEngine has finished appending its own
+                // interruption message so parentUuid chains linearly with no fork.
+                askInFlight = false
+                await persistPendingGoalClearedMessages()
+
                 // Flush pending SDK events so they appear before result on the stream.
                 for (const event of drainSdkEvents()) {
                   output.enqueue(event)
@@ -2675,6 +2772,7 @@ function runHeadlessStreaming(
                 // Hold-back: don't emit result while background agents are running
                 const currentState = getAppState()
                 if (
+                  !suppressBackgroundTaskFollowUp &&
                   getRunningTasks(currentState).some(
                     t =>
                       (t.type === 'local_agent' ||
@@ -2697,6 +2795,10 @@ function runHeadlessStreaming(
               }
             }
           }) // end runWithWorkload
+          } finally {
+            askInFlight = false
+            await persistPendingGoalClearedMessages()
+          }
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'completed')
@@ -2771,7 +2873,9 @@ function runHeadlessStreaming(
             t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
           )
           const hasMainThreadQueued = peek(isMainThread) !== undefined
-          const agentFollowUp = deferredAgentNotifications.takeIfSettled(hasRunningBg || hasMainThreadQueued)
+          const agentFollowUp = suppressBackgroundTaskFollowUp
+            ? undefined
+            : deferredAgentNotifications.takeIfSettled(hasRunningBg || hasMainThreadQueued)
           if (agentFollowUp) {
             enqueue({ mode: 'prompt', value: agentFollowUp, priority: 'later', isMeta: true, origin: { kind: 'task-notification' } })
           }
@@ -3308,8 +3412,11 @@ function runHeadlessStreaming(
           }
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'interrupt' || message.request.subtype === 'team_plan_pause') {
+          suppressBackgroundTaskFollowUp = true
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
+          cancelQueuedTaskNotifications()
           if (message.request.subtype === 'team_plan_pause') pauseLeadMailboxPoll(leadMailboxPoll)
+          const clearedMessage = clearGoalOnInterrupt()
           // Track escapes for attribution (ant-only feature)
           if (feature('COMMIT_ATTRIBUTION')) {
             setAppState(prev => ({
@@ -3320,6 +3427,8 @@ function runHeadlessStreaming(
               },
             }))
           }
+          // Abort immediately before any disk I/O so upstream cancellation and
+          // tool interruption are never delayed by transcript persistence.
           if (abortController) {
             abortController.abort()
           }
@@ -3327,9 +3436,12 @@ function runHeadlessStreaming(
           suggestionState.abortController = null
           suggestionState.lastEmitted = null
           suggestionState.pendingSuggestion = null
+          await recordGoalClearedMessage(clearedMessage)
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'end_session') {
+          suppressBackgroundTaskFollowUp = true
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
+          cancelQueuedTaskNotifications()
           logForDebugging(
             `[print.ts] end_session received, reason=${message.request.reason ?? 'unspecified'}`,
           )
@@ -4673,6 +4785,7 @@ function runHeadlessStreaming(
                     const fields = extractInboundMessageFields(msg)
                     if (!fields) return
                     const { content, uuid } = fields
+                    resumeBackgroundTaskFollowUp()
                     enqueue({
                       value: content,
                       mode: 'prompt' as const,
@@ -4688,7 +4801,11 @@ function runHeadlessStreaming(
                     structuredIO.injectControlResponse(response)
                   },
                   onInterrupt() {
+                    suppressBackgroundTaskFollowUp = true
+                    cancelQueuedTaskNotifications()
+                    const clearedMessage = clearGoalOnInterrupt()
                     abortController?.abort()
+                    void recordGoalClearedMessage(clearedMessage)
                   },
                   onSetModel(model) {
                     const resolved =
@@ -4857,6 +4974,7 @@ function runHeadlessStreaming(
       // the lead after this turn, alongside whatever the user now wants.
       leadMailboxPoll.held = false
       leadMailboxPoll.revision++
+      resumeBackgroundTaskFollowUp()
       enqueue({
         mode: 'prompt' as const,
         // file_attachments rides the protobuf catchall from the web composer.

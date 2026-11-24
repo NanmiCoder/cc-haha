@@ -111,6 +111,10 @@ export class TaskNotificationFollowUpBatch {
     return this.notifications.length > 0
   }
 
+  clear(): void {
+    this.notifications = []
+  }
+
   takeIfSettled(hasRunningBackgroundTasks: boolean): string | undefined {
     if (hasRunningBackgroundTasks || this.notifications.length === 0) {
       return undefined
