@@ -36,6 +36,7 @@ import { isDarkThemeMode, isLightThemeMode, isMaxConcurrentSubagents } from '../
 import type { ThemeMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource, ReasoningEffortLevel } from '../../types/settings'
 import type { Locale } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useQueueSendPreferenceStore } from '../../stores/queueSendPreferenceStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
@@ -156,6 +157,8 @@ export function GeneralSettings() {
   const setFollowSystemTheme = useUIStore((s) => s.setFollowSystemTheme)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sessions = useSessionStore((s) => s.sessions)
+  const sendQueuedMessagesAtOnce = useQueueSendPreferenceStore((s) => s.sendQueuedMessagesAtOnce)
+  const setSendQueuedMessagesAtOnce = useQueueSendPreferenceStore((s) => s.setSendQueuedMessagesAtOnce)
   const t = useTranslation()
   const [webSearchDraft, setWebSearchDraft] = useState(webSearch)
   const [networkDraft, setNetworkDraft] = useState(network)
@@ -1043,6 +1046,14 @@ export function GeneralSettings() {
               checked={nextPromptSuggestionsEnabled}
               onChange={handlePromptSuggestionsToggle}
               disabled={promptSuggestionsSaving}
+            />
+          )}
+          {!isTouchH5Document() && (
+            <SettingsSwitchRow
+              title={t('settings.general.queueSendModeTitle')}
+              description={t('settings.general.queueSendModeDescription')}
+              checked={sendQueuedMessagesAtOnce}
+              onChange={setSendQueuedMessagesAtOnce}
             />
           )}
           <SettingsRow

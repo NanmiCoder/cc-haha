@@ -18,6 +18,7 @@ import { useCLITaskStore, type CLITaskSnapshot } from './cliTaskStore'
 import { useWorkflowStore } from './workflowStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useProviderStore } from './providerStore'
+import { sendsQueuedMessagesAtOnce } from './queueSendPreferenceStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
 import { useUIStore } from './uiStore'
@@ -130,6 +131,13 @@ export type QueuedUserMessage = {
   displayAttachments?: AttachmentRef[]
   createdAt: number
 }
+
+/**
+ * Why automatic draining of the prompt queue stopped. A failed turn or a
+ * rejected send leaves later prompts queued until the user explicitly sends or
+ * withdraws one, matching the phone app's pause message.
+ */
+export type QueuedMessageAutoSendPause = 'turn-error' | 'send-failed'
 
 export type ComposerReferenceInsertion = {
   text: string
@@ -288,6 +296,12 @@ export type PerSessionState = {
   composerDraft?: ComposerDraftState | null
   repositoryLaunchDraft?: RepositoryLaunchDraftState | null
   queuedUserMessages?: QueuedUserMessage[]
+  /**
+   * Set when the turn that was running when prompts were queued ended in an
+   * error, or when a queued prompt could not be sent. Automatic draining stays
+   * off until the user starts a turn or guides a message explicitly.
+   */
+  queuedMessagesPaused?: QueuedMessageAutoSendPause
   /**
    * Predicted next prompt for the empty composer (`prompt_suggestion`). In
    * memory only; cleared when the user sends or the next turn starts.
@@ -624,7 +638,15 @@ type ChatStore = {
   ) => string
   updateQueuedUserMessage: (sessionId: string, messageId: string, content: string) => void
   removeQueuedUserMessage: (sessionId: string, messageId: string) => void
+  /** Move one queued prompt to a new position; it never sends anything. */
+  reorderQueuedUserMessage: (sessionId: string, messageId: string, toIndex: number) => void
   sendQueuedUserMessage: (sessionId: string, messageId: string) => void
+  /**
+   * Drain queued prompts when the session is idle: one per turn by default,
+   * all together when the caller enabled the batch preference. Safe to call
+   * repeatedly — it no-ops while busy or paused.
+   */
+  flushQueuedUserMessages: (sessionId: string) => void
   clearMessages: (sessionId: string) => void
   dismissPromptSuggestion: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
@@ -2488,6 +2510,38 @@ function updateSessionIn(
   return { ...sessions, [sessionId]: { ...session, ...updater(session) } }
 }
 
+/**
+ * Release queued prompts once the session is authoritatively idle.
+ *
+ * The queue used to be drained only from the `message_complete` handler. A
+ * reconnect, a stop, or a later event that returns the session to idle without
+ * that frame left prompts sitting in the composer forever (#1988), so every
+ * path that reports an idle state now calls this reconciliator.
+ *
+ * Sequential is the default (#2002): each prompt starts its own turn and the
+ * next one is released by that turn's completion, so the model answers one
+ * request before the next. The batch preference keeps the old behavior — the
+ * first prompt starts a turn and the rest are injected into it as guides.
+ */
+function releaseQueuedUserMessages(get: () => ChatStore, sessionId: string): void {
+  const session = get().sessions[sessionId]
+  if (
+    !session ||
+    session.chatState !== 'idle' ||
+    session.awaitingStopIdle === true ||
+    session.awaitingReconnectSync === true ||
+    session.isPreparingTurn === true ||
+    session.queuedMessagesPaused !== undefined
+  ) return
+  const queued = session.queuedUserMessages ?? []
+  if (queued.length === 0) return
+  if (sendsQueuedMessagesAtOnce()) {
+    for (const message of queued) get().sendQueuedUserMessage(sessionId, message.id)
+    return
+  }
+  get().sendQueuedUserMessage(sessionId, queued[0]!.id)
+}
+
 type SlashCommandState = PerSessionState['slashCommands'][number]
 
 function normalizeSlashCommand(command: unknown): SlashCommandState | null {
@@ -3780,6 +3834,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             scheduledTaskTurn: false,
             historyPageLoading: false,
             chatState: 'thinking',
+            // The user (or the queue drainer) started a turn: a pause left by
+            // an earlier failure no longer applies to what follows it.
+            queuedMessagesPaused: undefined,
             awaitingStopIdle: false,
             restoreIdleAfterPermissions: false,
             pendingBackgroundContinue: [],
@@ -5041,10 +5098,35 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   removeQueuedUserMessage: (sessionId, messageId) => {
     set((state) => ({
-      sessions: updateSessionIn(state.sessions, sessionId, (session) => ({
-        queuedUserMessages: (session.queuedUserMessages ?? []).filter((message) => message.id !== messageId),
-      })),
+      sessions: updateSessionIn(state.sessions, sessionId, (session) => {
+        const queuedUserMessages = (session.queuedUserMessages ?? [])
+          .filter((message) => message.id !== messageId)
+        return {
+          queuedUserMessages,
+          ...(queuedUserMessages.length === 0 ? { queuedMessagesPaused: undefined } : {}),
+        }
+      }),
     }))
+  },
+
+  reorderQueuedUserMessage: (sessionId, messageId, toIndex) => {
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (session) => {
+        const queued = session.queuedUserMessages ?? []
+        const fromIndex = queued.findIndex((message) => message.id === messageId)
+        if (fromIndex < 0 || queued.length < 2) return {}
+        const target = Math.max(0, Math.min(queued.length - 1, Math.trunc(toIndex)))
+        if (!Number.isFinite(target) || target === fromIndex) return {}
+        const next = [...queued]
+        const [moved] = next.splice(fromIndex, 1)
+        next.splice(target, 0, moved!)
+        return { queuedUserMessages: next }
+      }),
+    }))
+  },
+
+  flushQueuedUserMessages: (sessionId) => {
+    releaseQueuedUserMessages(get, sessionId)
   },
 
   sendQueuedUserMessage: (sessionId, messageId) => {
@@ -5064,6 +5146,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         },
       )
       if (sent) get().removeQueuedUserMessage(sessionId, messageId)
+      else {
+        set((state) => ({
+          sessions: updateSessionIn(state.sessions, sessionId, () => ({
+            queuedMessagesPaused: 'send-failed',
+          })),
+        }))
+      }
       return
     }
 
@@ -5071,7 +5160,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       type: 'user_message', content: queuedMessage.content, attachments: queuedMessage.attachments,
       ...(queuedMessage.sessionReferences?.length ? { sessionReferences: queuedMessage.sessionReferences } : {}),
     }
-    if (rejectOversizedMessage(sessionId, outgoing)) return
+    if (rejectOversizedMessage(sessionId, outgoing)) {
+      set((state) => ({
+        sessions: updateSessionIn(state.sessions, sessionId, () => ({
+          queuedMessagesPaused: 'send-failed',
+        })),
+      }))
+      return
+    }
 
     const now = Date.now()
     set((state) => ({
@@ -5121,6 +5217,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       streamingFallback: null,
       replaceHistoryOnCompletion: false,
       queuedUserMessages: [],
+      queuedMessagesPaused: undefined,
       pendingBackgroundContinue: [],
       backgroundContinueNoticeId: undefined,
       promptSuggestion: null,
@@ -5359,6 +5456,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             // separate REST requests.
             void get().loadHistory(sessionId)
           }
+          // A prompt queued while that turn ran may have missed its
+          // message_complete across a socket gap; this idle snapshot is the
+          // authoritative replacement (#1988).
+          releaseQueuedUserMessages(get, sessionId)
           break
         }
 
@@ -5408,6 +5509,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             backgroundAgentTasks: reconciledSession.backgroundAgentTasks,
           })
         }
+        // The server says this turn is over, but the client never saw the
+        // matching message_complete (it was offline when it happened). Drain
+        // the prompts that were waiting behind it (#1988).
+        releaseQueuedUserMessages(get, sessionId)
         break
       }
 
@@ -6224,9 +6329,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           sessionId,
           session.replaceHistoryOnCompletion === true,
         )
-        for (const queuedMessage of get().sessions[sessionId]?.queuedUserMessages ?? []) {
-          get().sendQueuedUserMessage(sessionId, queuedMessage.id)
-        }
+        releaseQueuedUserMessages(get, sessionId)
         break
       }
 
@@ -6381,6 +6484,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             restoreIdleAfterPermissions: false,
             apiRetry: null,
             streamingFallback: null,
+            // A turn that ended in an error makes later queued prompts unsafe
+            // to send on top: keep them until the user decides, like the phone.
+            ...(s.queuedUserMessages?.length ? { queuedMessagesPaused: 'turn-error' as const } : {}),
             historyMutationEpoch: (s.historyMutationEpoch ?? 0) + 1,
           }
         })
@@ -6580,6 +6686,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             awaitingReconnectSync: false,
             preHydrationSocketGapPending: false,
             queuedUserMessages: [],
+            queuedMessagesPaused: undefined,
             historyMutationEpoch: (session?.historyMutationEpoch ?? 0) + 1,
             historyStatus: 'ready',
             historyPage: undefined,

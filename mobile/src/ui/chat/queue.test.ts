@@ -3,6 +3,7 @@ import { Drafts } from '../../state/storage'
 import {
   canFlushQueue,
   clearParkedComposer,
+  moveQueueItem,
   parkComposer,
   parkedComposer,
   queueAttachments,
@@ -133,6 +134,20 @@ test('editing or clearing a restored composer before blur replaces its parked co
   withdrawQueuedComposer(key, { ...restored, draft: '', attachments: [], team: false }, drafts)
   expect(drafts.get(key)).toBeUndefined()
   expect(parkedComposer(key)).toBeUndefined()
+})
+
+test('reordering the queue changes the send order without dropping or duplicating items', () => {
+  const items = [
+    { id: 'A', text: 'a' },
+    { id: 'B', text: 'b' },
+    { id: 'C', text: 'c' },
+  ]
+  expect(moveQueueItem(items, 'C', 0).map((item) => item.id)).toEqual(['C', 'A', 'B'])
+  expect(moveQueueItem(items, 'A', 2).map((item) => item.id)).toEqual(['B', 'C', 'A'])
+  expect(moveQueueItem(items, 'B', 1)).toBe(items)
+  expect(moveQueueItem(items, 'missing', 0)).toBe(items)
+  expect(moveQueueItem(items, 'A', -5).map((item) => item.id)).toEqual(['A', 'B', 'C'])
+  expect(moveQueueItem(items, 'A', 99).map((item) => item.id)).toEqual(['B', 'C', 'A'])
 })
 
 test('withdrawing queued skills restores selection chips and plain draft, not model instructions', () => {

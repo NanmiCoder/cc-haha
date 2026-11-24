@@ -87,6 +87,7 @@ import { shouldPrefetchOlder } from '../../ui/chat/olderHistory'
 import {
   canFlushQueue,
   clearParkedComposer,
+  moveQueueItem,
   parkedComposer,
   queuePauseReason,
   withdrawQueuedComposer,
@@ -501,6 +502,10 @@ function ChatSession({
   }
   function withdrawQueued(ids?: string[]) {
     restoreQueue({ queue, draft, attachments, team, references }, ids)
+  }
+  /** 只调整发送顺序，不触发发送。 */
+  function moveQueued(itemId: string, toIndex: number) {
+    setQueue((items) => moveQueueItem(items, itemId, toIndex))
   }
   const runtime =
     state.runtime ??
@@ -1208,6 +1213,7 @@ function ChatSession({
       onWithdraw={(itemId) => withdrawQueued([itemId])}
       onSendNow={sendQueuedNow}
       onGuide={guideQueued}
+      onMove={moveQueued}
       guiding={state.turnActive}
       guideDisabled={
         !ready ||

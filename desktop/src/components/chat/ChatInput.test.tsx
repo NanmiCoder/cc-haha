@@ -166,6 +166,7 @@ import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPr
 import { getComposerElement, getComposerText, getComposerView, setComposerSelection, setComposerText } from './composerTestUtils'
 import { useVoiceInputStore } from '../../stores/voiceInputStore'
 import { useChatStore, type RepositoryLaunchDraftState } from '../../stores/chatStore'
+import { useQueueSendPreferenceStore } from '../../stores/queueSendPreferenceStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -1342,7 +1343,20 @@ describe('ChatInput file mentions', () => {
 
       expect(screen.getByRole('button', { name: /Guide now/i })).toHaveProperty('disabled', true)
 
-      setQuestionPending(false)
+      // Answering the question resumes the same turn; an idle session would
+      // (correctly) drain the queue instead of waiting for a guide.
+      act(() => {
+        useChatStore.setState((state) => ({
+          sessions: {
+            ...state.sessions,
+            [sessionId]: {
+              ...state.sessions[sessionId]!,
+              chatState: 'tool_executing',
+              pendingPermission: null,
+            },
+          },
+        }))
+      })
 
       expect(screen.getByRole('button', { name: /Guide now/i })).toHaveProperty('disabled', false)
     })
@@ -1462,6 +1476,112 @@ describe('ChatInput file mentions', () => {
       { type: 'assistant_text', content: 'workingdone now' },
       { type: 'user_text', content: 'continue after completion' },
     ])
+  })
+
+  it('sends one queued prompt per completed turn by default', async () => {
+    useQueueSendPreferenceStore.setState({ sendQueuedMessagesAtOnce: false })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          chatState: 'streaming',
+          streamingText: '',
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    setComposerText('first queued follow-up', 22)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    setComposerText('second queued follow-up', 23)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+
+    expect(screen.getAllByTestId('pending-user-message')).toHaveLength(2)
+
+    act(() => {
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'message_complete',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      })
+    })
+
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: 'first queued follow-up',
+      attachments: [],
+    })
+    expect(screen.getAllByTestId('pending-user-message')).toHaveLength(1)
+    expect(screen.getByTestId('pending-user-message')).toHaveTextContent('second queued follow-up')
+
+    act(() => {
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'message_complete',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      })
+    })
+
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: 'second queued follow-up',
+      attachments: [],
+    })
+    expect(screen.queryByTestId('pending-user-message')).not.toBeInTheDocument()
+  })
+
+  it('reorders queued prompts with the move buttons without sending them', () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          chatState: 'streaming',
+          streamingText: 'working',
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    setComposerText('older prompt', 12)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    setComposerText('newer prompt', 12)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+
+    // The second row's up arrow; the first row's is disabled at the edge.
+    fireEvent.click(screen.getAllByRole('button', { name: /Move queued message up/i })[1]!)
+
+    const rows = screen.getAllByTestId('pending-user-message')
+    expect(rows[0]).toHaveTextContent('newer prompt')
+    expect(rows[1]).toHaveTextContent('older prompt')
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message',
+    }))
+  })
+
+  it('explains why queued prompts stop sending after a failed turn', () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          chatState: 'idle',
+          queuedMessagesPaused: 'turn-error',
+          queuedUserMessages: [{
+            id: 'paused-queued',
+            content: 'after the failure',
+            displayContent: 'after the failure',
+            createdAt: 1,
+          }],
+        },
+      },
+    })
+
+    render(<ChatInput compact />)
+
+    expect(screen.getByText(/previous turn ended with an error/i)).toBeInTheDocument()
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message',
+    }))
+    expect(screen.getByTestId('pending-user-message')).toHaveTextContent('after the failure')
   })
 
   it('shows branch and worktree launch controls for an empty active Git session', async () => {

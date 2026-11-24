@@ -38,6 +38,7 @@ General covers four areas: appearance and replies, how the agent works, network 
 - **Language:** changes only the interface, with English, Simplified and Traditional Chinese, Japanese, and Korean choices. It does not set the response language.
 - **UI Zoom:** scales the whole window. Use `⌘+` / `⌘-` on macOS or `Ctrl+` / `Ctrl-` on Windows; press `0` to reset to 100%.
 - **Message sending:** defaults to Enter to send and Shift+Enter for a newline. If you write long prompts, choose `Ctrl/Cmd+Enter` to send.
+- **Queued messages:** prompts submitted while a turn runs wait above the composer. By default they are sent one at a time — the first when the current turn ends, the next after the model replies. Drag the left handle or use the up/down buttons to change the order; reordering never sends anything. Turn on **Send all queued messages at once** to restore the old behavior of releasing the rest together when the current turn ends. A failed turn pauses automatic sending and explains why, leaving the decision to continue or withdraw to you.
 - **Default editor:** chooses which detected local editor appears as the default under a file's **Open with** menu.
 
 ### For more involved agent workflows
