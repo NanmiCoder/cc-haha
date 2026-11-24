@@ -61,6 +61,7 @@ export type OpenAIChatRequest = {
   reasoning_effort?: OpenAIReasoningEffort
   thinking?: { type: string }
   parallel_tool_calls?: boolean
+  service_tier?: 'auto' | 'default' | 'flex' | 'priority'
   response_format?: { type: 'json_schema'; json_schema: { name: string; description?: string; schema: Record<string, unknown>; strict: boolean } }
 }
 
@@ -158,6 +159,7 @@ export type OpenAIResponsesRequest = {
   include?: string[]
   prompt_cache_key?: string
   parallel_tool_calls?: boolean
+  service_tier?: 'auto' | 'default' | 'flex' | 'priority'
   text?: { format: { type: 'json_schema'; name: string; description?: string; schema: Record<string, unknown>; strict: boolean } }
 }
 

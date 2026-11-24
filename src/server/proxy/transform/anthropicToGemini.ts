@@ -46,6 +46,27 @@ export type GeminiContent = { role: 'user' | 'model'; parts: GeminiPart[] }
 
 export type GeminiThinkingLevel = 'low' | 'medium' | 'high'
 
+export type GeminiThinkingConfig = {
+  includeThoughts?: boolean
+  thinkingLevel?: GeminiThinkingLevel
+  thinkingBudget?: number
+}
+
+export type GeminiTransformOptions = RequestCompatibilityOptions & {
+  /**
+   * When `false`, media inside `tool_result` blocks is hoisted into a follow-up
+   * user turn instead of nested in `functionResponse.parts`. Defaults to
+   * model-aware behavior (Gemini 3+/4+ nests images/PDFs; Gemini 2.x hoists).
+   */
+  supportsNestedToolResultMedia?: boolean
+  /**
+   * True when targeting Google Cloud Vertex AI rather than Google AI Studio.
+   * Vertex AI configures service tiers via `X-Vertex-AI-LLM-*` headers instead
+   * of the Gemini API `serviceTier` body field.
+   */
+  isVertex?: boolean
+}
+
 export type GeminiRequest = {
   contents: GeminiContent[]
   systemInstruction?: { parts: Array<{ text: string }> }
@@ -66,8 +87,10 @@ export type GeminiRequest = {
     stopSequences?: string[]
     responseMimeType?: string
     responseJsonSchema?: Record<string, unknown>
-    thinkingConfig?: { includeThoughts?: boolean; thinkingLevel?: GeminiThinkingLevel }
+    thinkingConfig?: GeminiThinkingConfig
   }
+  /** Gemini API (AI Studio) PayGo service tier (`standard` | `flex` | `priority`). */
+  serviceTier?: 'standard' | 'flex' | 'priority'
   /** Resumes a response Gemini split across requests (`finishReason: CONTINUATION`). */
   continuationToken?: string
 }
@@ -81,14 +104,39 @@ export function decodeGeminiThoughtSignature(value: unknown): string | undefined
   return value.slice(GEMINI_THOUGHT_SIGNATURE_PREFIX.length) || undefined
 }
 
+const GEMINI_2_BUDGET_BY_EFFORT: Record<GeminiThinkingLevel, number> = {
+  low: 1024,
+  medium: 8192,
+  high: 24576,
+}
+
+function isGemini2Model(model: string): boolean {
+  return /(?:^|\/)gemini-2(?:\.|-|$)/i.test(model.trim())
+}
+
+function supportsNestedFunctionResponseMedia(model: string, option?: boolean): boolean {
+  if (option === false) return false
+  return !isGemini2Model(model)
+}
+
+function isSupportedNestedFunctionResponseMimeType(mimeType: string): boolean {
+  const normalized = mimeType.trim().toLowerCase()
+  return !normalized.startsWith('audio/') && !normalized.startsWith('video/')
+}
+
 export function anthropicToGemini(
   body: AnthropicRequest,
-  options: RequestCompatibilityOptions = {},
+  options: GeminiTransformOptions = {},
 ): GeminiRequest {
-  // Gemini has a single output budget field, so only the resolved number is
-  // used; the default-budget omission policy is the same as OpenAI Chat's.
-  const compatibility = resolveRequestCompatibility(body, { ...options, protocol: 'openai_chat' })
-  const result: GeminiRequest = { contents: convertMessages(body) }
+  const compatibility = resolveRequestCompatibility(body, {
+    ...options,
+    protocol: options.isVertex ? 'google_vertex' : 'gemini',
+  })
+  const allowNestedMedia = supportsNestedFunctionResponseMedia(body.model, options.supportsNestedToolResultMedia)
+  // Vertex AI v1 FunctionCall/FunctionResponse protobuf schemas reject `id`
+  // (`Unknown name "id"`), matching `@ai-sdk/google` (`includeFunctionCallIds: !isVertexProvider`).
+  const includeFunctionCallIds = !options.isVertex
+  const result: GeminiRequest = { contents: convertMessages(body, allowNestedMedia, includeFunctionCallIds) }
 
   // The leading billing attribution is dropped: its rotating cch= signature
   // would change the prefix every turn and defeat upstream prompt caching.
@@ -123,30 +171,51 @@ export function anthropicToGemini(
   if (body.stop_sequences?.length) generationConfig.stopSequences = body.stop_sequences
   if (compatibility.structuredOutput) {
     generationConfig.responseMimeType = 'application/json'
-    generationConfig.responseJsonSchema = compatibility.structuredOutput.schema
+    generationConfig.responseJsonSchema = toGeminiParametersSchema(
+      compatibility.structuredOutput.schema,
+      { requireObjectRoot: false },
+    )
   }
   const thinkingConfig = compatibility.passReasoning ? convertThinking(body) : undefined
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig
   if (Object.keys(generationConfig).length > 0) result.generationConfig = generationConfig
+  if (!options.isVertex && compatibility.serviceTier) {
+    result.serviceTier = compatibility.serviceTier === 'default' ? 'standard' : compatibility.serviceTier
+  }
 
   return result
 }
 
 /**
- * Claude Code asks for adaptive thinking plus an effort level. Gemini 3+ takes a
- * thinking level instead of a budget and returns thought summaries only when
- * asked, which is what becomes the visible thinking block.
+ * Claude Code asks for adaptive thinking plus an effort level. Gemini 3+/4+
+ * takes `thinkingLevel`, whereas Gemini 2.5 uses `thinkingBudget` and rejects
+ * `thinkingLevel` (and Gemini 2.5 Pro rejects `thinkingBudget: 0`). Both return
+ * visible thought summaries only when `includeThoughts` is set.
  */
-function convertThinking(body: AnthropicRequest): NonNullable<GeminiRequest['generationConfig']>['thinkingConfig'] {
-  const includeThoughts = body.thinking !== undefined && body.thinking.type !== 'disabled'
-  const budget = body.thinking?.budget_tokens
+function convertThinking(body: AnthropicRequest): GeminiThinkingConfig | undefined {
+  const thinkingDisabled = body.thinking?.type === 'disabled'
+  const includeThoughts = body.thinking !== undefined && !thinkingDisabled
+  const rawBudget = !thinkingDisabled ? body.thinking?.budget_tokens : undefined
+  const budget = typeof rawBudget === 'number' && Number.isSafeInteger(rawBudget) && rawBudget > 0
+    ? rawBudget
+    : undefined
   const effort = normalizeOpenAIReasoningEffort(body.output_config?.effort)
     ?? (budget === undefined ? undefined : budget <= 1024 ? 'low' : budget <= 8192 ? 'medium' : 'high')
-  const thinkingLevel: GeminiThinkingLevel | undefined = effort === undefined
+  const thinkingLevel: GeminiThinkingLevel | undefined = effort === undefined || effort === 'none'
     ? undefined
     : effort === 'medium' ? 'medium'
       : effort === 'high' || effort === 'xhigh' || effort === 'max' ? 'high'
         : 'low'
+
+  if (isGemini2Model(body.model)) {
+    const thinkingBudget = budget ?? (thinkingLevel ? GEMINI_2_BUDGET_BY_EFFORT[thinkingLevel] : undefined)
+    if (!includeThoughts && thinkingBudget === undefined) return undefined
+    return {
+      ...(includeThoughts ? { includeThoughts: true } : {}),
+      ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
+    }
+  }
+
   if (!includeThoughts && !thinkingLevel) return undefined
   return {
     ...(includeThoughts ? { includeThoughts: true } : {}),
@@ -167,37 +236,88 @@ function convertToolChoice(choice: unknown, toolNames: string[]): GeminiRequest[
   return undefined
 }
 
-function convertMessages(body: AnthropicRequest): GeminiContent[] {
+function isFunctionResponseContent(content: GeminiContent | undefined): boolean {
+  return Boolean(content && content.role === 'user' && content.parts.some(part => part.functionResponse !== undefined))
+}
+
+function convertMessages(
+  body: AnthropicRequest,
+  allowNestedMedia: boolean,
+  includeFunctionCallIds: boolean,
+): GeminiContent[] {
   const contents: GeminiContent[] = []
   // Gemini answers a call by function name; Anthropic results only carry the id.
   const toolNames = new Map<string, string>()
+  // Track the preceding model turn's call IDs out-of-band so functionResponse
+  // ordering still works even when Vertex omits `id` on the wire.
+  let lastModelCallOrder: string[] = []
 
   for (const message of body.messages) {
     const blocks: AnthropicContentBlock[] = typeof message.content === 'string'
       ? [{ type: 'text', text: message.content }]
       : message.content
     if (message.role === 'assistant') {
-      const parts = convertAssistantBlocks(blocks, toolNames)
-      if (parts.length > 0) contents.push({ role: 'model', parts })
+      const { parts, callIds } = convertAssistantBlocks(blocks, toolNames, includeFunctionCallIds)
+      if (parts.length > 0) {
+        const previous = contents.at(-1)
+        if (previous?.role === 'model') {
+          previous.parts.push(...parts)
+          lastModelCallOrder = [...lastModelCallOrder, ...callIds]
+        } else {
+          contents.push({ role: 'model', parts })
+          lastModelCallOrder = callIds
+        }
+      }
       continue
     }
 
-    const responses: GeminiPart[] = []
+    const responses: Array<{ callId: string; part: GeminiPart }> = []
     const others: GeminiPart[] = []
     for (const block of blocks) {
-      if (block.type === 'tool_result') responses.push(convertToolResult(block, toolNames))
-      else others.push(...convertUserBlock(block))
+      if (block.type === 'tool_result') {
+        const converted = convertToolResult(block, toolNames, allowNestedMedia, includeFunctionCallIds)
+        responses.push({ callId: block.tool_use_id, part: converted.responsePart })
+        if (converted.hoistedMedia.length > 0) {
+          others.push({ text: `[Media content for tool call ${block.tool_use_id}]` }, ...converted.hoistedMedia)
+        }
+      } else {
+        others.push(...convertUserBlock(block))
+      }
     }
+    if (responses.length > 1 && lastModelCallOrder.length > 0) {
+      const orderIndex = new Map(lastModelCallOrder.map((id, idx) => [id, idx]))
+      responses.sort((a, b) => {
+        const idxA = orderIndex.get(a.callId) ?? Number.MAX_SAFE_INTEGER
+        const idxB = orderIndex.get(b.callId) ?? Number.MAX_SAFE_INTEGER
+        return idxA - idxB
+      })
+    }
+    lastModelCallOrder = []
+    const responseParts = responses.map(entry => entry.part)
+
     // The function-response turn must answer the call turn alone: Gemini rejects
     // one that carries extra parts, so anything else becomes its own user turn.
-    if (responses.length > 0) contents.push({ role: 'user', parts: responses })
-    if (others.length > 0) contents.push({ role: 'user', parts: others })
+    if (responseParts.length > 0) {
+      const previous = contents.at(-1)
+      if (isFunctionResponseContent(previous)) previous!.parts.push(...responseParts)
+      else contents.push({ role: 'user', parts: responseParts })
+    }
+    if (others.length > 0) {
+      const previous = contents.at(-1)
+      if (previous?.role === 'user' && !isFunctionResponseContent(previous)) previous.parts.push(...others)
+      else contents.push({ role: 'user', parts: others })
+    }
   }
   return contents
 }
 
-function convertAssistantBlocks(blocks: AnthropicContentBlock[], toolNames: Map<string, string>): GeminiPart[] {
+function convertAssistantBlocks(
+  blocks: AnthropicContentBlock[],
+  toolNames: Map<string, string>,
+  includeFunctionCallIds: boolean,
+): { parts: GeminiPart[]; callIds: string[] } {
   const parts: GeminiPart[] = []
+  const callIds: string[] = []
   let pendingSignature: string | undefined
   // Gemini signs only the first of parallel calls; unsigned siblings are valid.
   let signedCall = false
@@ -206,23 +326,39 @@ function convertAssistantBlocks(blocks: AnthropicContentBlock[], toolNames: Map<
     if (block.type === 'text') {
       if (block.text) parts.push({ text: block.text })
     } else if (block.type === 'thinking') {
-      if (!block.thinking) continue
       const signature = decodeGeminiThoughtSignature(block.signature)
-      parts.push({ text: block.thinking, thought: true, ...(signature ? { thoughtSignature: signature } : {}) })
+      if (block.thinking) {
+        parts.push({ text: block.thinking, thought: true, ...(signature ? { thoughtSignature: signature } : {}) })
+      } else if (signature) {
+        pendingSignature = signature
+      }
     } else if (block.type === 'redacted_thinking') {
       pendingSignature = decodeGeminiThoughtSignature(block.data) ?? pendingSignature
     } else if (block.type === 'tool_use') {
       toolNames.set(block.id, block.name)
+      callIds.push(block.id)
       const signature = pendingSignature ?? (signedCall ? undefined : SKIP_THOUGHT_SIGNATURE_VALIDATOR)
       if (pendingSignature) signedCall = true
       pendingSignature = undefined
       parts.push({
-        functionCall: { id: block.id, name: block.name, args: toolInput(block.input) },
+        functionCall: {
+          ...(includeFunctionCallIds ? { id: block.id } : {}),
+          name: block.name,
+          args: toolInput(block.input),
+        },
         ...(signature ? { thoughtSignature: signature } : {}),
       })
     }
   }
-  return parts
+  if (pendingSignature) {
+    const last = parts.at(-1)
+    if (last && !last.thoughtSignature) {
+      last.thoughtSignature = pendingSignature
+    } else if (!last) {
+      parts.push({ text: '', thought: true, thoughtSignature: pendingSignature })
+    }
+  }
+  return { parts, callIds }
 }
 
 function toolInput(input: unknown): Record<string, unknown> {
@@ -241,17 +377,25 @@ function toolInput(input: unknown): Record<string, unknown> {
 function convertToolResult(
   block: Extract<AnthropicContentBlock, { type: 'tool_result' }>,
   toolNames: Map<string, string>,
-): GeminiPart {
+  allowNestedMedia: boolean,
+  includeFunctionCallIds: boolean,
+): { responsePart: GeminiPart; hoistedMedia: GeminiPart[] } {
   const content: AnthropicContentBlock[] = typeof block.content === 'string'
     ? [{ type: 'text', text: block.content }]
     : block.content ?? []
   let text = ''
-  const media: GeminiInlineData[] = []
+  const nestedMedia: GeminiInlineData[] = []
+  const hoistedMedia: GeminiPart[] = []
   for (const item of content) {
     for (const part of convertUserBlock(item)) {
-      // Gemini 3+ accepts images and PDFs nested in the function response itself.
+      // Gemini 3+/4+ accepts images and PDFs nested in `functionResponse.parts`,
+      // while Gemini 2.x and audio/video payloads must be hoisted into a follow-up user turn.
       if (part.inlineData) {
-        media.push({ inlineData: part.inlineData })
+        if (allowNestedMedia && isSupportedNestedFunctionResponseMimeType(part.inlineData.mimeType)) {
+          nestedMedia.push({ inlineData: part.inlineData })
+        } else {
+          hoistedMedia.push({ inlineData: part.inlineData })
+        }
         continue
       }
       if (!part.text) continue
@@ -261,14 +405,20 @@ function convertToolResult(
       text += ownLine ? `\n${part.text}` : part.text
     }
   }
+  const responseText = text
+    || (!block.is_error && nestedMedia.length > 0 ? 'Binary content provided.' : '')
+    || (!block.is_error && hoistedMedia.length > 0 ? 'Media result attached after this tool result.' : '')
   return {
-    functionResponse: {
-      id: block.tool_use_id,
-      name: toolNames.get(block.tool_use_id) ?? block.tool_use_id,
-      // Google's documented keys: `output` for a result, `error` for a failure.
-      response: block.is_error ? { error: text } : { output: text },
-      ...(media.length > 0 ? { parts: media } : {}),
+    responsePart: {
+      functionResponse: {
+        ...(includeFunctionCallIds ? { id: block.tool_use_id } : {}),
+        name: toolNames.get(block.tool_use_id) ?? block.tool_use_id,
+        // Google's documented keys: `output` for a result, `error` for a failure.
+        response: block.is_error ? { error: responseText } : { output: responseText },
+        ...(nestedMedia.length > 0 ? { parts: nestedMedia } : {}),
+      },
     },
+    hoistedMedia,
   }
 }
 
@@ -291,7 +441,10 @@ function convertUserBlock(block: AnthropicContentBlock): GeminiPart[] {
 
 // Gemini fetches no public URLs: inline data is the only media it accepts here.
 function imagePart(source: AnthropicImageSource): GeminiPart {
-  if (source.type === 'base64') return { inlineData: { mimeType: source.media_type, data: source.data } }
+  if (source.type === 'base64') {
+    if (!source.data) return { text: '[Image omitted: empty base64 image payload.]' }
+    return { inlineData: { mimeType: source.media_type, data: source.data } }
+  }
   if (source.type === 'url') return { text: `[Image: ${source.url}]` }
   return { text: '[Image omitted: file-based image source is not supported by this endpoint.]' }
 }
@@ -301,6 +454,10 @@ function documentParts(block: Extract<AnthropicContentBlock, { type: 'document' 
   const source = block.source
   if (source.type === 'text') return [{ text: `${provenance}${source.data}` }]
   if (source.type === 'base64') {
+    if (!source.data) {
+      const label = block.title ?? 'document'
+      return [{ text: `${provenance}[Document: ${label} omitted — empty base64 payload]` }]
+    }
     return [
       ...(provenance ? [{ text: provenance }] : []),
       { inlineData: { mimeType: source.media_type, data: source.data } },

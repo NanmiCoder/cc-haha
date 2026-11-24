@@ -143,7 +143,15 @@ const LEGACY_CONFIG_FILES = ['config.json', 'config.json.migrated']
 const CC_SWITCH_SETTINGS_FILE = 'settings.json'
 const CURRENT_CLAUDE_PROVIDER_KEY = 'currentProviderClaude'
 const SUPPORTED_APP_TYPES: CcSwitchAppType[] = ['claude', 'claude-desktop']
-const SUPPORTED_API_FORMATS: ApiFormat[] = ['anthropic', 'openai_chat', 'openai_responses']
+const SUPPORTED_API_FORMATS: ApiFormat[] = [
+  'anthropic',
+  'openai_chat',
+  'openai_responses',
+  'gemini',
+  'google_vertex',
+  'bedrock_converse',
+  'azure_openai',
+]
 const DEFAULT_SORT_INDEX = 999_999
 const DEFAULT_AUTH_STRATEGY: ProviderAuthStrategy = 'auth_token'
 const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
@@ -696,7 +704,10 @@ function readApiFormat(meta: unknown): ApiFormat | null {
   if (!isRecord(parsed)) return 'anthropic'
   const apiFormat = toOptionalString(parsed.apiFormat)
   if (!apiFormat) return 'anthropic'
-  // gemini_native and anything else we do not speak cannot be imported.
+  if (apiFormat === 'gemini_native') return 'gemini'
+  if (apiFormat === 'vertex' || apiFormat === 'vertex_ai') return 'google_vertex'
+  if (apiFormat === 'bedrock' || apiFormat === 'aws_bedrock') return 'bedrock_converse'
+  if (apiFormat === 'azure' || apiFormat === 'azure_openai_chat') return 'azure_openai'
   return SUPPORTED_API_FORMATS.includes(apiFormat as ApiFormat) ? (apiFormat as ApiFormat) : null
 }
 

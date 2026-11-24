@@ -28,6 +28,7 @@ import { ProviderService } from '../services/providerService.js'
 import { openMagpieApp } from '../services/magpieGateway.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
+  ApiFormatSchema,
   CreateProviderSchema,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   ModelContextWindowsSchema,
@@ -54,13 +55,26 @@ const CcSwitchImportSchema = z.object({
 
 const FetchProviderModelsSchema = z.object({
   baseUrl: z.string().min(1),
-  apiKey: z.string().min(1),
+  apiKey: z.string(),
+  apiFormat: ApiFormatSchema.optional(),
   isFullUrl: z.boolean().optional(),
   proxy: ProviderProxyConfigSchema.optional(),
   // `modelsUrl` is deliberately NOT accepted over HTTP. The service still
   // supports the override for internal callers, but exposing a free-form
   // endpoint on an authenticated route only widens the request surface — no
   // client sends it.
+}).superRefine((data, ctx) => {
+  if (
+    data.apiKey.length === 0 &&
+    data.apiFormat !== 'google_vertex' &&
+    data.apiFormat !== 'bedrock_converse'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['apiKey'],
+      message: 'API key is required',
+    })
+  }
 })
 
 const OfficialProviderModelsUpdateSchema = z.object({

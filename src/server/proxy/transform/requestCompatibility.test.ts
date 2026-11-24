@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { anthropicToGemini } from './anthropicToGemini.js'
 import { anthropicToOpenaiChat } from './anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from './anthropicToOpenaiResponses.js'
 import { resolveRequestCompatibility } from './requestCompatibility.js'
@@ -16,6 +17,11 @@ describe('request intent survives protocol conversion', () => {
       .toEqual({ source: 'default', requested: 32_000, field: 'omit', reason: 'upstream_default' })
     expect(resolveRequestCompatibility(body({ max_tokens: 1 }), { protocol: 'openai_responses' }).outputBudget)
       .toEqual({ source: 'explicit', requested: 1, field: 'max_output_tokens', effective: 16, reason: 'responses_minimum' })
+    expect(resolveRequestCompatibility(body(), {
+      protocol: 'gemini', budgetSource: 'default', requestCompatibility: { maxOutputTokens: 96_000, outputTokenLimit: 64_000 },
+    }).outputBudget).toEqual({ source: 'default', requested: 32_000, configured: 96_000, hardLimit: 64_000, field: 'maxOutputTokens', effective: 64_000, reason: 'hard_limit' })
+    expect(anthropicToGemini(body({ max_tokens: 64 })).generationConfig?.maxOutputTokens).toBe(64)
+    expect(anthropicToGemini(body(), { budgetSource: 'default' }).generationConfig?.maxOutputTokens).toBeUndefined()
   })
 
   test('explicit budgets reach Chat and Responses while local defaults may omit', () => {
@@ -134,5 +140,28 @@ describe('request intent survives protocol conversion', () => {
     ] }] })
     const transformed = anthropicToOpenaiChat(input, { roundTripReasoningContent: true, requestCompatibility: { reasoning: 'unsupported' } })
     expect(transformed.messages[0].reasoning_content).toBeUndefined()
+  })
+
+  test('resolves maxTokens for bedrock_converse and propagates serviceTier across protocols', () => {
+    const bedrock = resolveRequestCompatibility(body({ max_tokens: 4096 }), {
+      protocol: 'bedrock_converse',
+      requestCompatibility: { serviceTier: 'flex' },
+    })
+    expect(bedrock.outputBudget.field).toBe('maxTokens')
+    expect(bedrock.outputBudget.effective).toBe(4096)
+    expect(bedrock.serviceTier).toBe('flex')
+
+    const vertex = resolveRequestCompatibility(body({ max_tokens: 2048 }), {
+      protocol: 'google_vertex',
+      requestCompatibility: { serviceTier: 'priority' },
+    })
+    expect(vertex.outputBudget.field).toBe('maxOutputTokens')
+    expect(vertex.serviceTier).toBe('priority')
+
+    const autoTier = resolveRequestCompatibility(body({ max_tokens: 2048 }), {
+      protocol: 'openai_chat',
+      requestCompatibility: { serviceTier: 'auto' },
+    })
+    expect(autoTier.serviceTier).toBeUndefined()
   })
 })

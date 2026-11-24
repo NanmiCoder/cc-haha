@@ -171,6 +171,54 @@ describe('geminiStreamToAnthropic', () => {
     ), MODEL, noContinuation))
     expect(output.find(event => event.type === 'message_delta')!.delta.stop_reason).toBe('end_turn')
   })
+
+  test('preserves signature-only and empty-text thoughtSignature parts ahead of tool calls and text', async () => {
+    // 1) Signature-only thought part (no `text` key) closes an open thinking block with its signature.
+    const withOpenThinking = await events(geminiStreamToAnthropic(sse(
+      { candidates: [{ content: { role: 'model', parts: [{ text: 'Step 1', thought: true }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ thought: true, thoughtSignature: 'sig-open' }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ text: 'Done.' }] }, finishReason: 'STOP' }] },
+    ), MODEL, noContinuation))
+    const sigDelta = withOpenThinking.find(event => event.delta?.type === 'signature_delta')
+    expect(decodeGeminiThoughtSignature(sigDelta?.delta.signature)).toBe('sig-open')
+
+    // 2) Signature-only part with no open thinking block carries over to the next functionCall.
+    const beforeCall = await events(geminiStreamToAnthropic(sse(
+      { candidates: [{ content: { role: 'model', parts: [{ text: '', thoughtSignature: 'sig-pending-call' }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ functionCall: { id: 'c1', name: 'Read', args: { file_path: 'x.ts' } } }] }, finishReason: 'STOP' }] },
+    ), MODEL, noContinuation))
+    const callStarts = beforeCall.filter(event => event.type === 'content_block_start').map(event => event.content_block)
+    expect(callStarts[0].type).toBe('redacted_thinking')
+    expect(decodeGeminiThoughtSignature(callStarts[0].data)).toBe('sig-pending-call')
+    expect(callStarts[1]).toEqual({ type: 'tool_use', id: 'c1', name: 'Read', input: {} })
+
+    // 3) Signature-only thought part before plain text emits redacted_thinking before text.
+    const beforeText = await events(geminiStreamToAnthropic(sse(
+      { candidates: [{ content: { role: 'model', parts: [{ thought: true, thoughtSignature: 'sig-before-text' }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ text: 'Hello' }] }, finishReason: 'STOP' }] },
+    ), MODEL, noContinuation))
+    const textStarts = beforeText.filter(event => event.type === 'content_block_start').map(event => event.content_block)
+    expect(textStarts[0].type).toBe('redacted_thinking')
+    expect(decodeGeminiThoughtSignature(textStarts[0].data)).toBe('sig-before-text')
+    expect(textStarts[1]).toEqual({ type: 'text', text: '' })
+  })
+
+  test('unwraps Code Assist response envelopes and ignores [DONE] SSE frames', async () => {
+    const encoder = new TextEncoder()
+    const rawSse = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ response: { responseId: 'wrapped-1', candidates: [{ content: { role: 'model', parts: [{ text: 'Wrapped ok' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 3 } } })}\n\n` +
+          'data: [DONE]\n\n',
+        ))
+        controller.close()
+      },
+    })
+    const output = await events(geminiStreamToAnthropic(rawSse, MODEL, noContinuation))
+    expect(output.some(event => event.type === 'error')).toBe(false)
+    expect(output.find(event => event.delta?.type === 'text_delta')?.delta.text).toBe('Wrapped ok')
+    expect(output.find(event => event.type === 'message_delta')?.usage).toEqual({ input_tokens: 10, output_tokens: 3 })
+  })
 })
 
 describe('geminiResponseToAnthropic', () => {

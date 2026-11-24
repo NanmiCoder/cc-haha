@@ -56,7 +56,10 @@ describe('createTraceRequestSemantic', () => {
     const body = {
       anthropic,
       upstream: {
-        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: dataUrl, detail: 'high' } }] }],
+        messages: [
+          { role: 'user', content: [{ type: 'image_url', image_url: { url: dataUrl, detail: 'high' } }] },
+          { role: 'user', content: [{ image: { format: 'png', source: { bytes: data } } }] },
+        ],
         input: [{ role: 'user', content: [{ type: 'input_image', image_url: dataUrl }] }],
         contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] }],
         token: 'fixture-token',
@@ -70,7 +73,10 @@ describe('createTraceRequestSemantic', () => {
     expect(JSON.parse(snapshot.preview)).toEqual({
       anthropic,
       upstream: {
-        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: omittedUrl, detail: 'high' } }] }],
+        messages: [
+          { role: 'user', content: [{ type: 'image_url', image_url: { url: omittedUrl, detail: 'high' } }] },
+          { role: 'user', content: [{ image: { format: 'png', source: { encodedChars: data.length } } }] },
+        ],
         input: [{ role: 'user', content: [{ type: 'input_image', image_url: omittedUrl }] }],
         contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', encodedChars: data.length } }] }],
         token: '[redacted]',
@@ -125,4 +131,31 @@ test('the request image path does not run getters or exempt other oversized data
   const toolInput = { type: 'tool_use', name: 'Write', input: { data } }
   expect(createTraceRequestSemantic({ messages: [{ content: [toolInput] }] }, 'anthropic')?.request)
     .toMatchObject({ traceCaptureOmitted: { reason: 'string-budget' } })
+})
+
+test('preserves Gemini token-count fields while still redacting credential token keys', () => {
+  const snapshot = createTraceBodySnapshot({
+    usageMetadata: {
+      promptTokenCount: 1200,
+      candidatesTokenCount: 340,
+      thoughtsTokenCount: 95,
+      cachedContentTokenCount: 800,
+      totalTokenCount: 1635,
+    },
+    token: 'secret-bearer-token',
+    access_token: 'secret-access-token',
+    continuationToken: 'opaque-continuation-token',
+  })
+  expect(JSON.parse(snapshot.preview)).toEqual({
+    usageMetadata: {
+      promptTokenCount: 1200,
+      candidatesTokenCount: 340,
+      thoughtsTokenCount: 95,
+      cachedContentTokenCount: 800,
+      totalTokenCount: 1635,
+    },
+    token: '[redacted]',
+    access_token: '[redacted]',
+    continuationToken: '[redacted]',
+  })
 })

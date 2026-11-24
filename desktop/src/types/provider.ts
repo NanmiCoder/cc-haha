@@ -1,9 +1,16 @@
 // desktop/src/types/provider.ts
 
-export type ApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
+export type ApiFormat =
+  | 'anthropic'
+  | 'openai_chat'
+  | 'openai_responses'
+  | 'gemini'
+  | 'google_vertex'
+  | 'bedrock_converse'
+  | 'azure_openai'
 
-/** Protocols a preset can route one model family to; a saved record only carries an ApiFormat. */
-export type ModelApiFormat = ApiFormat | 'gemini'
+/** Protocols a preset can route one model family to. */
+export type ModelApiFormat = ApiFormat
 
 export type ProviderAuthStrategy =
   | 'api_key'
@@ -49,10 +56,13 @@ export type ImageGenerationConfig = {
   apiKey?: string
 }
 
+export type ServiceTier = 'auto' | 'default' | 'flex' | 'priority'
+
 export type RequestCompatibility = {
   maxOutputTokens?: number
   outputTokenLimit?: number
   outputTokenField?: 'auto' | 'max_tokens' | 'max_completion_tokens' | 'omit'
+  serviceTier?: ServiceTier
   sampling?: 'auto' | 'supported' | 'unsupported'
   reasoning?: 'auto' | 'supported' | 'unsupported'
   parallelTools?: 'auto' | 'supported' | 'unsupported'
@@ -222,6 +232,7 @@ export type ProviderModelInfo = {
 export type ProviderModelsInput = {
   baseUrl: string
   apiKey: string
+  apiFormat?: ApiFormat
   isFullUrl?: boolean
   modelsUrl?: string
   /** The form's proxy override, so the probe takes the route chat will take. */

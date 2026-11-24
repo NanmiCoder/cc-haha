@@ -67,6 +67,9 @@ export function readCompatibilityJson(value: unknown): RequestCompatibility | un
   if (result.outputTokenField !== undefined && !['auto', 'max_tokens', 'max_completion_tokens', 'omit'].includes(result.outputTokenField)) {
     throw new Error('settings.providers.compatibilityJsonError')
   }
+  if (result.serviceTier !== undefined && !['auto', 'default', 'flex', 'priority'].includes(result.serviceTier)) {
+    throw new Error('settings.providers.compatibilityJsonError')
+  }
   for (const key of COMPATIBILITY_CAPABILITIES) {
     if (result[key] !== undefined && !['auto', 'supported', 'unsupported'].includes(result[key])) throw new Error('settings.providers.compatibilityJsonError')
   }

@@ -108,4 +108,63 @@ describe('bounded upstream protocol diagnostics', () => {
       await expect(reader.read()).rejects.toBe(failure)
     } finally { diagnostic.mockRestore() }
   })
+
+  test('tracks Gemini maxOutputTokens, finishReason, blockReason, usageMetadata, and errors without body leakage', () => {
+    const observer = new ProtocolTraceObserver('gemini', {
+      contents: [{ role: 'user', parts: [{ text: 'SECRET_BODY' }] }],
+      generationConfig: { maxOutputTokens: 2048 },
+    }, {
+      source: 'explicit', requested: 2048, effective: 2048, field: 'maxOutputTokens', reason: 'explicit_request',
+    })
+    observer.push(encoder.encode(
+      `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'SECRET_BODY' }] }, finishReason: 'MAX_TOKENS' }], usageMetadata: { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 2000, thoughtsTokenCount: 48, totalTokenCount: 2148 } })}\r\n\r\n`,
+    ))
+    observer.finish('eof')
+    const summary = observer.snapshot()
+    expect(summary).toMatchObject({
+      protocol: 'gemini',
+      transport: 'eof',
+      termination: { finishReason: 'MAX_TOKENS' },
+      usage: { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 2000, thoughtsTokenCount: 48, totalTokenCount: 2148 },
+      outputBudget: { source: 'explicit', field: 'maxOutputTokens', effective: 2048, wireFields: { maxOutputTokens: 2048 } },
+    })
+    expect(JSON.stringify(summary)).not.toContain('SECRET_BODY')
+
+    const blocked = new ProtocolTraceObserver('gemini', {})
+    blocked.observeJson({ promptFeedback: { blockReason: 'SAFETY' }, error: { code: 400, status: 'INVALID_ARGUMENT', message: 'SECRET_BODY' } })
+    blocked.finish('error')
+    expect(blocked.snapshot().termination).toEqual({ finishReason: 'SAFETY', errorType: 'INVALID_ARGUMENT', errorCode: '400' })
+    expect(JSON.stringify(blocked.snapshot())).not.toContain('SECRET_BODY')
+  })
+
+  test('tracks Bedrock Converse inferenceConfig.maxTokens, binary event usage, stopReason, and exceptions without body leakage', () => {
+    const observer = new ProtocolTraceObserver('bedrock_converse', {
+      messages: [{ role: 'user', content: [{ text: 'SECRET_BODY' }] }],
+      inferenceConfig: { maxTokens: 4096 },
+    }, {
+      source: 'explicit', requested: 4096, effective: 4096, field: 'maxTokens', reason: 'explicit_request',
+    })
+    observer.observeEvent('', {}, 512)
+    observer.observeEvent('messageStop', { stopReason: 'tool_use' })
+    observer.observeEvent('metadata', {
+      usage: { inputTokens: 150, outputTokens: 42, cacheReadInputTokens: 20, cacheWriteInputTokens: 10 },
+    })
+    observer.finish('eof')
+    const summary = observer.snapshot()
+    expect(summary).toMatchObject({
+      protocol: 'bedrock_converse',
+      transport: 'eof',
+      bytesObserved: 512,
+      termination: { finishReason: 'tool_use' },
+      usage: { inputTokens: 150, outputTokens: 42, cacheReadInputTokens: 20, cacheWriteInputTokens: 10 },
+      outputBudget: { source: 'explicit', field: 'maxTokens', effective: 4096, wireFields: { maxTokens: 4096 } },
+    })
+    expect(JSON.stringify(summary)).not.toContain('SECRET_BODY')
+
+    const failed = new ProtocolTraceObserver('bedrock_converse', {})
+    failed.observeEvent('throttlingException', { message: 'SECRET_BODY' })
+    failed.finish('error')
+    expect(failed.snapshot().termination.errorType).toBe('throttlingException')
+    expect(JSON.stringify(failed.snapshot())).not.toContain('SECRET_BODY')
+  })
 })

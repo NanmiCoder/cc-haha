@@ -14,7 +14,14 @@ export const SCHEMA_EFFORT_LEVELS = [
 
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
 export type SchemaEffortLevel = (typeof SCHEMA_EFFORT_LEVELS)[number]
-export type ModelReasoningApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
+export type ModelReasoningApiFormat =
+  | 'anthropic'
+  | 'openai_chat'
+  | 'openai_responses'
+  | 'gemini'
+  | 'google_vertex'
+  | 'bedrock_converse'
+  | 'azure_openai'
 export type ModelReasoningProviderKind =
   | 'zhipu_standard_api'
   | 'zhipu_coding_plan'
@@ -79,6 +86,10 @@ const COMPATIBLE_REASONING_API_FORMATS = [
   'anthropic',
   'openai_chat',
   'openai_responses',
+  'gemini',
+  'google_vertex',
+  'bedrock_converse',
+  'azure_openai',
 ] as const
 const GENERIC_REASONING_PROFILE: ModelReasoningProfile = {
   family: 'generic',

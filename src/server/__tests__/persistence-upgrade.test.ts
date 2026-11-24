@@ -965,10 +965,20 @@ describe('persistent storage upgrade migrations', () => {
     const service = new ProviderService()
     await service.updateProvider('old', { notes: 'edited' })
     await service.updateProvider('scripted', { name: 'Renamed' })
+    const gemini = await service.addProvider({
+      presetId: 'custom',
+      name: 'Saved Gemini',
+      apiKey: 'fake-gemini-key',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      apiFormat: 'gemini',
+      models,
+    })
     const rewritten = JSON.parse(await fs.readFile(file, 'utf8')) as { providers: Array<Record<string, unknown>> }
     expect(rewritten.providers[0]).toEqual({ ...fixture.providers[0], notes: 'edited' })
     expect(rewritten.providers[0]).not.toHaveProperty('usageScript')
     expect(rewritten.providers[1]).toEqual({ ...fixture.providers[1], name: 'Renamed' })
+    expect(rewritten.providers[2]).toMatchObject({ id: gemini.id, apiFormat: 'gemini' })
+    expect((await service.getProvider(gemini.id)).apiFormat).toBe('gemini')
   })
 
   test('keeps old cc-haha/settings.json fixtures unchanged until General preferences are saved and preserves unknown fields', async () => {
