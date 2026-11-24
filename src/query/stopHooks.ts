@@ -246,6 +246,7 @@ export async function* handleStopHooks(
     const hookInfos: StopHookInfo[] = []
     let goalCompleted = false
     let goalContinuationReason: string | null = null
+    let goalEvaluatorError: string | null = null
 
     // Goal hook's preventContinuation and blockingError arrive as separate
     // generator yields — preventContinuation comes first, but blockingError.command
@@ -286,9 +287,12 @@ export async function* handleStopHooks(
               attachment.hookEvent === 'SubagentStop')
           ) {
             if (attachment.type === 'hook_non_blocking_error') {
-              hookErrors.push(
-                attachment.stderr || `Exit code ${attachment.exitCode}`,
-              )
+              const detail =
+                attachment.stderr || `Exit code ${attachment.exitCode}`
+              hookErrors.push(detail)
+              if (isGoalPromptHookCommand(attachment.command)) {
+                goalEvaluatorError ??= detail
+              }
               // Non-blocking errors always have output
               hasOutput = true
             } else if (attachment.type === 'hook_error_during_execution') {
@@ -445,6 +449,10 @@ export async function* handleStopHooks(
       yield createCommandInputMessage(
         '<local-command-stdout>Goal marked complete.</local-command-stdout>',
       )
+    }
+
+    if (goalEvaluatorError) {
+      yield createSystemMessage(goalEvaluatorError, 'warning')
     }
 
     // A team lead whose members are still working has nothing to do but wait

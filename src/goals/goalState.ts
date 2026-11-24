@@ -7,6 +7,10 @@ import type { ToolUseContext } from '../Tool.js'
 import type { Message } from '../types/message.js'
 import { shouldSkipHookDueToTrust } from '../utils/hooks.js'
 import {
+  INTERRUPT_MESSAGE,
+  INTERRUPT_MESSAGE_FOR_TOOL_USE,
+} from '../utils/messages.js'
+import {
   addSessionHook,
   removeSessionHook,
 } from '../utils/hooks/sessionHooks.js'
@@ -171,6 +175,17 @@ function findActiveGoalObjective(messages: Message[]): string | null {
   for (const message of messages) {
     const text = messageToText(message)
     if (!text) continue
+
+    const trimmedText = text.trim()
+    if (
+      message.type === 'user' &&
+      (trimmedText === INTERRUPT_MESSAGE ||
+        trimmedText === INTERRUPT_MESSAGE_FOR_TOOL_USE)
+    ) {
+      activeObjective = null
+      pendingGoalCommand = false
+      continue
+    }
 
     const commandName = readXmlTag(text, COMMAND_NAME_TAG)
     if (commandName) {

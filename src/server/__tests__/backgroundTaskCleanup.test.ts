@@ -522,4 +522,37 @@ describe('background task cleanup boundaries', () => {
     }))
     expect(getSessionChatActivityState(s.sessionId)).toBe('idle')
   })
+
+  it('forwards CLI Goal cleared during stop_generation while keeping stale Goal continuing suppressed', async () => {
+    const s = setup()
+    handleWebSocket.message(s.ws, JSON.stringify({ type: 'user_message', content: 'work' }))
+    await flushMicrotasks()
+    s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+    handleWebSocket.message(s.ws, JSON.stringify({ type: 'stop_generation' }))
+    await flushMicrotasks()
+    s.dispatch({
+      type: 'system',
+      subtype: 'local_command_output',
+      content: '<local-command-stdout>Goal cleared: ship feature</local-command-stdout>',
+    })
+    s.dispatch({
+      type: 'system',
+      subtype: 'local_command_output',
+      content: '<local-command-stdout>Goal continuing: still incomplete</local-command-stdout>',
+    })
+    s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: '' })
+    await flushMicrotasks()
+
+    const goalEvents = s.ws.sent.filter(
+      (message: any) => message.type === 'system_notification' && message.subtype === 'goal_event',
+    )
+    expect(goalEvents).toEqual([
+      expect.objectContaining({
+        type: 'system_notification',
+        subtype: 'goal_event',
+        message: 'Goal cleared: ship feature',
+        data: { action: 'cleared', message: 'Goal cleared: ship feature' },
+      }),
+    ])
+  })
 })

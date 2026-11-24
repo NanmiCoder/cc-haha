@@ -5790,12 +5790,24 @@ function canAcceptPermissionRequestDuringStop(sessionId: string, cliMsg: any): b
   return !isAgentScopedPermissionRequest(cliMsg)
 }
 
+function isGoalClearedCliMessage(cliMsg: any): boolean {
+  if (!isLocalCommandOutputMessage(cliMsg)) return false
+  const output = extractLocalCommandOutput(
+    cliMsg.content ?? cliMsg.message,
+    { allowUntagged: cliMsg.subtype === 'local_command_output' },
+  )
+  if (!output) return false
+  const trimmed = output.trim()
+  return trimmed === 'Goal cleared.' || trimmed.startsWith('Goal cleared:')
+}
+
 function shouldSuppressCliOutputDuringStop(
   sessionId: string,
   cliMsg: any,
   taskLifecycle: CliBackgroundTaskLifecycle | null,
 ): boolean {
   if (taskLifecycle !== null) return false
+  if (isGoalClearedCliMessage(cliMsg)) return false
   // Team workers have independent SDK tokens and Stop revokes their prompt
   // rights before exit. A newly resumed worker can request approval while the
   // lead's stopped-turn fence is still protecting the lead's own old output.
