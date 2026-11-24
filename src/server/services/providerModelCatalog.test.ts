@@ -275,6 +275,29 @@ describe('provider proxy override', () => {
 })
 
 describe('fetchProviderModels', () => {
+  for (const [baseUrl, current, legacy] of [
+    ['https://api.minimax.io/anthropic', ['MiniMax-M3.1-Flash', 'MiniMax-M3'], 'MiniMax-M2.7'],
+    ['https://api.minimaxi.com/anthropic', ['MiniMax-M3.1-Flash', 'MiniMax-M3'], 'MiniMax-M2.5'],
+    ['https://openrouter.ai/api/v1', ['minimax/minimax-m3.1-flash:free', 'minimax/minimax-m3'], 'minimax/minimax-01'],
+    ['https://opencode.ai/zen/v1', ['minimax-m3.1-flash-free', 'minimax-m3'], 'minimax-m2.7'],
+    ['https://opencode.ai/zen/go/v1', ['minimax-m3.1-flash-free', 'minimax-m3'], 'minimax-m2.5'],
+  ] as const) {
+    test(`offers only advertised current MiniMax choices, Flash first: ${baseUrl}`, async () => {
+      stubFetch(() => jsonResponse({ data: [legacy, current[1], 'other-model', current[0], 'image-01'].map(id => ({ id })) }))
+      const result = await fetchProviderModels({ baseUrl, apiKey: 'test-key', apiFormat: 'openai_chat' })
+      expect(result.ok && result.models.map(model => model.id)).toEqual([...current, 'image-01', 'other-model'])
+      stubFetch(() => jsonResponse({ data: [{ id: current[1] }, { id: legacy }] }))
+      const m3Only = await fetchProviderModels({ baseUrl, apiKey: 'test-key', apiFormat: 'openai_chat' })
+      expect(m3Only.ok && m3Only.models.map(model => model.id)).toEqual([current[1]])
+    })
+  }
+
+  test('does not filter custom gateways', async () => {
+    stubFetch(() => jsonResponse({ data: [{ id: 'MiniMax-M2.7' }, { id: 'custom-model' }] }))
+    const result = await fetchProviderModels({ baseUrl: 'https://custom.example/v1', apiKey: 'test-key', apiFormat: 'openai_chat' })
+    expect(result.ok && result.models.map(model => model.id)).toEqual(['MiniMax-M2.7', 'custom-model'])
+  })
+
   test('reports missing config without any network I/O', async () => {
     stubFetch(() => { throw new Error('fetch must not be called') })
 
