@@ -249,7 +249,7 @@ export function MemorySettings() {
         </div>
       )}
 
-      <div className="mt-6 grid h-[calc(100vh_-_260px)] min-h-[520px] grid-rows-[minmax(0,240px)_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--bevel-surface-rest)] sm:grid-cols-[216px_minmax(0,1fr)] sm:grid-rows-1">
+      <div className="mt-6 grid h-[calc(100vh_-_260px)] min-h-[520px] grid-rows-[minmax(0,240px)_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] sm:grid-cols-[216px_minmax(0,1fr)] sm:grid-rows-1">
         <aside className="flex min-h-0 flex-col border-b border-[var(--color-border)] bg-[var(--color-surface-sidebar)] sm:border-b-0 sm:border-r">
           <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
             <h3 className="truncate text-xs font-semibold text-[var(--color-text-tertiary)]">
@@ -269,7 +269,7 @@ export function MemorySettings() {
               size="sm"
             />
           </div>
-          <div className="scrollbar-autohide min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {projects.length === 0 && !isLoadingProjects ? (
               <EmptyState icon={<FolderGit2 size={18} strokeWidth={1.75} />} description={t('settings.memory.emptyProjects')} variant="plain" size="sm" />
             ) : filteredProjects.length === 0 ? (
@@ -406,7 +406,7 @@ export function MemorySettings() {
                     {t('settings.memory.edit')}
                   </Button>
                 </div>
-                <div className="scrollbar-autohide min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                   <MarkdownRenderer
                     content={previewContent || ' '}
                     variant="document"

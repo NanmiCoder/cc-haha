@@ -100,21 +100,6 @@ describe('SearchField', () => {
   it('has a visible focus treatment', () => {
     // Three of the 11 hand-rolled search boxes had none at all.
     render(<SearchField label="Search" clearLabel="Clear search" value="" onChange={() => {}} />)
-    const input = screen.getByRole('searchbox')
-    expect(input.className).toContain('focus:border-[var(--color-border-focus)]')
-    expect(input.className).toContain('shadow-[var(--bevel-surface-rest)]')
-  })
-
-  it('renders trailing shortcut adornment when empty and swaps it for clear when populated', () => {
-    const { rerender } = render(
-      <SearchField label="Search" clearLabel="Clear search" value="" onChange={() => {}} trailing={<kbd>⌘K</kbd>} />,
-    )
-    expect(screen.getByText('⌘K')).toBeInTheDocument()
-
-    rerender(
-      <SearchField label="Search" clearLabel="Clear search" value="foo" onChange={() => {}} trailing={<kbd>⌘K</kbd>} />,
-    )
-    expect(screen.queryByText('⌘K')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
+    expect(screen.getByRole('searchbox').className).toContain('focus:border-[var(--color-border-focus)]')
   })
 })

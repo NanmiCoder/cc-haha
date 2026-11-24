@@ -233,10 +233,10 @@ export function ConversationNavigator({
           id="conversation-navigation-preview"
           data-testid="conversation-navigation-preview"
           role="tooltip"
-          className="dropdown-glass popover-motion fixed z-[var(--z-tooltip)] w-[min(320px,calc(100vw-88px))] -translate-y-1/2 rounded-[var(--radius-lg)] px-3.5 py-2.5 text-left"
+          className="fixed z-[var(--z-tooltip)] w-[min(320px,calc(100vw-88px))] -translate-y-1/2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3.5 py-3 text-left shadow-[var(--shadow-overlay)]"
           style={{ left: previewPosition.left, top: previewPosition.top }}
         >
-          <div className="mb-1 text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">
+          <div className="mb-1 text-xs font-semibold tabular-nums text-[var(--color-text-tertiary)]">
             {t('chat.conversationNavigator.turn', {
               current: previewItem.turnNumber,
               total: items.length,
@@ -248,9 +248,9 @@ export function ConversationNavigator({
           {previewItem.attachmentCount > 0 ? (
             <div
               aria-label={t('chat.conversationNavigator.attachments', { count: previewItem.attachmentCount })}
-              className="mt-1.5 flex items-center gap-1 text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
+              className="mt-2 flex items-center gap-1 text-[11px] text-[var(--color-text-tertiary)]"
             >
-              <Paperclip size={12} strokeWidth={1.75} aria-hidden="true" />
+              <Paperclip size={12} strokeWidth={2} aria-hidden="true" />
               <span>{previewItem.attachmentCount}</span>
             </div>
           ) : null}

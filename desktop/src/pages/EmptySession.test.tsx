@@ -483,7 +483,7 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('model-selector')).toHaveAttribute('data-compact', 'true')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('h-11', 'w-11')
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('px-3')
-    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('composer-glass', 'rounded-[var(--radius-2xl)]')
+    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('rounded-[var(--radius-xl)]')
   })
 
   it.each(['@', '/', '/empty', '+'] as const)('hides withdrawn bundled capabilities in %s while keeping personal skills and other plugins', async (entry) => {
@@ -983,25 +983,29 @@ describe('EmptySession', () => {
     expect(mocks.wsSend).not.toHaveBeenCalled()
   })
 
-  // The floating frosted-glass composer stays uncluttered: repository launch
-  // controls tuck cleanly underneath in a bare `.surface-glass` seam strip.
-  it('renders the floating frosted-glass composer with a bare under-card context strip', async () => {
+  // The launch controls used to be a bar welded under the composer, which is
+  // what forced the panel's squared bottom edge and the third divider line.
+  // They are one pill in the toolbar now, so the panel is fully rounded and
+  // the row the pill sits in is the same one holding "+" and the model.
+  it('puts the run-location pill in the composer toolbar, not on a bar of its own', async () => {
     render(<EmptySession />)
 
     const panel = screen.getByTestId('empty-session-composer-panel')
-    expect(panel).toHaveClass('composer-glass', 'rounded-[var(--radius-2xl)]', 'p-2')
+    // 16px corner and the composer shadow step — the same floating card as
+    // ChatInput's. The repository controls live inside this panel, so it
+    // must stay a single rounded block rather than a split top/bottom pair.
+    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'p-2', 'glass-panel--composer')
     expect(panel).not.toHaveClass('rounded-b-none')
-    expect(screen.getByTestId('empty-session-hero')).toBeInTheDocument()
 
     await pickProject()
 
-    const strip = screen.getByTestId('composer-context-strip')
-    expect(strip).toHaveClass('pt-2', 'overflow-x-clip')
-    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const pill = await screen.findByRole('button', { name: 'Location: project / main' })
-    expect(strip).toContainElement(pill)
-    expect(panel).not.toContainElement(pill)
+    expect(panel).toContainElement(pill)
     expect(pill).toHaveClass('h-7')
+
+    // Same toolbar row as Run — that row is the whole point of the change.
+    const toolbarRow = pill.closest('.justify-between')
+    expect(toolbarRow).toContainElement(screen.getByRole('button', { name: /Run/i }))
   })
 
   it('creates a session with the selected project and branch when submitted', async () => {
@@ -2136,8 +2140,8 @@ describe('EmptySession', () => {
     const leading = screen.getByTestId('empty-session-toolbar-leading')
     const trailing = screen.getByTestId('empty-session-toolbar-trailing')
     expect(toolbar).not.toHaveClass('flex-wrap')
-    expect(leading).toHaveClass('shrink-0')
-    expect(trailing).toHaveClass('min-w-0', 'flex-1')
+    expect(leading).toHaveClass('min-w-0', 'shrink')
+    expect(trailing).toHaveClass('shrink-0')
     expect(trailing).not.toHaveClass('min-w-max')
     // The permission glyph leads the trailing group; the usage ring is not on a draft.
     expect(trailing.firstElementChild).toContainElement(screen.getByRole('button', { name: /^Permission mode/ }))

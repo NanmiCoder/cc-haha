@@ -1,4 +1,4 @@
-import { SettingsGroup, SettingsSection } from '@/components/settings/SettingsSection'
+import { SettingsSection } from '@/components/settings/SettingsSection'
 import { useTranslation, type Locale } from '../../i18n'
 import { DATE_LOCALES } from './heatmapModel'
 import { TokenAmount } from './TokenAmount'
@@ -25,49 +25,47 @@ export function ModelDetails({ models, locale }: { models: RankedModel[]; locale
 
   return (
     <SettingsSection title={t('settings.activity.modelDetails')}>
-      <SettingsGroup>
-        <div role="table" aria-label={t('settings.activity.modelUsage')} className="divide-y divide-[var(--color-border)]">
-          <div role="row" className={`${ROW} px-4 py-2.5 text-[11px] text-[var(--color-text-tertiary)]`}>
-            <span role="columnheader">{t('settings.agents.model')}</span>
-            <span aria-hidden="true" />
-            <span role="columnheader" className="text-right">{t('settings.activity.tokens')}</span>
-            <span role="columnheader" className="text-right">{t('settings.activity.estimatedCost')}</span>
-          </div>
-          {models.map((model) => (
-            <div
-              key={model.id}
-              role="row"
-              className={`${ROW} px-4 py-3.5 tabular-nums`}
-            >
-              <span role="cell" className="flex min-w-0 items-center gap-3" title={model.id}>
-                <span
-                  aria-hidden="true"
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ background: seriesColor(model.series) }}
-                />
-                <span className="min-w-0 truncate text-[15px] font-medium text-[var(--color-text-primary)]">{model.label}</span>
-              </span>
-              <span role="cell" className="flex items-center gap-2">
-                <span aria-hidden="true" className="h-[3px] min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
-                  <span
-                    className="block h-full rounded-full"
-                    style={{ width: `${largest > 0 ? (model.total / largest) * 100 : 0}%`, background: seriesColor(model.series) }}
-                  />
-                </span>
-                <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{formatShare(model.total, grandTotal, locale)}</span>
-              </span>
-              <span role="cell" className="text-right text-[18px] font-medium tracking-[-0.02em] tabular-nums text-[var(--color-text-primary)]">
-                <TokenAmount amount={model.total} locale={locale} />
-              </span>
-              <span role="cell" className="text-right font-mono text-xs tabular-nums">
-                {model.unpriced
-                  ? <span className="text-[var(--color-text-tertiary)]">—</span>
-                  : formatCostUSD(model.costUSD, locale)}
-              </span>
-            </div>
-          ))}
+      <div role="table" aria-label={t('settings.activity.modelUsage')}>
+        <div role="row" className={`${ROW} pb-2 text-[11px] text-[var(--color-text-tertiary)]`}>
+          <span role="columnheader">{t('settings.agents.model')}</span>
+          <span aria-hidden="true" />
+          <span role="columnheader" className="text-right">{t('settings.activity.tokens')}</span>
+          <span role="columnheader" className="text-right">{t('settings.activity.estimatedCost')}</span>
         </div>
-      </SettingsGroup>
+        {models.map((model) => (
+          <div
+            key={model.id}
+            role="row"
+            className={`${ROW} border-t border-[var(--color-border)] py-3.5 tabular-nums`}
+          >
+            <span role="cell" className="flex min-w-0 items-center gap-3" title={model.id}>
+              <span
+                aria-hidden="true"
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ background: seriesColor(model.series) }}
+              />
+              <span className="min-w-0 truncate text-[15px] font-medium text-[var(--color-text-primary)]">{model.label}</span>
+            </span>
+            <span role="cell" className="flex items-center gap-2">
+              <span aria-hidden="true" className="h-[3px] min-w-0 flex-1 bg-[var(--color-border)]">
+                <span
+                  className="block h-full"
+                  style={{ width: `${largest > 0 ? (model.total / largest) * 100 : 0}%`, background: seriesColor(model.series) }}
+                />
+              </span>
+              <span className="w-10 shrink-0 text-right text-[11px] text-[var(--color-text-tertiary)]">{formatShare(model.total, grandTotal, locale)}</span>
+            </span>
+            <span role="cell" className="text-right text-[18px] font-medium tracking-[-0.02em] text-[var(--color-text-primary)]">
+              <TokenAmount amount={model.total} locale={locale} />
+            </span>
+            <span role="cell" className="text-right font-mono text-xs">
+              {model.unpriced
+                ? <span className="text-[var(--color-text-tertiary)]">—</span>
+                : formatCostUSD(model.costUSD, locale)}
+            </span>
+          </div>
+        ))}
+      </div>
       {/* A partial total presented as a complete one would understate spend for anyone running
           third-party models, so say what it leaves out. */}
       {unpricedCount > 0 ? (

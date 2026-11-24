@@ -66,11 +66,8 @@ export function H5Settings() {
 
   if (page) {
     return (
-      <div
-        data-testid="h5-settings-subpage"
-        className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]"
-      >
-        <div className="shrink-0 border-b border-[var(--color-border)] px-1 py-1 md:px-4 md:py-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
+        <div className="shrink-0 border-b border-[var(--color-border)] px-1 py-1">
           <Button
             variant="ghost"
             size="lg"
@@ -80,10 +77,8 @@ export function H5Settings() {
             {t('h5Settings.allSettings')}
           </Button>
         </div>
-        <div className="scrollbar-autohide min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 md:px-8 md:py-6">
-          <div className="mx-auto w-full max-w-[960px]">
-            {page === 'providers' ? <ProviderSettings browserMode /> : <ActivitySettings browserMode />}
-          </div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5">
+          {page === 'providers' ? <ProviderSettings browserMode /> : <ActivitySettings browserMode />}
         </div>
       </div>
     )
@@ -98,79 +93,65 @@ export function H5Settings() {
   })()
 
   return (
-    <div
-      data-testid="h5-settings-scroll"
-      className="scrollbar-autohide min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--color-surface)] px-4 py-5 md:px-8 md:pb-10 md:pt-5"
-    >
-      <div className="mx-auto w-full max-w-[960px]">
-        <header
-          data-testid="h5-settings-desktop-header"
-          className="mb-4 hidden min-h-8 items-center md:flex"
+    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--color-surface)] px-4 py-5">
+      <SettingsGroup>
+        <button
+          type="button"
+          onClick={() => setPage('activity')}
+          className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
         >
-          <h2 className="text-[18px] font-semibold leading-tight tracking-[-0.015em] text-[var(--color-text-primary)]">
-            {t('settings.title')}
-          </h2>
-        </header>
+          <UserRound size={22} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[14px] font-semibold text-[var(--color-text-primary)]">{t('settings.tab.activity')}</span>
+            <span className="mt-1 block text-xs text-[var(--color-text-tertiary)]">{t('settings.activity.entryDescription')}</span>
+          </span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </button>
+      </SettingsGroup>
 
+      <SettingsSection title={t('h5Settings.connection')}>
+        <SettingsGroup>
+          <SettingsRow title={t('h5Settings.connectedTo')} description={<span className="font-mono">{host}</span>}>
+            <Button
+              variant="danger-ghost"
+              size="md"
+              icon={<Unplug size={16} strokeWidth={1.75} aria-hidden="true" />}
+              onClick={() => setConfirmDisconnect(true)}
+            >
+              {t('h5Settings.disconnect')}
+            </Button>
+          </SettingsRow>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.tab.providers')}>
         <SettingsGroup>
           <button
             type="button"
-            onClick={() => setPage('activity')}
-            className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
+            data-testid="h5-settings-providers"
+            onClick={() => setPage('providers')}
+            className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
           >
-            <UserRound size={22} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[14px] font-semibold text-[var(--color-text-primary)]">{t('settings.tab.activity')}</span>
-              <span className="mt-1 block text-xs text-[var(--color-text-tertiary)]">{t('settings.activity.entryDescription')}</span>
-            </span>
+            <Server size={18} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
+            <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-text-primary)]">{t('h5Settings.activeProvider')}</span>
+            <span className="max-w-[45%] truncate text-[13px] text-[var(--color-text-tertiary)]">{providerName ?? ''}</span>
             <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           </button>
         </SettingsGroup>
+      </SettingsSection>
 
-        <SettingsSection title={t('h5Settings.connection')}>
-          <SettingsGroup>
-            <SettingsRow title={t('h5Settings.connectedTo')} description={<span className="font-mono">{host}</span>}>
-              <Button
-                variant="danger-ghost"
-                size="md"
-                icon={<Unplug size={16} strokeWidth={1.75} aria-hidden="true" />}
-                onClick={() => setConfirmDisconnect(true)}
-              >
-                {t('h5Settings.disconnect')}
-              </Button>
-            </SettingsRow>
-          </SettingsGroup>
-        </SettingsSection>
+      <H5GeneralSettings />
 
-        <SettingsSection title={t('settings.tab.providers')}>
-          <SettingsGroup>
-            <button
-              type="button"
-              data-testid="h5-settings-providers"
-              onClick={() => setPage('providers')}
-              className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
-            >
-              <Server size={18} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
-              <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-text-primary)]">{t('h5Settings.activeProvider')}</span>
-              <span className="max-w-[45%] truncate text-[13px] text-[var(--color-text-tertiary)]">{providerName ?? ''}</span>
-              <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-            </button>
-          </SettingsGroup>
-        </SettingsSection>
-
-        <H5GeneralSettings />
-
-        <SettingsSection title={t('h5Settings.desktopOnly')} description={t('h5Settings.desktopOnlyHint')}>
-          <SettingsGroup data-testid="h5-settings-desktop-only">
-            {DESKTOP_ONLY_SETTINGS.map((key) => (
-              <div key={key} className="flex min-h-11 items-center gap-3 px-4 text-[14px] text-[var(--color-text-tertiary)]">
-                <span className="min-w-0 flex-1 truncate">{t(key)}</span>
-                <Lock size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
-              </div>
-            ))}
-          </SettingsGroup>
-        </SettingsSection>
-      </div>
+      <SettingsSection title={t('h5Settings.desktopOnly')} description={t('h5Settings.desktopOnlyHint')}>
+        <SettingsGroup data-testid="h5-settings-desktop-only">
+          {DESKTOP_ONLY_SETTINGS.map((key) => (
+            <div key={key} className="flex min-h-11 items-center gap-3 px-4 text-[14px] text-[var(--color-text-tertiary)]">
+              <span className="min-w-0 flex-1 truncate">{t(key)}</span>
+              <Lock size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+            </div>
+          ))}
+        </SettingsGroup>
+      </SettingsSection>
 
       <ConfirmDialog
         open={confirmDisconnect}

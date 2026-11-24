@@ -41,12 +41,10 @@ describe('SessionChatSurface', () => {
     expect(screen.getByText('Activity')).toBeInTheDocument()
 
     const header = screen.getByTestId('session-header')
-    expect(header.className).not.toContain('border-b')
     expect(header.firstElementChild).toHaveClass('max-w-[var(--chat-content-max-width)]')
     expect(within(header).getByRole('heading', { name: 'Child run' })).toHaveClass('truncate', 'text-[15px]', 'font-semibold')
     const separators = header.querySelectorAll('[aria-hidden="true"]')
     expect(separators).toHaveLength(1)
-    expect(separators[0]!.parentElement?.className).toContain('tabular-nums')
     // A 3px dot, not a typed "·" glyph whose size and baseline follow the font.
     expect(separators[0]!.textContent).toBe('')
     expect(separators[0]).toHaveClass('rounded-full')

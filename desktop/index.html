@@ -29,7 +29,7 @@
       so a dark palette does not sit under light browser chrome. Safari only
       guesses from the page otherwise, and guesses gray here.
     -->
-    <meta name="theme-color" content="#FCFCFC" />
+    <meta name="theme-color" content="#FFFFFF" />
     <title>Claude Code Haha</title>
     <!--
       The Electron window draws its own chrome, but this same document is what
@@ -150,13 +150,13 @@
           // <style> block below and bootstrapScript.test.ts hold all three
           // copies to the same values.
           var BACKGROUND = {
-            white: '#FCFCFC',
+            white: '#FFFFFF',
             paper: '#FBF9F4',
             'warm-classic': '#F6F0E1',
             celadon: '#F5F8F5',
             dark: '#201D17',
             'ink-blue': '#1A1D24',
-            'neutral-dark': '#000000'
+            'neutral-dark': '#202020'
           }
           var paintBrowserChrome = function (value) {
             var meta = document.querySelector('meta[name="theme-color"]')
@@ -177,7 +177,7 @@
               ? storedLight
               : (has(LIGHT, theme) ? theme : 'white')
             var storedDark = read('cc-haha-dark-theme')
-            var darkTheme = isDark(storedDark) ? storedDark : (isDark(theme) ? theme : 'neutral-dark')
+            var darkTheme = isDark(storedDark) ? storedDark : (isDark(theme) ? theme : 'dark')
             var prefersDark = false
             try {
               // Some WebViews reject the query outright. Treating that as
@@ -207,14 +207,14 @@
          that strips it would remove the element entirely, so its try/catch is
          no help there) — it matches the default palette in globals.css rather
          than a fixed white, so that degraded case stays self-consistent. */
-      html { background: #FCFCFC; }
-      html[data-theme="white"] { background: #FCFCFC; }
+      html { background: #FFFFFF; }
+      html[data-theme="white"] { background: #FFFFFF; }
       html[data-theme="paper"] { background: #FBF9F4; }
       html[data-theme="warm-classic"] { background: #F6F0E1; }
       html[data-theme="celadon"] { background: #F5F8F5; }
       html[data-theme="dark"] { background: #201D17; }
       html[data-theme="ink-blue"] { background: #1A1D24; }
-      html[data-theme="neutral-dark"] { background: #000000; }
+      html[data-theme="neutral-dark"] { background: #202020; }
       html[data-window-kind="pet"],
       html[data-window-kind="pet"] body,
       html[data-window-kind="pet"] #root { background: transparent !important; }

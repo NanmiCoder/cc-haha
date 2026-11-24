@@ -250,13 +250,12 @@ const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
 
 const BASE_CLASSES = [
   'inline-flex shrink-0 items-center justify-center',
-  'transition-[background-color,color,border-color,box-shadow,transform,opacity] duration-150 ease-out cursor-pointer',
+  'transition-colors duration-150 cursor-pointer',
   // Offset matches Button: the two sit side by side in every toolbar, and a
   // flush ring next to a floated one reads as two different focus systems.
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
   'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]',
   'disabled:cursor-not-allowed disabled:pointer-events-none',
-  'motion-reduce:transition-none motion-reduce:active:scale-100',
 ].join(' ')
 
 const DISABLED_OPACITY = { dim: 'disabled:opacity-50', hide: 'disabled:opacity-0' } as const
@@ -294,7 +293,6 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   ...props
 }, ref) {
   const iconSize = ICON_PX[size]
-  const usesSurfaceBevel = !solid && !soft && (filled || bordered)
 
   return (
     <button
@@ -303,16 +301,12 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       title={showTooltip ? label : undefined}
       aria-pressed={pressed}
-      data-pressed={pressed ? 'true' : undefined}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cx(
         BASE_CLASSES,
         DISABLED_OPACITY[disabledStyle],
         SIZE_CLASSES[size],
-        solid && 'control-bevel-cta',
-        usesSurfaceBevel && 'control-bevel',
-        !solid && !usesSurfaceBevel && '[&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97]',
         surface === 'lightbox' && !pressed && 'bg-[var(--color-lightbox-control-bg)]',
         // `solid` and `pressed` supply both fill and foreground, so the tone's
         // resting text color is skipped rather than left to compete: two

@@ -86,24 +86,24 @@ export function Modal({
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[var(--z-dialog)] flex items-center justify-center [-webkit-app-region:no-drag]">
+    <div className="fixed inset-0 z-[var(--z-dialog)] flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className={`absolute inset-0 transition-opacity duration-200 ${variant === 'lightbox' ? 'bg-[var(--color-lightbox-scrim)]' : 'dialog-backdrop'}`}
+        className={`absolute inset-0 transition-opacity duration-200 ${variant === 'lightbox' ? 'bg-[var(--color-lightbox-scrim)]' : 'bg-[var(--color-modal-scrim)]'}`}
         onClick={onClose}
       />
 
       {/* Modal content */}
       <div
         ref={dialogRef}
-        // 20px — the top of the corner scale, reserved for dialogs.
-        // `.dialog-panel` provides frosted glass with specular rim + ambient
-        // shadow and falls back to opaque `--color-surface-dialog` via `@supports`.
+        // 24px — the top of the handoff's corner scale, reserved for modals.
+        // `dialog-panel`, not `glass-panel`: the fill has to be opaque on its
+        // own rather than leaning on a blur that may never run.
         className={(variant === 'lightbox'
           ? 'relative flex h-dvh w-screen flex-col overflow-hidden text-[var(--color-media-fg)]'
           : variant === 'media'
-          ? 'popover-motion relative flex h-[calc(100dvh-24px)] w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[var(--radius-2xl)] bg-[var(--color-media-bg)] text-[var(--color-media-fg)]'
-          : 'dialog-panel popover-motion relative flex max-h-[85vh] flex-col rounded-[var(--radius-3xl)]') + (className ? ` ${className}` : '')}
+          ? 'relative flex h-[calc(100dvh-24px)] w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[var(--radius-2xl)] bg-[var(--color-media-bg)] text-[var(--color-media-fg)]'
+          : 'dialog-panel relative flex max-h-[85vh] flex-col rounded-[var(--radius-3xl)]') + (className ? ` ${className}` : '')}
         style={variant === 'lightbox' ? undefined : variant === 'media'
           ? { maxHeight: 'calc(100dvh - 24px)', maxWidth: 'calc(100vw - 24px)' }
           : { width, maxWidth: 'calc(100vw - 48px)' }}
@@ -126,7 +126,7 @@ export function Modal({
               type="button"
               onClick={onClose}
               aria-label="Close dialog"
-              className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] motion-reduce:active:scale-100"
+              className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
             >
               <X size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
@@ -135,7 +135,7 @@ export function Modal({
 
         <div className={variant !== 'dialog'
           ? 'min-h-0 flex-1 overflow-hidden'
-          : 'scrollbar-autohide flex-1 overflow-y-auto px-6 py-4'}>
+          : 'flex-1 overflow-y-auto px-6 py-4'}>
           {children}
         </div>
 

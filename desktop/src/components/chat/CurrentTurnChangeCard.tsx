@@ -185,13 +185,13 @@ export function CurrentTurnChangeCard({
       // Follows the message it belongs to inside the same rail box, so it takes a
       // top margin and no width of its own — `max-w-[900px]` here would have
       // overflowed the column once the rail indented it.
-      className="mt-2.5 w-full overflow-x-clip rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]"
+      className="mt-2.5 w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
       aria-label={cardLabel}
     >
-      {/* One sticky 40px line. The disclosure's hit area is stretched over the
-          whole row (its ::after), so the trailing chevron toggles too; the undo
+      {/* One 40px line. The disclosure's hit area is stretched over the whole
+          row (its ::after), so the trailing chevron toggles too; the undo
           button is lifted above that layer to keep its own click. */}
-      <div className={`sticky top-0 z-[var(--z-sticky)] flex h-10 items-center gap-2 bg-[var(--color-surface-container)] pl-3 pr-2 ${expanded || hasUnverifiedChanges || Boolean(error) ? 'rounded-t-[var(--radius-lg)]' : 'rounded-[var(--radius-lg)]'}`}>
+      <div className="relative flex h-10 items-center gap-2 pl-3 pr-2">
         <button
           type="button"
           data-chat-disclosure="true"
@@ -206,19 +206,17 @@ export function CurrentTurnChangeCard({
           className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] focus-visible:outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-[var(--color-border-focus)]"
         >
           <FileDiff size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-          <span className="truncate font-medium tabular-nums text-[var(--color-text-primary)]">
+          <span className="truncate font-medium text-[var(--color-text-primary)]">
             {t('chat.turnChangesTitle', { count: files.length })}
           </span>
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-xs tabular-nums">
-            <span className="text-[var(--color-diff-added-text)]">+{checkpoint.code.insertions}</span>
-            <span className="text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
-          </span>
+          <span className="shrink-0 font-mono text-xs tabular-nums text-[var(--color-diff-added-text)]">+{checkpoint.code.insertions}</span>
+          <span className="shrink-0 font-mono text-xs tabular-nums text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
         </button>
 
         {/* 无法恢复文件时，仍可选择只回退对话。 */}
         <Button
-          variant="secondary"
-          size="xs"
+          variant="ghost"
+          size="sm"
           loading={isUndoing}
           disabled={undoDisabled}
           onClick={onUndo}
@@ -247,7 +245,7 @@ export function CurrentTurnChangeCard({
       )}
 
       <div id={filesId} hidden={!expanded}>
-        {expanded && <div className="scrollbar-autohide scroll-edge-fade max-h-[320px] overflow-y-auto border-t border-[var(--color-border)] py-1">
+        {expanded && <div className="border-t border-[var(--color-border)] py-1">
           {visibleFiles.map((fileEntry) => {
             const fileName = fileEntry.displayPath.split('/').pop() || fileEntry.displayPath
             const directory = fileEntry.displayPath.slice(0, fileEntry.displayPath.length - fileName.length)
@@ -319,7 +317,7 @@ export function CurrentTurnChangeCard({
       </div>
 
       {error && (
-        <div role="alert" className="rounded-b-[var(--radius-lg)] border-t border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">
+        <div role="alert" className="border-t border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">
           {error}
         </div>
       )}

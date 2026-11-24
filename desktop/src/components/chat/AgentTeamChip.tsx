@@ -11,7 +11,7 @@ export function AgentTeamChip({ onRemove, touch = false }: { onRemove?(): void, 
   return (
     <span
       data-testid="agent-team-chip"
-      className={`control-bevel inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] ${onRemove ? 'pl-2' : 'px-2'} text-xs font-medium text-[var(--color-on-brand-soft)] ${touch ? 'h-9' : 'h-6'}`}
+      className={`inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-brand-soft)] ${onRemove ? 'pl-2' : 'px-2'} text-xs font-medium text-[var(--color-on-brand-soft)] ${touch ? 'h-9' : 'h-6'}`}
     >
       <Users size={12} strokeWidth={1.75} aria-hidden="true" />
       {t('chat.capabilities.teams')}

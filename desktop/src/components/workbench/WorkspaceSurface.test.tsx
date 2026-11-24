@@ -467,7 +467,7 @@ describe('WorkspaceSurface', () => {
     expect(screen.queryByTestId('workspace-hide-bottom')).not.toBeInTheDocument()
   })
 
-  it('keeps side and bottom resource tabs inside their own compact h-10 surfaces instead of crowding the window TabBar', async () => {
+  it('places side tabs in the real window header and keeps bottom tabs beside their content', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
     const sideId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'side' })!
     useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'bottom' })
@@ -477,32 +477,27 @@ describe('WorkspaceSurface', () => {
       <WorkspaceSurface sessionId={SESSION} dock="bottom" cwd="/repo" />
     </WorkspaceHeaderProvider>)
     const header = screen.getByTestId('workspace-window-header')
-    const sideSurface = screen.getByTestId('workspace-surface-side')
-    const bottomSurface = screen.getByTestId('workspace-surface-bottom')
-
-    // Side tabs stay decoupled inside WorkspaceSurface with a compact h-10
-    // hairline header so the top 52px TabBar never crowds.
-    expect(within(header).queryByTestId('workspace-tab-strip-side')).toBeNull()
-    expect(screen.queryByTestId('workspace-header-slot')).toBeNull()
+    // Session overflow must stay in its own shrinkable region when the resource header fills the window.
+    const sessionHeader = screen.getByTestId('workspace-session-header')
+    expect(sessionHeader).toContainElement(screen.getByTestId('tab-bar-scroll-region'))
+    expect(sessionHeader).toHaveClass('min-w-0', 'overflow-hidden')
+    expect(sessionHeader).not.toContainElement(screen.getByTestId('workspace-header-frame'))
+    expect(within(header).getByTestId('workspace-tab-strip-side')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-header-slot').className).not.toMatch(/\btab-bar-interactive\b/)
+    expect(within(header).getByTestId('workspace-tab-strip-side')).toHaveAttribute('data-desktop-drag-region')
+    expect(within(header).getByTestId(`workspace-tab-wrap-${sideId}`)).toHaveClass('tab-bar-interactive')
     expect(within(header).getByTestId('workspace-toggle-side')).toBeInTheDocument()
-
-    const sideStrip = within(sideSurface).getByTestId('workspace-tab-strip-side')
-    expect(sideStrip).toHaveClass('h-10', 'border-b')
-    expect(sideStrip).not.toHaveAttribute('data-desktop-drag-region')
-    expect(within(sideSurface).getByRole('tablist')).toBeInTheDocument()
-    expect(within(bottomSurface).getByRole('tablist')).toBeInTheDocument()
-
-    const content = sideSurface.querySelector('[role="tabpanel"]')
+    expect(within(screen.getByTestId('workspace-surface-side')).queryByRole('tablist')).toBeNull()
+    expect(within(screen.getByTestId('workspace-surface-bottom')).getByRole('tablist')).toBeInTheDocument()
+    const content = screen.getByTestId('workspace-surface-side').querySelector('[role="tabpanel"]')
     act(() => useWorkspaceStore.getState().toggleFullscreen(SESSION))
-    expect(sideSurface.querySelector('[role="tabpanel"]')).toBe(content)
-
-    fireEvent.click(within(sideSurface).getByTestId('workspace-add-tab-side'))
+    expect(screen.getByTestId('workspace-surface-side').querySelector('[role="tabpanel"]')).toBe(content)
+    fireEvent.click(within(header).getByTestId('workspace-add-tab-side'))
     expect(screen.getByRole('menu')).toBeInTheDocument()
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     expect(screen.getByTestId('workspace-add-tab-side')).toHaveFocus()
-
     act(() => useWorkspaceStore.getState().closeTab(SESSION, sideId))
-    expect(within(sideSurface).queryByRole('tablist')).toBeNull()
+    expect(within(header).queryByRole('tablist')).toBeNull()
     expect(screen.getByTestId('workspace-launcher')).toBeInTheDocument()
     await act(async () => { await Promise.resolve() })
   })

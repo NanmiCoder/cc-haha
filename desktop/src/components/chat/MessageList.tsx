@@ -262,7 +262,7 @@ function ChatSelectionMenu({
   return createPortal(
     <div ref={popoverRef} role="toolbar" aria-label={t('chat.selectionActions')}
       onMouseDown={event => { if (event.button === 0 && !event.ctrlKey) event.preventDefault() }}
-      className="dropdown-glass popover-motion fixed z-[var(--z-popover)] inline-flex max-w-[calc(100vw-24px)] items-center rounded-[var(--radius-lg)] p-1"
+      className="fixed z-[var(--z-popover)] inline-flex max-w-[calc(100vw-24px)] items-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-overlay)]"
       style={{ left: selection.x, top: selection.y }}>
       <Button variant="ghost" onClick={onAdd}>{t('chat.addSelectionToChat')}</Button>
       {onSideChat && <Button variant="ghost" onClick={onSideChat}>{t('chat.askSelectionInSideChat')}</Button>}
@@ -1654,7 +1654,20 @@ const CONVERSATION_NAVIGATION_COMPACT_MIN_WIDTH_PX = 560
 const STREAMING_ASSISTANT_NAVIGATION_KEY = 'streaming-assistant-message'
 const EMPTY_MESSAGES: UIMessage[] = []
 const EMPTY_AGENT_TASK_NOTIFICATIONS: Record<string, AgentTaskNotification> = {}
-const CHAT_SCROLL_AREA_CLASS = 'chat-scroll-area topbar-scroll-fade scrollbar-autohide'
+const CHAT_SCROLL_AREA_CLASS = [
+  'chat-scroll-area',
+  '[scrollbar-width:auto]',
+  '[scrollbar-color:color-mix(in_srgb,var(--color-outline)_72%,transparent)_transparent]',
+  '[&::-webkit-scrollbar]:w-2.5',
+  '[&::-webkit-scrollbar-track]:bg-transparent',
+  '[&::-webkit-scrollbar-thumb]:rounded-full',
+  '[&::-webkit-scrollbar-thumb]:border-[3px]',
+  '[&::-webkit-scrollbar-thumb]:border-transparent',
+  '[&::-webkit-scrollbar-thumb]:bg-[color-mix(in_srgb,var(--color-outline)_74%,transparent)]',
+  '[&::-webkit-scrollbar-thumb]:bg-clip-content',
+  '[&::-webkit-scrollbar-thumb:hover]:border-2',
+  '[&::-webkit-scrollbar-thumb:hover]:bg-[color-mix(in_srgb,var(--color-outline)_90%,transparent)]',
+].join(' ')
 const CHAT_RENDER_ITEM_CLASS = [
   'chat-render-item',
 ].join(' ')
@@ -3074,15 +3087,6 @@ export function MessageList({
     () => buildTurnCompletionByMessageId(deferredMessages, { turnActive: chatState !== 'idle' }),
     [deferredMessages, chatState],
   )
-  const latestTurnCompletionMessageId = useMemo(() => {
-    for (let i = renderItems.length - 1; i >= 0; i -= 1) {
-      const candidate = renderItems[i]
-      if (candidate?.kind === 'message' && turnCompletionByMessageId.has(candidate.message.id)) {
-        return candidate.message.id
-      }
-    }
-    return null
-  }, [renderItems, turnCompletionByMessageId])
   const waitingForReconnect = sessionState?.connectionState === 'reconnecting' || sessionState?.awaitingReconnectSync === true
   const turnCheckpointQueryPaused = !checkpointHistoryReady || !supportsTurnCheckpoints || turnInProgress ||
     hasRunningBackgroundTasks || waitingForReconnect || sessionState?.awaitingStopIdle === true
@@ -4127,15 +4131,6 @@ export function MessageList({
               turnOutputEvidence={changedFilesByRenderIndex.get(index) ?? (turnEvidenceUnavailable ? UNKNOWN_TURN_OUTPUT_EVIDENCE : undefined)}
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
               turnCompletion={turnCompletionByMessageId.get(item.message.id)}
-              isLatestTurn={item.message.id === latestTurnCompletionMessageId}
-              consecutiveUserBefore={
-                item.message.type === 'user_text' && !item.message.teammateFrom && !item.message.scheduledTask
-                && isPlainUserRenderItem(renderItems[index - 1])
-              }
-              consecutiveUserAfter={
-                item.message.type === 'user_text' && !item.message.teammateFrom && !item.message.scheduledTask
-                && isPlainUserRenderItem(renderItems[index + 1])
-              }
               supersededAskUserQuestionIds={supersededAskUserQuestionIds}
               decisionsInComposer={decisionsInComposer}
               navigationHighlighted={
@@ -4360,9 +4355,9 @@ export function MessageList({
           onClick={handleJumpToLatest}
           title={t('chat.jumpToLatest')}
           aria-label={t('chat.jumpToLatest')}
-          // `surface-glass` is unlayered CSS, so it wins over the variant's
+          // `glass-panel` is unlayered CSS, so it wins over the variant's
           // layered background/border utilities without a tailwind-merge.
-          className="surface-glass popover-motion absolute bottom-4 right-5 z-20 rounded-full text-[13px] font-medium shadow-[var(--shadow-dropdown-glass)] hover:-translate-y-px motion-reduce:hover:translate-y-0"
+          className="glass-panel absolute bottom-4 right-5 z-20 rounded-full text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
           icon={<ArrowDown size={15} aria-hidden="true" />}
         >
           {t('chat.jumpToLatest')}
@@ -4399,16 +4394,6 @@ export function MessageList({
   )
 }
 
-function isPlainUserRenderItem(item: RenderItem | undefined): boolean {
-  return Boolean(
-    item &&
-    item.kind === 'message' &&
-    item.message.type === 'user_text' &&
-    !item.message.teammateFrom &&
-    !item.message.scheduledTask,
-  )
-}
-
 export const MessageBlock = memo(function MessageBlock({
   sessionId,
   message,
@@ -4423,9 +4408,6 @@ export const MessageBlock = memo(function MessageBlock({
   turnOutputEvidence,
   isTurnOutputOwner,
   turnCompletion,
-  isLatestTurn = true,
-  consecutiveUserBefore = false,
-  consecutiveUserAfter = false,
   supersededAskUserQuestionIds,
   decisionsInComposer = false,
   navigationHighlighted = false,
@@ -4447,9 +4429,6 @@ export const MessageBlock = memo(function MessageBlock({
   turnOutputEvidence?: TurnOutputEvidence
   isTurnOutputOwner?: boolean
   turnCompletion?: TurnCompletion
-  isLatestTurn?: boolean
-  consecutiveUserBefore?: boolean
-  consecutiveUserAfter?: boolean
   supersededAskUserQuestionIds?: ReadonlySet<string>
   decisionsInComposer?: boolean
   /** A "locate in chat" jump landed on this tool call. */
@@ -4494,8 +4473,6 @@ export const MessageBlock = memo(function MessageBlock({
             teammateAvatarSrc={teammateVisual?.avatarSrc}
             teammateAvatarKey={teammateVisual?.avatarKey}
             teammateAccent={teammateVisual?.accent}
-            consecutiveBefore={consecutiveUserBefore}
-            consecutiveAfter={consecutiveUserAfter}
           />
         </SelectableChatMessage>
       )
@@ -4516,7 +4493,6 @@ export const MessageBlock = memo(function MessageBlock({
             turnOutputEvidence={turnOutputEvidence}
             isTurnOutputOwner={isTurnOutputOwner}
             turnCompletion={turnCompletion}
-            isLatestTurn={isLatestTurn}
           />
           {isCliApiErrorText(message.content) && (
             <MagpieConnectionHint sessionId={sessionId} errorText={message.content} />

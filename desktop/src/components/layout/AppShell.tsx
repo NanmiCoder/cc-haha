@@ -33,7 +33,6 @@ import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { MobileShell } from '../mobile/MobileShell'
@@ -89,9 +88,6 @@ export function AppShell() {
   })
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
   const isActiveChatTab = isChatTab(activeTab)
-  const isWorkspaceFullscreen = useWorkspaceStore((state) =>
-    isActiveChatTab && activeTabId ? state.bySession[activeTabId]?.layout === 'full' : false,
-  )
 
   useEffect(() => {
     const sessionStore = useSessionStore.getState()
@@ -250,7 +246,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface-sidebar)] surface-grain">
+    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface)]">
       <div
         id="sidebar-shell"
         ref={sidebarResize.shellRef}
@@ -277,12 +273,7 @@ export function AppShell() {
       <main
         id="content-area"
         data-sidebar-state={sidebarOpen ? 'open' : 'closed'}
-        data-canvas-inset={isWorkspaceFullscreen ? 'false' : 'true'}
-        className={`min-w-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)] surface-grain ${
-          isWorkspaceFullscreen
-            ? ''
-            : 'md:m-1.5 md:ml-0 md:rounded-[var(--radius-lg)] md:border md:border-[var(--color-border)]'
-        }`}
+        className="min-w-0 flex-1 flex flex-col overflow-hidden"
       >
         <WorkspaceHeaderProvider>
           <TabBar />

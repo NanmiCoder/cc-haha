@@ -190,16 +190,16 @@ export function AboutSettings() {
           <div className="min-w-0 flex-1">
             <div className="text-[15px] font-semibold text-[var(--color-text-primary)]">Claude Code Haha</div>
             {version && (
-              <div className="mt-0.5 flex items-center gap-2 text-xs tabular-nums text-[var(--color-text-tertiary)]">
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
                 <span>{t('settings.about.version')} {version}</span>
                 <span aria-hidden="true">·</span>
-                <Button
-                  variant="link"
-                  size="sm"
+                <button
+                  type="button"
                   onClick={() => openUrl(GITHUB_RELEASES)}
+                  className="font-medium text-[var(--color-text-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                 >
                   {t('settings.about.changelog')}
-                </Button>
+                </button>
               </div>
             )}
           </div>

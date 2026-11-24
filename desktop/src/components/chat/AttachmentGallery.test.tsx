@@ -713,25 +713,5 @@ describe('composer attachment tray', () => {
       expect(tray.scrollTop).toBe(36)
       expect(diff.getBoundingClientRect().bottom).toBeLessThanOrEqual(tray.getBoundingClientRect().bottom)
     })
-
-    it('uses semantic token accents for file icons and frames image thumbnails with a 1px inset ring', () => {
-      const view = render(
-        <AttachmentGallery
-          variant="message"
-          attachments={[
-            { id: 'img-1', type: 'image', name: 'dark-shot.png', data: 'data:image/png;base64,AAAA' },
-            { id: 'doc-1', type: 'file', name: 'report.pdf', path: '/tmp/report.pdf' },
-          ]}
-        />,
-      )
-
-      const imgButton = view.getByRole('button', { name: 'Open dark-shot.png' })
-      expect(imgButton.className).toContain('after:ring-1')
-      expect(imgButton.className).toContain('after:ring-inset')
-
-      const fileCard = view.container.querySelector<HTMLElement>('[data-file-extension="PDF"]')
-      const iconBox = fileCard?.querySelector<HTMLElement>('[aria-hidden="true"]')
-      expect(iconBox?.style.color).toBe('var(--color-error)')
-    })
   })
 })

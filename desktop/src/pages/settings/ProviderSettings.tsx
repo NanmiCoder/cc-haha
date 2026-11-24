@@ -818,13 +818,13 @@ function SortableProviderCard({
       style={style}
       data-testid={providerItemTestId(item)}
       className={cx(
-        'group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border bg-[var(--color-surface-container)] p-[14px] pl-1.5',
+        'group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] p-[14px] pl-1.5',
         'transition-[border-color,box-shadow] duration-150 ease-out',
-        // The default provider: a cobalt/accent-mixed hairline plus a soft brand
+        // The default provider: a terracotta-mixed hairline plus a soft brand
         // halo. Not the focus color, which would collide with the real focus ring.
         isActive
           ? 'border-[var(--color-primary-fixed-dim)] shadow-[0_0_0_3px_var(--color-brand-soft)]'
-          : 'border-[var(--color-border)] shadow-[var(--bevel-surface-rest)] hover:border-[var(--color-outline)]',
+          : 'border-[var(--color-border)] hover:border-[var(--color-outline)]',
         isDragging && 'opacity-90 shadow-[var(--shadow-dropdown)]',
       )}
     >

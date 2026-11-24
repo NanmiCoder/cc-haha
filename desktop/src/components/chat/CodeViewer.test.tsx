@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { CodeViewer } from './CodeViewer'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -30,23 +30,8 @@ describe('CodeViewer', () => {
     expect(copy.textContent).toBe('Copy')
     expect(copy.querySelector('svg.lucide-copy')).not.toBeNull()
     expect(copy.className.split(/\s+/)).not.toContain('border')
-    // The card is an elevated artifact code block using the lg radius token.
-    expect((container.firstElementChild as HTMLElement).className).toContain('rounded-[var(--radius-lg)]')
-    expect(copy.className).toContain('control-bevel')
-  })
-
-  it('toggles word wrap from the header bar', () => {
-    const { container } = render(
-      <CodeViewer code={'const line = "very long code line"'} language="ts" />,
-    )
-
-    const wrapButton = screen.getByRole('button', { name: 'Enable word wrap' })
-    expect(wrapButton.getAttribute('aria-pressed')).toBe('false')
-    expect((container.querySelector('[data-code-viewer-content]') as HTMLElement).style.whiteSpace).toBe('pre')
-
-    fireEvent.click(wrapButton)
-    expect(screen.getByRole('button', { name: 'Disable word wrap' }).getAttribute('aria-pressed')).toBe('true')
-    expect((container.querySelector('[data-code-viewer-content]') as HTMLElement).style.whiteSpace).toBe('pre-wrap')
+    // The card is a code block, so it takes the 8px block radius.
+    expect((container.firstElementChild as HTMLElement).className).toContain('rounded-[var(--radius-md)]')
   })
 
   it('counts a single line in the singular', () => {

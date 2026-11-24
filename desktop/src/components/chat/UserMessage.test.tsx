@@ -267,19 +267,7 @@ describe('UserMessage bare-URL linkify', () => {
 
     expect(container.querySelector('[data-message-shell="teammate"]')).toBeNull()
     expect(bubbleOf(container).textContent).toBe('Review the auth diff.')
-    expect(bubbleOf(container).className).toContain('rounded-[var(--radius-2xl)]')
-    expect(container.querySelector('[data-message-shell="user"]')?.className).toContain('max-w-[80%]')
     expect(container.firstElementChild?.className).toContain('justify-end')
-  })
-
-  it('tightens facing inner corners on consecutive user bubbles', () => {
-    const { container } = render(
-      <UserMessage content="Follow-up note" consecutiveBefore consecutiveAfter />,
-    )
-
-    const bubble = bubbleOf(container)
-    expect(bubble.className).toContain('rounded-tr-[var(--radius-sm)]')
-    expect(bubble.className).toContain('rounded-br-[var(--radius-sm)]')
   })
 })
 

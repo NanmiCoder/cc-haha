@@ -26,10 +26,6 @@ export type SearchFieldProps =
     onClear?: () => void
     /** Overrides the magnifier. */
     icon?: ReactNode
-    /** Optional right-aligned adornment (such as a `<Kbd>` shortcut hint) shown when the clear button is absent. */
-    trailing?: ReactNode
-    /** Monospace face with tabular numerals for symbol/path filtering. */
-    mono?: boolean
     containerClassName?: string
     /** Arrow keys move through a result list without leaving the field. */
     onNavigate?: (direction: 'up' | 'down') => void
@@ -69,8 +65,6 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
   clearLabel,
   onClear,
   icon,
-  trailing,
-  mono = false,
   className,
   containerClassName,
   onNavigate,
@@ -83,8 +77,6 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
 }: SearchFieldProps, ref) {
   const generatedId = useId()
   const inputId = id ?? generatedId
-  const showClear = clearable && Boolean(value)
-  const showTrailing = !showClear && Boolean(trailing)
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (onNavigate && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
@@ -105,11 +97,11 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
         <span
           aria-hidden="true"
           className={cx(
-            'pointer-events-none absolute top-1/2 flex -translate-y-1/2 items-center text-[var(--color-text-tertiary)]',
+            'pointer-events-none absolute top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]',
             ICON_INSET[size],
           )}
         >
-          {icon ?? <Search size={ICON_PX[size]} strokeWidth={1.75} />}
+          {icon ?? <Search size={ICON_PX[size]} strokeWidth={2} />}
         </span>
         <input
           ref={ref}
@@ -125,27 +117,24 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           className={cx(
-            'w-full border outline-none bg-clip-padding',
+            'w-full border outline-none',
             RADIUS[size],
             'bg-[var(--color-surface)] text-[var(--color-text-primary)]',
             'placeholder:text-[var(--color-text-tertiary)]',
-            'border-[var(--color-border)] shadow-[var(--bevel-surface-rest)]',
-            'transition-[border-color,box-shadow,background-color] duration-150 ease-out',
-            'enabled:hover:border-[var(--color-outline)]',
+            'border-[var(--color-border)] transition-colors duration-150',
             'focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]',
-            'disabled:cursor-not-allowed disabled:opacity-60 disabled:bg-[var(--color-surface-container)] disabled:shadow-none',
+            'disabled:cursor-not-allowed disabled:opacity-60',
             // Chrome renders its own clear affordance for type=search; ours is
             // a real button, so hide the native one rather than showing two.
             '[&::-webkit-search-cancel-button]:appearance-none',
             FIELD_SIZE_CLASSES[size],
             TEXT_INSET[size],
-            mono && 'font-mono tabular-nums',
-            showClear ? 'pr-8' : showTrailing ? 'pr-12' : '',
+            clearable && value ? 'pr-8' : '',
             className,
           )}
           {...props}
         />
-        {showClear && (
+        {clearable && value && (
           <button
             type="button"
             onClick={() => {
@@ -153,15 +142,10 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
               onClear?.()
             }}
             aria-label={clearLabel}
-            className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] motion-reduce:active:scale-100"
+            className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            <X size={12} strokeWidth={1.75} />
+            <X size={12} strokeWidth={2.5} />
           </button>
-        )}
-        {showTrailing && (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center">
-            {trailing}
-          </span>
         )}
       </div>
     </div>

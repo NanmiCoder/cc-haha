@@ -111,10 +111,11 @@ export function Tooltip({
           role="tooltip"
           style={{ ...style, zIndex: 'var(--z-tooltip)' }}
           className={cx(
-            'popover-motion pointer-events-none max-w-xs rounded-[var(--radius-md)] px-2 py-1',
+            'pointer-events-none max-w-xs rounded-[var(--radius-md)] px-2 py-1',
             appearance === 'surface'
-              ? 'dropdown-glass text-[var(--color-text-primary)] text-[13px] leading-5'
-              : 'border border-[var(--color-surface-glass-border)] bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] text-xs leading-5 shadow-[var(--shadow-dropdown-glass)]',
+              ? 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] text-[13px] leading-5'
+              : 'bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] text-xs leading-5 shadow-[var(--shadow-dropdown)]',
+            'animate-overlay-in',
             className,
           )}
         >

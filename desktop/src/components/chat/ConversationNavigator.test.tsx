@@ -280,8 +280,6 @@ describe('ConversationNavigator', () => {
     fireEvent.mouseEnter(marker)
     const preview = screen.getByTestId('conversation-navigation-preview')
     expect(preview.parentElement).toBe(document.body)
-    expect(preview.className).toContain('dropdown-glass')
-    expect(preview.className).toContain('popover-motion')
     expect(preview.textContent).toContain('Turn 1 of 1')
     expect(preview.textContent).toContain('Inspect the virtual transcript')
     expect(preview.textContent).toContain('2')

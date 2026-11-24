@@ -85,7 +85,7 @@ export function PromptOptimizeButton({
           onPointerLeave={() => setAttended(false)}
           onFocus={() => setAttended(true)}
           onBlur={handleBlur}
-          className="dropdown-glass popover-motion absolute bottom-full right-0 z-[var(--z-popover)] mb-2 inline-flex min-h-[30px] w-max max-w-[min(22rem,calc(100vw-2rem))] items-center gap-2 rounded-full py-1 pl-3 pr-1 text-xs text-[var(--color-text-secondary)]"
+          className="absolute bottom-full right-0 z-[var(--z-popover)] mb-2 inline-flex min-h-[30px] w-max max-w-[min(22rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 pl-3 pr-1 text-xs text-[var(--color-text-secondary)] shadow-[var(--shadow-overlay)]"
         >
           <Check size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-success)]" />
           <span className="min-w-0 flex-1">{t('chat.promptOptimize.done')}</span>

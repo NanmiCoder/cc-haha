@@ -70,23 +70,10 @@ describe('SettingsGroup / SettingsRow', () => {
     )
     const group = screen.getByLabelText('Rows')
     expect(group.className).toContain('rounded-[var(--radius-lg)]')
-    expect(group.className).toContain('bg-[var(--color-surface-container)]')
-    expect(group.className).toContain('shadow-[var(--bevel-surface-rest)]')
     expect(group.className).toContain('border')
     expect(group.className).toContain('divide-y')
     // Not overflow-hidden: rows host Dropdowns whose menus would be clipped.
     expect(group.className).not.toContain('overflow-hidden')
-  })
-
-  it('renders an optional integrated card header inside SettingsGroup', () => {
-    render(
-      <SettingsGroup title="Network" description="Proxy rules" action={<button type="button">Reset</button>}>
-        <SettingsRow title="Mode">System</SettingsRow>
-      </SettingsGroup>,
-    )
-    expect(screen.getByText('Network')).toBeInTheDocument()
-    expect(screen.getByText('Proxy rules')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reset' })).toBeInTheDocument()
   })
 
   it('shows the title, the description and the control of a row', () => {

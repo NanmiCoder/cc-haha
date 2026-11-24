@@ -53,10 +53,9 @@ export function SkillCard({
     <Card
       as="article"
       radius="lg"
-      surface="container"
-      shadow="bevel"
+      surface="lowest"
       padding="none"
-      className="group relative isolate flex min-h-[200px] min-w-0 flex-col p-4 transition-[border-color,box-shadow] duration-150 hover:border-[var(--color-outline)] hover:shadow-[var(--shadow-card)]"
+      className="group relative isolate flex min-h-[200px] min-w-0 flex-col p-4 transition-colors duration-150 hover:border-[var(--color-outline)]"
     >
       <button
         type="button"

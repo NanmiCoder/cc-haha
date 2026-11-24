@@ -551,7 +551,7 @@ export function AgentTeamsMemberInspector({
         ) : null}
       </header>
 
-      <div ref={reveal.scrollRootRef} className="scrollbar-autohide min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={reveal.scrollRootRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <section
           aria-labelledby={`${headingId}-tasks`}
           className="border-b border-[var(--color-border)] px-3.5 py-3"

@@ -153,8 +153,8 @@ describe('ToolCallBlock · images returned by a tool (#1397)', () => {
     expect(strip).toBeTruthy()
     expect(disclosureOf(container).contains(strip)).toBe(false)
     // The row has no card padding; the strip hangs under the text column, past
-    // the 24px icon column and its gap (pl-7), where the expanded details also start.
-    expect(strip.className).toMatch(/\bpl-7\b/)
+    // the 22px node and its gap, where the expanded details also start.
+    expect(strip.className).toMatch(/\bpl-\[30px\]/)
     expect(strip.className).not.toMatch(/\bpx-4\b/)
     expect(screen.getByRole('button', { name: 'Open image 1 of 1' })).toBeInTheDocument()
   })

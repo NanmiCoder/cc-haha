@@ -12,9 +12,8 @@ import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { safeMentionIcon, type NewComposerMention } from '@/lib/composerMentions'
 import { publicAssetPath } from '@/lib/publicAsset'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
-import { Kbd } from '@/components/ui/Kbd'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
-import { COMPOSER_MENU_SECTION } from './composerMenuStyles'
+import { COMPOSER_KBD, COMPOSER_MENU_SECTION } from './composerMenuStyles'
 
 type FileEntry = { name: string, path: string, isDirectory: boolean, relativePath?: string }
 type Row = { key: string, label: string, description: string, searchTerms?: string[], contentMatch?: boolean, session?: SessionCandidate, shortId?: string, source?: string, mention?: NewComposerMention, file?: FileEntry, icon?: ReactNode, onSelect?: () => void }
@@ -165,8 +164,8 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
 
   let offset = 0
   return (
-    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`} onMouseDown={event => event.preventDefault()}>
-      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="scrollbar-autohide min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
+    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] `} onMouseDown={event => event.preventDefault()}>
+      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
         {visibleGroups.map(group => {
           const start = offset
           offset += group.rows.length
@@ -200,7 +199,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
         {!rows.length && !loading && !referencesLoading && !sessionLoading && !sessionError && !currentResult?.error && !referencesError ? <div className="px-2 py-3 text-xs text-[var(--color-text-tertiary)]">{t('chat.referencesEmpty')}</div> : null}
       </div>
       {!isSearching && !embedded ? <div className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.referenceSearchHint')}</div> : null}
-      {!compact && !embedded ? <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]"><Kbd size="xs">↑↓</Kbd><span>{t('fileSearch.navigate')}</span><Kbd size="xs" className="ml-2">Enter / Tab</Kbd><span>{t('fileSearch.select')}</span><Kbd size="xs" className="ml-2">→</Kbd><span>{t('fileSearch.open')}</span><Kbd size="xs" className="ml-2">Esc</Kbd><span>{t('fileSearch.close')}</span></div> : null}
+      {!compact && !embedded ? <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]"><kbd className={COMPOSER_KBD}>↑↓</kbd><span>{t('fileSearch.navigate')}</span><kbd className={`${COMPOSER_KBD} ml-2`}>Enter / Tab</kbd><span>{t('fileSearch.select')}</span><kbd className={`${COMPOSER_KBD} ml-2`}>→</kbd><span>{t('fileSearch.open')}</span><kbd className={`${COMPOSER_KBD} ml-2`}>Esc</kbd><span>{t('fileSearch.close')}</span></div> : null}
     </div>
   )
 })

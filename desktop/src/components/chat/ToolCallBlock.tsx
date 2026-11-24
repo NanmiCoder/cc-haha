@@ -327,26 +327,26 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
           }
         }}
         title={headTitle}
-        className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left after:absolute after:inset-0 after:rounded-[var(--radius-sm)] after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)]"
+        className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left after:absolute after:inset-0 after:rounded-[var(--radius-sm)] after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)]"
       >
         {isRow ? null : <CardToolIcon toolName={toolName} status={rowStatus} />}
         <span
           className={
             labelKind === 'toolName'
-              ? `${target.text ? 'max-w-[40%] shrink-0' : 'min-w-0'} truncate font-mono text-[12px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]`
+              ? `${target.text ? 'max-w-[40%] shrink-0' : 'min-w-0'} truncate font-mono text-[12px] font-medium text-[var(--color-text-primary)]`
               : labelKind === 'description'
-                ? 'min-w-0 truncate text-[13px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]'
-                : 'shrink-0 text-[13px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]'
+                ? 'min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]'
+                : 'shrink-0 text-[13px] font-medium text-[var(--color-text-primary)]'
           }
         >
           {verb}
         </span>
         {target.text ? (
           <span
-            className={`min-w-0 truncate transition-colors group-hover/toolhead:text-[var(--color-text-secondary)] ${
+            className={`min-w-0 truncate ${
               target.mono
-                ? 'font-mono text-[12px] text-[var(--color-text-tertiary)]'
-                : 'text-[13px] text-[var(--color-text-tertiary)]'
+                ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
+                : 'text-[13px] text-[var(--color-text-secondary)]'
             }`}
           >
             {target.text}
@@ -386,8 +386,8 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       omitted={toolImages.dropped}
       originalPath={toolImages.originalPath}
       toolName={toolName}
-      // Row & worklog: under the text column, where the expanded details also start.
-      className="pb-1.5 pl-7 pt-0.5"
+      // Row: under the text column, where the expanded details also start.
+      className={isRow ? 'pb-1.5 pl-[30px] pt-0.5' : 'px-3 pb-3'}
     />
   ) : null
 
@@ -399,15 +399,10 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         data-tool-status={rowStatus}
         className={`rounded-[var(--radius-sm)]${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
       >
-        <div
-          className={[
-            'flex min-h-6 items-center gap-1 py-0.5',
-            rowStatus === 'running' ? 'border-b border-[var(--color-info-container)]' : '',
-          ].filter(Boolean).join(' ')}
-        >
+        <div className="flex min-h-[30px] items-center gap-1">
           <ToolNode toolName={toolName} status={rowStatus} />
           <div
-            className={`group/toolhead relative flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-[var(--radius-sm)] pl-1 pr-1 transition-colors ${
+            className={`group/toolhead relative flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-sm)] pl-1 pr-1 transition-colors ${
               expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''
             }`}
           >
@@ -416,7 +411,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         </div>
 
         {SESSION_TOOL_NAMES.has(toolName) ? (
-          <div className="pl-7"><SessionToolLinks input={input} result={result?.content} /></div>
+          <div className="pl-[30px]"><SessionToolLinks input={input} result={result?.content} /></div>
         ) : null}
 
         {/* Outside the disclosure on purpose: a picture the tool returned is the
@@ -427,7 +422,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
           <div
             data-tool-call-details="inline"
             data-tool-output-error={result?.isError ? 'true' : undefined}
-            className="space-y-2 pb-2 pl-7 pt-1"
+            className="space-y-2 pb-2.5 pl-[30px] pt-1"
           >
             {preview}
             {details}
@@ -442,21 +437,19 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       data-tool-call-chrome="card"
       data-tool-use-id={toolUseId}
       data-tool-status={rowStatus}
-      className={`overflow-hidden rounded-[var(--radius-sm)] ${
-        compact ? 'mb-0' : 'mb-1'
+      className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
+        compact ? 'mb-0' : 'mb-2'
       }${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
     >
       <div
-        className={[
-          'group/toolhead relative -mx-1.5 flex min-h-6 w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-0.5 transition-colors',
-          expandable ? 'hover:bg-[var(--color-surface-hover)]' : '',
-          rowStatus === 'running' ? 'border-b border-[var(--color-info-container)]' : '',
-        ].filter(Boolean).join(' ')}
+        className={`group/toolhead relative flex w-full items-center gap-2 px-3 transition-colors ${
+          compact ? 'min-h-9' : 'min-h-10'
+        } ${expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''}`}
       >
         {head}
       </div>
 
-      {SESSION_TOOL_NAMES.has(toolName) ? <div className="pl-7"><SessionToolLinks input={input} result={result?.content} /></div> : null}
+      {SESSION_TOOL_NAMES.has(toolName) ? <SessionToolLinks input={input} result={result?.content} /> : null}
 
       {imageStrip}
 
@@ -464,7 +457,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         <div
           data-tool-call-details="panel"
           data-tool-output-error={result?.isError ? 'true' : undefined}
-          className="space-y-2 pb-2.5 pl-7 pt-1.5"
+          className="space-y-2.5 border-t border-[var(--color-border)] px-3 py-3"
         >
           {preview}
           {details}
@@ -474,30 +467,30 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   )
 })
 
-/** The row's cap-aligned 24px icon column on the run's rail. */
+/** The row's node on the run's rail. */
 function ToolNode({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
   const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
   return (
     <span
       aria-hidden="true"
       data-tool-node={status}
-      className={`relative flex h-6 w-6 shrink-0 items-center justify-center ${NODE_TONE[status]}`}
+      className={`relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${NODE_TONE[status]}`}
     >
-      <Icon size={13} strokeWidth={1.75} className={status === 'running' ? 'animate-spin' : undefined} />
+      <Icon size={12} strokeWidth={2} className={status === 'running' ? 'animate-spin' : undefined} />
     </span>
   )
 }
 
 const NODE_TONE: Record<ToolRowStatus, string> = {
-  idle: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  done: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  stopped: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  running: 'bg-[var(--color-surface)] text-[var(--color-info)]',
-  waiting: 'rounded-[var(--radius-sm)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
-  error: 'rounded-[var(--radius-sm)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+  idle: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  done: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  stopped: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  running: 'border-[var(--color-info)] bg-[var(--color-info-container)] text-[var(--color-on-info-container)]',
+  waiting: 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
+  error: 'border-[var(--color-error-soft-hover)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
 }
 
-/** Cap-aligned 24px icon column for standalone borderless worklog rows. */
+/** A standalone card leads with a plain glyph; the node belongs to the rail. */
 function CardToolIcon({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
   const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
   const tone = status === 'error'
@@ -508,13 +501,12 @@ function CardToolIcon({ toolName, status }: { toolName: string; status: ToolRowS
         ? 'text-[var(--color-warning)]'
         : 'text-[var(--color-text-tertiary)]'
   return (
-    <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center">
-      <Icon
-        size={14}
-        strokeWidth={1.75}
-        className={`${tone} ${status === 'running' ? 'animate-spin' : ''}`}
-      />
-    </span>
+    <Icon
+      size={14}
+      strokeWidth={1.75}
+      aria-hidden="true"
+      className={`shrink-0 ${tone} ${status === 'running' ? 'animate-spin' : ''}`}
+    />
   )
 }
 
@@ -547,7 +539,7 @@ function ToolRowMeta({
 
   if (pendingSummary) {
     return (
-      <span className="animate-stepped-pulse inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+      <span className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
         <span className="truncate">{pendingSummary}</span>
         {liveStatsSummary ? (
           <>
@@ -679,17 +671,17 @@ function EnterPlanModeToolCallBlock({
   const errorText = result?.isError ? extractTextContent(result.content) : null
 
   return (
-    <div className={compact ? 'mb-0' : 'mb-1'}>
-      <div className="flex min-h-6 w-full items-center gap-1.5 py-0.5 text-left">
-        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
-          <ClipboardList size={14} strokeWidth={1.75} />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-secondary)]">
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
+      compact ? 'mb-0' : 'mb-2'
+    }`}>
+      <div className="flex min-h-9 w-full items-center gap-2 px-3 text-left">
+        <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
           {t('settings.permissions.plan')}
         </span>
         {isPending ? (
-          <span className="animate-stepped-pulse inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
-            <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
             {t('tool.preparingTool')}
           </span>
         ) : null}
@@ -699,7 +691,7 @@ function EnterPlanModeToolCallBlock({
       </div>
 
       {result?.isError && errorText ? (
-        <div className="pb-2 pl-7 pt-1">
+        <div className="border-t border-[var(--color-border)] px-3 py-3">
           {renderResultOutput(result, errorText, t)}
         </div>
       ) : null}
@@ -738,14 +730,14 @@ function PlanToolCallBlock({
   const hasRawResult = Boolean(result && extractTextContent(result.content))
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)] ${
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
       compact ? 'mb-0' : 'mb-2'
     }`}>
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex min-h-10 w-full items-center gap-2 px-3.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        className="flex min-h-10 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
         <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -757,8 +749,8 @@ function PlanToolCallBlock({
           </span>
         ) : null}
         {isPending ? (
-          <span className="animate-stepped-pulse inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
-            <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
             {t('tool.preparingTool')}
           </span>
         ) : null}
@@ -771,10 +763,9 @@ function PlanToolCallBlock({
       </button>
 
       {expanded ? (
-        <div className="space-y-2.5 border-t border-[var(--color-border)] px-3.5 py-3">
+        <div className="space-y-2.5 border-t border-[var(--color-border)] px-3 py-3">
           {showPlanPreview ? (
             <PlanPreviewCard
-              embedded
               title={t('permission.planPreviewTitle')}
               plan={preview.plan}
               filePath={preview.filePath}
@@ -997,7 +988,7 @@ function ShellTerminal({
             <pre
               data-shell-output=""
               tabIndex={0}
-              className={`scrollbar-autohide scroll-edge-fade mt-1.5 max-h-[420px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+              className={`mt-1.5 max-h-[420px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
                 isError ? 'text-[var(--color-error)]' : 'text-[var(--color-code-fg)]'
               }`}
             >
@@ -1043,7 +1034,7 @@ function SearchResultView({
   return (
     <div
       data-search-result=""
-      className="scrollbar-autohide scroll-edge-fade max-h-[340px] divide-y divide-[var(--color-border)] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] font-mono text-[12px] leading-[1.6]"
+      className="max-h-[340px] divide-y divide-[var(--color-border)] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] font-mono text-[12px] leading-[1.6]"
     >
       {rows.map((row, index) => (
         <div key={`${row.file}:${row.line ?? ''}:${index}`} className="flex gap-3.5 px-2.5 py-1">
@@ -1303,7 +1294,7 @@ function renderResultOutput(
           <DetailHead label={label} tone="error">
             <DetailCopyButton text={text} t={t} />
           </DetailHead>
-          <pre className="scrollbar-autohide scroll-edge-fade max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
+          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
             {text}
           </pre>
         </div>
@@ -1551,7 +1542,7 @@ function renderWriterPreview(
           <span className="shrink-0 pr-1.5 font-mono text-[11px] tabular-nums">{statsSummary}</span>
         </DetailHead>
       </div>
-      <pre className="scrollbar-autohide scroll-edge-fade max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-code-fg)]">
+      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-code-fg)]">
         {visibleContent}
       </pre>
     </div>

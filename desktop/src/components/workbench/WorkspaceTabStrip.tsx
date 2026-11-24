@@ -212,7 +212,7 @@ export function WorkspaceTabStrip({
     <div
       data-testid={`workspace-tab-strip-${dock}`}
       data-desktop-drag-region={placement === 'window' ? true : undefined}
-      className={`flex min-w-0 shrink-0 items-center gap-1 pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)]'}`}
+      className={`flex min-w-0 shrink-0 items-center gap-1 pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-sidebar)]'}`}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1">
         <div
@@ -398,7 +398,7 @@ export function WorkspaceTabStrip({
           aria-label={t('workspace.tabMenu')}
           data-testid="workspace-tab-menu"
           onKeyDown={handleMenuKeyDown}
-          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+          className="fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={menuPosition.style}
         >
           {menuRuntime ? <>

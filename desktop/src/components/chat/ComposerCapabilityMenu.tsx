@@ -4,7 +4,6 @@ import { useTranslation } from '@/i18n'
 import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { publicAssetPath } from '@/lib/publicAsset'
 import { Button } from '@/components/ui/Button'
-import { Kbd } from '@/components/ui/Kbd'
 import { Switch } from '@/components/ui/Switch'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { IconButton } from '@/components/ui/IconButton'
@@ -13,7 +12,7 @@ import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/compo
 import type { NewComposerMention } from '@/lib/composerMentions'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { CapabilityAction, CapabilityIcon, CapabilityMenuItem, CapabilityMenuSection } from './capabilityMenuModel'
-import { COMPOSER_MENU_SECTION, COMPOSER_MENU_SEPARATOR } from './composerMenuStyles'
+import { COMPOSER_KBD, COMPOSER_MENU_SECTION, COMPOSER_MENU_SEPARATOR } from './composerMenuStyles'
 
 type Props = {
   id: string
@@ -44,7 +43,7 @@ const FLYOUT_HEADER_HEIGHT = 40
 const VIEWPORT_MARGIN = 8
 /** The full skill list reuses the @ menu's reference browser. */
 const BROWSE_REFERENCES_KEY = 'skills:all'
-const PANEL = 'dropdown-glass popover-motion overflow-hidden rounded-[var(--radius-lg)]'
+const PANEL = 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]'
 
 export function getCapabilityMenuOptionId(id: string, index: number): string {
   return `${id}-option-${index}`
@@ -278,7 +277,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
             {item.count ? <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">{item.count}</span> : null}
             <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />
           </>
-          : item.key === 'slash-commands' ? <Kbd size="xs">/</Kbd> : status
+          : item.key === 'slash-commands' ? <kbd className={COMPOSER_KBD}>/</kbd> : status
     return <ComposerSuggestionRow
       key={item.key} id={optionId} label={item.label}
       // The root stays a short list of names; sub-lists say what each row is.
@@ -308,7 +307,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   }
 
   const renderSubList = (listItems: CapabilityMenuItem[]) => <div id={subListId} role="listbox" aria-label={drillParent?.label}
-    className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
+    className={sheet ? 'p-2' : 'min-h-0 max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
     {listItems.map((item, index) => {
       const previous = listItems[index - 1]
       const heading = item.group && item.group !== previous?.group
@@ -326,7 +325,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     referencesLoading={referencesLoading} referencesError={referencesError} onSelect={selectMention} onActiveChange={setReferenceOptionId} />
 
   let offset = 0
-  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(420px,60vh)] overflow-y-auto p-1'}>
+  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'min-h-0 max-h-[min(420px,60vh)] overflow-y-auto p-1'}>
     {sections.map(section => {
       const start = offset
       offset += section.items.length
@@ -357,7 +356,6 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
       placeholder={inPlace && drillParent ? drillParent.label : t('chat.capabilities.searchPlaceholder')} aria-label={t('chat.capabilities.searchPlaceholder')}
       role="combobox" aria-expanded="true" aria-controls={controlsId} aria-activedescendant={activeOptionId}
       className={`min-w-0 flex-1 bg-transparent text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] ${sheet ? 'text-[15px]' : 'text-[13px]'}`} />
-    {!sheet && !query ? <Kbd size="xs" appearance="subtle">Esc</Kbd> : null}
   </div>
 
   if (inPlace) {

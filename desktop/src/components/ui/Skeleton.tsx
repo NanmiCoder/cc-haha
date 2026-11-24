@@ -76,24 +76,13 @@ export type SkeletonGroupProps = {
 /**
  * Wraps a cluster of `Skeleton`s.
  *
- * The only place that animates, and the only place that carries the loading
- * semantics — the hand-rolled placeholders had neither `role` nor `aria-busy`,
- * so a screen reader saw an empty region and said nothing.
- *
- * Uses the low-GPU `.animate-stepped-pulse` (discrete `steps(4)` frames) which
- * overrides Tailwind's `@layer utilities` `.animate-pulse` via unlayered CSS
- * precedence while keeping `animate-pulse` on the class list for callers/tests
- * that inspect it.
+ * The only place that holds `animate-pulse`, and the only place that carries
+ * the loading semantics — the hand-rolled placeholders had neither `role` nor
+ * `aria-busy`, so a screen reader saw an empty region and said nothing.
  */
 export function SkeletonGroup({ label, className, style, children }: SkeletonGroupProps) {
   return (
-    <div
-      role="status"
-      aria-busy="true"
-      aria-live="polite"
-      style={style}
-      className={cx('animate-pulse animate-stepped-pulse', className)}
-    >
+    <div role="status" aria-busy="true" aria-live="polite" style={style} className={cx('animate-pulse', className)}>
       <span className="sr-only">{label}</span>
       {children}
     </div>

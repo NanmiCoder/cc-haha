@@ -62,7 +62,6 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
       useUIStore.getState().startNewSessionDraft()
     }
   }, [draftVisible, retainsDraft, newSessionDraft])
-
   let page: ReactNode = null
   if (!activeTabId || !activeTabType) {
     page = draft ? null : homePage ?? <EmptySession />
@@ -130,13 +129,9 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
         <WorkspaceBrowserGuestLayer />
       </div>
       {draft && (
-        <div
-          hidden={!draftVisible}
-          aria-hidden={!draftVisible}
-          {...(draftVisible ? {} : { inert: '' })}
+        <div hidden={!draftVisible} aria-hidden={!draftVisible} {...(draftVisible ? {} : { inert: '' })}
           data-testid="new-session-draft-panel"
-          className={draftVisible ? 'absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden' : 'hidden'}
-        >
+          className={draftVisible ? 'absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden' : 'hidden'}>
           {/* Keyed by revision only: moving an empty draft to another project
               changes `initialWorkDir` and the composer follows it in place. */}
           <EmptySession key={draft.revision} draftRevision={draft.revision} initialWorkDir={draft.workDir} visible={draftVisible} />
@@ -154,7 +149,6 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
           <div
             key={tab.sessionId}
             aria-hidden={!visible}
-            {...(visible ? {} : { inert: '' })}
             data-testid={`terminal-tab-panel-${tab.sessionId}`}
             className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
               visible ? 'z-20 opacity-100' : 'pointer-events-none z-0 opacity-0'

@@ -23,8 +23,6 @@ export type SelectFieldProps<T extends string = string> =
     hint?: ReactNode
     error?: string
     size?: FieldSize
-    /** Monospace face with tabular numerals for technical values. */
-    mono?: boolean
     containerClassName?: string
   }
 
@@ -45,7 +43,6 @@ export function SelectField<T extends string = string>({
   hint,
   error,
   size = 'lg',
-  mono = false,
   className,
   containerClassName,
   id,
@@ -73,14 +70,7 @@ export function SelectField<T extends string = string>({
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         onChange={(event) => onChange(event.target.value as T)}
-        className={cx(
-          FIELD_BASE_CLASSES,
-          FIELD_SIZE_CLASSES[size],
-          fieldStateClasses(!!error),
-          'cursor-pointer',
-          mono && 'font-mono tabular-nums',
-          className,
-        )}
+        className={cx(FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES[size], fieldStateClasses(!!error), 'cursor-pointer', className)}
         {...props}
       >
         {options.map((option) => (

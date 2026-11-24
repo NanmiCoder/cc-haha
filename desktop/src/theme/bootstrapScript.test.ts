@@ -237,7 +237,7 @@ describe('index.html pre-hydration theme script', () => {
     stubMatchMedia(true)
 
     const result = runBootstrapScript()
-    expect(result.theme).toBe('neutral-dark')
+    expect(result.theme).toBe('dark')
     expect(result.colorScheme).toBe('dark')
   })
 

@@ -2,6 +2,8 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { SideChatSurface } from '@/components/sideChat/SideChatSurface'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useWorkspaceHeaderTarget } from '../layout/WorkspaceHeaderContext'
 import { useShallow } from 'zustand/react/shallow'
 import { t, useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -56,6 +58,7 @@ export function WorkspaceSurface({
 }: WorkspaceSurfaceProps) {
   const t = useTranslation()
   const surfaceRef = useRef<HTMLDivElement>(null)
+  const headerTarget = useWorkspaceHeaderTarget(surfaceRef, sessionId, dock === 'side' && visible)
   const [menuOpen, setMenuOpen] = useState(false)
   const [pendingClose, setPendingClose] = useState<{ sessionId: string; tabId: string; scope: WorkspaceCloseScope } | null>(null)
   const menuId = useId()
@@ -186,7 +189,7 @@ export function WorkspaceSurface({
   const tabStrip = tabs.length > 0 ? (
       <WorkspaceTabStrip
         dock={dock}
-        placement="dock"
+        placement={headerTarget ? 'window' : 'dock'}
         tabs={tabs}
         activeTabId={activeTabId}
         canReopenClosed={canReopenClosed}
@@ -220,7 +223,7 @@ export function WorkspaceSurface({
       className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface)]"
     >
       {watchError ? <p role="status" className="shrink-0 px-3 py-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.files.watchFailed', { reason: watchError })}</p> : null}
-      {tabStrip}
+      {tabStrip && headerTarget ? createPortal(tabStrip, headerTarget) : tabStrip}
 
       <div
         ref={contentRef}

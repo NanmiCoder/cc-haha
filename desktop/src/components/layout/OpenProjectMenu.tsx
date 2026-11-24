@@ -78,7 +78,7 @@ export function OpenProjectMenu({ path }: Props) {
           }
           void handleOpenTarget(primaryTarget.id)
         }}
-        className={`control-bevel tab-bar-interactive inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] [-webkit-app-region:no-drag] ${
+        className={`inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] ${
           hasMenu
             ? 'min-w-[2.75rem] px-1.5 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
             : 'w-7 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
@@ -92,7 +92,7 @@ export function OpenProjectMenu({ path }: Props) {
         <div
           ref={menuRef}
           role="menu"
-          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[220px] overflow-hidden rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+          className="fixed z-[var(--z-dropdown)] min-w-[220px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={{ top: rect.bottom + 6, right: Math.max(12, window.innerWidth - rect.right) }}
         >
           {targets.map((target) => (

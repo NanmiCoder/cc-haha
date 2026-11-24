@@ -395,11 +395,15 @@ describe('desktop theme tokens', () => {
 })
 
 /**
- * Layered frosted glass surfaces pair translucent fills (`0.82–0.86` alpha) with
- * `backdrop-filter` blur/saturation and a 1px top specular rim. Where
- * `backdrop-filter` is unavailable, CSS silently drops the blur without
- * reporting a failure — so every translucent surface MUST drop back to its
- * opaque fill inside `@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))`.
+ * `.glass-panel` states a translucent fill and a blur in one rule, and reads as
+ * frosted only when both land. The blur is the fragile half: where
+ * `backdrop-filter` does not run there is no failure for CSS to report — the
+ * declaration is simply skipped, the fill stays translucent on its own, and
+ * page text reads straight through the panel. That is what put a legible
+ * provider list behind the 860px provider form.
+ *
+ * These pin the two defenses. Dialogs opted out of the coupling entirely;
+ * the small floating layers kept it but no longer depend on it for legibility.
  */
 describe('overlay opacity contract', () => {
   /** Every value assigned to `token` across the stylesheet, in source order. */
@@ -416,11 +420,11 @@ describe('overlay opacity contract', () => {
     return Number(match![1])
   }
 
-  it('gives the opaque dialog fallback token a fill with no alpha channel in every theme', () => {
-    // `--color-surface-dialog` is both the `@supports` fallback when blur is
-    // unavailable and the surface measured by contrast tests.
+  it('gives dialogs a fill with no alpha channel at all, in every theme', () => {
+    // Not "mostly opaque" — an rgba() here would put the regression back one
+    // decimal at a time.
     for (const value of declarationsOf('--color-surface-dialog')) {
-      expect(value, `dialog fallback fill should be opaque, got "${value}"`).not.toMatch(/rgba|hsla/)
+      expect(value, `dialog fill should be opaque, got "${value}"`).not.toMatch(/rgba|hsla/)
       expect(value).not.toMatch(/,\s*[0-9.]+\s*\)\s*$/)
     }
   })
@@ -433,37 +437,32 @@ describe('overlay opacity contract', () => {
     expect(values).toContain('var(--cc-s1)')
   })
 
-  it('keeps frosted glass fills dense enough (>= 0.80 alpha) for legible blur', () => {
-    for (const token of ['--color-surface-glass', '--color-surface-dialog-glass']) {
-      for (const value of declarationsOf(token)) {
-        expect(alphaOf(value), `${token} fill "${value}" is too sheer`).toBeGreaterThanOrEqual(0.8)
-      }
+  it('keeps the glass fill dense enough to stand without the blur', () => {
+    // At 0.84 the page was readable through unblurred glass. These floating
+    // layers are small enough that the frosted look survives the extra density.
+    for (const value of declarationsOf('--color-surface-glass')) {
+      expect(alphaOf(value), `glass fill "${value}" is too sheer`).toBeGreaterThanOrEqual(0.9)
     }
   })
 
-  it('uses frosted dialog glass on .dialog-panel with top specular rim and ambient shadow', () => {
-    const rule = normalizedCss.match(/\n\.dialog-panel \{([^}]*)\}/)
-    expect(rule, 'expected a .dialog-panel rule').not.toBeNull()
-    expect(rule![1]).toMatch(/background:\s*var\(--color-surface-dialog-glass\)/)
-    expect(rule![1]).toMatch(/backdrop-filter:\s*blur\(var\(--glass-blur\)\)/)
-    expect(rule![1]).toMatch(/box-shadow:\s*var\(--glass-top-rim\),\s*var\(--shadow-dialog-glass\)/)
+  it('drops glass to a fully opaque fill where backdrop-filter is unavailable', () => {
+    const fallback = normalizedCss.match(
+      /@supports not \(\(backdrop-filter[^)]*\)[^{]*\{\s*\.glass-panel\s*\{([^}]*)\}/,
+    )
+    expect(fallback, 'expected an @supports fallback for .glass-panel').not.toBeNull()
+    expect(fallback![1]).toMatch(/background:\s*rgb\(var\(--cc-bg-rgb\)\)/)
   })
 
-  it('drops every frosted glass surface to an opaque fill where backdrop-filter is unavailable', () => {
-    const fallbackStart = normalizedCss.indexOf('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {')
-    expect(fallbackStart, 'expected an @supports fallback block for frosted glass').toBeGreaterThanOrEqual(0)
-    const fallbackBlock = getThemeBlock('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))')
-    expect(fallbackBlock).toContain('.glass-panel')
-    expect(fallbackBlock).toContain('.surface-glass')
-    expect(fallbackBlock).toContain('.dropdown-glass')
-    expect(fallbackBlock).toMatch(/background:\s*rgb\(var\(--cc-bg-rgb\)\)/)
-    expect(fallbackBlock).toContain('.dialog-glass')
-    expect(fallbackBlock).toContain('.dialog-panel')
-    expect(fallbackBlock).toContain('.composer-glass')
-    expect(fallbackBlock).toMatch(/background:\s*var\(--color-surface-dialog\)/)
+  it('keeps the dialog panel off backdrop-filter entirely', () => {
+    const rule = normalizedCss.match(/\n\.dialog-panel \{([^}]*)\}/)
+    expect(rule, 'expected a .dialog-panel rule').not.toBeNull()
+    expect(rule![1]).not.toMatch(/backdrop-filter/)
+    expect(rule![1]).toMatch(/background:\s*var\(--color-surface-dialog\)/)
   })
 
   it('dims harder behind a modal than behind a non-modal drawer', () => {
+    // Now that the panel is opaque the scrim is the only thing separating the
+    // dialog from the page, so it carries more weight than the sidebar's.
     const modal = declarationsOf('--color-modal-scrim').map(alphaOf)
     const overlay = declarationsOf('--color-overlay-scrim').map(alphaOf)
     expect(modal).toHaveLength(overlay.length)
@@ -471,56 +470,6 @@ describe('overlay opacity contract', () => {
       expect(alpha, 'modal scrim should be at least as heavy as the overlay scrim')
         .toBeGreaterThanOrEqual(overlay[index]!)
     })
-  })
-})
-
-describe('Safari 15-safe texture utilities', () => {
-  it('defines surface grain, bevel, scroll fade, glass, seam, and stepped motion utilities without color-mix', () => {
-    expect(normalizedCss).not.toContain('color-mix(')
-    for (const token of [
-      '--surface-grain:',
-      '--bevel-surface-rest:',
-      '--bevel-surface-pressed:',
-      '--bevel-cta-rest:',
-      '--bevel-cta-pressed:',
-      '--app-scrollbar-width: 6px;',
-      '--ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);',
-    ]) {
-      expect(normalizedCss, `missing token ${token}`).toContain(token)
-    }
-    for (const selector of [
-      '.surface-grain {',
-      '.control-bevel {',
-      '.control-bevel-cta {',
-      '.surface-glass {',
-      '.dropdown-glass {',
-      '.dialog-glass {',
-      '.dialog-backdrop {',
-      '.composer-glass {',
-      '.composer-seam-below {',
-      '.composer-seam-above {',
-      '.topbar-scroll-fade {',
-      '.scroll-edge-fade {',
-      '.scrollbar-autohide {',
-      '.animate-stepped-pulse {',
-      '.animate-stepped-shimmer {',
-      '.popover-motion {',
-    ]) {
-      expect(normalizedCss, `missing utility ${selector}`).toContain(selector)
-    }
-  })
-
-  it('keeps .control-bevel and .control-bevel-cta inside @layer components so Tailwind absolute/fixed utilities win', () => {
-    const componentsLayer = normalizedCss.match(/@layer components \{[\s\S]*?\.control-bevel \{[\s\S]*?\.control-bevel-cta \{/)
-    expect(componentsLayer).not.toBeNull()
-  })
-
-  it('lets .scrollbar-autohide own the sidebar scrollbar without legacy .sidebar-scroll-area overrides', () => {
-    const sidebarScrollAreaBlock = getThemeBlock('.sidebar-scroll-area')
-    expect(sidebarScrollAreaBlock).toContain('padding-bottom: 60px;')
-    expect(sidebarScrollAreaBlock).not.toContain('scrollbar-color')
-    expect(sidebarScrollAreaBlock).not.toContain('scrollbar-width')
-    expect(normalizedCss).not.toContain('.sidebar-scroll-area::-webkit-scrollbar')
   })
 })
 

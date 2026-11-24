@@ -91,34 +91,34 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // selection, so an ink block is what reads as "the button". The old hover
   // lift and terracotta flip made every confirm look like a marketing CTA.
   primary:
-    `control-bevel-cta bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] hover:bg-[var(--color-btn-primary-hover)] ${DISABLED_FILL}`,
+    `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-btn-primary-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   // Terracotta at rest. `primary`'s ink block is right where a button sits among
   // other buttons; `accent` is for the one control on a surface that has no
   // competition and has to be found instantly — the composer's send key. Using
   // it anywhere terracotta already marks something else is what `primary`
   // exists to avoid.
   accent:
-    `control-bevel-cta bg-[var(--color-brand)] text-[var(--color-on-primary)] hover:bg-[var(--color-brand-hover)] ${DISABLED_FILL}`,
+    `bg-[var(--color-brand)] text-[var(--color-on-primary)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-brand-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   secondary:
-    `control-bevel bg-[var(--color-surface)] text-[var(--color-text-primary)] border border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] ${DISABLED_FILL}`,
+    `bg-[var(--color-surface)] text-[var(--color-text-primary)] border border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   tonal:
     // Text is the darkened pair, not `--color-brand`: the raw accent only makes
     // 4.3:1 on its own soft fill under the two ink palettes.
-    `control-bevel bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] hover:bg-[var(--color-brand-soft-hover)] ${DISABLED_FILL}`,
+    `bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] hover:bg-[var(--color-brand-soft-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   'tonal-outline':
-    `control-bevel bg-transparent text-[var(--color-brand)] border border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-brand)] hover:border-[var(--color-brand)] hover:text-[var(--color-on-primary)] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-brand)] border border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-brand)] hover:border-[var(--color-brand)] hover:text-[var(--color-on-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
   ghost:
-    `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] [&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
   danger:
     // Foreground from a token, not `white`: dark's --color-error is a light red
     // that white text is unreadable on.
-    `control-bevel-cta bg-[var(--color-error)] text-[var(--color-on-error)] hover:brightness-110 ${DISABLED_FILL}`,
+    `bg-[var(--color-error)] text-[var(--color-on-error)] hover:brightness-110 active:scale-[0.98] ${DISABLED_FILL}`,
   inverse:
-    `control-bevel-cta bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] hover:bg-[var(--color-btn-primary-hover)] ${DISABLED_FILL}`,
+    `bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] hover:bg-[var(--color-btn-primary-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   'danger-outline':
-    `control-bevel bg-transparent text-[var(--color-error)] border border-[var(--color-error)] hover:bg-[var(--color-error-soft)] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-error)] border border-[var(--color-error)] hover:bg-[var(--color-error-soft)] active:scale-[0.98] ${DISABLED_FADE}`,
   'danger-ghost':
-    `bg-transparent text-[var(--color-error)] hover:bg-[var(--color-error-soft)] [&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-error)] hover:bg-[var(--color-error-soft)] active:scale-[0.98] ${DISABLED_FADE}`,
   link:
     `bg-transparent text-[var(--color-brand)] underline-offset-2 hover:underline hover:text-[var(--color-brand-hover)] px-0 ${DISABLED_FADE}`,
 }

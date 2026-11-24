@@ -71,7 +71,7 @@ export function Switch({
     <label
       htmlFor={inputId}
       className={cx(
-        'group/switch flex items-center justify-between gap-6',
+        'flex items-center justify-between gap-6',
         disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
         className,
       )}
@@ -116,13 +116,12 @@ export function Switch({
         />
         <span
           aria-hidden="true"
-          className="absolute inset-0 rounded-full bg-[var(--color-outline)] shadow-[var(--bevel-surface-pressed)] transition-[background-color,box-shadow] duration-150 peer-checked:bg-[var(--color-switch-checked-bg)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--color-surface)]"
+          className="absolute inset-0 rounded-full bg-[var(--color-outline)] transition-colors peer-checked:bg-[var(--color-switch-checked-bg)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)]"
         />
         <span
           aria-hidden="true"
           className={cx(
-            'relative rounded-full bg-[var(--color-switch-thumb)] shadow-[var(--bevel-surface-rest)] transition-transform duration-150 ease-out motion-reduce:transition-none',
-            !disabled && 'group-active/switch:scale-x-110 group-active/switch:scale-y-95 motion-reduce:group-active/switch:scale-100',
+            'relative rounded-full bg-[var(--color-switch-thumb)] shadow-sm transition-transform',
             THUMB_SIZE[size],
             THUMB_OFFSET[size],
           )}

@@ -21,7 +21,7 @@ export function ScheduledTasks() {
   }, [fetchTasks])
 
   return (
-    <div className="scrollbar-autohide flex-1 overflow-y-auto bg-[var(--color-surface)]">
+    <div className="flex-1 overflow-y-auto bg-[var(--color-surface)]">
       <div className="mx-auto max-w-[960px] px-10 pb-16 pt-9">
         {/* Page head: 22 semibold title, 13 tertiary description, the one
             primary action on the right — the same head every list page uses. */}

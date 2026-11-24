@@ -669,33 +669,33 @@
    the `:root` semantic layer below re-points every one of them at a
    `--cc-*` source variable, which is what actually varies per theme. */
 @theme {
-  --color-primary: #1D4ED8;
-  --color-primary-container: #1E40AF;
-  --color-primary-fixed: #EFF6FF;
-  --color-primary-fixed-dim: #BFDBFE;
+  --color-primary: #A24A2E;
+  --color-primary-container: #8C3F26;
+  --color-primary-fixed: #F6ECE7;
+  --color-primary-fixed-dim: #E8CFC3;
 
   --color-on-primary: #FFFFFF;
   --color-on-primary-container: #FFFFFF;
-  --color-on-surface: #18181B;
-  --color-on-surface-variant: #3F3F46;
+  --color-on-surface: #1F1E1C;
+  --color-on-surface-variant: #55524D;
 
-  --color-surface: #FCFCFC;
-  --color-surface-bright: #FCFCFC;
-  --color-surface-dim: #EFEFF1;
-  --color-surface-container: #FFFFFF;
-  --color-surface-container-low: #F7F7F8;
-  --color-surface-container-high: #EFEFF1;
-  --color-surface-container-highest: #E4E4E7;
-  --color-surface-container-lowest: #FCFCFC;
-  --color-surface-variant: #F7F7F8;
+  --color-surface: #FFFFFF;
+  --color-surface-bright: #FFFFFF;
+  --color-surface-dim: #F1F0EE;
+  --color-surface-container: #F5F5F3;
+  --color-surface-container-low: #F7F7F6;
+  --color-surface-container-high: #F1F0EE;
+  --color-surface-container-highest: #E9E8E5;
+  --color-surface-container-lowest: #FFFFFF;
+  --color-surface-variant: #F7F7F6;
 
-  --color-background: #FCFCFC;
+  --color-background: #FFFFFF;
 
-  --color-outline: #D4D4D8;
-  --color-outline-variant: #E4E4E7;
+  --color-outline: #D9D7D3;
+  --color-outline-variant: #E9E8E5;
 
-  --color-secondary: #1D4ED8;
-  --color-secondary-container: #EFF6FF;
+  --color-secondary: #2C66C9;
+  --color-secondary-container: #E9F0FB;
   --color-tertiary: #3B7068;
   --color-tertiary-container: #F1F5F4;
 
@@ -704,16 +704,16 @@
   --color-error-container: #FBE9EC;
   --color-on-error-container: #B12636;
 
-  --color-inverse-surface: #18181B;
-  --color-inverse-on-surface: #FCFCFC;
-  --color-inverse-primary: #BFDBFE;
+  --color-inverse-surface: #1F1E1C;
+  --color-inverse-on-surface: #FFFFFF;
+  --color-inverse-primary: #E8CFC3;
 
   --color-success: #2E7D4F;
   --color-success-container: #E7F3EB;
   --color-on-success-container: #2A7148;
-  --color-info: #1D4ED8;
-  --color-info-container: #EFF6FF;
-  --color-on-info-container: #1E40AF;
+  --color-info: #2C66C9;
+  --color-info-container: #E9F0FB;
+  --color-on-info-container: #2459B3;
   --color-warning: #A5650F;
   --color-warning-container: #FBF0DC;
   --color-on-warning-container: #8A540C;
@@ -748,38 +748,40 @@
    (`*-ink`, the heat ramp, the `*-rgb` triplets) are derived from these
    sources — see the header comment on the semantic layer. */
 
-/* 纯白 pure-white — Cold Porcelain default */
+/* 纯白 pure-white — 默认 */
 :root,
 [data-theme="white"] {
   color-scheme: light;
 
-  /* Crisp Cold Porcelain + Cold Cobalt accent: zinc-25 canvas (#FCFCFC),
-     cool porcelain sidebar (#F7F7F8), pure white cards (#FFFFFF), soft zinc
-     hover/selected (#EFEFF1), razor-thin zinc hairlines (#E4E4E7 / #D4D4D8),
-     and cobalt primary (#1D4ED8). */
-  --cc-bg: #FCFCFC;
-  --cc-s0: #F7F7F8;
-  --cc-s1: #EFEFF1;
-  --cc-s2: #FFFFFF;
-  --cc-bd: #E4E4E7;
-  --cc-bd2: #D4D4D8;
+  /* 「素 Porcelain」(2026-10 visual direction). One warm-neutral ramp that
+     climbs in a single direction — page → sidebar (s0) → card lining (s2) →
+     hover/selected (s1) — and every shadow below uses the same warm hue, so
+     the surfaces no longer mix cool greys with brown shadows. Terracotta is
+     kept for the brand, the send key and selection only; info is a separate
+     blue and error a crimson, so status never reads as brand. */
+  --cc-bg: #FFFFFF;
+  --cc-s0: #F7F7F6;
+  --cc-s1: #F1F0EE;
+  --cc-s2: #F5F5F3;
+  --cc-bd: #E9E8E5;
+  --cc-bd2: #D9D7D3;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #71717A;
+  --cc-bd-strong: #8C8984;
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D4D4D8;
-  --cc-tab-sep: #E0E0E5;
-  /* Reading tiers calibrated for WCAG AAA on reading grounds and AA on
-     every control surface. */
-  --cc-t1: #18181B;
-  --cc-t2: #3F3F46;
-  --cc-t3: #595962;
+  --cc-tab-edge: #D7D5D1;
+  --cc-tab-sep: #E6E4E1;
+  /* Reading tiers keep the warm neutral hue while leaving small descriptions
+     enough contrast on hover and raised control fills as well as the page. */
+  --cc-t1: #1A1917;
+  --cc-t2: #494640;
+  --cc-t3: #625E58;
 
-  --cc-ac: #1D4ED8;
-  --cc-ac2: #1E40AF;
-  --cc-ac-soft: #EFF6FF;
-  --cc-ac-soft-hover: #DBEAFE;
-  --cc-ac-border: #BFDBFE;
-  --cc-ac-ink: #1E40AF;
+  --cc-ac: #A24A2E;
+  --cc-ac2: #8C3F26;
+  --cc-ac-soft: #F6ECE7;
+  --cc-ac-soft-hover: #F0DFD6;
+  --cc-ac-border: #E8CFC3;
+  --cc-ac-ink: #93432A;
   --cc-on-ac: #FFFFFF;
 
   --cc-ok: #2E7D4F;
@@ -792,9 +794,9 @@
   --cc-er-soft: #FBE9EC;
   --cc-er-soft-hover: #F6D6DB;
   --cc-er-ink: #B12636;
-  --cc-info: #1D4ED8;
-  --cc-info-soft: #EFF6FF;
-  --cc-info-ink: #1E40AF;
+  --cc-info: #2C66C9;
+  --cc-info-soft: #E9F0FB;
+  --cc-info-ink: #2459B3;
 
   --cc-teal: #3B7068;
   --cc-teal-soft: #F1F5F4;
@@ -809,13 +811,13 @@
   --cc-diff-del-word: #F2CDC8;
   --cc-diff-mark: #F7F0E4;
   --cc-diff-mark-gutter: #EFE3CF;
-  --cc-code: #F4F4F5;
+  --cc-code: #F7F6F4;
 
-  --cc-heat-0: #EFEFF1;
-  --cc-heat-1: #DBEAFE;
-  --cc-heat-2: #93C5FD;
-  --cc-heat-3: #3B82F6;
-  --cc-heat-4: #1D4ED8;
+  --cc-heat-0: #F0EFE9;
+  --cc-heat-1: #E8D6D0;
+  --cc-heat-2: #D1ADA2;
+  --cc-heat-3: #B8806F;
+  --cc-heat-4: #9C4F38;
   /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
      Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
      neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
@@ -825,18 +827,18 @@
   --cc-series-4: #99732B;
   --cc-series-5: #A8A49C;
 
-  --cc-shadow-card: 0 1px 2px rgba(24, 24, 27, 0.04), 0 6px 20px -6px rgba(24, 24, 27, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(24, 24, 27, 0.05), 0 8px 28px -8px rgba(24, 24, 27, 0.08);
-  --cc-shadow-overlay: 0 2px 6px rgba(24, 24, 27, 0.06), 0 16px 40px -12px rgba(24, 24, 27, 0.14);
+  --cc-shadow-card: 0 1px 2px rgba(28, 25, 23, 0.05), 0 6px 20px rgba(28, 25, 23, 0.06);
+  --cc-shadow-composer: 0 1px 2px rgba(28, 25, 23, 0.04), 0 8px 28px rgba(28, 25, 23, 0.07);
+  --cc-shadow-overlay: 0 2px 6px rgba(28, 25, 23, 0.05), 0 16px 40px rgba(28, 25, 23, 0.12);
 
-  --cc-bg-rgb: 252, 252, 252;
-  --cc-s1-rgb: 239, 239, 241;
-  --cc-t1-rgb: 24, 24, 27;
-  --cc-t2-rgb: 63, 63, 70;
-  --cc-bd2-rgb: 212, 212, 216;
-  --cc-ac-rgb: 29, 78, 216;
+  --cc-bg-rgb: 255, 255, 255;
+  --cc-s1-rgb: 241, 240, 238;
+  --cc-t1-rgb: 26, 25, 23;
+  --cc-t2-rgb: 73, 70, 64;
+  --cc-bd2-rgb: 217, 215, 211;
+  --cc-ac-rgb: 162, 74, 46;
   --cc-er-rgb: 196, 43, 60;
-  --cc-scrim-rgb: 24, 24, 27;
+  --cc-scrim-rgb: 24, 22, 20;
 }
 
 /* 纸墨 paper */
@@ -1265,85 +1267,83 @@
   --cc-scrim-rgb: 6, 6, 6;
 }
 
-/* 深灰 neutral-dark — True OLED black grounds and strictly achromatic reading tiers, with Cold Cobalt accent. */
+/* 深灰 neutral-dark — neutral grounds and reading tiers, without a color cast. */
 [data-theme="neutral-dark"] {
   color-scheme: dark;
 
-  --cc-bg: #000000;
-  --cc-s0: #000000;
-  --cc-s1: #1C1C1C;
-  --cc-s2: #111111;
-  --cc-bd: #222222;
-  --cc-bd2: #303030;
-  --cc-bd-strong: #767676;
-  --cc-tab-edge: #262626;
-  --cc-tab-sep: #1E1E1E;
-  --cc-t1: #F5F5F5;
-  --cc-t2: #B8B8B8;
-  --cc-t3: #949494;
+  --cc-bg: #202020;
+  --cc-s0: #191919;
+  --cc-s1: #2B2B2B;
+  --cc-s2: #252525;
+  --cc-bd: #383838;
+  --cc-bd2: #4C4C4C;
+  --cc-bd-strong: #777777;
+  --cc-tab-edge: #353535;
+  --cc-tab-sep: #2D2D2D;
+  --cc-t1: #F2F2F2;
+  --cc-t2: #C4C4C4;
+  --cc-t3: #AAAAAA;
 
-  /* Cold Cobalt calibrated to clear WCAG AA 4.5:1 with #FFFFFF on both
-     primary and primary-container while keeping >= 3:1 against #111111 code. */
-  --cc-ac: #346BF1;
-  --cc-ac2: #2A5DE0;
-  --cc-ac-soft: #13203A;
-  --cc-ac-soft-hover: #1A2B4D;
-  --cc-ac-border: #264073;
-  --cc-ac-ink: #8CB4FF;
-  --cc-on-ac: #FFFFFF;
+  --cc-ac: #D07B52;
+  --cc-ac2: #DE8F66;
+  --cc-ac-soft: #2C2C2C;
+  --cc-ac-soft-hover: #363636;
+  --cc-ac-border: #585858;
+  --cc-ac-ink: #E09A74;
+  --cc-on-ac: #202020;
 
   --cc-ok: #6FB58C;
-  --cc-ok-soft: #14261B;
-  --cc-ok-ink: #7AC498;
+  --cc-ok-soft: #213026;
+  --cc-ok-ink: #6FB58C;
   --cc-wn: #D3A34C;
-  --cc-wn-soft: #261F10;
-  --cc-wn-ink: #DEB05B;
+  --cc-wn-soft: #2F2917;
+  --cc-wn-ink: #D3A34C;
   --cc-er: #E0685E;
-  --cc-er-soft: #2E1815;
-  --cc-er-soft-hover: #45231E;
-  --cc-er-ink: #EA7A70;
-  --cc-info: #7DA8FA;
-  --cc-info-soft: #152138;
-  --cc-info-ink: #8EB4FC;
+  --cc-er-soft: #37211D;
+  --cc-er-soft-hover: #522C27;
+  --cc-er-ink: #E06A60;
+  --cc-info: #8FA8E8;
+  --cc-info-soft: #2D3343;
+  --cc-info-ink: #8FA8E8;
 
   --cc-teal: #7DD3C7;
-  --cc-teal-soft: #142426;
-  --cc-teal-border: #244042;
-  --cc-teal-icon: #1A3033;
+  --cc-teal-soft: #263338;
+  --cc-teal-border: #385455;
+  --cc-teal-icon: #2C3E41;
 
-  --cc-diff-add: #13241A;
-  --cc-diff-add-gutter: #1A3022;
-  --cc-diff-add-word: #1E3A28;
-  --cc-diff-del: #2B171A;
-  --cc-diff-del-gutter: #381D21;
-  --cc-diff-del-word: #4A2428;
-  --cc-diff-mark: #262116;
-  --cc-diff-mark-gutter: #332B1B;
-  --cc-code: #111111;
+  --cc-diff-add: #233028;
+  --cc-diff-add-gutter: #2C3B31;
+  --cc-diff-add-word: #29382E;
+  --cc-diff-del: #36282C;
+  --cc-diff-del-gutter: #422C30;
+  --cc-diff-del-word: #513234;
+  --cc-diff-mark: #34302A;
+  --cc-diff-mark-gutter: #3F382C;
+  --cc-code: #191919;
 
-  --cc-heat-0: #1C1C1C;
-  --cc-heat-1: #162544;
-  --cc-heat-2: #1E3A70;
-  --cc-heat-3: #2852A8;
-  --cc-heat-4: #346BF1;
+  --cc-heat-0: #2B2B2B;
+  --cc-heat-1: #42322E;
+  --cc-heat-2: #6A4638;
+  --cc-heat-3: #965D43;
+  --cc-heat-4: #C5754F;
   --cc-series-1: #35A69D;
   --cc-series-2: #AD644E;
   --cc-series-3: #6177B6;
   --cc-series-4: #99732B;
   --cc-series-5: #B4B4B4;
 
-  --cc-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.55), 0 8px 24px -8px rgba(0, 0, 0, 0.72);
-  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.6), 0 14px 32px -18px rgba(0, 0, 0, 0.78);
-  --cc-shadow-overlay: 0 16px 40px -18px rgba(0, 0, 0, 0.78), 0 24px 64px -20px rgba(0, 0, 0, 0.85);
+  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
+  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
+  --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
 
-  --cc-bg-rgb: 0, 0, 0;
-  --cc-s1-rgb: 28, 28, 28;
-  --cc-t1-rgb: 245, 245, 245;
-  --cc-t2-rgb: 184, 184, 184;
-  --cc-bd2-rgb: 48, 48, 48;
-  --cc-ac-rgb: 52, 107, 241;
+  --cc-bg-rgb: 32, 32, 32;
+  --cc-s1-rgb: 43, 43, 43;
+  --cc-t1-rgb: 242, 242, 242;
+  --cc-t2-rgb: 196, 196, 196;
+  --cc-bd2-rgb: 76, 76, 76;
+  --cc-ac-rgb: 208, 123, 82;
   --cc-er-rgb: 224, 104, 94;
-  --cc-scrim-rgb: 0, 0, 0;
+  --cc-scrim-rgb: 6, 6, 6;
 }
 
 /* ─── Semantic layer ──────────────────────────────────────────────
@@ -1361,24 +1361,6 @@
   --titlebar-height: 52px;
   --motion-sidebar-duration: 280ms;
   --motion-sidebar-easing: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-
-  /* Procedural surface grain & tactile bevel tokens (Safari 15 safe, zero color-mix) */
-  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-  --surface-grain-size: 256px 256px;
-  --bevel-surface-rest: 0 1px 0 rgba(0, 0, 0, 0.04);
-  --bevel-surface-pressed: inset 0 1px 1px rgba(0, 0, 0, 0.06);
-  --bevel-cta-rest: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(var(--cc-ac-rgb), 0.24);
-  --bevel-cta-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.14);
-
-  /* Scrollbars & scroll-edge masks */
-  --app-scrollbar-width: 6px;
-  --app-scrollbar-thumb: rgba(var(--cc-t1-rgb), 0.18);
-  --app-scrollbar-thumb-hover: rgba(var(--cc-t1-rgb), 0.32);
-  --workspace-titlebar-scroll-fade-height: 24px;
-  --scroll-edge-fade-size: 24px;
-  --composer-seam-shade: rgba(var(--cc-t1-rgb), 0.06);
-  --composer-seam-wash: rgba(var(--cc-t1-rgb), 0.015);
 
   /* Surfaces. The handoff has four grounds: page (--bg), sidebar and
      secondary panels (--s0), hover/selected (--s1), card lining (--s2). */
@@ -1573,19 +1555,12 @@
   /* `--color-overlay-scrim` dims for non-modal layers (the mobile sidebar
      drawer); `--color-modal-scrim` is the heavier one true modals sit on. */
   --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.42);
-  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.52);
-  /* `--color-surface-dialog` stays opaque as the `@supports` fallback when
-     `backdrop-filter` is unavailable and as the ground measured by contrast
-     tests. Light themes put the paper at the top of the ramp. */
+  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.5);
+  /* Dialogs are opaque: see `.dialog-panel`. Light themes put the paper at the
+     top of the ramp, so the lifted surface is the background value itself. */
   --color-surface-dialog: var(--cc-bg);
-  --glass-blur: 14px;
-  --glass-saturation: 1.14;
-  --color-surface-glass: rgba(var(--cc-bg-rgb), 0.84);
-  --color-surface-dialog-glass: rgba(var(--cc-bg-rgb), 0.86);
-  --color-surface-glass-border: rgba(var(--cc-t1-rgb), 0.10);
-  --glass-top-rim: inset 0 1px 0 rgba(255, 255, 255, 0.72);
-  --shadow-dialog-glass: 0 24px 64px -20px rgba(var(--cc-scrim-rgb), 0.24), 0 4px 16px rgba(var(--cc-scrim-rgb), 0.08);
-  --shadow-dropdown-glass: 0 16px 40px -18px rgba(var(--cc-scrim-rgb), 0.28), 0 2px 8px rgba(var(--cc-scrim-rgb), 0.06);
+  --color-surface-glass: rgba(var(--cc-bg-rgb), 0.92);
+  --color-surface-glass-border: rgba(var(--cc-bd2-rgb), 0.4);
 
   /* Shadows: card / composer / floating overlay */
   --shadow-card: var(--cc-shadow-card);
@@ -1757,22 +1732,7 @@
   --color-surface-dialog: var(--cc-s1);
   --color-btn-soft-bg: var(--cc-bd);
   --color-btn-soft-hover: var(--cc-bd2);
-  --glass-blur: 16px;
-  --glass-saturation: 1.08;
-  --color-surface-glass: rgba(var(--cc-s1-rgb), 0.82);
-  --color-surface-dialog-glass: rgba(var(--cc-s1-rgb), 0.84);
-  --color-surface-glass-border: rgba(255, 255, 255, 0.08);
-  --glass-top-rim: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --shadow-dialog-glass: 0 24px 72px -20px rgba(0, 0, 0, 0.88), 0 4px 16px rgba(0, 0, 0, 0.45);
-  --shadow-dropdown-glass: 0 16px 40px -18px rgba(0, 0, 0, 0.80), 0 2px 8px rgba(0, 0, 0, 0.40);
-  --bevel-surface-rest: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --bevel-surface-pressed: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-  --bevel-cta-rest: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 3px rgba(0, 0, 0, 0.45);
-  --bevel-cta-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.22);
-  --app-scrollbar-thumb: rgba(255, 255, 255, 0.36);
-  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.48);
-  --composer-seam-shade: rgba(0, 0, 0, 0.22);
-  --composer-seam-wash: rgba(255, 255, 255, 0.015);
+  --color-surface-glass: rgba(var(--cc-bg-rgb), 0.93);
   --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.66);
   --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.56);
   --shadow-button-primary: 0 2px 10px rgba(0, 0, 0, 0.4);
@@ -1795,101 +1755,6 @@ html, body, #root {
   background-color: var(--color-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-/* Procedural micro-grain baked onto body (not a full-viewport compositing
-   overlay) and opt-in for floating chrome via `.surface-grain`. */
-body {
-  background-image: var(--surface-grain);
-  background-repeat: repeat;
-  background-size: var(--surface-grain-size);
-}
-
-.surface-grain {
-  background-image: var(--surface-grain);
-  background-repeat: repeat;
-  background-size: var(--surface-grain-size);
-}
-
-/* Soften default 2px Lucide strokes to 1.75px for crisp dense chrome while
-   staying overridable by explicit strokeWidth or Tailwind stroke-* utilities. */
-:where(svg.lucide[stroke-width="2"]) {
-  stroke-width: 1.75;
-}
-
-/* 3D hairline bevel & top specular rim for interactive controls (Safari 15 safe).
-   Declared inside `@layer components` so Tailwind positioning utilities
-   (`absolute`, `fixed`, `sticky`) cleanly override the default `position: relative`. */
-@layer components {
-  .control-bevel {
-    position: relative;
-    background-clip: padding-box;
-    transition:
-      transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
-      border-color 140ms ease,
-      background-color 140ms ease,
-      box-shadow 140ms ease;
-  }
-
-  .control-bevel::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    box-shadow: var(--bevel-surface-rest);
-    transition: box-shadow 120ms ease;
-  }
-
-  .control-bevel:active:not(:disabled):not([aria-haspopup])::before,
-  .control-bevel[data-pressed="true"]::before {
-    box-shadow: var(--bevel-surface-pressed);
-  }
-
-  .control-bevel:active:not(:disabled):not([aria-haspopup]) {
-    transform: scale(0.97);
-  }
-
-  .control-bevel-cta {
-    position: relative;
-    background-clip: padding-box;
-    box-shadow: var(--bevel-cta-rest);
-    transition:
-      transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
-      background-color 140ms ease,
-      box-shadow 140ms ease;
-  }
-
-  .control-bevel-cta::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
-    transition: box-shadow 120ms ease;
-  }
-
-  .control-bevel-cta:active:not(:disabled):not([aria-haspopup]) {
-    transform: scale(0.97);
-    box-shadow: var(--bevel-cta-pressed);
-  }
-
-  .control-bevel-cta:active:not(:disabled):not([aria-haspopup])::before {
-    box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.08);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .control-bevel,
-    .control-bevel-cta {
-      transition: none;
-    }
-
-    .control-bevel:active:not(:disabled):not([aria-haspopup]),
-    .control-bevel-cta:active:not(:disabled):not([aria-haspopup]) {
-      transform: none;
-    }
-  }
 }
 
 /* Code reads as code: JetBrains Mono's ligatures turned `===` into a single
@@ -1957,115 +1822,59 @@ body > :not(#root, [role="tooltip"]) * {
   -webkit-app-region: no-drag;
 }
 
-/* Layered frosted glass surfaces (Safari 15 safe: precomputed rgba() per theme,
-   1px specular top rim, and @supports opaque fallback when backdrop-filter is absent). */
-.surface-glass {
+/* 「素」 popover shell: a near-opaque white sheet, the same hairline every card
+   uses, and the dropdown step of the shadow scale. The old translucent border
+   (`--color-surface-glass-border`) vanished against white pages, so menus read
+   as floating shadows with no edge. */
+.glass-panel {
   background: var(--color-surface-glass);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  border: 1px solid var(--color-border);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-dropdown);
 }
 
-.glass-panel,
-.dropdown-glass {
-  background: var(--color-surface-glass);
-  border: 1px solid var(--color-surface-glass-border);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--glass-top-rim), var(--shadow-dropdown-glass);
+/* The fill above is translucent on the assumption that the blur will scramble
+   whatever shows through. Where `backdrop-filter` is unavailable that
+   assumption fails silently — no fallback fires, the blur is simply skipped,
+   and page text stays legible straight through every dropdown and popover.
+   Going opaque costs the glass look only on engines that never rendered it. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-panel {
+    background: rgb(var(--cc-bg-rgb));
+  }
 }
 
 /* Focus inside a popover is shown on the focused control itself; ringing the
-   whole sheet as well doubled the indicator. The edge sharpens one step instead. */
-.glass-panel:focus-within,
-.dropdown-glass:focus-within {
+   whole sheet as well doubled the indicator. The edge darkens one step instead. */
+.glass-panel:focus-within {
   border-color: var(--color-outline);
 }
 
-/* Frosted modal surface with dark top specular rim (`inset 0 1px rgba(255,255,255,0.05)`)
-   and deep ambient shadow (`0 24px 72px -20px rgba(0,0,0,0.88)`). Falls back to opaque
-   `--color-surface-dialog` via `@supports` when backdrop-filter is unavailable. */
-.dialog-glass {
-  background: var(--color-surface-dialog-glass);
-  border: 1px solid var(--color-surface-glass-border);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--glass-top-rim), var(--shadow-dialog-glass);
-}
-
+/* Modals are read-and-fill surfaces, not glances: an 860px provider form that
+   scrolls needs the page behind it gone, not softened. `.glass-panel` couples
+   its fill to `backdrop-filter`, and a dialog this large cannot take the bet
+   that the blur is live — when it is not, the page reads through the form.
+   No `:focus-within` ring: a dialog holds focus essentially always, so the
+   glass variant's ring would burn permanently rather than signal anything. */
 .dialog-panel {
-  background: var(--color-surface-dialog-glass);
-  border: 1px solid var(--color-surface-glass-border);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--glass-top-rim), var(--shadow-dialog-glass);
+  background: var(--color-surface-dialog);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-overlay);
 }
 
-.dialog-backdrop {
-  background: var(--color-modal-scrim);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
-}
-
-.composer-glass {
-  background: var(--color-surface-dialog-glass);
-  border: 1px solid var(--color-surface-glass-border);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--glass-top-rim), var(--shadow-composer);
-  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
-}
-
-.composer-glass:focus-within {
-  border-color: var(--color-outline);
-}
-
-/* Where `backdrop-filter` is unavailable, drop every translucent glass surface
-   to its opaque ground so background page text never bleeds through. */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-panel,
-  .surface-glass,
-  .dropdown-glass {
-    background: rgb(var(--cc-bg-rgb));
-  }
-
-  .dialog-glass,
-  .dialog-panel,
-  .composer-glass {
-    background: var(--color-surface-dialog);
-  }
-}
-
-/* Composer seam fades for attached banners/context strips above or below the card. */
-.composer-seam-below {
-  background-image:
-    linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent 1rem,
-      var(--composer-seam-shade) 1rem,
-      transparent calc(1rem + 10px)
-    ),
-    linear-gradient(var(--composer-seam-wash), var(--composer-seam-wash));
-}
-
-.composer-seam-above {
-  background-image:
-    linear-gradient(
-      to top,
-      transparent 0,
-      transparent var(--composer-seam-overlap, 1rem),
-      var(--composer-seam-shade) var(--composer-seam-overlap, 1rem),
-      transparent calc(var(--composer-seam-overlap, 1rem) + 10px)
-    );
-}
-
-/* The composer is a floating card: lifted sheet with hairline border,
-   top specular rim, and composer shadow step. */
+/* The composer is a floating card (「素」): an opaque lifted sheet — white on
+   the light themes, one step up the ramp on the ink ones — with the card
+   hairline and the composer step of the shadow scale. No blur: it sits over
+   the transcript's fade, not over content that has to stay legible behind it.
+   Declared as a class rather than utilities because `.glass-panel` also sets
+   the fill, border and shadow, and which of two would win would come down to
+   stylesheet order. */
 .glass-panel--composer {
   background: var(--color-surface-dialog);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  box-shadow: var(--glass-top-rim), var(--shadow-composer);
+  box-shadow: var(--shadow-composer);
   transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 
@@ -2073,7 +1882,7 @@ body > :not(#root, [role="tooltip"]) * {
    time anyone types, and a permanent halo stops meaning anything. */
 .glass-panel--composer:focus-within {
   border-color: var(--color-outline);
-  box-shadow: var(--glass-top-rim), var(--shadow-composer);
+  box-shadow: var(--shadow-composer);
 }
 
 /* The 28px fade above the docked composer, so the transcript dissolves into
@@ -2596,122 +2405,19 @@ body.sidebar-resizing * {
   color: inherit;
 }
 
-/* Scrollbar: 6px thin pill thumb (>= 3:1 contrast on OLED dark). */
-::-webkit-scrollbar { width: var(--app-scrollbar-width); height: var(--app-scrollbar-width); }
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-/* `opacity` is ignored on scrollbar parts, so the hover step uses a brighter/darker thumb. */
-::-webkit-scrollbar-thumb { background: var(--app-scrollbar-thumb); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--app-scrollbar-thumb-hover); }
-
-/* Auto-hiding thin scrollbar utility for scrollable lists and panes. */
-.scrollbar-autohide {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-.scrollbar-autohide:hover,
-.scrollbar-autohide:focus-within {
-  scrollbar-color: var(--app-scrollbar-thumb) transparent;
-}
-.scrollbar-autohide::-webkit-scrollbar-thumb {
-  background: transparent;
-}
-.scrollbar-autohide:hover::-webkit-scrollbar-thumb,
-.scrollbar-autohide:focus-within::-webkit-scrollbar-thumb {
-  background: var(--app-scrollbar-thumb);
-}
-.scrollbar-autohide::-webkit-scrollbar-thumb:hover {
-  background: var(--app-scrollbar-thumb-hover);
-}
-
-/* 7-stop top scroll fade mask leaving the 6px scrollbar lane unmasked. */
-.topbar-scroll-fade {
-  -webkit-mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      rgba(0, 0, 0, 0.10) 10%,
-      rgba(0, 0, 0, 0.30) 24%,
-      rgba(0, 0, 0, 0.58) 42%,
-      rgba(0, 0, 0, 0.82) 62%,
-      rgba(0, 0, 0, 0.96) 82%,
-      #000000 100%
-    ),
-    linear-gradient(#000000, #000000),
-    linear-gradient(#000000, #000000);
-  -webkit-mask-position: top, bottom, right;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size:
-    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
-    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
-    var(--app-scrollbar-width) 100%;
-  mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      rgba(0, 0, 0, 0.10) 10%,
-      rgba(0, 0, 0, 0.30) 24%,
-      rgba(0, 0, 0, 0.58) 42%,
-      rgba(0, 0, 0, 0.82) 62%,
-      rgba(0, 0, 0, 0.96) 82%,
-      #000000 100%
-    ),
-    linear-gradient(#000000, #000000),
-    linear-gradient(#000000, #000000);
-  mask-position: top, bottom, right;
-  mask-repeat: no-repeat;
-  mask-size:
-    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
-    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
-    var(--app-scrollbar-width) 100%;
-}
-
-/* Soft top/bottom scroll-edge mask leaving the 6px scrollbar lane unmasked. */
-.scroll-edge-fade {
-  --scroll-edge-fade-top: var(--scroll-edge-fade-size);
-  --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
-  -webkit-mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      #000000 var(--scroll-edge-fade-top),
-      #000000 calc(100% - var(--scroll-edge-fade-bottom)),
-      transparent 100%
-    ),
-    linear-gradient(#000000, #000000);
-  -webkit-mask-position: left, right;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size:
-    calc(100% - var(--app-scrollbar-width)) 100%,
-    var(--app-scrollbar-width) 100%;
-  mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      #000000 var(--scroll-edge-fade-top),
-      #000000 calc(100% - var(--scroll-edge-fade-bottom)),
-      transparent 100%
-    ),
-    linear-gradient(#000000, #000000);
-  mask-position: left, right;
-  mask-repeat: no-repeat;
-  mask-size:
-    calc(100% - var(--app-scrollbar-width)) 100%,
-    var(--app-scrollbar-width) 100%;
-}
-
-.scroll-edge-fade[data-fade-top="false"] {
-  --scroll-edge-fade-top: 0px;
-}
-
-.scroll-edge-fade[data-fade-bottom="false"] {
-  --scroll-edge-fade-bottom: 0px;
-}
+/* `opacity` is ignored on scrollbar parts, so the hover step is a darker ink. */
+::-webkit-scrollbar-thumb { background: var(--color-outline); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); }
 
 /* Clears the settings dock (8px inset + 30px row + 8px + hairline) with a
-   row's breathing room, so the last session never sits under it. Scrollbar
-   presentation is owned by `<ScrollArea autohide>` (`.scrollbar-autohide`). */
+   row's breathing room, so the last session never sits under it. */
 .sidebar-scroll-area {
   padding-bottom: 60px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-outline-a72) transparent;
 }
 
 .sidebar-settings-dock {
@@ -2720,6 +2426,23 @@ body.sidebar-resizing * {
   background-image: var(--sidebar-panel-bg-image);
   background-repeat: no-repeat;
   background-position: left bottom;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar-thumb {
+  background: var(--color-outline-a78);
+  border-radius: 9999px;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline-a92);
 }
 
 /* Token usage page. The page is one container so its display numerals scale
@@ -2812,41 +2535,14 @@ body.sidebar-resizing * {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: none; }
 }
-/* Low-GPU duty-cycled stepped animations: discrete frames instead of every 120Hz vsync. */
-@keyframes stepped-pulse {
-  0%, 30% {
-    opacity: 1;
-    animation-timing-function: steps(4);
-  }
-  50%, 88% {
-    opacity: 0.45;
-    animation-timing-function: steps(4);
-  }
-  100% {
-    opacity: 1;
-  }
-}
-@keyframes stepped-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-@keyframes popover-enter {
-  from { opacity: 0; transform: scale(0.98) translateY(-2px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
-}
 
 .animate-shimmer { animation: shimmer 1.5s ease-in-out infinite; }
 .animate-spin { animation: spin 0.9s linear infinite; }
 .animate-pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
 .animate-screen-pop { animation: screen-pop 250ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.animate-stepped-pulse { animation: stepped-pulse 2s infinite; }
-.animate-stepped-shimmer { animation: stepped-shimmer 2.2s steps(8) infinite; }
-.popover-motion { animation: popover-enter 140ms var(--ease-drawer) backwards; }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-screen-pop,
-  .popover-motion { animation: overlay-fade-in 1ms linear; }
-  .animate-stepped-shimmer { animation: none; }
+  .animate-screen-pop { animation: overlay-fade-in 1ms linear; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2855,8 +2551,7 @@ body.sidebar-resizing * {
      rotation is the whole signal the component carries. */
   .animate-spin { animation-duration: 2.4s; }
   .animate-shimmer,
-  .animate-pulse-dot,
-  .animate-stepped-pulse { animation-duration: 3s; }
+  .animate-pulse-dot { animation-duration: 3s; }
 }
 
 /* Overlay entrances.

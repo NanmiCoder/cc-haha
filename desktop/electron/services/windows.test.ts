@@ -1,15 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
 import {
   clampWindowStateToVisibleWorkArea,
   captureWindowState,
-  computeMacosTrafficLightPosition,
   hideWindowSafely,
   hasMeaningfulIntersection,
   installFullScreenKey,
-  installMacosWindowButtonsSync,
   installWindowLifecycle,
   isPersistableWindowState,
   isWindowStateVisibleOnAnyDisplay,
@@ -17,7 +15,6 @@ import {
   refreshWindowsDragHitTest,
   restoreWindowMaximized,
   showMainWindow,
-  syncMacosWindowButtons,
   toggleWindowFullScreen,
   windowChromeOptionsForPlatform,
   windowOptionsFromState,
@@ -260,177 +257,11 @@ describe('Electron window service', () => {
     // fullscreenable off, macOS demotes it to a zoom that only fills the desktop.
     expect(windowChromeOptionsForPlatform('darwin')).toEqual({
       titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 19 },
       fullscreenable: true,
     })
     expect(windowChromeOptionsForPlatform('linux')).toEqual({
       titleBarStyle: 'default',
       fullscreenable: true,
-    })
-  })
-
-  describe('macOS optical traffic-light centering', () => {
-    it.each([
-      [1.0, { x: 16, y: 19 }],
-      [1.25, { x: 16, y: 26 }],
-      [0.8, { x: 16, y: 14 }],
-      [1.5, { x: 16, y: 32 }],
-      [Number.NaN, { x: 16, y: 19 }],
-      [0, { x: 16, y: 19 }],
-    ])('computes optical traffic-light position for zoom %s', (zoomFactor, expected) => {
-      expect(computeMacosTrafficLightPosition(zoomFactor)).toEqual(expected)
-    })
-
-    it.each([
-      [1.0, { x: 16, y: 19 }],
-      [1.25, { x: 16, y: 26 }],
-      [0.8, { x: 16, y: 14 }],
-    ])('syncMacosWindowButtons centers buttons from webContents zoom %s on darwin', (zoomFactor, expected) => {
-      const setWindowButtonPosition = vi.fn()
-      const window = {
-        isDestroyed: () => false,
-        isFullScreen: () => false,
-        setWindowButtonPosition,
-        webContents: {
-          isDestroyed: () => false,
-          getZoomFactor: () => zoomFactor,
-        },
-      }
-
-      syncMacosWindowButtons(window as never, 'darwin')
-      expect(setWindowButtonPosition).toHaveBeenCalledWith(expected)
-    })
-
-    it('uses an explicit zoomFactor override when provided', () => {
-      const setWindowButtonPosition = vi.fn()
-      const window = {
-        isDestroyed: () => false,
-        isFullScreen: () => false,
-        setWindowButtonPosition,
-        webContents: {
-          isDestroyed: () => false,
-          getZoomFactor: () => 1.0,
-        },
-      }
-
-      syncMacosWindowButtons(window as never, 'darwin', 1.25)
-      expect(setWindowButtonPosition).toHaveBeenCalledWith({ x: 16, y: 26 })
-    })
-
-    it('is a no-op outside darwin', () => {
-      for (const platform of ['win32', 'linux'] as const) {
-        const setWindowButtonPosition = vi.fn()
-        const window = {
-          isDestroyed: () => false,
-          isFullScreen: () => false,
-          setWindowButtonPosition,
-          webContents: {
-            isDestroyed: () => false,
-            getZoomFactor: () => 1.25,
-          },
-        }
-
-        syncMacosWindowButtons(window as never, platform)
-        expect(setWindowButtonPosition).not.toHaveBeenCalled()
-      }
-    })
-
-    it('guards against destroyed, fullscreen, or non-supporting windows', () => {
-      const destroyedWindow = {
-        isDestroyed: () => true,
-        isFullScreen: vi.fn(),
-        setWindowButtonPosition: vi.fn(),
-        webContents: { getZoomFactor: vi.fn(() => 1.25) },
-      }
-      syncMacosWindowButtons(destroyedWindow as never, 'darwin')
-      expect(destroyedWindow.setWindowButtonPosition).not.toHaveBeenCalled()
-
-      const fullscreenWindow = {
-        isDestroyed: () => false,
-        isFullScreen: () => true,
-        setWindowButtonPosition: vi.fn(),
-        webContents: { getZoomFactor: vi.fn(() => 1.25) },
-      }
-      syncMacosWindowButtons(fullscreenWindow as never, 'darwin')
-      expect(fullscreenWindow.setWindowButtonPosition).not.toHaveBeenCalled()
-
-      const unsupportedWindow = {
-        isDestroyed: () => false,
-        isFullScreen: () => false,
-        webContents: { getZoomFactor: vi.fn(() => 1.25) },
-      }
-      expect(() => syncMacosWindowButtons(unsupportedWindow as never, 'darwin')).not.toThrow()
-    })
-
-    it('syncs on creation and re-syncs on leave-full-screen, did-finish-load, and zoom-changed on darwin', () => {
-      let zoomFactor = 1.0
-      const windowHandlers = new Map<string, () => void>()
-      const webContentsHandlers = new Map<string, () => void>()
-      const setWindowButtonPosition = vi.fn()
-      const window = {
-        isDestroyed: () => false,
-        isFullScreen: () => false,
-        setWindowButtonPosition,
-        on: vi.fn((event: string, handler: () => void) => {
-          windowHandlers.set(event, handler)
-        }),
-        webContents: {
-          isDestroyed: () => false,
-          getZoomFactor: () => zoomFactor,
-          on: vi.fn((event: string, handler: () => void) => {
-            webContentsHandlers.set(event, handler)
-          }),
-        },
-      }
-
-      installMacosWindowButtonsSync(window as never, 'darwin')
-      expect(setWindowButtonPosition).toHaveBeenLastCalledWith({ x: 16, y: 19 })
-
-      zoomFactor = 1.25
-      webContentsHandlers.get('zoom-changed')?.()
-      expect(setWindowButtonPosition).toHaveBeenLastCalledWith({ x: 16, y: 26 })
-
-      zoomFactor = 0.8
-      webContentsHandlers.get('did-finish-load')?.()
-      expect(setWindowButtonPosition).toHaveBeenLastCalledWith({ x: 16, y: 14 })
-
-      zoomFactor = 1.5
-      windowHandlers.get('leave-full-screen')?.()
-      expect(setWindowButtonPosition).toHaveBeenLastCalledWith({ x: 16, y: 32 })
-    })
-
-    it('does not attach traffic-light sync listeners outside darwin', () => {
-      for (const platform of ['win32', 'linux'] as const) {
-        const window = {
-          isDestroyed: () => false,
-          isFullScreen: () => false,
-          setWindowButtonPosition: vi.fn(),
-          on: vi.fn(),
-          webContents: {
-            isDestroyed: () => false,
-            getZoomFactor: () => 1.0,
-            on: vi.fn(),
-          },
-        }
-
-        installMacosWindowButtonsSync(window as never, platform)
-        expect(window.setWindowButtonPosition).not.toHaveBeenCalled()
-        expect(window.on).not.toHaveBeenCalled()
-        expect(window.webContents.on).not.toHaveBeenCalled()
-      }
-    })
-
-    it('wires traffic-light sync into main window creation and zoom IPC in main.ts', () => {
-      const desktopRoot = existsSync(path.resolve(process.cwd(), 'electron', 'main.ts'))
-        ? process.cwd()
-        : path.resolve(process.cwd(), 'desktop')
-      const mainSource = readFileSync(path.join(desktopRoot, 'electron', 'main.ts'), 'utf-8')
-      const zoomHandler = mainSource.slice(
-        mainSource.indexOf('ELECTRON_IPC_CHANNELS.zoomSet'),
-        mainSource.indexOf('ELECTRON_IPC_CHANNELS.appearanceSetApplied'),
-      )
-      expect(zoomHandler).toContain('syncMacosWindowButtons(')
-      expect(mainSource).toContain('installMacosWindowButtonsSync(mainWindow, process.platform)')
     })
   })
 

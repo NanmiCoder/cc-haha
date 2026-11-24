@@ -1,12 +1,7 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronUp, FileText, ShieldCheck } from 'lucide-react'
+import { FileText, ShieldCheck } from 'lucide-react'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
-import { useTranslation } from '../../i18n'
 import type { PermissionUpdate } from '../../types/chat'
 import { PLAN_REJECTION_MESSAGE, PLAN_REJECTION_WITH_REASON_PREFIX } from '../../../../src/constants/messages'
-
-const PLAN_COLLAPSE_LINE_THRESHOLD = 14
-const PLAN_COLLAPSE_CHAR_THRESHOLD = 900
 
 export const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode'
 export const ENTER_PLAN_MODE_TOOL_NAME = 'EnterPlanMode'
@@ -55,86 +50,41 @@ export function PlanPreviewCard({
   emptyLabel = 'No plan content available.',
   embedded = false,
 }: Props) {
-  const t = useTranslation()
   const trimmedPlan = plan.trim()
-  const planLines = trimmedPlan ? trimmedPlan.split('\n') : []
-  const isLongPlan = planLines.length > PLAN_COLLAPSE_LINE_THRESHOLD || trimmedPlan.length > PLAN_COLLAPSE_CHAR_THRESHOLD
-  const [expanded, setExpanded] = useState(false)
-  const isCollapsedPreview = isLongPlan && !expanded
-  const hiddenLineCount = Math.max(1, planLines.length - PLAN_COLLAPSE_LINE_THRESHOLD)
 
   // `embedded` is the plan inside the approval card, which already supplies
   // the frame and the header — a second bordered card inside it was the
   // card-in-card the 「素」 rules rule out. Standalone (a finished plan in the
-  // transcript) it keeps its own elevated artifact card.
+  // transcript) it keeps its own card.
   return (
     <div
       data-testid="plan-preview-card"
       className={embedded
         ? 'min-w-0'
-        : 'overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'}
+        : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'}
     >
-      <div className={`flex min-w-0 items-center gap-2 ${embedded ? 'pb-2' : 'border-b border-[var(--color-border)] px-4 py-3'}`}>
+      <div className={`flex min-w-0 items-center gap-2 ${embedded ? 'pb-2' : 'border-b border-[var(--color-border)] px-3.5 py-2.5'}`}>
         <FileText size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
         <div className="shrink-0 text-[13px] font-medium text-[var(--color-text-primary)]">
           {title}
         </div>
         {filePath ? (
-          <div className="min-w-0 truncate rounded-[var(--radius-xs)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]" title={filePath}>
+          <div className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={filePath}>
             {filePath}
           </div>
         ) : null}
       </div>
 
-      <div className="relative">
-        <div
-          className={[
-            isCollapsedPreview
-              ? 'max-h-[260px] overflow-hidden'
-              : 'scrollbar-autohide scroll-edge-fade max-h-[520px] overflow-auto',
-            embedded ? '' : 'px-4 py-3',
-          ].filter(Boolean).join(' ')}
-        >
-          {trimmedPlan ? (
-            <MarkdownRenderer content={trimmedPlan} variant="compact" />
-          ) : (
-            <div className="text-xs text-[var(--color-text-tertiary)]">{emptyLabel}</div>
-          )}
-        </div>
-        {isCollapsedPreview ? (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-[var(--color-surface-container)] to-transparent"
-          />
-        ) : null}
+      <div className={`max-h-[520px] overflow-auto ${embedded ? '' : 'px-3.5 py-3'}`}>
+        {trimmedPlan ? (
+          <MarkdownRenderer content={trimmedPlan} variant="compact" />
+        ) : (
+          <div className="text-xs text-[var(--color-text-tertiary)]">{emptyLabel}</div>
+        )}
       </div>
 
-      {isLongPlan ? (
-        <button
-          type="button"
-          data-plan-expand-toggle="true"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-          className={`flex h-8 w-full items-center justify-center gap-1 border-t border-[var(--color-border)] text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${
-            embedded ? 'mt-2 rounded-[var(--radius-md)]' : ''
-          }`}
-        >
-          {expanded ? (
-            <>
-              {t('codeViewer.collapse')}
-              <ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" />
-            </>
-          ) : (
-            <>
-              {t('codeViewer.showMoreLines', { count: hiddenLineCount })}
-              <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
-            </>
-          )}
-        </button>
-      ) : null}
-
       {allowedPrompts.length > 0 && requestedPermissionsTitle ? (
-        <div className={embedded ? 'pt-2.5' : 'border-t border-[var(--color-border)] px-4 py-3'}>
+        <div className={embedded ? 'pt-2.5' : 'border-t border-[var(--color-border)] px-3.5 py-2.5'}>
           <div className="mb-1 flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
             <ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" />
             {requestedPermissionsTitle}
@@ -145,7 +95,7 @@ export function PlanPreviewCard({
                 key={`${prompt.tool}-${prompt.prompt}-${index}`}
                 className="text-xs text-[var(--color-text-secondary)]"
               >
-                <span className="rounded-[var(--radius-xs)] bg-[var(--color-surface-container-low)] px-1 font-mono text-[11px] text-[var(--color-text-primary)]">
+                <span className="rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1 font-mono text-[11px] text-[var(--color-text-primary)]">
                   {prompt.tool}
                 </span>
                 <span className="text-[var(--color-text-tertiary)]"> · </span>

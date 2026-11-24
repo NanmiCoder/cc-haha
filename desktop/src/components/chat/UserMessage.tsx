@@ -55,9 +55,6 @@ type Props = {
   teammateAvatarSrc?: string
   teammateAvatarKey?: string
   teammateAccent?: string
-  /** Adjacent user messages tighten their facing right-hand corners into a cohesive stack. */
-  consecutiveBefore?: boolean
-  consecutiveAfter?: boolean
 }
 
 export const UserMessage = memo(function UserMessage({
@@ -74,8 +71,6 @@ export const UserMessage = memo(function UserMessage({
   teammateAvatarSrc,
   teammateAvatarKey,
   teammateAccent,
-  consecutiveBefore = false,
-  consecutiveAfter = false,
 }: Props) {
   const t = useTranslation()
   const hasText = content.trim().length > 0
@@ -267,7 +262,7 @@ export const UserMessage = memo(function UserMessage({
       <div
         data-message-shell="user"
         {...actionMenu.pressProps}
-        className={`group relative flex min-w-0 max-w-[80%] flex-col items-end lg:max-w-[640px] ${actionMenu.pressClassName}`}
+        className={`group relative flex min-w-0 max-w-[82%] flex-col items-end lg:max-w-[640px] ${actionMenu.pressClassName}`}
       >
         <div className="flex max-w-full flex-col items-end gap-2">
           {collaboration ? <div className="px-0.5 text-[11px] text-[var(--color-text-tertiary)]">
@@ -284,11 +279,7 @@ export const UserMessage = memo(function UserMessage({
           {hasText && (
             <div
               data-message-body="user"
-              className={[
-                'min-w-0 max-w-full rounded-[var(--radius-2xl)] bg-[var(--color-surface-user-msg)] px-4 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words',
-                consecutiveBefore ? 'rounded-tr-[var(--radius-sm)]' : '',
-                consecutiveAfter ? 'rounded-br-[var(--radius-sm)]' : '',
-              ].filter(Boolean).join(' ')}
+              className="min-w-0 max-w-full rounded-[var(--radius-lg)] bg-[var(--color-surface-user-msg)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words"
               style={{
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',

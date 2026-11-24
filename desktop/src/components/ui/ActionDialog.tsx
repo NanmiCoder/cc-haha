@@ -12,7 +12,7 @@ export type ActionDialogAction = {
   disabled?: boolean
 }
 
-export type ActionDialogProps = {
+type ActionDialogProps = {
   open: boolean
   onClose: () => void
   title: string

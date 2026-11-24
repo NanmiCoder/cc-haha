@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ActionDialog } from './ActionDialog'
 
-export type ConfirmDialogProps = {
+type ConfirmDialogProps = {
   open: boolean
   onClose: () => void
   onConfirm: () => void | Promise<void>

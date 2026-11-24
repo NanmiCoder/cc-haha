@@ -8,10 +8,6 @@ export const DEFAULT_WINDOW_WIDTH = 1280
 export const DEFAULT_WINDOW_HEIGHT = 820
 export const MIN_WINDOW_WIDTH = 960
 export const MIN_WINDOW_HEIGHT = 640
-// Match the 52px desktop topbar height; native macOS traffic lights stay 14pt tall at any zoom.
-export const MACOS_WORKSPACE_TOPBAR_HEIGHT = 52
-export const MACOS_WINDOW_BUTTON_RADIUS = 7
-export const MACOS_TRAFFIC_LIGHT_X = 16
 const MIN_VISIBLE_PIXELS = 80
 const failedWindowStateWritePaths = new Set<string>()
 
@@ -29,7 +25,7 @@ export type WindowCreateBounds =
   & Pick<StoredWindowState, 'width' | 'height'>
 export type WindowChromeOptions = Pick<
   BrowserWindowConstructorOptions,
-  'autoHideMenuBar' | 'frame' | 'fullscreenable' | 'titleBarStyle' | 'trafficLightPosition'
+  'autoHideMenuBar' | 'frame' | 'fullscreenable' | 'titleBarStyle'
 >
 
 export function windowStatePath(app: App, env: NodeJS.ProcessEnv = process.env): string {
@@ -161,46 +157,6 @@ export function windowOptionsFromState(state: StoredWindowState | null): WindowC
     : { width: DEFAULT_WINDOW_WIDTH, height: DEFAULT_WINDOW_HEIGHT }
 }
 
-export function computeMacosTrafficLightPosition(zoomFactor = 1): { x: number; y: number } {
-  const safeZoom = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1
-  return {
-    x: MACOS_TRAFFIC_LIGHT_X,
-    y: Math.max(
-      0,
-      Math.round((MACOS_WORKSPACE_TOPBAR_HEIGHT * safeZoom) / 2 - MACOS_WINDOW_BUTTON_RADIUS),
-    ),
-  }
-}
-
-export function syncMacosWindowButtons(
-  window: BrowserWindow,
-  platform: NodeJS.Platform = process.platform,
-  zoomFactor?: number,
-): void {
-  if (platform !== 'darwin') return
-  if (window.isDestroyed()) return
-  if (typeof window.isFullScreen === 'function' && window.isFullScreen()) return
-  if (typeof window.setWindowButtonPosition !== 'function') return
-
-  const resolvedZoom = zoomFactor ?? (
-    window.webContents && !window.webContents.isDestroyed?.()
-      ? window.webContents.getZoomFactor?.()
-      : undefined
-  )
-  window.setWindowButtonPosition(computeMacosTrafficLightPosition(resolvedZoom))
-}
-
-export function installMacosWindowButtonsSync(
-  window: BrowserWindow,
-  platform: NodeJS.Platform = process.platform,
-): void {
-  if (platform !== 'darwin') return
-  syncMacosWindowButtons(window, platform)
-  window.on('leave-full-screen', () => syncMacosWindowButtons(window, platform))
-  window.webContents.on('did-finish-load', () => syncMacosWindowButtons(window, platform))
-  window.webContents.on('zoom-changed', () => syncMacosWindowButtons(window, platform))
-}
-
 export function windowChromeOptionsForPlatform(
   platform: NodeJS.Platform = process.platform,
 ): WindowChromeOptions {
@@ -210,7 +166,6 @@ export function windowChromeOptionsForPlatform(
     // keeps a hidden window from stranding a black Space behind.
     return {
       titleBarStyle: 'hiddenInset',
-      trafficLightPosition: computeMacosTrafficLightPosition(1),
       fullscreenable: true,
     }
   }

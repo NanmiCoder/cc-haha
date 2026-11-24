@@ -31,8 +31,6 @@ export type BadgeProps = Omit<HTMLAttributes<HTMLSpanElement>, 'children' | 'tit
   icon?: ReactNode
   /** Tabular figures for versions, hashes and paths. */
   mono?: boolean
-  /** Tabular numerals without switching to monospace (also enabled automatically for non-pill counters and numeric children). */
-  tabularNums?: boolean
   /**
    * Lets long content wrap and break mid-word. Badges are single-line by
    * default, which overflows for the things that actually go in a `mono` badge
@@ -80,7 +78,7 @@ const SIZE_CLASSES = {
 /** Border colors for `bordered` soft badges, one shade up from the fill. */
 const SOFT_BORDER: Record<Tone, string> = {
   neutral: 'border border-[var(--color-border)]',
-  brand: 'border border-[var(--color-primary-fixed-dim)]',
+  brand: 'border border-[var(--color-brand-soft-hover)]',
   success: 'border border-[var(--color-success)]',
   warning: 'border border-[var(--color-warning)]',
   danger: 'border border-[var(--color-error)]',
@@ -102,7 +100,6 @@ export function Badge({
   pill = true,
   icon,
   mono = false,
-  tabularNums = false,
   wrap = false,
   title,
   className,
@@ -112,23 +109,18 @@ export function Badge({
   // span the moment a test needs to select it.
   ...props
 }: BadgeProps) {
-  const numeric = tabularNums || !pill || typeof children === 'number'
-  const hasBorder = variant === 'outline' || bordered
-
   return (
     <span
       title={title}
       {...props}
       className={cx(
-        'inline-flex shrink-0 items-center font-medium bg-clip-padding',
+        'inline-flex shrink-0 items-center font-medium',
         wrap ? 'break-all' : 'whitespace-nowrap',
         pill ? 'rounded-full' : 'rounded-[var(--radius-sm)]',
         SIZE_CLASSES[size],
         variant === 'soft' ? SOFT_CLASSES[tone] : OUTLINE_CLASSES[tone],
         variant === 'soft' && bordered && SOFT_BORDER[tone],
-        hasBorder && 'shadow-[var(--bevel-surface-rest)]',
         mono && 'font-mono tabular-nums',
-        !mono && numeric && 'tabular-nums',
         className,
       )}
     >

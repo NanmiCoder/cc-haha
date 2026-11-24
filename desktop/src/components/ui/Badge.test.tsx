@@ -29,15 +29,9 @@ describe('Badge', () => {
     expect(square.firstElementChild?.className).not.toContain('rounded-full')
   })
 
-  it('switches to tabular figures when mono, numeric, or counter-shaped', () => {
-    const { container: mono } = render(<Badge mono>v0.4.2</Badge>)
-    expect(mono.firstElementChild?.className).toContain('tabular-nums')
-
-    const { container: counter } = render(<Badge pill={false}>12</Badge>)
-    expect(counter.firstElementChild?.className).toContain('tabular-nums')
-
-    const { container: numeric } = render(<Badge>{42}</Badge>)
-    expect(numeric.firstElementChild?.className).toContain('tabular-nums')
+  it('switches to tabular figures when mono', () => {
+    const { container } = render(<Badge mono>v0.4.2</Badge>)
+    expect(container.firstElementChild?.className).toContain('tabular-nums')
   })
 
   it('is single-line by default and can be told to wrap', () => {

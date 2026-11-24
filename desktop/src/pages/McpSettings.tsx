@@ -1030,11 +1030,11 @@ export function McpSettings() {
                       disabled={isBusy || (sharedScopeLocked && scope !== 'project')}
                       onClick={() => setDraftField('scope', scope)}
                       className={cx(
-                        'control-bevel flex flex-col justify-start rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow,transform] duration-150',
+                        'flex flex-col justify-start rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors duration-150',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
                         active
                           ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
-                          : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]',
+                          : 'border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]',
                       )}
                     >
                       <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">

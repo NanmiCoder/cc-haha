@@ -106,14 +106,12 @@ import {
 } from './services/pets'
 import {
   installFullScreenKey,
-  installMacosWindowButtonsSync,
   installWindowLifecycle,
   readWindowState,
   refreshWindowsDragHitTest,
   restoreWindowMaximized,
   saveWindowState,
   showMainWindow,
-  syncMacosWindowButtons,
   windowChromeOptionsForPlatform,
   windowOptionsFromState,
   MIN_WINDOW_HEIGHT,
@@ -993,14 +991,10 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
-    const factor = normalizeZoomFactor(payload)
-    window.webContents.setZoomFactor(factor)
-    if (window === mainWindow) {
-      syncMacosWindowButtons(window, process.platform, factor)
-      // Electron pushes the embedder's zoom into every browser guest; app zoom
-      // must not change the pages' own zoom.
-      workspaceBrowserService?.restorePageZoom()
-    }
+    window.webContents.setZoomFactor(normalizeZoomFactor(payload))
+    // Electron pushes the embedder's zoom into every browser guest; app zoom
+    // must not change the pages' own zoom.
+    if (window === mainWindow) workspaceBrowserService?.restorePageZoom()
   })
   registerHandler(ELECTRON_IPC_CHANNELS.appearanceSetApplied, (_event, payload) => {
     if (!isAppliedAppearance(payload)) return
@@ -1086,7 +1080,6 @@ async function createMainWindow() {
     shouldQuit: () => isQuitting,
   })
   installFullScreenKey(mainWindow, process.platform)
-  installMacosWindowButtonsSync(mainWindow, process.platform)
 
   const window = mainWindow
   setNotificationBadge = createNotificationBadge({

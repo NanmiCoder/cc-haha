@@ -1965,44 +1965,4 @@ describe('controlled runtime pickers outside the composer', () => {
     fireEvent.click(within(picker).getByRole('button', { name: /^opus/ }))
     expect(onRuntimeSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ providerId: '__session__', modelId: 'opus' }))
   })
-
-  it('docks effort controls and permissions shortcut inside the frosted-glass model dropdown', async () => {
-    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
-    useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
-    useSessionRuntimeStore.getState().setSelection('session-docked', {
-      providerId: null,
-      modelId: 'claude-opus-4-8',
-      effortLevel: 'high',
-    })
-    const onOpenPermissions = vi.fn()
-    render(
-      <ModelSelector
-        runtimeKey="session-docked"
-        permissionModeLabel="Ask permissions"
-        onOpenPermissions={onOpenPermissions}
-      />,
-    )
-
-    await clickByRole('Opus 4.8, Claude Official')
-    const dropdown = screen.getByTestId('model-selector-dropdown')
-    expect(dropdown).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-lg)]')
-
-    const docked = within(dropdown).getByTestId('model-selector-docked-controls')
-    const maxEffort = within(docked).getByRole('radio', { name: 'Max' })
-    fireEvent.click(maxEffort)
-    // Inline effort switch updates selection without dismissing the dropdown.
-    expect(useSessionRuntimeStore.getState().selections['session-docked']?.effortLevel).toBe('max')
-    expect(screen.getByTestId('model-selector-dropdown')).toBeInTheDocument()
-
-    const permShortcut = within(docked).getByTestId('model-selector-permissions-shortcut')
-    expect(permShortcut.tagName).toBe('BUTTON')
-    expect(permShortcut).toHaveAttribute('type', 'button')
-    expect(permShortcut).not.toHaveAttribute('role', 'menuitem')
-    expect(permShortcut).toHaveTextContent('Ask permissions')
-    fireEvent.click(permShortcut)
-    await waitFor(() => {
-      expect(onOpenPermissions).toHaveBeenCalledTimes(1)
-    })
-    expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
-  })
 })

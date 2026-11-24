@@ -16,10 +16,8 @@ import { useProviderStore } from '../../stores/providerStore'
 import { useTranslation } from '../../i18n'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Kbd } from '@/components/ui/Kbd'
 import { ModelSelector } from '../controls/ModelSelector'
 import { isSideChatSession } from '@/lib/sideChatSessions'
-import { detectPlatform } from '@/lib/workspace/shortcuts'
 import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
 import type { RuntimeSelection } from '../../types/runtime'
@@ -52,15 +50,15 @@ type Props = {
 
 /** Card shell shared by the permission and plan-approval cards (「素」). */
 const PENDING_CARD =
-  'mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-outline)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
+  'mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-raised)]'
 
 /** A request that has been answered collapses to one quiet line. */
 const RESOLVED_ROW =
-  'mb-4 flex min-h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1.5 pl-3 pr-2 text-[13px] text-[var(--color-text-secondary)]'
+  'mb-4 flex min-h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] py-1.5 pl-3 pr-2 text-[13px] text-[var(--color-text-secondary)]'
 
 /** Sunken inset for commands, paths and raw input inside the card. */
 const INSET_BLOCK =
-  'rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-code-fg)]'
+  'rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-text-primary)]'
 
 function renderPermissionPreview(toolName: string, input: unknown) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
@@ -76,7 +74,7 @@ function renderPermissionPreview(toolName: string, input: unknown) {
 
   if (toolName === 'Bash' && typeof obj.command === 'string') {
     return (
-      <div className={`scrollbar-autohide scroll-edge-fade max-h-[240px] overflow-auto ${INSET_BLOCK}`}>
+      <div className={`overflow-x-auto ${INSET_BLOCK}`}>
         <pre className="whitespace-pre-wrap break-words font-mono">
           <span className="select-none text-[var(--color-brand)]">$ </span>{obj.command}
         </pre>
@@ -97,7 +95,6 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
     ? getPendingPermission(s.sessions[targetSessionId], requestId)
     : undefined)
   const t = useTranslation()
-  const submitShortcut = detectPlatform() === 'mac' ? '⌘↵' : 'Ctrl+↵'
   const isPending = Boolean(pendingPermission)
   const [showRaw, setShowRaw] = useState(false)
 
@@ -149,16 +146,6 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
     <div
       role="group"
       aria-label={`${title}: ${permissionContext}`}
-      onKeyDown={(event) => {
-        if (!targetSessionId) return
-        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault()
-          respondToPermission(targetSessionId, requestId, true)
-        } else if (event.key === 'Escape') {
-          event.preventDefault()
-          respondToPermission(targetSessionId, requestId, false)
-        }
-      }}
       className={PENDING_CARD}
     >
       {/* Header: icon block, title over context, "awaiting" pill. */}
@@ -188,7 +175,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
         {preview ? (
           <div className="space-y-2">
             {details.primary && toolName !== 'Bash' ? (
-              <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+              <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
                 <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <span className="truncate">{details.primary}</span>
               </div>
@@ -196,7 +183,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
             {preview}
           </div>
         ) : details.primary ? (
-          <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+          <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
             {toolName === 'Glob' || toolName === 'Grep'
               ? <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
               : <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />}
@@ -224,7 +211,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
         )}
 
         {allowRawToggle && showRaw && (
-          <pre className={`scrollbar-autohide scroll-edge-fade mt-1.5 max-h-[220px] overflow-auto whitespace-pre-wrap break-words ${INSET_BLOCK}`}>
+          <pre className={`mt-1.5 max-h-[220px] overflow-auto whitespace-pre-wrap break-words ${INSET_BLOCK}`}>
             {rawInput}
           </pre>
         )}
@@ -238,8 +225,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
           aria-label={`${t('permission.allow')}: ${permissionContext}`}
           onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true)}
         >
-          <span>{t('permission.allow')}</span>
-          <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{submitShortcut}</Kbd>
+          {t('permission.allow')}
         </Button>
         {!isAntigravity && (
           <Button
@@ -258,8 +244,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
           aria-label={`${t('permission.deny')}: ${permissionContext}`}
           onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, false)}
         >
-          <span>{t('permission.deny')}</span>
-          <Kbd size="xs" appearance="subtle" aria-hidden="true" className="ml-0.5">Esc</Kbd>
+          {t('permission.deny')}
         </Button>
       </div>
     </div>
@@ -288,7 +273,6 @@ function ExitPlanModePermissionDialog({
   const errorId = useId()
   const respondToPermission = useChatStore((s) => s.respondToPermission)
   const t = useTranslation()
-  const submitShortcut = detectPlatform() === 'mac' ? '⌘↵' : 'Ctrl+↵'
   const [feedback, setFeedback] = useState('')
   // null = execute on the planning model (unchanged); non-null = the staged
   // execution-model switch sent with the approval as runtimeOverride.
@@ -377,26 +361,7 @@ function ExitPlanModePermissionDialog({
   }
 
   return (
-    <div
-      className={PENDING_CARD}
-      onKeyDown={(event) => {
-        if (submittingRuntime) return
-        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-          const isEditableTarget = event.target instanceof HTMLElement && (
-            event.target.tagName === 'TEXTAREA'
-            || event.target.tagName === 'INPUT'
-            || event.target.isContentEditable
-          )
-          if (trimmedFeedback.length > 0) {
-            event.preventDefault()
-            keepPlanning()
-          } else if (!isEditableTarget) {
-            event.preventDefault()
-            approve(permissionUpdates.length ? { permissionUpdates } : undefined)
-          }
-        }
-      }}
-    >
+    <div className={PENDING_CARD}>
       <div className="flex h-[42px] items-center gap-2 border-b border-[var(--color-border)] px-3.5">
         <ListChecks aria-hidden="true" size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
@@ -430,7 +395,7 @@ function ExitPlanModePermissionDialog({
           placeholder={t('permission.planFeedbackPlaceholder')}
           rows={3}
           disabled={submittingRuntime}
-          className="scrollbar-autohide min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2.5 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)]"
+          className="min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-transparent bg-[var(--color-surface-container)] px-3 py-2.5 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)]"
         />
         <div className="flex items-center justify-between gap-3">
           <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
@@ -470,8 +435,7 @@ function ExitPlanModePermissionDialog({
           aria-describedby={runtimeError ? errorId : undefined}
           onClick={() => approve(permissionUpdates.length ? { permissionUpdates } : undefined)}
         >
-          <span>{t('permission.planApprove')}</span>
-          <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{submitShortcut}</Kbd>
+          {t('permission.planApprove')}
         </Button>
         <Button
           variant="secondary"

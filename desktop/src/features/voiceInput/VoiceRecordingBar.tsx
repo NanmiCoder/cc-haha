@@ -245,7 +245,7 @@ export function VoiceRecordingBar({ dictation, mobile = false }: VoiceRecordingB
         title={t('voice.composer.sendNow')}
         onMouseDown={keepCaret}
         onClick={dictation.stopAndSend}
-        className={`shrink-0 motion-safe:enabled:hover:scale-105 ${mobile ? 'h-11 w-11' : ''}`}
+        className={`shrink-0 ${mobile ? 'h-11 w-11' : ''}`}
         icon={<ArrowUp size={mobile ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
       />
     </div>
