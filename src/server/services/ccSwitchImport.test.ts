@@ -1298,7 +1298,7 @@ describe('cc-switch candidate mapping', () => {
 
     expect(candidateById(candidates, 'claude:chat')).toMatchObject({ apiFormat: 'openai_chat', importable: true })
     expect(candidateById(candidates, 'claude:responses')).toMatchObject({ apiFormat: 'openai_responses', importable: true })
-    expect(candidateById(candidates, 'claude:gemini')).toMatchObject({ importable: false, skipReason: 'unsupported-format' })
+    expect(candidateById(candidates, 'claude:gemini')).toMatchObject({ apiFormat: 'gemini', importable: true })
     expect(candidateById(candidates, 'claude:unknown')).toMatchObject({ importable: false, skipReason: 'unsupported-format' })
     expect(candidateById(candidates, 'claude:no-meta')).toMatchObject({ apiFormat: 'anthropic', importable: true })
   })
@@ -1310,7 +1310,7 @@ describe('cc-switch candidate mapping', () => {
       { id: 'blank-url', sortIndex: 2, env: { ANTHROPIC_BASE_URL: '  ', ANTHROPIC_AUTH_TOKEN: FULL_KEY, ANTHROPIC_MODEL: 'm' } },
       { id: 'no-key', sortIndex: 3, env: { ANTHROPIC_BASE_URL: 'https://api.example.com', ANTHROPIC_AUTH_TOKEN: '', ANTHROPIC_MODEL: 'm' } },
       { id: 'no-model', sortIndex: 4, env: { ANTHROPIC_BASE_URL: 'https://api.example.com', ANTHROPIC_AUTH_TOKEN: FULL_KEY } },
-      { id: 'bad-format', sortIndex: 5, meta: JSON.stringify({ apiFormat: 'gemini_native' }), env: claudeEnv() },
+      { id: 'bad-format', sortIndex: 5, meta: JSON.stringify({ apiFormat: 'llamacpp' }), env: claudeEnv() },
     ])
 
     const candidates = await scanCandidates()

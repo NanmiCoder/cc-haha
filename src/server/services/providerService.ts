@@ -11,6 +11,19 @@ import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
 import { buildOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
+import { buildBedrockConverseEndpoint } from '../proxy/bedrockEndpoint.js'
+import {
+  buildBedrockRequestHeaders,
+  buildOpenaiAuthHeaders,
+  buildVertexServiceTierHeaders,
+  resolveVertexAuthHeaders,
+} from '../proxy/cloudAuth.js'
+import {
+  buildGeminiEndpoint,
+  buildVertexAnthropicEndpoint,
+  isVertexAnthropicTarget,
+  isVertexEndpointUrl,
+} from '../proxy/geminiEndpoint.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { getOpenAIModelCatalogEntry } from '../../services/openaiAuth/models.js'
 import { getGrokModelCatalogEntry } from '../../services/grokAuth/models.js'
@@ -20,6 +33,8 @@ import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
 import { anthropicToGemini, type GeminiRequest } from '../proxy/transform/anthropicToGemini.js'
 import { geminiResponseToAnthropic } from '../proxy/streaming/geminiStreamToAnthropic.js'
+import { anthropicToBedrockConverse } from '../proxy/transform/anthropicToBedrockConverse.js'
+import { bedrockConverseResponseToAnthropic } from '../proxy/streaming/bedrockConverseToAnthropic.js'
 import { resolveRequestCompatibility } from '../proxy/transform/requestCompatibility.js'
 import { hoistToolResultMediaForCompatibility, shouldHoistNestedToolResultMedia } from '../proxy/transform/anthropicMediaHoist.js'
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
@@ -1053,7 +1068,8 @@ export class ProviderService {
     const apiKey = resolveProviderApiKey(provider, presetDefaultEnv)
       || (authStrategy === 'dual_dummy' ? 'dummy' : '')
 
-    if (!baseUrl || !apiKey) {
+    const allowsAmbientCloudCredential = apiFormat === 'google_vertex' || apiFormat === 'bedrock_converse'
+    if (!baseUrl || (!apiKey && !allowsAmbientCloudCredential)) {
       return { connectivity: { success: false, latencyMs: 0, error: 'Missing baseUrl or apiKey' } }
     }
     return this.testProviderConfig({
@@ -1139,12 +1155,20 @@ export class ProviderService {
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
-      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format, authStrategy, requestCompatibility, upstreamHeaders)
+      const { url, headers, body, serializedBody } = await buildDirectTestRequest(
+        base,
+        apiKey,
+        modelId,
+        format,
+        authStrategy,
+        requestCompatibility,
+        upstreamHeaders,
+      )
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
       const response = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: serializedBody ?? JSON.stringify(body),
         signal: AbortSignal.timeout(networkSettings.aiRequestTimeoutMs),
         ...proxyOptions,
       })
@@ -1156,12 +1180,14 @@ export class ProviderService {
         let error = `HTTP ${response.status}`
         if (resBody?.error && typeof resBody.error === 'object') {
           error = ((resBody.error as Record<string, unknown>).message as string) || error
+        } else if (typeof resBody?.message === 'string' && resBody.message) {
+          error = resBody.message
         }
         return { success: false, latencyMs, error, modelUsed: modelId, httpStatus: response.status }
       }
 
       // Validate response structure
-      const valid = validateResponseBody(resBody, format)
+      const valid = validateResponseBody(resBody, format, base, modelId)
       if (!valid.ok) {
         return { success: false, latencyMs, error: valid.error, modelUsed: modelId, httpStatus: response.status }
       }
@@ -1199,28 +1225,69 @@ export class ProviderService {
 
       let upstreamUrl: string
       let transformedBody: unknown
+      let serializedBody: string | undefined
       let headers: Record<string, string>
-      if (format === 'openai_chat') {
-        transformedBody = anthropicToOpenaiChat(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
-        upstreamUrl = buildOpenaiEndpoint(base, 'chat/completions')
+      const isVertexAnthropic = format === 'google_vertex' && isVertexAnthropicTarget(base, modelId)
+      if (format === 'openai_chat' || format === 'azure_openai') {
+        const forceAzure = format === 'azure_openai'
+        transformedBody = anthropicToOpenaiChat(anthropicReq, {
+          requestCompatibility,
+          budgetSource: 'explicit',
+          protocol: format,
+        })
+        upstreamUrl = buildOpenaiEndpoint(base, 'chat/completions', { modelId, forceAzure })
         headers = {}
         applyUpstreamHeaders(headers, upstreamHeaders)
         headers['Content-Type'] = 'application/json'
-        headers.Authorization = `Bearer ${apiKey}`
+        Object.assign(headers, buildOpenaiAuthHeaders({ url: upstreamUrl, apiKey, authStrategy, forceAzure }))
       } else if (format === 'openai_responses') {
         transformedBody = anthropicToOpenaiResponses(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
-        upstreamUrl = buildOpenaiEndpoint(base, 'responses')
+        upstreamUrl = buildOpenaiEndpoint(base, 'responses', { modelId })
         headers = {}
         applyUpstreamHeaders(headers, upstreamHeaders)
         headers['Content-Type'] = 'application/json'
-        headers.Authorization = `Bearer ${apiKey}`
-      } else if (format === 'gemini') {
-        transformedBody = anthropicToGemini(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
-        upstreamUrl = buildGeminiEndpoint(base, modelId)
+        Object.assign(headers, buildOpenaiAuthHeaders({ url: upstreamUrl, apiKey, authStrategy }))
+      } else if (isVertexAnthropic) {
+        const prepared = hoistNestedMedia ? hoistToolResultMediaForCompatibility(anthropicReq) : anthropicReq
+        const { model: _model, ...rest } = prepared
+        transformedBody = { ...rest, anthropic_version: 'vertex-2023-10-16' }
+        upstreamUrl = buildVertexAnthropicEndpoint(base, modelId, false)
         headers = {}
         applyUpstreamHeaders(headers, upstreamHeaders)
-        headers['Content-Type'] = 'application/json'
-        headers['x-goog-api-key'] = apiKey
+        applyUpstreamHeaders(headers, { 'Content-Type': 'application/json' })
+        applyUpstreamHeaders(headers, buildVertexServiceTierHeaders(requestCompatibility?.serviceTier))
+        applyUpstreamHeaders(headers, await resolveVertexAuthHeaders(apiKey, authStrategy, base))
+      } else if (format === 'gemini' || format === 'google_vertex') {
+        const isVertex = format === 'google_vertex' || isVertexEndpointUrl(base)
+        transformedBody = anthropicToGemini(anthropicReq, {
+          requestCompatibility,
+          budgetSource: 'explicit',
+          isVertex,
+        })
+        upstreamUrl = buildGeminiEndpoint(base, modelId, false, { isVertex })
+        headers = {}
+        applyUpstreamHeaders(headers, upstreamHeaders)
+        applyUpstreamHeaders(headers, { 'Content-Type': 'application/json' })
+        if (isVertex) {
+          applyUpstreamHeaders(headers, buildVertexServiceTierHeaders(requestCompatibility?.serviceTier))
+          applyUpstreamHeaders(headers, await resolveVertexAuthHeaders(apiKey, authStrategy, base))
+        } else if (apiKey) {
+          applyUpstreamHeaders(headers, { 'x-goog-api-key': apiKey })
+        }
+      } else if (format === 'bedrock_converse') {
+        transformedBody = anthropicToBedrockConverse(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
+        serializedBody = JSON.stringify(transformedBody)
+        upstreamUrl = buildBedrockConverseEndpoint(base, modelId, false)
+        const baseHeaders: Record<string, string> = {}
+        applyUpstreamHeaders(baseHeaders, upstreamHeaders)
+        baseHeaders['Content-Type'] = 'application/json'
+        headers = await buildBedrockRequestHeaders({
+          url: upstreamUrl,
+          method: 'POST',
+          body: serializedBody,
+          rawCredential: apiKey,
+          baseHeaders,
+        })
       } else {
         transformedBody = hoistNestedMedia ? hoistToolResultMediaForCompatibility(anthropicReq) : anthropicReq
         upstreamUrl = `${normalizeAnthropicBaseUrl(base)}/v1/messages`
@@ -1234,14 +1301,14 @@ export class ProviderService {
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, upstreamUrl)
 
       // Call upstream with transformed request
-      const post = (payload: unknown) => fetch(upstreamUrl, {
+      const post = (payload: unknown, rawBody?: string) => fetch(upstreamUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: rawBody ?? JSON.stringify(payload),
         signal: AbortSignal.timeout(networkSettings.aiRequestTimeoutMs),
         ...proxyOptions,
       })
-      const response = await post(transformedBody)
+      const response = await post(transformedBody, serializedBody)
 
       if (!response.ok) {
         const latencyMs = Date.now() - start
@@ -1252,17 +1319,19 @@ export class ProviderService {
 
       // Transform response back to Anthropic format
       const responseBody = await response.json()
-      const anthropicRes = format === 'openai_chat'
+      const anthropicRes = format === 'openai_chat' || format === 'azure_openai'
         ? openaiChatToAnthropic(responseBody, modelId)
         : format === 'openai_responses'
           ? openaiResponsesToAnthropic(responseBody, modelId)
-          : format === 'gemini'
-            ? await geminiResponseToAnthropic(responseBody, modelId, async (continuationToken) => {
-                const continued = await post({ ...(transformedBody as GeminiRequest), continuationToken })
-                if (!continued.ok) throw new Error(`Upstream HTTP ${continued.status} on continuation`)
-                return continued.json()
-              })
-            : responseBody
+          : format === 'bedrock_converse'
+            ? bedrockConverseResponseToAnthropic(responseBody, modelId, response.headers.get('x-amzn-requestid') ?? undefined)
+            : (format === 'gemini' || (format === 'google_vertex' && !isVertexAnthropic))
+              ? await geminiResponseToAnthropic(responseBody, modelId, async (continuationToken) => {
+                  const continued = await post({ ...(transformedBody as GeminiRequest), continuationToken })
+                  if (!continued.ok) throw new Error(`Upstream HTTP ${continued.status} on continuation`)
+                  return continued.json()
+                })
+              : responseBody
 
       const latencyMs = Date.now() - start
 
@@ -1295,7 +1364,7 @@ function connectivityProbeSessionId(): string {
   return random ? `cc-haha-probe-${random}` : 'cc-haha-probe'
 }
 
-function buildDirectTestRequest(
+async function buildDirectTestRequest(
   base: string,
   apiKey: string,
   modelId: string,
@@ -1303,12 +1372,11 @@ function buildDirectTestRequest(
   authStrategy: ProviderAuthStrategy,
   requestCompatibility?: RequestCompatibility,
   upstreamHeaders: Record<string, string> = {},
-): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+): Promise<{ url: string; headers: Record<string, string>; body: Record<string, unknown>; serializedBody?: string }> {
   const prompt = 'Say "ok" and nothing else.'
   const outputBudget = format !== 'anthropic'
     ? resolveRequestCompatibility({ model: modelId, max_tokens: 16, messages: [] }, {
-        // Gemini has one budget field and the same policy as OpenAI Chat.
-        protocol: format === 'gemini' ? 'openai_chat' : format,
+        protocol: format,
         requestCompatibility,
         budgetSource: 'explicit',
       }).outputBudget
@@ -1322,24 +1390,57 @@ function buildDirectTestRequest(
   const baseHeaders = applyUpstreamHeaders<Record<string, string>>({}, upstreamHeaders)
   baseHeaders['Content-Type'] = 'application/json'
 
-  if (format === 'openai_chat') {
+  if (format === 'openai_chat' || format === 'azure_openai') {
+    const forceAzure = format === 'azure_openai'
+    const url = buildOpenaiEndpoint(base, 'chat/completions', { modelId, forceAzure })
     return {
-      url: buildOpenaiEndpoint(base, 'chat/completions'),
-      headers: { ...baseHeaders, Authorization: `Bearer ${apiKey}` },
+      url,
+      headers: {
+        ...baseHeaders,
+        ...buildOpenaiAuthHeaders({ url, apiKey, authStrategy, forceAzure }),
+      },
       body: { model: modelId, ...budgetParams, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {
+    const url = buildOpenaiEndpoint(base, 'responses', { modelId })
     return {
-      url: buildOpenaiEndpoint(base, 'responses'),
-      headers: { ...baseHeaders, Authorization: `Bearer ${apiKey}` },
+      url,
+      headers: {
+        ...baseHeaders,
+        ...buildOpenaiAuthHeaders({ url, apiKey, authStrategy }),
+      },
       body: { model: modelId, ...budgetParams, input: [{ type: 'message', role: 'user', content: prompt }] },
     }
   }
-  if (format === 'gemini') {
+  if (format === 'google_vertex' && isVertexAnthropicTarget(base, modelId)) {
+    const url = buildVertexAnthropicEndpoint(base, modelId, false)
+    const headers: Record<string, string> = { ...baseHeaders }
+    applyUpstreamHeaders(headers, buildVertexServiceTierHeaders(requestCompatibility?.serviceTier))
+    applyUpstreamHeaders(headers, await resolveVertexAuthHeaders(apiKey, authStrategy, base))
     return {
-      url: buildGeminiEndpoint(base, modelId),
-      headers: { ...baseHeaders, 'x-goog-api-key': apiKey },
+      url,
+      headers,
+      body: {
+        anthropic_version: 'vertex-2023-10-16',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: prompt }],
+      },
+    }
+  }
+  if (format === 'gemini' || format === 'google_vertex') {
+    const isVertex = format === 'google_vertex' || isVertexEndpointUrl(base)
+    const url = buildGeminiEndpoint(base, modelId, false, { isVertex })
+    const headers: Record<string, string> = { ...baseHeaders }
+    if (isVertex) {
+      applyUpstreamHeaders(headers, buildVertexServiceTierHeaders(requestCompatibility?.serviceTier))
+      applyUpstreamHeaders(headers, await resolveVertexAuthHeaders(apiKey, authStrategy, base))
+    } else if (apiKey) {
+      applyUpstreamHeaders(headers, { 'x-goog-api-key': apiKey })
+    }
+    return {
+      url,
+      headers,
       body: {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         ...(outputBudget?.effective !== undefined && outputBudget.field !== 'omit'
@@ -1347,6 +1448,24 @@ function buildDirectTestRequest(
           : {}),
       },
     }
+  }
+  if (format === 'bedrock_converse') {
+    const url = buildBedrockConverseEndpoint(base, modelId, false)
+    const body: Record<string, unknown> = {
+      messages: [{ role: 'user', content: [{ text: prompt }] }],
+      ...(outputBudget?.effective !== undefined && outputBudget.field !== 'omit'
+        ? { inferenceConfig: { maxTokens: outputBudget.effective } }
+        : {}),
+    }
+    const serializedBody = JSON.stringify(body)
+    const headers = await buildBedrockRequestHeaders({
+      url,
+      method: 'POST',
+      body: serializedBody,
+      rawCredential: apiKey,
+      baseHeaders,
+    })
+    return { url, headers, body, serializedBody }
   }
   // anthropic
   return {
@@ -1374,21 +1493,18 @@ function buildAnthropicAuthHeaders(apiKey: string, authStrategy: ProviderAuthStr
   }
 }
 
-/** Non-stream `generateContent` for a Gemini route's base URL. */
-function buildGeminiEndpoint(base: string, modelId: string): string {
-  return `${base.replace(/\/+$/, '')}/models/${encodeURIComponent(modelId)}:generateContent`
-}
-
 function validateResponseBody(
   body: Record<string, unknown> | null,
   format: ModelApiFormat,
+  baseUrl = '',
+  modelId = '',
 ): { ok: true; model?: string } | { ok: false; error: string } {
   if (!body) return { ok: false, error: 'Empty response — not a valid API endpoint' }
   if (body.error && typeof body.error === 'object') {
     return { ok: false, error: ((body.error as Record<string, unknown>).message as string) || 'Error in response body' }
   }
 
-  if (format === 'openai_chat') {
+  if (format === 'openai_chat' || format === 'azure_openai') {
     if (!Array.isArray(body.choices) || body.choices.length === 0) {
       return { ok: false, error: 'Response missing choices — not a valid Chat Completions endpoint' }
     }
@@ -1400,13 +1516,28 @@ function validateResponseBody(
     }
     return { ok: true, model: (body.model as string) || undefined }
   }
-  if (format === 'gemini') {
-    if (!Array.isArray(body.candidates)) {
+  if (format === 'bedrock_converse') {
+    const output = body.output && typeof body.output === 'object' && !Array.isArray(body.output)
+      ? body.output as Record<string, unknown>
+      : null
+    const message = output?.message && typeof output.message === 'object' && !Array.isArray(output.message)
+      ? output.message as Record<string, unknown>
+      : null
+    if (!message || !Array.isArray(message.content)) {
+      return { ok: false, error: 'Response missing output.message.content — not a valid AWS Bedrock Converse endpoint' }
+    }
+    return { ok: true, model: modelId || undefined }
+  }
+  if (format === 'gemini' || (format === 'google_vertex' && !isVertexAnthropicTarget(baseUrl, modelId))) {
+    const payload = body.candidates === undefined && body.response && typeof body.response === 'object' && !Array.isArray(body.response)
+      ? body.response as Record<string, unknown>
+      : body
+    if (!Array.isArray(payload.candidates)) {
       return { ok: false, error: 'Response missing candidates — not a valid Gemini generateContent endpoint' }
     }
-    return { ok: true, model: (body.modelVersion as string) || undefined }
+    return { ok: true, model: (payload.modelVersion as string) || undefined }
   }
-  // anthropic
+  // anthropic (including Vertex Anthropic rawPredict)
   if (body.type !== 'message' || !Array.isArray(body.content)) {
     return { ok: false, error: 'Not a valid Anthropic Messages endpoint' }
   }

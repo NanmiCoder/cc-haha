@@ -77,13 +77,14 @@ export type TraceSessionWindow = {
 function traceResourceError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
 }
-// `token(?!s)` keeps secret-bearing keys (token, access_token, api_token) redacted while
-// letting token-count fields (input_tokens, max_tokens, prompt_tokens) through.
+// `token(?!s|count\b)` keeps secret-bearing keys (token, access_token, api_token,
+// continuationToken) redacted while letting token-count fields (input_tokens,
+// max_tokens, prompt_tokens, Gemini's promptTokenCount / candidatesTokenCount) through.
 // `session` covers stable per-conversation identifiers (x-opencode-session,
 // x-session-affinity) that gateways take as routing keys: not credentials, but the
 // same value the local transcript and trace files are named after, and traces are
 // meant to be shareable when reporting a bug.
-const SENSITIVE_KEY_RE = /authorization|api[-_]?key|secret|token(?!s)|cookie|password|bearer|session/i
+const SENSITIVE_KEY_RE = /authorization|api[-_]?key|secret|token(?!s|count\b)|cookie|password|bearer|session/i
 
 export type TraceCaptureSettings = {
   enabled: boolean
@@ -413,20 +414,27 @@ export const TRACE_CAPTURE_DEPTH_LIMIT = 32
 export const TRACE_CAPTURE_CHAR_LIMIT = 1024 * 1024
 const TRACE_REQUEST_PARSE_CHAR_LIMIT = 64 * TRACE_CAPTURE_CHAR_LIMIT
 const TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT = 64 * 1024
-const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"/i
+const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"|"image"\s*:\s*\{\s*"(?:format|source)"/i
 
 type BoundedTraceValue = { value: unknown; omitted?: string }
 type RequestImageMode = 'preview' | 'semantic'
-type RequestImageSource = 'anthropic' | 'gemini' | 'url'
+type RequestImageSource = 'anthropic' | 'gemini' | 'bedrock_image' | 'bedrock_source' | 'url'
 
 function ownTraceValue(value: object, key: string): unknown {
   const property = Object.getOwnPropertyDescriptor(value, key)
   return property?.enumerable ? property.value : undefined
 }
 
-function requestImageSource(key: string, type: unknown, parent?: RequestImageSource): RequestImageSource | undefined {
+function requestImageSource(
+  key: string,
+  type: unknown,
+  parent?: RequestImageSource,
+  bedrockFormat?: unknown,
+): RequestImageSource | undefined {
   if (key === 'source' && type === 'image') return 'anthropic'
   if (key === 'inlineData') return 'gemini'
+  if (key === 'image') return 'bedrock_image'
+  if (key === 'source' && parent === 'bedrock_image' && typeof bedrockFormat === 'string') return 'bedrock_source'
   if (key === 'image_url' && (type === 'image_url' || type === 'input_image')) return 'url'
   if (key === 'url' && parent === 'url') return 'url'
   return undefined
@@ -485,9 +493,12 @@ function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): Bo
     }
     const type = requestImages ? ownTraceValue(value, 'type') : undefined
     const mime = imageSource === 'gemini' ? ownTraceValue(value, 'mimeType') : undefined
+    const bedrockFormat = imageSource === 'bedrock_image' ? ownTraceValue(value, 'format') : undefined
     const base64Image = imageSource === 'anthropic' && type === 'base64'
     const inlineImage = typeof mime === 'string' && mime.startsWith('image/')
-    const imageData = base64Image || inlineImage ? ownTraceValue(value, 'data') : undefined
+    const bedrockImage = imageSource === 'bedrock_source'
+    const imageDataKey = bedrockImage ? 'bytes' : 'data'
+    const imageData = base64Image || inlineImage || bedrockImage ? ownTraceValue(value, imageDataKey) : undefined
     const smallImage = typeof imageData === 'string' && reserveImageChars(imageData.length)
     const compactImage = typeof imageData === 'string' && (requestImages === 'semantic' || !smallImage)
     const result: Record<string, unknown> = {}
@@ -497,8 +508,8 @@ function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): Bo
       countText(key)
       const property = Object.getOwnPropertyDescriptor(value, key)
       if (property?.get || property?.set) throw new Error('accessor')
-      if (compactImage && key === 'data') continue
-      const nestedSource = requestImages ? requestImageSource(key, type, imageSource) : undefined
+      if (compactImage && key === imageDataKey) continue
+      const nestedSource = requestImages ? requestImageSource(key, type, imageSource, bedrockFormat) : undefined
       Object.defineProperty(result, key, { value: visit(property?.value, depth + 1, nestedSource), enumerable: true, configurable: true, writable: true })
     }
     if (compactImage) {

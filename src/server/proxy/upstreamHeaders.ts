@@ -25,6 +25,9 @@ export const UPSTREAM_VERSION_PLACEHOLDER = '$VERSION'
 const BLOCKED_UPSTREAM_HEADERS = new Set([
   'authorization',
   'x-api-key',
+  'api-key',
+  'x-goog-api-key',
+  'x-amz-security-token',
   'host',
   'content-type',
   'content-length',

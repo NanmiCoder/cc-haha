@@ -35,16 +35,16 @@ export const ApiFormatSchema = z.enum([
   'anthropic',         // Native Anthropic Messages API (passthrough, no proxy)
   'openai_chat',       // OpenAI Chat Completions /v1/chat/completions
   'openai_responses',  // OpenAI Responses API /v1/responses
+  'gemini',            // Google Gemini /v1beta/models/:model:generateContent
+  'google_vertex',     // Google Vertex AI (GCP) Gemini & Anthropic rawPredict
+  'bedrock_converse',  // AWS Bedrock Runtime Converse / ConverseStream API
+  'azure_openai',      // Microsoft Azure OpenAI / Azure AI Foundry
 ])
 export type ApiFormat = z.infer<typeof ApiFormatSchema>
 
-/**
- * Protocols a preset can route one model family to. Wider than ApiFormat: a
- * gateway may serve a family only over a protocol no provider record is saved
- * with (OpenCode Go serves Gemini only over Google `generateContent`).
- */
-export const ModelApiFormatSchema = z.enum([...ApiFormatSchema.options, 'gemini'])
-export type ModelApiFormat = z.infer<typeof ModelApiFormatSchema>
+/** Protocols a preset can route one model family to. */
+export const ModelApiFormatSchema = ApiFormatSchema
+export type ModelApiFormat = ApiFormat
 
 export const ProviderAuthStrategySchema = z.enum([
   'api_key',
@@ -104,6 +104,8 @@ export const SupportsNestedToolResultMediaSchema = z.boolean()
 
 const RequestCapabilitySchema = z.enum(['auto', 'supported', 'unsupported'])
 const OutputTokenBudgetSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+export const ServiceTierSchema = z.enum(['auto', 'default', 'flex', 'priority'])
+export type ServiceTier = z.infer<typeof ServiceTierSchema>
 
 // These options describe this endpoint's contract, not capabilities inferred
 // from a model name. Missing fields retain automatic behavior.
@@ -111,6 +113,7 @@ export const RequestCompatibilitySchema = z.object({
   maxOutputTokens: OutputTokenBudgetSchema.optional(),
   outputTokenLimit: OutputTokenBudgetSchema.optional(),
   outputTokenField: z.enum(['auto', 'max_tokens', 'max_completion_tokens', 'omit']).optional(),
+  serviceTier: ServiceTierSchema.optional(),
   sampling: RequestCapabilitySchema.optional(),
   reasoning: RequestCapabilitySchema.optional(),
   parallelTools: RequestCapabilitySchema.optional(),
@@ -259,7 +262,7 @@ export const UpdateProviderSchema = z.object({
 
 export const TestProviderSchema = z.object({
   baseUrl: z.string().url(),
-  apiKey: z.string().min(1),
+  apiKey: z.string(),
   modelId: z.string().min(1),
   authStrategy: ProviderAuthStrategySchema.optional(),
   apiFormat: ApiFormatSchema.default('anthropic'),
@@ -272,6 +275,18 @@ export const TestProviderSchema = z.object({
    */
   presetId: z.string().optional(),
   proxy: ProviderProxyConfigSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.apiKey.length === 0 &&
+    data.apiFormat !== 'google_vertex' &&
+    data.apiFormat !== 'bedrock_converse'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['apiKey'],
+      message: 'API key is required',
+    })
+  }
 })
 
 export const ReorderProvidersSchema = z.object({

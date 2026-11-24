@@ -61,7 +61,7 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
           hint={t('settings.providers.compatibilityLimitHint')}
           error={invalidCompatibilityNumber(value.outputTokenLimit) ? t('settings.providers.compatibilityNumberError') : undefined}
         />
-        {apiFormat === 'openai_chat' && <SelectField<NonNullable<RequestCompatibility['outputTokenField']>>
+        {(apiFormat === 'openai_chat' || apiFormat === 'azure_openai') && <SelectField<NonNullable<RequestCompatibility['outputTokenField']>>
           label={t('settings.providers.compatibilityTokenField')}
           value={value.options.outputTokenField ?? 'auto'}
           onChange={next => updateOption('outputTokenField', next)}
@@ -72,6 +72,17 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
             { value: 'omit', label: t('settings.providers.compatibilityOmit') },
           ]}
         />}
+        <SelectField<NonNullable<RequestCompatibility['serviceTier']>>
+          label={t('settings.providers.compatibilityServiceTier')}
+          value={value.options.serviceTier ?? 'auto'}
+          onChange={next => updateOption('serviceTier', next)}
+          options={[
+            { value: 'auto', label: t('settings.providers.compatibilityAuto') },
+            { value: 'default', label: t('settings.providers.compatibilityServiceTierDefault') },
+            { value: 'flex', label: t('settings.providers.compatibilityServiceTierFlex') },
+            { value: 'priority', label: t('settings.providers.compatibilityServiceTierPriority') },
+          ]}
+        />
         {capabilities.map(([key, label]) => <SelectField
           key={key}
           label={t(label)}

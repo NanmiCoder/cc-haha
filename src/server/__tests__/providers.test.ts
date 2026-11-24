@@ -5467,3 +5467,116 @@ describe('OpenCode Go preset request contract', () => {
   })
 
 })
+
+describe('standalone Gemini provider', () => {
+  const apiKey = 'fake-gemini-key'
+
+  test('persists apiFormat=gemini, routes through proxy with reasoning capabilities, and proxies namespaced gateway models with images and thinking', async () => {
+    const service = new ProviderService()
+    const provider = await service.addProvider({
+      presetId: 'custom',
+      name: 'Local Gemini Gateway',
+      apiKey,
+      baseUrl: 'http://127.0.0.1:3425',
+      apiFormat: 'gemini',
+      models: {
+        main: 'devin/gemini-4-neon',
+        haiku: 'devin/gemini-4-neon',
+        sonnet: 'devin/gemini-4-neon',
+        opus: 'devin/gemini-4-neon',
+      },
+    })
+    expect(provider.apiFormat).toBe('gemini')
+
+    const runtimeEnv = await service.getProviderRuntimeEnv(provider.id)
+    expect(runtimeEnv.ANTHROPIC_BASE_URL).toContain(`/proxy/providers/${provider.id}`)
+    expect(runtimeEnv.ANTHROPIC_API_KEY).toBe('proxy-managed')
+    expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toContain('thinking')
+    expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toContain('adaptive_thinking')
+
+    const seen: Array<{ url: string; headers: Headers; body: Record<string, any> }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const headers = new Headers(init?.headers)
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      seen.push({ url, headers, body })
+      const chunk = {
+        responseId: 'gem-1',
+        candidates: [{
+          content: {
+            role: 'model',
+            parts: [
+              { text: 'Checking the image.', thought: true, thoughtSignature: 'sig-turn-1' },
+              { functionCall: { id: 'call_img', name: 'Read', args: { file_path: 'README.md' } }, thoughtSignature: 'sig-call-1' },
+            ],
+          },
+          finishReason: 'STOP',
+        }],
+        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 15, thoughtsTokenCount: 10 },
+      }
+      if (url.includes(':streamGenerateContent')) {
+        return new Response(`data: ${JSON.stringify(chunk)}\r\n\r\n`, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json(chunk)
+    }) as typeof fetch
+
+    try {
+      const streamReq = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'devin/gemini-4-neon',
+          max_tokens: 1024,
+          stream: true,
+          thinking: { type: 'adaptive' },
+          output_config: { effort: 'high' },
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Inspect this screenshot' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+            ],
+          }],
+        }),
+      })
+      const streamRes = await handleProxyRequest(streamReq, new URL(streamReq.url))
+      expect(streamRes.status).toBe(200)
+      const sseText = await streamRes.text()
+      expect(sseText).toContain('"thinking_delta"')
+      expect(sseText).toContain('"redacted_thinking"')
+      expect(sseText).toContain('"name":"Read"')
+      expect(sseText).toContain('"stop_reason":"tool_use"')
+
+      expect(seen[0]!.url).toBe('http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:streamGenerateContent?alt=sse')
+      expect(seen[0]!.headers.get('x-goog-api-key')).toBe(apiKey)
+      expect(seen[0]!.headers.get('authorization')).toBeNull()
+      expect(seen[0]!.body.contents[0].parts).toEqual([
+        { text: 'Inspect this screenshot' },
+        { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgo=' } },
+      ])
+      expect(seen[0]!.body.generationConfig).toEqual({
+        maxOutputTokens: 1024,
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'high' },
+      })
+
+      seen.length = 0
+      const testResult = await service.testProviderConfig({
+        baseUrl: 'http://127.0.0.1:3425',
+        apiKey,
+        modelId: 'devin/gemini-4-neon',
+        apiFormat: 'gemini',
+      })
+      expect(testResult.connectivity.success).toBe(true)
+      expect(testResult.proxy?.success).toBe(true)
+      expect(seen.map(call => call.url)).toEqual([
+        'http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:generateContent',
+        'http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:generateContent',
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
