@@ -212,6 +212,14 @@ export type PerSessionState = {
   /** Currently displayed Computer Use request; remaining requests stay queued. */
   pendingComputerUsePermission: PendingComputerUsePermission | null
   pendingComputerUsePermissions?: PendingComputerUsePermissions
+  /**
+   * True when `permission_pending` was entered from `idle` solely for
+   * delegated team-worker permission prompt(s) (carrying `displayName`) while
+   * this lead session had no active foreground turn. Resolving or cancelling
+   * the last prompt restores `'idle'` instead of sticking in `'tool_executing'`
+   * or `'thinking'`.
+   */
+  restoreIdleAfterPermissions?: boolean
   tokenUsage: TokenUsage
   /**
    * Bumped each time a compact boundary arrives. The context usage indicator
@@ -305,6 +313,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   pendingPermissions: {},
   pendingComputerUsePermission: null,
   pendingComputerUsePermissions: {},
+  restoreIdleAfterPermissions: false,
   tokenUsage: { input_tokens: 0, output_tokens: 0 },
   compactCount: 0,
   runtimeConfigReadyCount: 0,
@@ -384,12 +393,52 @@ function hasPendingPermissionRequests(session: PerSessionState): boolean {
     Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
 }
 
+function isDelegatedPermissionRequest(
+  permission: Pick<PendingPermission, 'displayName'>,
+): boolean {
+  return Boolean(permission.displayName?.trim())
+}
+
+function hasOnlyDelegatedPendingPermissions(
+  session: Pick<
+    PerSessionState,
+    'pendingPermission' | 'pendingPermissions' | 'pendingComputerUsePermission' | 'pendingComputerUsePermissions'
+  >,
+): boolean {
+  const pendingPermissions = Object.values(getPendingPermissionRecord(session))
+  const pendingComputerUsePermissions = Object.values(getPendingComputerUsePermissionRecord(session))
+  return pendingPermissions.length > 0 &&
+    pendingComputerUsePermissions.length === 0 &&
+    pendingPermissions.every(isDelegatedPermissionRequest)
+}
+
+function isDelegatedIdlePending(session: PerSessionState): boolean {
+  return session.chatState === 'permission_pending' &&
+    session.restoreIdleAfterPermissions === true &&
+    hasOnlyDelegatedPendingPermissions(session)
+}
+
+function syncIdleTabStatus(
+  sessionId: string,
+  backgroundAgentTasks: PerSessionState['backgroundAgentTasks'],
+): void {
+  const tabStore = useTabStore.getState()
+  if (hasRunningBackgroundTasks(backgroundAgentTasks)) {
+    tabStore.updateTabStatus(sessionId, 'running')
+    return
+  }
+  const currentTab = tabStore.tabs.find((tab) => tab.sessionId === sessionId)
+  if (currentTab?.status === 'error') return
+  tabStore.updateTabStatus(sessionId, 'idle')
+}
+
 function getChatStateAfterPermissionResolution(
   session: PerSessionState,
   hasRemainingPermissions: boolean,
   allowed: boolean | undefined,
 ): ChatState {
   if (hasRemainingPermissions) return 'permission_pending'
+  if (session.restoreIdleAfterPermissions) return 'idle'
   if (allowed === true) return 'tool_executing'
   if (allowed === false) return 'idle'
   return session.chatState === 'permission_pending' ? 'thinking' : session.chatState
@@ -454,7 +503,10 @@ export type AskUserQuestionDraft = {
 // Rollback stash for in-flight permission responses carrying attachments. If
 // server-side image materialization fails, the pending permission is restored
 // so the user can retry without losing their AskUserQuestion draft.
-const pendingAttachmentPermissionStash = new Map<string, PendingPermission>()
+const pendingAttachmentPermissionStash = new Map<
+  string,
+  { permission: PendingPermission; restoreIdleAfterPermissions: boolean }
+>()
 
 type ChatStore = {
   applyBoundedUpdate: (update: (state: ChatStore) => Partial<ChatStore>) => void
@@ -3729,6 +3781,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             historyPageLoading: false,
             chatState: 'thinking',
             awaitingStopIdle: false,
+            restoreIdleAfterPermissions: false,
             pendingBackgroundContinue: [],
             backgroundContinueNoticeId: undefined,
             isPreparingTurn: false,
@@ -3832,7 +3885,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
-    const pending = getPendingPermission(get().sessions[sessionId], requestId)
+    const initialSession = get().sessions[sessionId]
+    const pending = getPendingPermission(initialSession, requestId)
     if (pending?.planRuntimeSubmission) return false
     const payload: ClientMessage = {
       type: 'permission_response',
@@ -3847,7 +3901,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     }
     if (options?.attachments?.length && rejectOversizedMessage(sessionId, payload)) return false
     if (options?.attachments?.length && pending) {
-      pendingAttachmentPermissionStash.set(`${sessionId}:${requestId}`, pending)
+      pendingAttachmentPermissionStash.set(`${sessionId}:${requestId}`, {
+        permission: pending,
+        restoreIdleAfterPermissions: initialSession?.restoreIdleAfterPermissions === true,
+      })
     }
     const submittingPlanRuntime = pending?.toolName === 'ExitPlanMode' && options?.runtimeOverride
     if (submittingPlanRuntime) {
@@ -3865,23 +3922,40 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     }
     wsManager.send(sessionId, payload)
     if (submittingPlanRuntime) return true
+    let shouldSyncIdleTabStatus = false
+    let clearedElapsedTimer: ReturnType<typeof setInterval> | null = null
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, (session) => {
         const pendingPermissions = getPendingPermissionRecord(session)
         delete pendingPermissions[requestId]
         const remainingPermissions = Object.values(pendingPermissions)
+        const hasRemainingPermissions = remainingPermissions.length > 0 ||
+          Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+        const returningDelegatedIdle = !hasRemainingPermissions && session.restoreIdleAfterPermissions === true
+        if (returningDelegatedIdle) {
+          shouldSyncIdleTabStatus = true
+          if (session.elapsedTimer) clearedElapsedTimer = session.elapsedTimer
+        }
 
         return {
           pendingPermissions,
           pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
           awaitingStopIdle: false,
-          chatState: remainingPermissions.length > 0 ||
-            Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+          chatState: hasRemainingPermissions
             ? 'permission_pending'
-            : allowed ? 'tool_executing' : 'idle',
+            : returningDelegatedIdle
+              ? 'idle'
+              : allowed ? 'tool_executing' : 'idle',
+          ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
+          ...(clearedElapsedTimer ? { elapsedTimer: null } : {}),
         }
       }),
     }))
+    if (clearedElapsedTimer) clearInterval(clearedElapsedTimer)
+    if (shouldSyncIdleTabStatus) {
+      const currentSession = get().sessions[sessionId]
+      syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+    }
     return true
   },
 
@@ -3900,6 +3974,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const pendingComputerUsePermissions = getPendingComputerUsePermissionRecord(session)
         delete pendingComputerUsePermissions[requestId]
         const remainingPermissions = Object.values(pendingComputerUsePermissions)
+        const hasRemainingPermissions = Object.keys(getPendingPermissionRecord(session)).length > 0 ||
+          remainingPermissions.length > 0
 
         return {
           pendingComputerUsePermissions,
@@ -3908,10 +3984,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             session.pendingComputerUsePermission,
           ),
           awaitingStopIdle: false,
-          chatState: Object.keys(getPendingPermissionRecord(session)).length > 0 ||
-            remainingPermissions.length > 0
+          chatState: hasRemainingPermissions
             ? 'permission_pending'
             : response.userConsented === false ? 'idle' : 'tool_executing',
+          ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
         }
       }),
     }))
@@ -3994,6 +4070,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             apiRetry: null,
             streamingFallback: null,
             stoppingBackgroundTaskIds,
@@ -4579,9 +4656,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       if (guard) {
         const current = get().sessions[sessionId]
+        const isIdleOrDelegatedIdle = Boolean(
+          current && (current.chatState === 'idle' || isDelegatedIdlePending(current)),
+        )
         if (
           !current ||
-          current.chatState !== 'idle' ||
+          !isIdleOrDelegatedIdle ||
           (current.historyMutationEpoch ?? 0) !== requestedMutationEpoch
         ) {
           return skipReload()
@@ -4649,6 +4729,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications,
           },
         )
+        const preserveDelegatedPermissions =
+          session.restoreIdleAfterPermissions === true &&
+          hasOnlyDelegatedPendingPermissions(session)
         historyApplied = true
         return {
           sessions: updateSessionIn(state.sessions, sessionId, () => ({
@@ -4664,16 +4747,21 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications,
             backgroundAgentTasks,
             tokenUsage: nextTokenUsage,
-            chatState: 'idle',
+            chatState: preserveDelegatedPermissions ? 'permission_pending' : 'idle',
             activeThinkingId: null,
             activeToolUseId: null,
             activeToolName: null,
             streamingText: '',
             streamingToolInput: '',
-            pendingPermission: null,
-            pendingPermissions: {},
-            pendingComputerUsePermission: null,
-            pendingComputerUsePermissions: {},
+            ...(preserveDelegatedPermissions
+              ? { restoreIdleAfterPermissions: true }
+              : {
+                  pendingPermission: null,
+                  pendingPermissions: {},
+                  pendingComputerUsePermission: null,
+                  pendingComputerUsePermissions: {},
+                  restoreIdleAfterPermissions: false,
+                }),
             elapsedTimer: null,
             statusVerb: '',
             apiRetry: null,
@@ -4724,12 +4812,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
       const reloadedSession = get().sessions[sessionId]
       if (reloadedSession) {
-        const isRunning = reloadedSession.chatState !== 'idle' ||
-          hasRunningBackgroundTasks(reloadedSession.backgroundAgentTasks)
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          isRunning ? 'running' : 'idle',
-        )
+        const isForegroundRunning = reloadedSession.chatState !== 'idle' &&
+          !isDelegatedIdlePending(reloadedSession)
+        if (isForegroundRunning) {
+          useTabStore.getState().updateTabStatus(sessionId, 'running')
+        } else {
+          syncIdleTabStatus(sessionId, reloadedSession.backgroundAgentTasks)
+        }
       }
 
       const currentTaskStore = useCLITaskStore.getState()
@@ -5022,6 +5111,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       streamingText: '',
       chatState: 'idle',
       awaitingStopIdle: false,
+      restoreIdleAfterPermissions: false,
       historyStatus: 'ready',
       historyHydrated: true,
       historyError: null,
@@ -5203,6 +5293,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               ],
               chatState: 'thinking',
               awaitingStopIdle: false,
+              restoreIdleAfterPermissions: false,
               streamingText: '',
               streamingToolInput: '',
               activeThinkingId: null,
@@ -5228,16 +5319,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
 
-        if (session.chatState === 'idle') {
-          if (session.awaitingStopIdle) {
-            update(() => ({ awaitingStopIdle: false }))
+        const preserveDelegatedPermissions = hasOnlyDelegatedPendingPermissions(session)
+
+        if (session.chatState === 'idle' && !preserveDelegatedPermissions) {
+          if (session.awaitingStopIdle || session.restoreIdleAfterPermissions) {
+            update(() => ({
+              ...(session.awaitingStopIdle ? { awaitingStopIdle: false } : {}),
+              ...(session.restoreIdleAfterPermissions ? { restoreIdleAfterPermissions: false } : {}),
+            }))
           }
-          if (reconciledBackgroundTaskSnapshot) {
-            useTabStore.getState().updateTabStatus(
-              sessionId,
-              hasRunningBackgroundTasks(session.backgroundAgentTasks) ? 'running' : 'idle',
-            )
-          }
+          clearElapsedTimer()
+          syncIdleTabStatus(sessionId, session.backgroundAgentTasks)
           if (automaticReconnectSnapshot) {
             // An idle reconnect snapshot is authoritative for everything that
             // predates it. Preserve only rows that arrive after the REST
@@ -5280,13 +5372,18 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           : session.messages
         update(() => ({
           messages: markPendingToolUseMessagesStopped(messagesWithText),
-          chatState: 'idle',
+          chatState: preserveDelegatedPermissions ? 'permission_pending' : 'idle',
           awaitingStopIdle: false,
           activeThinkingId: null,
           activeToolUseId: null,
           activeToolName: null,
-          pendingPermission: null,
-          pendingComputerUsePermission: null,
+          ...(preserveDelegatedPermissions
+            ? { restoreIdleAfterPermissions: true }
+            : {
+                pendingPermission: null,
+                pendingComputerUsePermission: null,
+                restoreIdleAfterPermissions: false,
+              }),
           elapsedTimer: null,
           statusVerb: '',
           apiRetry: null,
@@ -5295,13 +5392,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           streamingToolInput: '',
         }))
         const reconciledSession = get().sessions[sessionId]
-        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(
-          reconciledSession?.backgroundAgentTasks,
-        )
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          hasRunningBackgroundAgents ? 'running' : 'idle',
-        )
+        syncIdleTabStatus(sessionId, reconciledSession?.backgroundAgentTasks)
         // The terminal event may have arrived while this renderer was offline.
         // Drop the stale baseline for the completed foreground turn, then merge
         // durable history with only rows that arrive after this request starts.
@@ -5357,10 +5448,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? buildBackgroundContinueMessage(continueTasks, Date.now())
             : null
           if (notice) nextMessages = [...nextMessages, notice]
+          const preserveDelegatedPermissions = msg.state === 'idle' &&
+            hasOnlyDelegatedPendingPermissions(session)
           return {
             ...(continueTasks.length > 0 ? { pendingBackgroundContinue: [] } : {}),
             ...(notice ? { backgroundContinueNoticeId: notice.id } : {}),
-            chatState: preserveStreamingTurn ? 'streaming' : msg.state,
+            chatState: preserveStreamingTurn
+              ? 'streaming'
+              : preserveDelegatedPermissions
+                ? 'permission_pending'
+                : msg.state,
+            restoreIdleAfterPermissions: preserveDelegatedPermissions,
             statusVerb: msg.state === 'idle'
               ? ''
               : msg.verb && msg.verb !== 'Thinking'
@@ -5380,17 +5478,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             } : pendingText !== session.streamingText ? { streamingText: pendingText } : {}),
           }
         })
-        if (msg.state !== 'idle') ensureElapsedTimer()
-        if (msg.state === 'idle') {
+        if (msg.state !== 'idle') {
+          ensureElapsedTimer()
+          useTabStore.getState().updateTabStatus(sessionId, 'running')
+        } else {
           clearElapsedTimer()
+          syncIdleTabStatus(sessionId, get().sessions[sessionId]?.backgroundAgentTasks)
         }
-        // Sync tab status
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          msg.state === 'idle' && !hasRunningBackgroundTasks(get().sessions[sessionId]?.backgroundAgentTasks)
-            ? 'idle'
-            : 'running',
-        )
         break
 
       case 'runtime_config_applied': {
@@ -5453,6 +5547,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           update((s) => ({
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
             chatState: 'streaming',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5483,6 +5578,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeToolName: toolName,
             streamingToolInput: '',
             chatState: 'tool_executing',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5509,6 +5605,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             receivedAt: Date.now(),
           },
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
+          restoreIdleAfterPermissions: false,
           activeThinkingId: null,
           statusVerb: '',
         }))
@@ -5564,6 +5661,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               streamingFallback: null,
               apiRetry: null,
               chatState: 'thinking',
+              restoreIdleAfterPermissions: false,
               statusVerb: '',
             }
           })
@@ -5582,6 +5680,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           },
           apiRetry: null,
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
+          restoreIdleAfterPermissions: false,
           activeThinkingId: null,
           statusVerb: '',
         }))
@@ -5688,6 +5787,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             return {
               messages: updated,
               chatState: 'thinking',
+              restoreIdleAfterPermissions: false,
               activeThinkingId: last.id,
               streamingText: '',
               streamingResponseChars: s.streamingResponseChars + msg.text.length,
@@ -5697,6 +5797,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           return {
             messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
             chatState: 'thinking',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: id,
             streamingText: '',
             streamingResponseChars: s.streamingResponseChars + msg.text.length,
@@ -5840,11 +5941,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const hasPermissionMessage = s.messages.some((message) =>
             message.type === 'permission_request' && message.requestId === msg.requestId)
           const isAskUserQuestion = msg.toolName === 'AskUserQuestion'
+          const allDelegated = hasOnlyDelegatedPendingPermissions({
+            pendingPermission,
+            pendingPermissions,
+            pendingComputerUsePermission: s.pendingComputerUsePermission,
+            pendingComputerUsePermissions: s.pendingComputerUsePermissions,
+          })
+          const restoreIdleAfterPermissions = allDelegated && (
+            s.chatState === 'idle' ||
+            (s.chatState === 'permission_pending' && s.restoreIdleAfterPermissions === true)
+          )
 
           return {
             pendingPermission,
             pendingPermissions,
             chatState: 'permission_pending',
+            restoreIdleAfterPermissions,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5905,6 +6017,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ),
             pendingComputerUsePermissions,
             chatState: 'permission_pending',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5912,14 +6025,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         })
         break
 
-      case 'permission_resolved':
+      case 'permission_resolved': {
         pendingAttachmentPermissionStash.delete(`${sessionId}:${msg.requestId}`)
+        let shouldSyncIdleTabStatus = false
         update((session) => {
           if (msg.permissionType === 'computer_use') {
             const pendingComputerUsePermissions = getPendingComputerUsePermissionRecord(session)
             if (!pendingComputerUsePermissions[msg.requestId]) return {}
             delete pendingComputerUsePermissions[msg.requestId]
             const remainingPermissions = Object.values(pendingComputerUsePermissions)
+            const hasRemainingPermissions = Object.keys(getPendingPermissionRecord(session)).length > 0 ||
+              remainingPermissions.length > 0
+            if (!hasRemainingPermissions && session.restoreIdleAfterPermissions) {
+              shouldSyncIdleTabStatus = true
+            }
 
             return {
               pendingComputerUsePermissions,
@@ -5929,10 +6048,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               ),
               chatState: getChatStateAfterPermissionResolution(
                 session,
-                Object.keys(getPendingPermissionRecord(session)).length > 0 ||
-                  remainingPermissions.length > 0,
+                hasRemainingPermissions,
                 msg.allowed,
               ),
+              ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
             }
           }
 
@@ -5940,22 +6059,37 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           if (!pendingPermissions[msg.requestId]) return {}
           delete pendingPermissions[msg.requestId]
           const remainingPermissions = Object.values(pendingPermissions)
+          const hasRemainingPermissions = remainingPermissions.length > 0 ||
+            Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+          if (!hasRemainingPermissions && session.restoreIdleAfterPermissions) {
+            shouldSyncIdleTabStatus = true
+          }
           return {
             pendingPermissions,
             pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
             chatState: getChatStateAfterPermissionResolution(
               session,
-              remainingPermissions.length > 0 ||
-                Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0,
+              hasRemainingPermissions,
               msg.allowed,
             ),
+            ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
           }
         })
+        if (shouldSyncIdleTabStatus) {
+          clearElapsedTimer()
+          const currentSession = get().sessions[sessionId]
+          syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+        }
         break
+      }
 
-      case 'permission_requests_snapshot':
+      case 'permission_requests_snapshot': {
+        let shouldSyncIdleTabStatus = false
         update((session) => {
           if (session.awaitingStopIdle) {
+            if (!msg.turnActive) {
+              shouldSyncIdleTabStatus = true
+            }
             return {
               connectionSnapshotReady: true,
               pendingPermissions: {},
@@ -5963,6 +6097,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               pendingComputerUsePermissions: {},
               pendingComputerUsePermission: null,
               chatState: 'idle',
+              restoreIdleAfterPermissions: false,
               ...(!msg.turnActive ? { awaitingStopIdle: false } : {}),
             }
           }
@@ -5980,6 +6115,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const remainingComputerUsePermissions = Object.values(pendingComputerUsePermissions)
           const hasRemainingPermissions = remainingPermissions.length > 0 ||
             remainingComputerUsePermissions.length > 0
+          const allRemainingAreDelegated = remainingPermissions.length > 0 &&
+            remainingComputerUsePermissions.length === 0 &&
+            remainingPermissions.every(isDelegatedPermissionRequest)
+          if ((!hasRemainingPermissions && !msg.turnActive) || (allRemainingAreDelegated && !msg.turnActive)) {
+            shouldSyncIdleTabStatus = true
+          }
 
           return {
             connectionSnapshotReady: true,
@@ -5997,9 +6138,18 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 : session.chatState === 'idle' || session.chatState === 'permission_pending'
                   ? 'thinking'
                   : session.chatState,
+            restoreIdleAfterPermissions: hasRemainingPermissions
+              ? (msg.turnActive ? false : Boolean(session.restoreIdleAfterPermissions || allRemainingAreDelegated))
+              : false,
           }
         })
+        if (shouldSyncIdleTabStatus) {
+          clearElapsedTimer()
+          const currentSession = get().sessions[sessionId]
+          syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+        }
         break
+      }
 
       case 'message_complete': {
         const session = get().sessions[sessionId]
@@ -6050,6 +6200,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             elapsedTimer: null,
             apiRetry: null,
             streamingFallback: null,
@@ -6143,14 +6294,31 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
           if (msg.code === 'ATTACHMENT_PROCESSING_FAILED' && msg.permissionRequestId) {
             const stashKey = `${sessionId}:${msg.permissionRequestId}`
-            const stashed = pendingAttachmentPermissionStash.get(stashKey)
+            const stashedEntry = pendingAttachmentPermissionStash.get(stashKey)
             pendingAttachmentPermissionStash.delete(stashKey)
-            if (stashed) {
-              update((current) => ({
-                pendingPermissions: { ...getPendingPermissionRecord(current), [stashed.requestId]: stashed },
-                pendingPermission: stashed,
-                chatState: 'permission_pending',
-              }))
+            if (stashedEntry) {
+              const { permission: stashed, restoreIdleAfterPermissions: stashedRestoreIdle } = stashedEntry
+              update((current) => {
+                const pendingPermissions = { ...getPendingPermissionRecord(current), [stashed.requestId]: stashed }
+                const allDelegated = hasOnlyDelegatedPendingPermissions({
+                  pendingPermission: stashed,
+                  pendingPermissions,
+                  pendingComputerUsePermission: current.pendingComputerUsePermission,
+                  pendingComputerUsePermissions: current.pendingComputerUsePermissions,
+                })
+                const restoreIdleAfterPermissions = allDelegated && (
+                  current.chatState === 'idle' ||
+                  (current.chatState === 'permission_pending' && (
+                    current.restoreIdleAfterPermissions === true || stashedRestoreIdle
+                  ))
+                )
+                return {
+                  pendingPermissions,
+                  pendingPermission: stashed,
+                  chatState: 'permission_pending',
+                  restoreIdleAfterPermissions,
+                }
+              })
               if (stashed.toolUseId) {
                 const toolUseId = stashed.toolUseId
                 set((state) => {
@@ -6210,6 +6378,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             apiRetry: null,
             streamingFallback: null,
             historyMutationEpoch: (s.historyMutationEpoch ?? 0) + 1,
@@ -6391,6 +6560,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             chatState: 'idle',
             elapsedTimer: null,
             elapsedSeconds: 0,
