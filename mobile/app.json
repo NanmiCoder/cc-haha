@@ -12,9 +12,16 @@
     "orientation": "portrait",
     "scheme": "cchaha",
     "userInterfaceStyle": "automatic",
+    "backgroundColor": "#FFFFFF",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
     "icon": "./assets/icon.png",
     "ios": {
       "icon": "./assets/icon-ios.png",
+      "backgroundColor": "#FFFFFF",
       "supportsTablet": true,
       "bundleIdentifier": "com.yunce.cchaha.mobile",
       "entitlements": {
@@ -30,9 +37,10 @@
     },
     "android": {
       "package": "app.cchaha.mobile",
+      "backgroundColor": "#FFFFFF",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#E8E7E3"
+        "backgroundColor": "#FFFFFF"
       },
       "permissions": [
         "CAMERA"

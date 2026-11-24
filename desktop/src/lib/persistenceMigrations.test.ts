@@ -19,13 +19,13 @@ describe('desktop persistence migrations', () => {
     window.localStorage.clear()
   })
 
-  test('upgrades a frozen schema-6 install with prevent sleep off and preserves existing preferences', () => {
+  test('upgrades a frozen schema-6 install with prevent sleep off and migrates legacy themes', () => {
     localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '6')
     localStorage.setItem('cc-haha-theme', 'ink-blue')
     localStorage.setItem('unrelated-user-key', 'keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).toContain(PREVENT_SLEEP_STORAGE_KEY)
     expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
-    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(PREVENT_SLEEP_STORAGE_KEY)
     localStorage.setItem(PREVENT_SLEEP_STORAGE_KEY, '1')
@@ -36,7 +36,7 @@ describe('desktop persistence migrations', () => {
     expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
   })
 
-  test('upgrades a frozen schema-4 install with reading defaults without changing zoom or theme', () => {
+  test('upgrades a frozen schema-4 install with reading defaults without changing zoom and migrates legacy theme', () => {
     localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '4')
     localStorage.setItem('cc-haha-app-zoom', '1.25')
     localStorage.setItem('cc-haha-theme', 'ink-blue')
@@ -44,7 +44,7 @@ describe('desktop persistence migrations', () => {
     runDesktopPersistenceMigrations()
     expect(JSON.parse(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)!)).toEqual({ version: 1, ...DEFAULT_CHAT_APPEARANCE })
     expect(localStorage.getItem('cc-haha-app-zoom')).toBe('1.25')
-    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(CHAT_APPEARANCE_STORAGE_KEY)
   })
@@ -245,31 +245,42 @@ describe('desktop persistence migrations', () => {
     expect(window.localStorage.getItem('cc-haha-theme')).toBe('white')
   })
 
-  test('renames the retired light theme to warm-classic instead of resetting it', () => {
-    // `light` was the warm workspace, labelled 经典暖色 in the picker. Falling
-    // through to the enum check would drop it and silently reset those
-    // installs to pure white, which reads as the app forgetting the setting.
-    window.localStorage.setItem('cc-haha-theme', 'light')
+  test('forward-migrates all legacy light themes to white instead of resetting them', () => {
+    for (const legacyLight of ['light', 'paper', 'warm-classic', 'celadon']) {
+      window.localStorage.setItem('cc-haha-theme', legacyLight)
 
-    const report = runDesktopPersistenceMigrations()
+      const report = runDesktopPersistenceMigrations()
 
-    expect(report.migratedKeys).toContain('cc-haha-theme')
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('warm-classic')
+      expect(report.migratedKeys, legacyLight).toContain('cc-haha-theme')
+      expect(window.localStorage.getItem('cc-haha-theme'), legacyLight).toBe('white')
+    }
   })
 
-  test('applies the same rename to the light half of follow-the-system', () => {
-    // The preference holds a theme name too, so a rename that only reached the
-    // applied theme would silently reset which palette daytime returns to.
+  test('forward-migrates all legacy dark themes to dark instead of resetting them', () => {
+    for (const legacyDark of ['ink-blue', 'neutral-dark']) {
+      window.localStorage.setItem('cc-haha-theme', legacyDark)
+
+      const report = runDesktopPersistenceMigrations()
+
+      expect(report.migratedKeys, legacyDark).toContain('cc-haha-theme')
+      expect(window.localStorage.getItem('cc-haha-theme'), legacyDark).toBe('dark')
+    }
+  })
+
+  test('applies legacy theme migrations to the light and dark halves of follow-the-system', () => {
     window.localStorage.setItem('cc-haha-light-theme', 'light')
+    window.localStorage.setItem('cc-haha-dark-theme', 'ink-blue')
 
     const report = runDesktopPersistenceMigrations()
 
     expect(report.migratedKeys).toContain('cc-haha-light-theme')
-    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('warm-classic')
+    expect(report.migratedKeys).toContain('cc-haha-dark-theme')
+    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
   })
 
-  test('preserves every palette introduced by the redesign', () => {
-    for (const theme of ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue']) {
+  test('preserves both canonical Direction C palettes', () => {
+    for (const theme of ['white', 'dark']) {
       window.localStorage.setItem('cc-haha-theme', theme)
 
       const report = runDesktopPersistenceMigrations()
@@ -279,7 +290,7 @@ describe('desktop persistence migrations', () => {
     }
   })
 
-  test.each([undefined, '4', '6', String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION)])('preserves neutral dark with schema %s and keeps migration idempotent', (schema) => {
+  test.each([undefined, '4', '6', String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION)])('migrates neutral dark to dark with schema %s and keeps migration idempotent', (schema) => {
     if (schema !== undefined) localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, schema)
     localStorage.setItem('cc-haha-theme', 'neutral-dark')
     localStorage.setItem('cc-haha-follow-system-theme', '1')
@@ -288,10 +299,10 @@ describe('desktop persistence migrations', () => {
     localStorage.setItem('unrelated-user-key', 'keep')
     runDesktopPersistenceMigrations()
 
-    expect(localStorage.getItem('cc-haha-theme')).toBe('neutral-dark')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
-    expect(localStorage.getItem('cc-haha-light-theme')).toBe('warm-classic')
-    expect(localStorage.getItem('cc-haha-dark-theme')).toBe('neutral-dark')
+    expect(localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
     expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
   })
@@ -316,8 +327,8 @@ describe('desktop persistence migrations', () => {
 
   test('preserves a valid follow-the-system flag and both ground preferences', () => {
     window.localStorage.setItem('cc-haha-follow-system-theme', '1')
-    window.localStorage.setItem('cc-haha-light-theme', 'celadon')
-    window.localStorage.setItem('cc-haha-dark-theme', 'ink-blue')
+    window.localStorage.setItem('cc-haha-light-theme', 'white')
+    window.localStorage.setItem('cc-haha-dark-theme', 'dark')
 
     const report = runDesktopPersistenceMigrations()
 
@@ -325,8 +336,8 @@ describe('desktop persistence migrations', () => {
     expect(report.migratedKeys).not.toContain('cc-haha-light-theme')
     expect(report.migratedKeys).not.toContain('cc-haha-dark-theme')
     expect(window.localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
-    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('celadon')
-    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('ink-blue')
+    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
   })
 
   test('preserves every supported locale during startup migration', () => {
@@ -420,8 +431,8 @@ describe('desktop persistence migrations', () => {
 
     expect(report.migratedKeys).not.toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
-    // The schema-1 keys a v0.6.2 install carries must survive untouched.
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    // The schema-1 keys a v0.6.2 install carries must survive (with legacy dark theme migrated to dark).
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs')!).openTabs).toHaveLength(1)
     expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
   })

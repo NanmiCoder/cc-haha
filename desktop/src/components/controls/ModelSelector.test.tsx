@@ -70,61 +70,6 @@ beforeEach(() => {
 })
 
 describe('ModelSelector', () => {
-  it('opens with only Antigravity installed, offers agent default, and picks the discovered model ID exactly', async () => {
-    useSettingsStore.setState({ locale: 'en', effortLevel: 'max' })
-    const agent = { id: 'antigravity-acp', kind: 'acp', status: 'unchecked', models: [] } as const
-    const fetchProviders = vi.spyOn(providersApi, 'list').mockResolvedValue({
-      providers: [], activeId: null, localAgent: { ...agent, models: [] },
-    })
-    render(<ModelSelector runtimeKey="__draft__" />)
-    await clickByRole(/Configure model provider|Select model/i)
-    const firstMenu = within(await screen.findByTestId('model-selector-dropdown'))
-    expect(fetchProviders).toHaveBeenCalled()
-    expect(firstMenu.getByText('Antigravity', { exact: true })).toBeInTheDocument()
-    fireEvent.click(firstMenu.getByRole('button', { name: 'Antigravity default' }))
-    expect(useSessionRuntimeStore.getState().selections.__draft__).toEqual({ providerId: 'antigravity-acp', modelId: 'agent-default' })
-
-    act(() => useProviderStore.setState({ localAgent: { ...agent, status: 'ready', models: [{ id: 'agy:native/1[1m]', name: 'Native Model' }] } }))
-    await clickByRole('Antigravity default, Antigravity')
-    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: 'Native Model' }))
-    expect(useSessionRuntimeStore.getState().selections.__draft__).toEqual({ providerId: 'antigravity-acp', modelId: 'agy:native/1[1m]' })
-    expect(screen.queryByRole('button', { name: /reasoning|effort/i })).not.toBeInTheDocument()
-    expect(useProviderStore.getState().activeId).toBeNull()
-  })
-
-  it('only changes models within existing Antigravity chats and never shows a different provider after uninstall', async () => {
-    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
-    const agent = { id: 'antigravity-acp', kind: 'acp', status: 'ready', models: [{ id: 'agy:retained', name: 'Native Model' }] } as const
-    useProviderStore.setState({
-      hasLoadedProviders: true,
-      localAgent: { ...agent, models: [...agent.models] },
-      activeId: 'relay',
-      providers: [{
-        id: 'relay', presetId: 'custom', name: 'Other provider', apiFormat: 'anthropic', apiKey: 'fixture', baseUrl: 'http://127.0.0.1:1',
-        models: { main: 'other-model', haiku: '', sonnet: '', opus: '' },
-      }],
-    })
-    useSessionRuntimeStore.getState().setSelection('restored', { providerId: 'antigravity-acp', modelId: 'agent-default' })
-    const sendRuntime = vi.spyOn(useChatStore.getState(), 'setSessionRuntime').mockImplementation(() => {})
-    const { rerender } = render(<ModelSelector runtimeKey="restored" />)
-    await clickByRole('Antigravity default, Antigravity')
-    const menu = within(screen.getByTestId('model-selector-dropdown'))
-    expect(menu.queryByText('Other provider')).not.toBeInTheDocument()
-    fireEvent.click(menu.getByRole('button', { name: 'Native Model' }))
-    expect(sendRuntime).toHaveBeenCalledExactlyOnceWith('restored', { providerId: 'antigravity-acp', modelId: 'agy:retained' })
-
-    act(() => useProviderStore.setState({ localAgent: { ...agent, status: 'not_installed', models: [] } }))
-    await clickByRole('agy:retained, Antigravity')
-    expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('not installed')
-    expect(screen.queryByRole('button', { name: /other-model/i })).not.toBeInTheDocument()
-    fireEvent.keyDown(document, { key: 'Escape' })
-
-    act(() => useProviderStore.setState({ localAgent: { ...agent, models: [...agent.models] } }))
-    rerender(<ModelSelector runtimeKey="other-session" />)
-    await clickByRole('other-model, Other provider')
-    expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('Start a new chat')
-    expect(screen.queryByRole('button', { name: 'Antigravity default' })).not.toBeInTheDocument()
-  })
   it('lists every model Magpie serves on the Magpie provider, not only its mapped slots', async () => {
     useSettingsStore.setState({ locale: 'en' })
     const magpieState = {

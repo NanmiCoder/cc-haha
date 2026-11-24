@@ -52,11 +52,8 @@ describe('offline test environment', () => {
         APPDATA: '/real/app-data',
         LOCALAPPDATA: '/real/local-app-data',
         XDG_DATA_HOME: '/real/xdg-data',
-        CC_HAHA_TEST_HOME: '/real/home',
       })
 
-      expect(environment.CC_HAHA_TEST_HOME).toBe(sandboxHome)
-      expect(environment.HOME).toBe(sandboxHome)
       expect(environment.APPDATA).toBe(join(sandboxHome, '.config'))
       expect(environment.LOCALAPPDATA).toBe(join(sandboxHome, '.local'))
       expect(environment.XDG_DATA_HOME).toBe(join(sandboxHome, '.local', 'share'))

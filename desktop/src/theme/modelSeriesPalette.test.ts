@@ -18,12 +18,7 @@ const normalizedCss = css.replace(/\r\n/g, '\n')
 
 const themes = [
   ':root,\n[data-theme="white"]',
-  '[data-theme="paper"]',
-  '[data-theme="warm-classic"]',
-  '[data-theme="celadon"]',
   '[data-theme="dark"]',
-  '[data-theme="ink-blue"]',
-  '[data-theme="neutral-dark"]',
 ] as const
 
 /** Every block written against `selector`: a theme can also be named in a shared rule elsewhere. */

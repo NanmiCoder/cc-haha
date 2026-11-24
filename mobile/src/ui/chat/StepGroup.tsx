@@ -315,7 +315,7 @@ function StepCard({
         ) : state === 'error' ? (
           <Icon name="circle-alert" size={15} color={colors.err} strokeWidth={2.2} />
         ) : item.type === 'thinking' ? (
-          <Icon name="sparkle" size={15} color={colors.ink3} strokeWidth={2} />
+          <Icon name="lightbulb" size={15} color={colors.ink3} strokeWidth={2} />
         ) : state === 'missing' ? (
           <View style={{ width: 15, alignItems: 'center' }}>
             <View style={{ width: 8, height: 8, borderRadius: 4, boxShadow: `inset 0 0 0 1.5px ${colors.faint}` }} />

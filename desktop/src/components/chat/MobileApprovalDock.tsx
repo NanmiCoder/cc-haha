@@ -3,8 +3,6 @@ import { ArrowUp, ListChecks, MessageCircleQuestion, Shield } from 'lucide-react
 import { useTranslation } from '../../i18n'
 import { Button } from '@/components/ui/Button'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
-import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
-import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { listPendingPermissions, useChatStore, type PendingPermission } from '../../stores/chatStore'
 import { AskUserQuestion } from './AskUserQuestion'
 import { PermissionDialog } from './PermissionDialog'
@@ -13,9 +11,9 @@ import { PERMISSION_TOOL_ICONS, extractToolDetails, getPermissionTitle } from '.
 
 type DecisionKind = 'tool' | 'plan' | 'question'
 
-function kindOf(request: PendingPermission, isAntigravity: boolean): DecisionKind {
+function kindOf(request: PendingPermission): DecisionKind {
   if (request.toolName === 'AskUserQuestion') return 'question'
-  if (!isAntigravity && isExitPlanModeTool(request.toolName)) return 'plan'
+  if (isExitPlanModeTool(request.toolName)) return 'plan'
   return 'tool'
 }
 
@@ -40,7 +38,6 @@ function firstQuestionText(input: unknown): string {
 export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
   const t = useTranslation()
   const session = useChatStore((state) => state.sessions[sessionId])
-  const isAntigravity = useSessionRuntimeStore((state) => state.selections[sessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID)
   const respondToPermission = useChatStore((state) => state.respondToPermission)
   const pending = useMemo(() => listPendingPermissions(session), [session])
   const current = pending[0]
@@ -59,7 +56,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
 
   if (!current) return null
 
-  const kind = kindOf(current, isAntigravity)
+  const kind = kindOf(current)
   const position = pending.length > 1 ? t('mobile.approval.position', { index: 1, total: pending.length }) : null
 
   let Icon = PERMISSION_TOOL_ICONS[current.toolName] ?? Shield
@@ -140,17 +137,15 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             <Button variant="ghost" size="md" onClick={() => setDetailOpen(true)}>
               {t('mobile.approval.viewDetails')}
             </Button>
-            {!isAntigravity && (
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
-              >
-                {t('permission.allowForSession')}
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
+            >
+              {t('permission.allowForSession')}
+            </Button>
           </div>
-          {isAntigravity ? null : reasonOpen ? (
+          {reasonOpen ? (
             <form onSubmit={submitReason} className="flex items-center gap-2">
               <label htmlFor={reasonId} className="sr-only">{t('mobile.approval.reasonLabel')}</label>
               <input

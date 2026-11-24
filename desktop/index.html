@@ -29,7 +29,7 @@
       so a dark palette does not sit under light browser chrome. Safari only
       guesses from the page otherwise, and guesses gray here.
     -->
-    <meta name="theme-color" content="#FCFCFC" />
+    <meta name="theme-color" content="#FFFFFF" />
     <title>Claude Code Haha</title>
     <!--
       The Electron window draws its own chrome, but this same document is what
@@ -140,23 +140,32 @@
           var read = function (key) {
             try { return window.localStorage.getItem(key) } catch (_) { return null }
           }
-          // The palettes, split by ground. Keep in step with
-          // LIGHT_THEME_MODES / DARK_THEME_MODES in src/types/settings.ts.
-          var LIGHT = ['white', 'paper', 'warm-classic', 'celadon']
-          var DARK = ['dark', 'ink-blue', 'neutral-dark']
+          // The two canonical Direction C palettes, split by ground. Keep in
+          // step with LIGHT_THEME_MODES / DARK_THEME_MODES /
+          // LEGACY_THEME_MIGRATIONS in src/types/settings.ts.
+          var LIGHT = ['white']
+          var DARK = ['dark']
+          var LEGACY = {
+            light: 'white',
+            paper: 'white',
+            'warm-classic': 'white',
+            celadon: 'white',
+            'ink-blue': 'dark',
+            'neutral-dark': 'dark'
+          }
           var has = function (list, value) { return list.indexOf(value) !== -1 }
+          var normalize = function (value) {
+            if (!value) return null
+            if (has(LIGHT, value) || has(DARK, value)) return value
+            return LEGACY[value] || null
+          }
           var isDark = function (value) { return has(DARK, value) }
           // Mirrors THEME_BACKGROUNDS in src/theme/systemAppearance.ts; the
           // <style> block below and bootstrapScript.test.ts hold all three
           // copies to the same values.
           var BACKGROUND = {
-            white: '#FCFCFC',
-            paper: '#FBF9F4',
-            'warm-classic': '#F6F0E1',
-            celadon: '#F5F8F5',
-            dark: '#201D17',
-            'ink-blue': '#1A1D24',
-            'neutral-dark': '#000000'
+            white: '#FFFFFF',
+            dark: '#1B1A18'
           }
           var paintBrowserChrome = function (value) {
             var meta = document.querySelector('meta[name="theme-color"]')
@@ -164,7 +173,7 @@
           }
 
           var stored = read('cc-haha-theme')
-          var theme = (has(LIGHT, stored) || isDark(stored)) ? stored : 'white'
+          var theme = normalize(stored) || 'white'
 
           var followRaw = read('cc-haha-follow-system-theme')
           // Unset means: new install follows the system, existing install
@@ -172,12 +181,12 @@
           var follow = followRaw === '1' || (followRaw !== '0' && stored === null)
 
           if (follow) {
-            var storedLight = read('cc-haha-light-theme')
+            var storedLight = normalize(read('cc-haha-light-theme'))
             var lightTheme = has(LIGHT, storedLight)
               ? storedLight
               : (has(LIGHT, theme) ? theme : 'white')
-            var storedDark = read('cc-haha-dark-theme')
-            var darkTheme = isDark(storedDark) ? storedDark : (isDark(theme) ? theme : 'neutral-dark')
+            var storedDark = normalize(read('cc-haha-dark-theme'))
+            var darkTheme = isDark(storedDark) ? storedDark : (isDark(theme) ? theme : 'dark')
             var prefersDark = false
             try {
               // Some WebViews reject the query outright. Treating that as
@@ -194,8 +203,7 @@
           // `theme` is function-scoped, so a failure after it was resolved
           // still applies the user's stored choice rather than flashing white.
           document.documentElement.setAttribute('data-theme', theme || 'white')
-          document.documentElement.style.colorScheme =
-            (theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark') ? 'dark' : 'light'
+          document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
         }
       })()
     </script>
@@ -207,14 +215,9 @@
          that strips it would remove the element entirely, so its try/catch is
          no help there) — it matches the default palette in globals.css rather
          than a fixed white, so that degraded case stays self-consistent. */
-      html { background: #FCFCFC; }
-      html[data-theme="white"] { background: #FCFCFC; }
-      html[data-theme="paper"] { background: #FBF9F4; }
-      html[data-theme="warm-classic"] { background: #F6F0E1; }
-      html[data-theme="celadon"] { background: #F5F8F5; }
-      html[data-theme="dark"] { background: #201D17; }
-      html[data-theme="ink-blue"] { background: #1A1D24; }
-      html[data-theme="neutral-dark"] { background: #000000; }
+      html { background: #FFFFFF; }
+      html[data-theme="white"] { background: #FFFFFF; }
+      html[data-theme="dark"] { background: #1B1A18; }
       html[data-window-kind="pet"],
       html[data-window-kind="pet"] body,
       html[data-window-kind="pet"] #root { background: transparent !important; }

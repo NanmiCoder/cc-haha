@@ -41,7 +41,6 @@ export function SessionChatHeader({
             <div className="flex min-w-0 items-center gap-2">
               <h1
                 className="min-w-0 truncate text-[15px] font-semibold leading-[1.35] tracking-[-0.01em] text-[var(--color-text-primary)]"
-                style={{ fontFamily: 'var(--font-headline)' }}
                 title={title}
               >
                 {title}

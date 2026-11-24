@@ -5,27 +5,35 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypa
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type ReasoningEffortLevel = EffortLevel
 /**
- * The palettes, in the order the appearance picker shows them: four light
- * grounds, then three dark ones. Each name matches a
- * `[data-theme]` block in theme/globals.css.
+ * The two canonical Direction C (Warm Editorial Studio) palettes: pure white
+ * light and matte charcoal dark. Each name matches a `[data-theme]` block in
+ * theme/globals.css.
  *
- * `light` was the pre-redesign key for the warm workspace; it migrates to
- * `warm-classic` (see lib/persistenceMigrations.ts).
+ * Legacy themes (`light`, `paper`, `warm-classic`, `celadon` -> `white`;
+ * `ink-blue`, `neutral-dark` -> `dark`) are forward-migrated in
+ * `normalizeThemeMode()`, `theme/systemAppearance.ts`, `index.html`, and
+ * `lib/persistenceMigrations.ts`.
  */
-export const THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue', 'neutral-dark'] as const
+export const THEME_MODES = ['white', 'dark'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
 
-/** The themes on a dark ground. Drives `color-scheme` and Mermaid. */
-export const DARK_THEME_MODES = ['dark', 'ink-blue', 'neutral-dark'] as const
+/** The dark palette. Drives `color-scheme` and Mermaid. */
+export const DARK_THEME_MODES = ['dark'] as const
 export type DarkThemeMode = (typeof DARK_THEME_MODES)[number]
 
-/**
- * The four paper grounds. Following the system only yields a dark/light
- * signal, so each half carries its own preference — these are the values the
- * light half can resolve to.
- */
-export const LIGHT_THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon'] as const
+/** The light palette. */
+export const LIGHT_THEME_MODES = ['white'] as const
 export type LightThemeMode = (typeof LIGHT_THEME_MODES)[number]
+
+/** Forward-migration map for retired theme keys. */
+export const LEGACY_THEME_MIGRATIONS: Readonly<Record<string, ThemeMode>> = {
+  light: 'white',
+  paper: 'white',
+  'warm-classic': 'white',
+  celadon: 'white',
+  'ink-blue': 'dark',
+  'neutral-dark': 'dark',
+}
 
 /**
  * Every palette belongs to exactly one half. This fails to compile if a
@@ -37,6 +45,13 @@ void _everyThemeHasAGround
 
 export function isThemeMode(value: unknown): value is ThemeMode {
   return typeof value === 'string' && (THEME_MODES as readonly string[]).includes(value)
+}
+
+/** Resolves current and legacy persisted theme keys into the 2-theme system. */
+export function normalizeThemeMode(value: unknown): ThemeMode | null {
+  if (typeof value !== 'string') return null
+  if (isThemeMode(value)) return value
+  return LEGACY_THEME_MIGRATIONS[value] ?? null
 }
 
 export function isDarkTheme(theme: ThemeMode): boolean {

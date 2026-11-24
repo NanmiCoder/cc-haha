@@ -46,7 +46,7 @@ export function ComputerCard({
   const tileColor =
     view.tile === 'err' ? colors.err : view.tile === 'dim' ? colors.ink3 : colors.ink
   return (
-    <View style={{ backgroundColor: colors.card, borderRadius: 16 }}>
+    <View style={{ backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.hair }}>
       <View
         style={{
           height: 64,

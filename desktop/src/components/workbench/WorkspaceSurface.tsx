@@ -29,7 +29,7 @@ export type WorkspaceSurfaceProps = {
   cwd: string
   /** Reason the review entry is unavailable here, e.g. "not a Git repository". */
   reviewUnavailableReason?: string | null
-  /** False when the current session cannot fork a side chat. */
+  /** False until the session has a conversation for a side chat to fork. */
   sideChatAvailable?: boolean
   /**
    * Whether this dock is on screen. The bottom dock stays mounted while hidden
@@ -119,7 +119,7 @@ export function WorkspaceSurface({
     // to its existing tab and must not be consumed as a blank placeholder.
     switch (kind) {
       case 'side-chat':
-        if (sideChatAvailable) void openSideChat(sessionId)
+        void openSideChat(sessionId)
         break
       case 'review':
         openWorkspaceTarget({ sessionId, target: { kind: 'review' } })
@@ -143,7 +143,7 @@ export function WorkspaceSurface({
         })
         break
     }
-  }, [cwd, dock, sessionId, sideChatAvailable])
+  }, [cwd, dock, sessionId])
 
   // Let the menu finish its own focus cleanup before opening/focusing a resource.
   // Otherwise its close autofocus can pull focus out of a new address bar or tree.

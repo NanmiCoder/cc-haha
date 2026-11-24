@@ -1921,9 +1921,9 @@ describe('settingsStore theme persistence', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
 
-    await useSettingsStore.getState().setTheme('warm-classic')
+    await useSettingsStore.getState().setTheme('white')
 
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('warm-classic')
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('white')
     expect(updateUser).not.toHaveBeenCalled()
     teardownTheme()
   })

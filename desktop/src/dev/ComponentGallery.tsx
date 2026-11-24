@@ -458,8 +458,7 @@ export function ComponentGallery() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    document.documentElement.style.colorScheme =
-      theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark' ? 'dark' : 'light'
+    document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
   }, [theme])
 
   useEffect(() => {

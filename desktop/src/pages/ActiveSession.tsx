@@ -9,8 +9,6 @@ import type { RefObject } from 'react'
 import { ArrowLeft, Folder, GitBranch, GitFork, History, Target, MessageCircleQuestion, TriangleAlert } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { openSideChat } from '@/lib/workspace/openSideChat'
-import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
-import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
@@ -411,8 +409,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const stoppingBackgroundTaskIds = sessionState?.stoppingBackgroundTaskIds
 
   const session = sessions.find((s) => s.id === activeTabId)
-  const isAntigravity = useSessionRuntimeStore((s) => Boolean(activeTabId &&
-    s.selections[activeTabId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const isLean = session?.agentProfile === 'lean'
   const sessionMessageCount = Math.max(
     sessionState?.messages.length ?? 0,
     session?.messageCount ?? 0,
@@ -548,7 +545,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     !streamingText &&
     !isPreparingTurn &&
     (session?.messageCount ?? 0) === 0
-  const sideChatAvailable = !isEmpty && session?.agentProfile !== 'lean' && !isAntigravity
   const compactEmptyHero = isEmpty && showTerminalPanel
   // The project the blank session will work in, by the name the sidebar shows.
   const emptyHeroProject = isEmpty && session && (session.projectRoot || session.workDir)
@@ -886,7 +882,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               dock="side"
               cwd={getSessionTerminalCwd(session) ?? ''}
               reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
-              sideChatAvailable={sideChatAvailable}
+              sideChatAvailable={!isEmpty && !isLean}
               visible={active}
             />
           </aside>
@@ -897,7 +893,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             Mobile has no session header, so its side-chat entry lives here. A
             blank session has nothing for a side chat to fork, so it gets none.
           */}
-          {isMobileLayout && sideChatAvailable && (
+          {isMobileLayout && !isEmpty && !isLean && (
             <div className="flex justify-end px-4 py-2">
               <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                 pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
@@ -940,7 +936,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   metadata={headerMetadata}
                   actions={<>
                     {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
-                    {sideChatAvailable && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
+                    {!isLean && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                       pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
                   </>}
                 >
