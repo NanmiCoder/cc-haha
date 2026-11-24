@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -27,6 +27,7 @@ import { get3PModelCapabilityOverride } from '../utils/model/modelSupportOverrid
 import {
   clearThreadGoalHook,
   ensureThreadGoalHookFromTranscript,
+  getThreadGoal,
   setThreadGoalHook,
 } from './goalState.js'
 
@@ -822,6 +823,129 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
       },
       30_000,
     )
+
+    it(
+      '1C: a new user turn after interrupt re-enables normal background task-notification follow-up',
+      async () => {
+        const sandbox = createIsolatedSandbox('chain1-recovery')
+        let releaseMidTurnStream: (() => void) | null = null
+        let midTurnStreamOpened!: () => void
+        const midTurnStreamReady = new Promise<void>(resolveReady => {
+          midTurnStreamOpened = resolveReady
+        })
+
+        let phase: 'before_interrupt' | 'after_new_user' = 'before_interrupt'
+        let turn2MainCalls = 0
+        let sawNewTurnTaskNotification = false
+
+        const server = startLoopbackAnthropicServer(req => {
+          if (isGoalEvaluatorRequest(req)) {
+            return {
+              kind: 'message',
+              content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+            }
+          }
+
+          if (phase === 'before_interrupt') {
+            return {
+              kind: 'message',
+              content: [{ type: 'text', text: 'Working...' }],
+              onStreamOpened: () => midTurnStreamOpened(),
+              holdUntilAborted: () =>
+                new Promise<void>(resolveHold => {
+                  releaseMidTurnStream = resolveHold
+                  setTimeout(resolveHold, 10_000)
+                }),
+            }
+          }
+
+          turn2MainCalls++
+          if (JSON.stringify(req.body.messages ?? []).includes('<task-notification>')) {
+            sawNewTurnTaskNotification = true
+          }
+          if (turn2MainCalls === 1) {
+            return {
+              kind: 'message',
+              stopReason: 'tool_use',
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'toolu_new_turn_bg_1933',
+                  name: 'Bash',
+                  input: {
+                    command: 'sleep 0.6 && echo new-turn-bg-done-1933',
+                    description: 'Run post-recovery background task',
+                    run_in_background: true,
+                  },
+                },
+              ],
+            }
+          }
+          return {
+            kind: 'message',
+            content: [{ type: 'text', text: `Turn 2 reply #${turn2MainCalls}` }],
+          }
+        })
+
+        const cli = spawnHeadlessCli({ sandbox, baseUrl: server.url })
+        try {
+          cli.send({
+            type: 'user',
+            message: { role: 'user', content: '/goal complete task X' },
+          })
+          await cli.waitForEvent(
+            ev => serializedEventText(ev).includes('Goal set: complete task X'),
+            15_000,
+            'Goal set output',
+          )
+          await midTurnStreamReady
+
+          cli.send({
+            type: 'control_request',
+            request_id: 'req-interrupt-recovery',
+            request: { subtype: 'interrupt' },
+          })
+          await cli.waitForEvent(
+            ev =>
+              ev.type === 'control_response' &&
+              (ev.response as { request_id?: string } | undefined)?.request_id ===
+                'req-interrupt-recovery',
+            10_000,
+            'interrupt control_response',
+          )
+          await cli.waitForEvent(ev => ev.type === 'result', 10_000, 'interrupted turn result')
+          releaseMidTurnStream?.()
+
+          // Now user starts a fresh turn with a new background task.
+          phase = 'after_new_user'
+          cli.send({
+            type: 'user',
+            message: { role: 'user', content: 'run fresh background command' },
+          })
+          await cli.waitForEvent(
+            ev =>
+              ev.type === 'system' &&
+              ev.subtype === 'task_notification' &&
+              ev.status === 'completed',
+            15_000,
+            'new turn task_notification',
+          )
+          // Wait for the model follow-up turn triggered by the new background task.
+          const deadline = Date.now() + 8_000
+          while (!sawNewTurnTaskNotification && Date.now() < deadline) {
+            await Bun.sleep(100)
+          }
+          expect(sawNewTurnTaskNotification).toBe(true)
+          expect(turn2MainCalls).toBeGreaterThanOrEqual(3)
+        } finally {
+          releaseMidTurnStream?.()
+          await cli.close()
+          await server.stop()
+          sandbox.cleanup()
+        }
+      },
+      30_000,
+    )
   })
 
   describe('Chain 2: cross-process --resume reactivates an interrupted /goal via ensureThreadGoalHookFromTranscript', () => {
@@ -945,6 +1069,41 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
           await cli1.close()
         }
 
+        // Verify persisted JSONL transcript contains Goal cleared on the active
+        // linear parentUuid chain (no forked orphan leaf with interruptionMessage).
+        const projectsDir = join(sandbox.configDir, 'projects')
+        const jsonlPaths: string[] = []
+        const walkJsonl = (dir: string) => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const full = join(dir, entry.name)
+            if (entry.isDirectory()) walkJsonl(full)
+            else if (entry.name === `${sessionId}.jsonl`) jsonlPaths.push(full)
+          }
+        }
+        walkJsonl(projectsDir)
+        expect(jsonlPaths).toHaveLength(1)
+        const entries = readFileSync(jsonlPaths[0]!, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map(line => JSON.parse(line) as { uuid?: string; parentUuid?: string | null; content?: unknown; message?: unknown })
+        const byUuid = new Map<string, (typeof entries)[number]>()
+        const children = new Map<string, number>()
+        for (const entry of entries) {
+          if (entry.uuid) byUuid.set(entry.uuid, entry)
+          if (entry.parentUuid) children.set(entry.parentUuid, (children.get(entry.parentUuid) ?? 0) + 1)
+        }
+        const leaf = [...entries].reverse().find(entry => entry.uuid && !children.has(entry.uuid))
+        expect(leaf).toBeDefined()
+        const chain: Array<(typeof entries)[number]> = []
+        let cursor = leaf
+        while (cursor) {
+          chain.push(cursor)
+          cursor = cursor.parentUuid ? byUuid.get(cursor.parentUuid) : undefined
+        }
+        const chainText = JSON.stringify(chain)
+        expect(chainText).toContain('Goal cleared: ship feature Y')
+        expect(chainText).toContain('[Request interrupted by user]')
+
         // Process 2: brand new CLI process with --resume <sessionId>
         phase = 'process2'
         const cli2 = spawnHeadlessCli({
@@ -984,8 +1143,8 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
     )
   })
 
-  describe('Chain 3: evaluator hardcoded thinking:disabled + HTTP 400 swallowed as invalid JSON + infinite continuation loop', () => {
-    it('3A: execPromptHook sends thinking:disabled, swallows upstream HTTP 400 as invalid JSON, and returns blocking continuation', async () => {
+  describe('Chain 3: evaluator thinking compatibility, upstream API error preservation, and no infinite continuation loop', () => {
+    it('3A: execPromptHook thinking matrix omits thinking:disabled on non-1P relays, caps required manual thinking to 1024, and preserves HTTP 400 errors', async () => {
       const savedEnv = {
         ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -993,14 +1152,16 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
         ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES:
           process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES,
+        CC_HAHA_SEND_DISABLED_THINKING: process.env.CC_HAHA_SEND_DISABLED_THINKING,
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
       }
       const sandbox = createIsolatedSandbox('chain3-unit')
       const upstream400Message =
         'reasoning effort "disabled" is not supported by the selected DSH model'
+      let forceError400 = false
 
       const server = startLoopbackAnthropicServer(req => {
-        if (req.body.thinking?.type === 'disabled') {
+        if (forceError400 || req.body.thinking?.type === 'disabled') {
           return {
             kind: 'error',
             status: 400,
@@ -1022,41 +1183,88 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
         process.env.ANTHROPIC_BASE_URL = server.url
         process.env.ANTHROPIC_API_KEY = 'mock-api-key'
         delete process.env.ANTHROPIC_SMALL_FAST_MODEL
+        delete process.env.CC_HAHA_SEND_DISABLED_THINKING
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'loomy/DeepSeek-V4.1-Flash[1M]'
         process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES = 'thinking,effort'
         get3PModelCapabilityOverride.cache.clear?.()
 
         const goal = setThreadGoalHook(context, evalThreadId, 'finish task Z')
 
-        const result = await execPromptHook(
+        // 1. Even when session thinkingConfig is undefined or disabled, non-1P
+        // prompt hooks omit `thinking` (neither `disabled` nor full-budget enabled).
+        const okResultUndefined = await execPromptHook(
           goal.hook,
           'Stop',
           'Stop',
-          '{}',
+          '{"case":"undefined"}',
           new AbortController().signal,
           context,
         )
+        expect(okResultUndefined.outcome).toBe('success')
+        expect(server.requests[0]?.body.thinking).toBeUndefined()
 
-        // Confirm the wire request actually sent hardcoded thinking: { type: 'disabled' }
-        expect(server.requests.length).toBeGreaterThanOrEqual(1)
-        expect(server.requests[0]?.body.thinking).toEqual({ type: 'disabled' })
+        const disabledContext = makeHookToolUseContext()
+        ;(disabledContext.options as Record<string, unknown>).thinkingConfig = { type: 'disabled' }
+        const okResultDisabled = await execPromptHook(
+          goal.hook,
+          'Stop',
+          'Stop',
+          '{"case":"disabled"}',
+          new AbortController().signal,
+          disabledContext,
+        )
+        expect(okResultDisabled.outcome).toBe('success')
+        expect(server.requests[1]?.body.thinking).toBeUndefined()
 
-        // Expected fixed behavior:
-        // 1. Upstream HTTP 400 must NOT be turned into blocking continuation ("treat as incomplete and continue").
-        // 2. Original upstream error must be preserved rather than swallowed as "response was not valid JSON".
+        // 2. When a 3P model requires manual thinking, prompt hooks cap budget to 1024
+        // instead of maxOutputTokens - 1.
+        process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES = 'thinking,required_thinking'
+        get3PModelCapabilityOverride.cache.clear?.()
+        const okResultRequired = await execPromptHook(
+          goal.hook,
+          'Stop',
+          'Stop',
+          '{"case":"required"}',
+          new AbortController().signal,
+          context,
+        )
+        expect(okResultRequired.outcome).toBe('success')
+        expect(server.requests[2]?.body.thinking).toEqual({
+          type: 'enabled',
+          budget_tokens: 1024,
+        })
+
+        // 3. Explicit CC_HAHA_SEND_DISABLED_THINKING=1 opt-in still sends thinking:disabled,
+        // and any upstream HTTP 400 is preserved as non_blocking_error (never invalid JSON / blocking).
+        process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES = 'thinking,effort'
+        process.env.CC_HAHA_SEND_DISABLED_THINKING = '1'
+        get3PModelCapabilityOverride.cache.clear?.()
+        forceError400 = true
+
+        const errorResult = await execPromptHook(
+          goal.hook,
+          'Stop',
+          'Stop',
+          '{"case":"error400"}',
+          new AbortController().signal,
+          context,
+        )
+        expect(server.requests[3]?.body.thinking).toEqual({ type: 'disabled' })
         const attachmentStderr =
-          result.message?.type === 'attachment' &&
-          result.message.attachment.type === 'hook_non_blocking_error'
-            ? result.message.attachment.stderr
+          errorResult.message?.type === 'attachment' &&
+          errorResult.message.attachment.type === 'hook_non_blocking_error'
+            ? errorResult.message.attachment.stderr
             : ''
         expect({
-          outcome: result.outcome,
-          blockingError: result.blockingError?.blockingError ?? null,
+          outcome: errorResult.outcome,
+          blockingError: errorResult.blockingError?.blockingError ?? null,
           preservesUpstreamError: attachmentStderr.includes(upstream400Message),
+          swallowedAsJsonError: attachmentStderr.includes('not valid JSON'),
         }).toEqual({
           outcome: 'non_blocking_error',
           blockingError: null,
           preservesUpstreamError: true,
+          swallowedAsJsonError: false,
         })
       } finally {
         clearThreadGoalHook(context, evalThreadId)
@@ -1070,7 +1278,7 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
       }
     })
 
-    it('3B: handleStopHooks turns evaluator HTTP 400 into blockingErrors + Goal continuing instead of pausing/stopping', async () => {
+    it('3B: handleStopHooks clears broken goal and emits Goal cleared local_command output with upstream HTTP 400 without looping', async () => {
       const savedEnv = {
         ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -1083,20 +1291,14 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
       const prevInteractive = getIsInteractive()
       const prevSessionId = getSessionId()
       const sandbox = createIsolatedSandbox('chain3-stophooks')
-      const server = startLoopbackAnthropicServer(req => {
-        if (req.body.thinking?.type === 'disabled') {
-          return {
-            kind: 'error',
-            status: 400,
-            errorType: 'invalid_request_error',
-            message: 'reasoning effort "disabled" is not supported by the selected DSH model',
-          }
-        }
-        return {
-          kind: 'message',
-          content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
-        }
-      })
+      const upstream400Message =
+        'reasoning effort "disabled" is not supported by the selected DSH model'
+      const server = startLoopbackAnthropicServer(() => ({
+        kind: 'error',
+        status: 400,
+        errorType: 'invalid_request_error',
+        message: upstream400Message,
+      }))
 
       const threadId = `repro-1933-stophook-${crypto.randomUUID()}` as SessionId
       const context = makeHookToolUseContext()
@@ -1122,19 +1324,35 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
           step = await gen.next()
         }
 
-        // Expected fixed behavior: Evaluator API 400 failure must NOT return blockingErrors
-        // with preventContinuation=false (which drives query.ts's infinite continue loop),
-        // and must NOT emit "Goal continuing: Goal evaluator failed: response was not valid JSON".
+        const localCommandOutputs = yielded.filter(
+          (msg): msg is { type: string; subtype?: string; content?: string } =>
+            Boolean(
+              msg &&
+                typeof msg === 'object' &&
+                'type' in msg &&
+                (msg as { type?: string }).type === 'system' &&
+                (msg as { subtype?: string }).subtype === 'local_command',
+            ),
+        )
+        const clearedErrorOutput = localCommandOutputs.find(msg =>
+          String(msg.content ?? '').includes('Goal cleared:'),
+        )
+
         expect({
           blockingErrorsCount: step.value.blockingErrors.length,
           preventContinuation: step.value.preventContinuation,
-          emittedGoalContinuing: JSON.stringify(yielded).includes(
-            'Goal continuing: Goal evaluator failed:',
+          emittedGoalContinuing: JSON.stringify(yielded).includes('Goal continuing:'),
+          activeGoalAfterError: getThreadGoal(threadId),
+          hasVisibleGoalClearedWithUpstreamError: Boolean(
+            clearedErrorOutput &&
+              String(clearedErrorOutput.content ?? '').includes(upstream400Message),
           ),
         }).toEqual({
           blockingErrorsCount: 0,
-          preventContinuation: expect.any(Boolean),
+          preventContinuation: false,
           emittedGoalContinuing: false,
+          activeGoalAfterError: null,
+          hasVisibleGoalClearedWithUpstreamError: true,
         })
       } finally {
         clearThreadGoalHook(context, threadId)
@@ -1151,7 +1369,7 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
     })
 
     it(
-      '3C: real headless CLI loops repeatedly with Goal continuing when evaluator hits HTTP 400 on thinking:disabled',
+      '3C: real headless CLI omits thinking:disabled on non-1P evaluator and completes without HTTP 400 loop',
       async () => {
         const sandbox = createIsolatedSandbox('chain3-cli-loop')
         let mainCalls = 0
@@ -1205,8 +1423,6 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
             serializedEventText(ev).includes('Goal continuing: Goal evaluator failed: response was not valid JSON'),
           )
 
-          // Expected fixed behavior: evaluator must not hit repeated 400s and loop
-          // main model calls via "Goal continuing: Goal evaluator failed: response was not valid JSON".
           expect({
             eval400Count,
             mainCalls,
@@ -1216,6 +1432,76 @@ describe('Issue #1933 reproduction: /goal stop_generation, cross-process resume,
             mainCalls: 1,
             goalContinuingJsonErrorCount: 0,
           })
+        } finally {
+          await cli.close()
+          await server.stop()
+          sandbox.cleanup()
+        }
+      },
+      30_000,
+    )
+
+    it(
+      '3D: real headless CLI surfaces evaluator HTTP 400 to SDK stream, clears broken goal, and does not re-trigger on next normal message',
+      async () => {
+        const sandbox = createIsolatedSandbox('chain3-cli-error-visibility')
+        let mainCalls = 0
+        let evalCalls = 0
+        const upstreamError = 'upstream evaluator unavailable (400 bad request)'
+
+        const server = startLoopbackAnthropicServer(req => {
+          if (isGoalEvaluatorRequest(req)) {
+            evalCalls++
+            return {
+              kind: 'error',
+              status: 400,
+              errorType: 'invalid_request_error',
+              message: upstreamError,
+            }
+          }
+          mainCalls++
+          return {
+            kind: 'message',
+            content: [{ type: 'text', text: `Main reply #${mainCalls}` }],
+          }
+        })
+
+        const cli = spawnHeadlessCli({ sandbox, baseUrl: server.url })
+        try {
+          cli.send({
+            type: 'user',
+            message: { role: 'user', content: '/goal finish task Z' },
+          })
+          await cli.waitForEvent(
+            ev => serializedEventText(ev).includes('Goal set: finish task Z'),
+            15_000,
+            'Goal set output',
+          )
+          const firstResult = await cli.waitForEvent(ev => ev.type === 'result', 20_000, 'turn 1 result')
+          const firstResultIndex = cli.events.indexOf(firstResult)
+
+          const goalClearedEvents = cli.events.filter(
+            ev =>
+              ev.type === 'system' &&
+              ev.subtype === 'local_command_output' &&
+              String(ev.content ?? '').includes('Goal cleared:') &&
+              String(ev.content ?? '').includes(upstreamError),
+          )
+          expect(goalClearedEvents.length).toBeGreaterThanOrEqual(1)
+          expect({ mainCalls, evalCalls }).toEqual({ mainCalls: 1, evalCalls: 1 })
+
+          // Send a normal follow-up message: the cleared broken goal must NOT re-trigger evaluator.
+          cli.send({
+            type: 'user',
+            message: { role: 'user', content: 'normal chat after evaluator error' },
+          })
+          await cli.waitForEvent(
+            ev => ev.type === 'result' && cli.events.indexOf(ev) > firstResultIndex,
+            15_000,
+            'turn 2 result',
+          )
+
+          expect({ mainCalls, evalCalls }).toEqual({ mainCalls: 2, evalCalls: 1 })
         } finally {
           await cli.close()
           await server.stop()

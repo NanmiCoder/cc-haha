@@ -233,6 +233,7 @@ import {
   resetSessionFilePointer,
   doesMessageExistInSession,
   findUnresolvedToolUse,
+  flushSessionStorage,
   recordAttributionSnapshot,
   recordTranscript,
   saveAgentSetting,
@@ -1369,6 +1370,8 @@ function runHeadlessStreaming(
   // background task notifications from starting a new model turn until the
   // next real user message arrives. Lifecycle events still publish normally.
   let suppressBackgroundTaskFollowUp = false
+  let askInFlight = false
+  const pendingGoalClearedMessages: Message[] = []
   let abortController: AbortController | undefined
   // Same queue sendRequest() enqueues to — one FIFO for everything.
   const output = structuredIO.outbound
@@ -1398,6 +1401,39 @@ function runHeadlessStreaming(
         notifyCommandLifecycle(cmd.uuid, 'completed')
       }
     }
+  }
+
+  const persistPendingGoalClearedMessages = async () => {
+    if (pendingGoalClearedMessages.length === 0) return
+    const toPersist = pendingGoalClearedMessages.splice(0)
+    mutableMessages.push(...toPersist)
+    if (!isSessionPersistenceDisabled()) {
+      try {
+        await recordTranscript(mutableMessages)
+        await flushSessionStorage()
+      } catch (error) {
+        logError(error)
+      }
+    }
+  }
+
+  const clearGoalOnInterrupt = (): Message | null => {
+    const threadId = getSessionId()
+    const activeGoal =
+      getThreadGoal(threadId) ??
+      ensureThreadGoalHookFromTranscript({ setAppState }, threadId, mutableMessages)
+    const clearedGoal = clearThreadGoalHook({ setAppState }, threadId) ?? activeGoal
+    if (!clearedGoal) return null
+    const clearedContent = `<local-command-stdout>Goal cleared: ${clearedGoal.objective}</local-command-stdout>`
+    const clearedMessage = createCommandInputMessage(clearedContent)
+    output.enqueue({
+      type: 'system',
+      subtype: 'local_command_output',
+      content: clearedContent,
+      uuid: clearedMessage.uuid,
+      session_id: threadId,
+    } as StdoutMessage)
+    return clearedMessage
   }
 
   // Ctrl+C in -p mode: abort the in-flight query, then shut down gracefully.
@@ -2625,6 +2661,8 @@ function runHeadlessStreaming(
           const requiredComputerUse = requiresComputerUse(cmd) && !isPendingSessionMessage(cmd.uuid)
             ? { unavailableMessage: computerUseUnavailableMessage(computerUseMcp.unavailableReason()) }
             : undefined
+          askInFlight = true
+          try {
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               commands: uniqBy(
@@ -2705,6 +2743,12 @@ function runHeadlessStreaming(
               forwardMessagesToBridge()
 
               if (message.type === 'result') {
+                // Persist any Goal cleared anchor queued during an in-flight
+                // interrupt AFTER QueryEngine has finished appending its own
+                // interruption message so parentUuid chains linearly with no fork.
+                askInFlight = false
+                await persistPendingGoalClearedMessages()
+
                 // Flush pending SDK events so they appear before result on the stream.
                 for (const event of drainSdkEvents()) {
                   output.enqueue(event)
@@ -2736,6 +2780,10 @@ function runHeadlessStreaming(
               }
             }
           }) // end runWithWorkload
+          } finally {
+            askInFlight = false
+            await persistPendingGoalClearedMessages()
+          }
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'completed')
@@ -3353,30 +3401,7 @@ function runHeadlessStreaming(
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
           cancelQueuedTaskNotifications()
           if (message.request.subtype === 'team_plan_pause') pauseLeadMailboxPoll(leadMailboxPoll)
-          const threadId = getSessionId()
-          const activeGoal =
-            getThreadGoal(threadId) ??
-            ensureThreadGoalHookFromTranscript({ setAppState }, threadId, mutableMessages)
-          const clearedGoal = clearThreadGoalHook({ setAppState }, threadId) ?? activeGoal
-          if (clearedGoal) {
-            const clearedContent = `<local-command-stdout>Goal cleared: ${clearedGoal.objective}</local-command-stdout>`
-            const clearedMessage = createCommandInputMessage(clearedContent)
-            mutableMessages.push(clearedMessage)
-            if (!isSessionPersistenceDisabled()) {
-              try {
-                await recordTranscript(mutableMessages)
-              } catch (error) {
-                logError(error)
-              }
-            }
-            output.enqueue({
-              type: 'system',
-              subtype: 'local_command_output',
-              content: clearedContent,
-              uuid: clearedMessage.uuid,
-              session_id: threadId,
-            } as StdoutMessage)
-          }
+          const clearedMessage = clearGoalOnInterrupt()
           // Track escapes for attribution (ant-only feature)
           if (feature('COMMIT_ATTRIBUTION')) {
             setAppState(prev => ({
@@ -3387,6 +3412,8 @@ function runHeadlessStreaming(
               },
             }))
           }
+          // Abort immediately before any disk I/O so upstream cancellation and
+          // tool interruption are never delayed by transcript persistence.
           if (abortController) {
             abortController.abort()
           }
@@ -3394,6 +3421,12 @@ function runHeadlessStreaming(
           suggestionState.abortController = null
           suggestionState.lastEmitted = null
           suggestionState.pendingSuggestion = null
+          if (clearedMessage) {
+            pendingGoalClearedMessages.push(clearedMessage)
+            if (!askInFlight) {
+              await persistPendingGoalClearedMessages()
+            }
+          }
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'end_session') {
           suppressBackgroundTaskFollowUp = true
@@ -4761,7 +4794,16 @@ function runHeadlessStreaming(
                     structuredIO.injectControlResponse(response)
                   },
                   onInterrupt() {
+                    suppressBackgroundTaskFollowUp = true
+                    cancelQueuedTaskNotifications()
+                    const clearedMessage = clearGoalOnInterrupt()
                     abortController?.abort()
+                    if (clearedMessage) {
+                      pendingGoalClearedMessages.push(clearedMessage)
+                      if (!askInFlight) {
+                        void persistPendingGoalClearedMessages()
+                      }
+                    }
                   },
                   onSetModel(model) {
                     const resolved =

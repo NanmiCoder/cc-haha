@@ -12,26 +12,9 @@ import type { HookResult } from '../hooks.js'
 import { safeParseJSON } from '../json.js'
 import { createUserMessage, extractTextContent } from '../messages.js'
 import { getSmallFastModel } from '../model/model.js'
-import { isFirstPartyAnthropicBaseUrl } from '../model/providers.js'
 import type { PromptHook } from '../settings/types.js'
 import { asSystemPrompt } from '../systemPromptType.js'
-import { modelSupportsThinking, type ThinkingConfig } from '../thinking.js'
 import { addArgumentsToPrompt, hookResponseSchema } from './hookHelpers.js'
-
-function resolvePromptHookThinkingConfig(
-  model: string,
-  sessionThinkingConfig: ThinkingConfig | undefined,
-): ThinkingConfig {
-  if (
-    !isFirstPartyAnthropicBaseUrl() &&
-    sessionThinkingConfig &&
-    sessionThinkingConfig.type !== 'disabled' &&
-    modelSupportsThinking(model)
-  ) {
-    return sessionThinkingConfig
-  }
-  return { type: 'disabled' }
-}
 
 function formatPromptHookApiErrorDetail(
   fullResponse: string,
@@ -137,10 +120,7 @@ Your response must be a JSON object matching one of the following schemas:
 1. If the condition is met, return: {"ok": true}
 2. If the condition is not met, return: {"ok": false, "reason": "Reason for why it is not met"}`,
         ]),
-        thinkingConfig: resolvePromptHookThinkingConfig(
-          evaluatorModel,
-          toolUseContext.options?.thinkingConfig,
-        ),
+        thinkingConfig: { type: 'disabled' as const },
         tools: toolUseContext.options.tools,
         signal: combinedSignal,
         options: {

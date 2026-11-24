@@ -277,4 +277,50 @@ describe('chatStore immediate stop fence (#1917)', () => {
     store.clearMessages(SESSION_ID)
     expect(useChatStore.getState().sessions[SESSION_ID]?.awaitingStopIdle).toBe(false)
   })
+
+  it('preserves stop fences when goal_event(cleared) arrives during stopGeneration', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal set: ship feature',
+      data: { action: 'created', status: 'active', objective: 'ship feature', message: 'Goal set: ship feature' },
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.activeGoal?.objective).toBe('ship feature')
+
+    store.stopGeneration(SESSION_ID)
+    expect(useChatStore.getState().sessions[SESSION_ID]?.awaitingStopIdle).toBe(true)
+    expect(useChatStore.getState().sessions[SESSION_ID]?.stopAllSubagentsRequested).toBe(true)
+
+    // CLI interrupt emits Goal cleared while stop is still settling.
+    store.handleServerMessage(SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'goal_event',
+      message: 'Goal cleared: ship feature',
+      data: { action: 'cleared', message: 'Goal cleared: ship feature' },
+    })
+
+    const afterClear = useChatStore.getState().sessions[SESSION_ID]!
+    expect(afterClear.activeGoal).toBeNull()
+    expect(afterClear.awaitingStopIdle).toBe(true)
+    expect(afterClear.stopAllSubagentsRequested).toBe(true)
+
+    // Residual stream frames arriving before status:idle remain fenced.
+    store.handleServerMessage(SESSION_ID, { type: 'content_start', blockType: 'text' })
+    store.handleServerMessage(SESSION_ID, { type: 'content_delta', text: 'stale tail' })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.chatState).toBe('idle')
+
+    // Late task_started inside the stop boundary still inherits stopping lock.
+    store.handleServerMessage(SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      message: 'Late subagent',
+      data: { task_id: 'late-agent-1', task_type: 'local_agent', description: 'Late subagent' },
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.stoppingBackgroundTaskIds?.['late-agent-1']).toBe(true)
+
+    // status:idle clears the fence cleanly once stop settles.
+    store.handleServerMessage(SESSION_ID, { type: 'status', state: 'idle' })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.awaitingStopIdle).toBe(false)
+  })
 })

@@ -6490,8 +6490,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               activeGoalRevision: (session.activeGoalRevision ?? 0) +
                 (goalEvent.action === 'message' ? 0 : 1),
               historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
-              stopAllSubagentsRequested: false,
-              awaitingStopIdle: false,
+              // A Goal cleared event can arrive inside an active Stop boundary
+              // (from CLI interrupt). Keep stop fences intact until status:idle
+              // or a new authoritative turn clears them.
+              ...(goalEvent.action === 'cleared'
+                ? {}
+                : {
+                    stopAllSubagentsRequested: false,
+                    awaitingStopIdle: false,
+                  }),
               messages: [
                 ...session.messages,
                 {
