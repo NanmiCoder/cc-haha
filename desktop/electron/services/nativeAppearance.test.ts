@@ -208,8 +208,8 @@ describe('startupWindowBackground', () => {
     expect(startupWindowBackground(cached, false)).toBe(WARM_LIGHT)
   })
 
-  it.each(['neutral-dark', 'ink-blue'] as const)('keeps the selected %s ground on startup and native appearance updates', (theme) => {
-    const background = THEME_BACKGROUNDS[theme]
+  it('keeps the selected dark ground on startup and native appearance updates', () => {
+    const background = THEME_BACKGROUNDS.dark
     const cached = appearance({ background: WARM_LIGHT, lightBackground: WARM_LIGHT, darkBackground: background, followSystem: true })
 
     // The app last reported a light theme; its independent dark preference
@@ -286,10 +286,10 @@ describe('window background constants', () => {
     // CSS and bootstrapScript.test.ts binds it to index.html, but the main
     // process had its own copies. Without this, changing the palette would
     // leave the pre-paint window color silently behind.
-    expect(LIGHT_WINDOW_BACKGROUND).toBe('#FCFCFC')
-    expect(DARK_WINDOW_BACKGROUND).toBe('#000000')
+    expect(LIGHT_WINDOW_BACKGROUND).toBe('#FFFFFF')
+    expect(DARK_WINDOW_BACKGROUND).toBe('#1B1A18')
     expect(LIGHT_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.white)
-    expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS['neutral-dark'])
+    expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.dark)
     // The defaults of each half — what a first launch paints before the
     // renderer has reported a preference.
     expect(THEME_BACKGROUNDS[DEFAULT_LIGHT_THEME]).toBe(LIGHT_WINDOW_BACKGROUND)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AppState } from '../state/AppState.js'
-import { createCommandInputMessage } from '../utils/messages.js'
+import { createCommandInputMessage, createUserInterruptionMessage } from '../utils/messages.js'
 import {
   clearThreadGoalHook,
   ensureThreadGoalHookFromTranscript,
@@ -126,6 +126,41 @@ describe('goalState', () => {
 
     expect(completed).toBeNull()
     expect(cleared).toBeNull()
+  })
+
+  test('does not restore a goal after user interruption anchors, but restores a later /goal', () => {
+    const { context } = hookContext()
+
+    const interrupted = ensureThreadGoalHookFromTranscript(
+      context,
+      'thread-interrupted',
+      [
+        createCommandInputMessage('<local-command-stdout>Goal set: ship persisted goal</local-command-stdout>'),
+        createUserInterruptionMessage({ toolUse: false }),
+      ],
+    )
+    const interruptedToolUse = ensureThreadGoalHookFromTranscript(
+      context,
+      'thread-interrupted-tool',
+      [
+        createCommandInputMessage('<local-command-stdout>Goal set: ship persisted goal</local-command-stdout>'),
+        createUserInterruptionMessage({ toolUse: true }),
+      ],
+    )
+    const resetAfterInterrupt = ensureThreadGoalHookFromTranscript(
+      context,
+      'thread-reset-after-interrupt',
+      [
+        createCommandInputMessage('<local-command-stdout>Goal set: old goal</local-command-stdout>'),
+        createUserInterruptionMessage({ toolUse: false }),
+        createCommandInputMessage('<local-command-stdout>Goal set: replacement goal</local-command-stdout>'),
+      ],
+    )
+
+    expect(interrupted).toBeNull()
+    expect(interruptedToolUse).toBeNull()
+    expect(resetAfterInterrupt?.objective).toBe('replacement goal')
+    clearThreadGoalHook(context, 'thread-reset-after-interrupt')
   })
 
   test('does not resurrect a cleared goal from an in-flight turn transcript (#1339)', () => {

@@ -250,7 +250,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface-sidebar)] surface-grain">
+    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface-sidebar)]">
       <div
         id="sidebar-shell"
         ref={sidebarResize.shellRef}
@@ -277,11 +277,11 @@ export function AppShell() {
       <main
         id="content-area"
         data-sidebar-state={sidebarOpen ? 'open' : 'closed'}
-        data-canvas-inset={isWorkspaceFullscreen ? 'false' : 'true'}
-        className={`min-w-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)] surface-grain ${
+        data-canvas-inset="false"
+        className={`min-w-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)] ${
           isWorkspaceFullscreen
             ? ''
-            : 'md:m-1.5 md:ml-0 md:rounded-[var(--radius-lg)] md:border md:border-[var(--color-border)]'
+            : 'border-l border-[var(--color-border)]'
         }`}
       >
         <WorkspaceHeaderProvider>

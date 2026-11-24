@@ -2018,7 +2018,7 @@ describe('TabBar', () => {
     expect(inactive?.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/)
   })
 
-  it('keeps the Scheme A strip borderless and seamlessly integrated onto the inset canvas', async () => {
+  it('frames the editorial studio tab strip with a crisp hairline bottom divider', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -2040,8 +2040,7 @@ describe('TabBar', () => {
 
     const strip = screen.getByTestId('tab-bar')
 
-    expect(strip).toHaveClass('bg-transparent')
-    expect(strip.className).not.toMatch(/\bborder-b\b/)
+    expect(strip).toHaveClass('bg-transparent', 'border-b', 'border-[var(--color-border)]')
     expect(screen.getByText('Active One').closest('.tab-bar-interactive')?.className)
       .toContain('bg-[var(--color-surface-container)]')
   })

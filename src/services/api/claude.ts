@@ -1791,8 +1791,18 @@ async function* queryModel(
         !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
     )
     const modelCanThink = modelSupportsThinking(options.model)
+    // Prompt-hook evaluators are internal JSON checks, not explicit user
+    // thinking disables. Omit `thinking: { type: 'disabled' }` on non-1P
+    // endpoints unless the provider explicitly opts in, so relays that reject
+    // disabled reasoning do not fail with HTTP 400.
+    const isThirdPartyPromptHook =
+      options.querySource === 'hook_prompt' &&
+      !isFirstPartyAnthropicBaseUrl() &&
+      !shouldSendExplicitDisabledThinking()
     const sendsExplicitDisabledThinking =
-      !hasThinking && (modelCanThink || shouldSendExplicitDisabledThinking())
+      !hasThinking &&
+      !isThirdPartyPromptHook &&
+      (modelCanThink || shouldSendExplicitDisabledThinking())
 
     const outputConfig: BetaOutputConfig = {
       ...((extraBodyParams.output_config as BetaOutputConfig) ?? {}),
@@ -1865,6 +1875,14 @@ async function* queryModel(
           thinkingConfig.budgetTokens !== undefined
         ) {
           thinkingBudget = thinkingConfig.budgetTokens;
+        } else if (
+          options.querySource === 'hook_prompt' &&
+          thinkingConfig.type === 'disabled'
+        ) {
+          // Prompt-hook evaluators only return a small JSON object; when a
+          // model requires manual thinking, keep its budget at the 1024-token
+          // minimum to preserve output headroom and avoid heavy reasoning cost.
+          thinkingBudget = Math.min(thinkingBudget, 1024);
         }
         thinkingBudget = Math.min(maxOutputTokens - 1, thinkingBudget);
         thinking = {
@@ -2087,12 +2105,23 @@ async function* queryModel(
       : undefined
   }
 
+  const normalizeAssistantRole = (role: unknown): BetaMessage['role'] => {
+    if (typeof role === 'string') {
+      const trimmed = role.trim()
+      if (trimmed.length > 0) {
+        return trimmed as BetaMessage['role']
+      }
+    }
+    return 'assistant'
+  }
+
   function* commitFallbackResponse(result: BetaMessage): Generator<AssistantMessage> {
     const outputLimit = result.stop_reason === 'max_tokens' || result.stop_reason === 'model_context_window_exceeded'
     const truncatedToolUse = outputLimit && result.content.some(block => block.type === 'tool_use')
     const message: AssistantMessage = {
       message: {
         ...result,
+        role: normalizeAssistantRole(result.role),
         usage: normalizeUsage(result.usage),
         content: normalizeContentFromAPI(
           truncatedToolUse ? result.content.filter(block => block.type !== 'tool_use') : result.content,
@@ -2509,7 +2538,12 @@ async function* queryModel(
 
         switch (part.type) {
           case "message_start": {
-            partialMessage = part.message;
+            partialMessage = part.message
+              ? {
+                  ...part.message,
+                  role: normalizeAssistantRole(part.message.role),
+                }
+              : part.message;
             ttftMs = Date.now() - start;
             usage = updateUsage(usage, part.message?.usage);
             // Capture research from message_start if available (internal only).

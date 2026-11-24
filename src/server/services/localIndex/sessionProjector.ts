@@ -50,7 +50,9 @@ import type {
 //     rebuild the persisted per-model tokens and dollars that under-counted zero-first replies.
 // 14: Fable 5.2 gained its own pricing ($8/$40, not the Fable 5 prefix's $10/$50); rebuild the
 //     persisted per-model dollars of sessions that already ran it.
-export const SESSION_SUMMARY_PARSER_VERSION = 14
+// 15: conversation entries whose nested message.role is omitted or blank fall back to entry.type;
+//     rebuild already-indexed sessions so messageCount, modifiedAt, and firstUserTitle refresh.
+export const SESSION_SUMMARY_PARSER_VERSION = 15
 
 export type SessionSourceCandidate = {
   path: string

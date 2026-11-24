@@ -95,8 +95,6 @@ export type CreateSessionRequest = {
   workDir?: string
   repository?: CreateSessionRepositoryOptions
   permissionMode?: PermissionMode
-  /** For creation-time compatibility checks only; runtime is still set separately. */
-  launchProviderId?: string
 }
 export type BranchSessionRequest = {
   targetMessageId: string
@@ -340,6 +338,8 @@ export type WorkspaceStatusResult = {
   branch: string | null
   isGitRepo: boolean
   changedFiles: WorkspaceChangedFile[]
+  truncated?: boolean
+  totalChangedFiles?: number
   error?: string
 }
 
@@ -383,6 +383,8 @@ export type WorkspaceTreeResult = {
   state: 'ok' | 'missing' | 'error'
   path: string
   entries: WorkspaceTreeEntry[]
+  truncated?: boolean
+  totalCount?: number
   error?: string
 }
 
@@ -780,6 +782,13 @@ export const sessionsApi = {
     return api.get<SessionInspectionResponse>(
       `/api/sessions/${sessionId}/inspection?includeContext=0&usageOnly=1`,
       { timeout: 6_000, signal },
+    )
+  },
+
+  getWorkspaceMeta(sessionId: string, signal?: AbortSignal) {
+    return api.get<WorkspaceStatusResult>(
+      `${buildWorkspacePath(sessionId, 'status')}?includeChangedFiles=0`,
+      { signal },
     )
   },
 

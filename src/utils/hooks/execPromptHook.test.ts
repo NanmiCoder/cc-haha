@@ -9,6 +9,9 @@ import type { PromptHook } from '../settings/types.js'
 import { addSessionHook } from './sessionHooks.js'
 
 const queryModelWithoutStreamingMock = mock(async (_params?: { signal?: AbortSignal }) => ({
+  isApiErrorMessage: false as boolean | undefined,
+  apiError: undefined as string | undefined,
+  error: undefined as string | undefined,
   message: {
     content: [{ type: 'text', text: 'not json' }],
   },
@@ -85,7 +88,7 @@ describe('execPromptHook goal failures', () => {
     }))
   })
 
-  test('turns invalid /goal evaluator JSON into blocking continuation feedback', async () => {
+  test('reports invalid /goal evaluator JSON as a non-blocking error instead of looping', async () => {
     const result = await execPromptHook(
       goalHook,
       'Stop',
@@ -95,11 +98,90 @@ describe('execPromptHook goal failures', () => {
       makeContext(),
     )
 
-    expect(result.outcome).toBe('blocking')
-    expect(result.preventContinuation).toBe(true)
-    expect(result.blockingError?.command).toContain('<cc-haha-goal-hook>')
-    expect(result.blockingError?.blockingError).toContain('response was not valid JSON')
-    expect(result.blockingError?.blockingError).toContain('continue working toward it')
+    expect(result.outcome).toBe('non_blocking_error')
+    expect(result.preventContinuation).toBeUndefined()
+    expect(result.blockingError).toBeUndefined()
+    expect(result.message?.attachment.type).toBe('hook_non_blocking_error')
+    if (result.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(result.message.attachment.stderr).toContain('response was not valid JSON')
+      expect(result.message.attachment.stdout).toBe('not json')
+    }
+  })
+
+  test('preserves upstream API errors without swallowing them as invalid JSON or blocking continuation', async () => {
+    const upstreamError =
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"reasoning effort \\"disabled\\" is not supported"}}'
+    queryModelWithoutStreamingMock.mockImplementation(async () => ({
+      isApiErrorMessage: true,
+      error: 'unknown',
+      message: {
+        content: [{ type: 'text', text: upstreamError }],
+      },
+    }))
+
+    const result = await execPromptHook(
+      goalHook,
+      'Stop',
+      'Stop',
+      '{}',
+      new AbortController().signal,
+      makeContext(),
+    )
+
+    expect(result.outcome).toBe('non_blocking_error')
+    expect(result.preventContinuation).toBeUndefined()
+    expect(result.blockingError).toBeUndefined()
+    expect(result.message?.attachment.type).toBe('hook_non_blocking_error')
+    if (result.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(result.message.attachment.stderr).toContain('Goal evaluator API error:')
+      expect(result.message.attachment.stderr).toContain('reasoning effort')
+      expect(result.message.attachment.stderr).not.toContain('not valid JSON')
+    }
+  })
+
+  test('formats top-level JSON message, plain text, and fallback API error details for goal and ordinary prompt hooks', async () => {
+    queryModelWithoutStreamingMock.mockImplementationOnce(async () => ({
+      isApiErrorMessage: true,
+      message: {
+        content: [{ type: 'text', text: 'HTTP 400 {"message":"relay rejected thinking"}' }],
+      },
+    }))
+    const topLevelResult = await execPromptHook(
+      goalHook,
+      'Stop',
+      'Stop',
+      '{}',
+      new AbortController().signal,
+      makeContext(),
+    )
+    expect(topLevelResult.outcome).toBe('non_blocking_error')
+    if (topLevelResult.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(topLevelResult.message.attachment.stderr).toBe(
+        'Goal evaluator API error: HTTP 400 relay rejected thinking',
+      )
+    }
+
+    queryModelWithoutStreamingMock.mockImplementationOnce(async () => ({
+      isApiErrorMessage: true,
+      apiError: 'gateway timeout',
+      message: {
+        content: [{ type: 'text', text: '' }],
+      },
+    }))
+    const fallbackResult = await execPromptHook(
+      ordinaryHook,
+      'Stop',
+      'Stop',
+      '{}',
+      new AbortController().signal,
+      makeContext(),
+    )
+    expect(fallbackResult.outcome).toBe('non_blocking_error')
+    if (fallbackResult.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(fallbackResult.message.attachment.stderr).toBe(
+        'Prompt hook API error: gateway timeout',
+      )
+    }
   })
 
   test('keeps ordinary prompt hook invalid JSON as a non-blocking hook error', async () => {
@@ -118,7 +200,7 @@ describe('execPromptHook goal failures', () => {
     expect(result.message?.attachment.type).toBe('hook_non_blocking_error')
   })
 
-  test('turns /goal evaluator schema failures into blocking continuation feedback', async () => {
+  test('reports /goal evaluator schema failures as a non-blocking error instead of looping', async () => {
     queryModelWithoutStreamingMock.mockImplementation(async () => ({
       message: {
         content: [{ type: 'text', text: '{"ok":"not boolean"}' }],
@@ -134,12 +216,16 @@ describe('execPromptHook goal failures', () => {
       makeContext(),
     )
 
-    expect(result.outcome).toBe('blocking')
-    expect(result.preventContinuation).toBe(true)
-    expect(result.blockingError?.blockingError).toContain('expected schema')
+    expect(result.outcome).toBe('non_blocking_error')
+    expect(result.preventContinuation).toBeUndefined()
+    expect(result.blockingError).toBeUndefined()
+    expect(result.message?.attachment.type).toBe('hook_non_blocking_error')
+    if (result.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(result.message.attachment.stderr).toContain('expected schema')
+    }
   })
 
-  test('turns /goal evaluator timeout into blocking continuation when parent signal is omitted', async () => {
+  test('reports /goal evaluator timeout as a non-blocking error when parent signal is omitted', async () => {
     queryModelWithoutStreamingMock.mockImplementation(stallUntilAborted)
     const fastGoalHook: PromptHook = { ...goalHook, timeout: 0.05 }
 
@@ -152,10 +238,13 @@ describe('execPromptHook goal failures', () => {
       makeContext(),
     )
 
-    expect(result.outcome).toBe('blocking')
-    expect(result.preventContinuation).toBe(true)
-    expect(result.blockingError?.command).toContain('<cc-haha-goal-hook>')
-    expect(result.blockingError?.blockingError).toContain('evaluation timed out')
+    expect(result.outcome).toBe('non_blocking_error')
+    expect(result.preventContinuation).toBeUndefined()
+    expect(result.blockingError).toBeUndefined()
+    expect(result.message?.attachment.type).toBe('hook_non_blocking_error')
+    if (result.message?.attachment.type === 'hook_non_blocking_error') {
+      expect(result.message.attachment.stderr).toContain('evaluation timed out')
+    }
   })
 })
 
@@ -173,7 +262,7 @@ describe('executeStopHooks explicit prompt hook timeout', () => {
     setIsInteractive(prevInteractive)
   })
 
-  test('reports evaluation timed out for /goal hook with explicit timeout instead of silently cancelling', async () => {
+  test('reports evaluation timed out for /goal hook with explicit timeout instead of silently cancelling or looping', async () => {
     const context = makeContext()
     const fastGoalHook: PromptHook = { ...goalHook, timeout: 0.05 }
     addSessionHook(context.setAppState, getSessionId(), 'Stop', '', fastGoalHook)
@@ -191,10 +280,21 @@ describe('executeStopHooks explicit prompt hook timeout', () => {
       results.push(result)
     }
 
-    const blocking = results.find(result => result.blockingError)
-    expect(blocking?.blockingError?.command).toContain('<cc-haha-goal-hook>')
-    expect(blocking?.blockingError?.blockingError).toContain('evaluation timed out')
-    expect(blocking?.blockingError?.blockingError).toContain('continue working toward it')
+    expect(results.some(result => result.blockingError)).toBe(false)
+    expect(results.some(result => result.preventContinuation)).toBe(false)
+    const timeoutError = results.find(
+      result =>
+        result.message?.type === 'attachment' &&
+        result.message.attachment.type === 'hook_non_blocking_error',
+    )
+    expect(timeoutError).toBeDefined()
+    if (
+      timeoutError?.message?.type === 'attachment' &&
+      timeoutError.message.attachment.type === 'hook_non_blocking_error'
+    ) {
+      expect(timeoutError.message.attachment.command).toContain('<cc-haha-goal-hook>')
+      expect(timeoutError.message.attachment.stderr).toContain('evaluation timed out')
+    }
   })
 
   test('keeps user abort as cancelled without turning it into a timeout continuation', async () => {

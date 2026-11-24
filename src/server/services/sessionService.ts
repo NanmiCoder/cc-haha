@@ -1,5 +1,4 @@
 import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
-import { ANTIGRAVITY_PROVIDER_ID } from './antigravityAcp.js'
 import { normalizeAdditionalDirectories, validateProjectAdditionalDirectories } from './projectDirectories.js'
 import { getSideChat, isSideChatId, sideChatSummary } from './sideChatRegistry.js'
 import { splitSessionReferenceContext } from './sessionReferenceContext.js'
@@ -76,6 +75,7 @@ import { readSessionArchives, withSessionArchiveLock, writeSessionArchive } from
 import {
   extractGoalCreationTitle,
   extractTranscriptUserTitle,
+  resolveEntryMessageRole,
   resolveSessionEffortLevel,
 } from './localIndex/transcriptReducer.js'
 import type {
@@ -225,7 +225,6 @@ export type SessionLaunchInfo = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
-  antigravitySessionId?: string
 }
 
 type SessionMetadataPatch = {
@@ -238,7 +237,6 @@ type SessionMetadataPatch = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
-  antigravitySessionId?: string
 }
 
 type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
@@ -1265,7 +1263,16 @@ export class SessionService {
 
   private metadataMatchesLaunchInfo(
     launchInfo: SessionLaunchInfo | null,
-    metadata: SessionMetadataPatch,
+    metadata: {
+      workDir: string
+      repository?: PreparedSessionWorkspace['repository']
+      additionalDirectories?: string[]
+      permissionMode?: string
+      runtimeProviderId?: string | null
+      runtimeModelId?: string
+      effortLevel?: string
+      openAIFastMode?: boolean
+    },
   ): boolean {
     if (!launchInfo) return false
     if (metadata.additionalDirectories !== undefined && JSON.stringify(launchInfo.additionalDirectories ?? []) !== JSON.stringify(metadata.additionalDirectories)) return false
@@ -1294,7 +1301,6 @@ export class SessionService {
     if (metadata.runtimeModelId && launchInfo.runtimeModelId !== metadata.runtimeModelId) {
       return false
     }
-    if (metadata.antigravitySessionId !== undefined && launchInfo.antigravitySessionId !== metadata.antigravitySessionId) return false
     if (launchInfo.effortLevel !== resolveSessionEffortLevel(metadata, launchInfo.effortLevel)) {
       return false
     }
@@ -1575,7 +1581,6 @@ export class SessionService {
         runtimeProviderId: undefined as string | null | undefined,
         runtimeModelId: undefined as string | undefined, effortLevel: undefined as string | undefined,
         openAIFastMode: undefined as boolean | undefined,
-        antigravitySessionId: undefined as string | undefined,
         customTitle: null as string | null, nonemptyCustomTitle: null as string | null,
         goalTitle: null as string | null, aiTitle: null as string | null, firstUserTitle: null as string | null,
         createdAt: null as string | null, modifiedAt: null as string | null,
@@ -1586,7 +1591,7 @@ export class SessionService {
       const transcriptMetadata: TranscriptMetadataSnapshot = {}
       const apply = (state: ReturnType<typeof makeState>, entry: RawEntry) => {
         if (!state.createdAt && entry.timestamp) state.createdAt = entry.timestamp
-        if ((entry.type === 'user' || entry.type === 'assistant') && entry.message?.role) {
+        if ((entry.type === 'user' || entry.type === 'assistant') && resolveEntryMessageRole(entry)) {
           state.count++
           if (!entry.isMeta) state.modifiedAt = this.latestTimestamp(state.modifiedAt, entry.timestamp)
         }
@@ -1603,10 +1608,6 @@ export class SessionService {
           if (typeof record.runtimeModelId === 'string') state.runtimeModelId = record.runtimeModelId
           state.effortLevel = resolveSessionEffortLevel(record, state.effortLevel)
           if (typeof record.openAIFastMode === 'boolean') state.openAIFastMode = record.openAIFastMode
-          // 旧会话没有 ACP 会话 ID；读取时保持缺省，不重写旧记录。
-          if (typeof record.antigravitySessionId === 'string' && record.antigravitySessionId.length <= 512) {
-            state.antigravitySessionId = record.antigravitySessionId
-          }
         }
         state.repository = this.resolveRepositoryFromEntries([entry]) ?? state.repository
         const worktree = this.resolveWorktreeSessionFromEntries([entry])
@@ -1617,7 +1618,7 @@ export class SessionService {
         }
         state.goalTitle ??= extractGoalCreationTitle(entry)
         if (entry.type === 'ai-title' && entry.aiTitle) state.aiTitle = cleanSessionTitleSource(String(entry.aiTitle)) || state.aiTitle
-        if (!state.firstUserTitle && entry.type === 'user' && !entry.isMeta && entry.message?.role === 'user') state.firstUserTitle = extractTranscriptUserTitle(entry.message.content)
+        if (!state.firstUserTitle && entry.type === 'user' && !entry.isMeta && resolveEntryMessageRole(entry) === 'user') state.firstUserTitle = extractTranscriptUserTitle(entry.message?.content)
         // Metadata has a separate fixed bound even when a file contains only
         // a handful of maliciously large scalar values or repository fields.
         if (Buffer.byteLength(JSON.stringify(state)) > 128 * 1024) throw new ApiError(413, 'Session metadata exceeds its resource budget', 'SESSION_METADATA_TOO_LARGE')
@@ -1657,7 +1658,6 @@ export class SessionService {
           customTitle: launch.customTitle,
           transcriptMessageCount: launch.launchCount,
           ...shared(launch),
-          ...(launch.antigravitySessionId ? { antigravitySessionId: launch.antigravitySessionId } : {}),
         },
         customTitle: launch.nonemptyCustomTitle,
         transcriptMetadata: { ...transcriptMetadata, cwd: launch.cwd },
@@ -2006,7 +2006,7 @@ export class SessionService {
       if (
         !entry.isMeta &&
         (entry.type === 'user' || entry.type === 'assistant') &&
-        entry.message?.role
+        resolveEntryMessageRole(entry)
       ) {
         modifiedAt = this.latestTimestamp(modifiedAt, entry.timestamp)
       }
@@ -2139,7 +2139,7 @@ export class SessionService {
   private countTranscriptMessages(entries: RawEntry[]): number {
     return entries.filter((entry) =>
       !entry.isMeta &&
-      !!entry.message?.role &&
+      !!resolveEntryMessageRole(entry) &&
       (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
     ).length
   }
@@ -2147,10 +2147,10 @@ export class SessionService {
   /** A real conversation, including a collaboration delivery persisted as isMeta. */
   private hasConversationTranscript(entries: RawEntry[]): boolean {
     return entries.some((entry) => {
-      if (!entry.message?.role) return false
+      if (!resolveEntryMessageRole(entry)) return false
       if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system') return false
       if (!entry.isMeta) return true
-      return entry.type === 'user' && parseSessionCollaborationEnvelope(entry.message.content) !== null
+      return entry.type === 'user' && parseSessionCollaborationEnvelope(entry.message?.content) !== null
     })
   }
 
@@ -2203,12 +2203,13 @@ export class SessionService {
     parentToolUseId?: string,
   ): MessageEntry | null {
     const msg = entry.message
-    if (!msg || !msg.role) return null
+    const role = resolveEntryMessageRole(entry)
+    if (!msg || !role) return null
 
     // The CLI records an explicit interrupt as a synthetic user message.
     // Project it as a status so history retains the stop boundary without
     // displaying the model-facing sentinel as a user prompt.
-    if (msg.role === 'user' && this.isSyntheticUserInterruption(msg.content)) {
+    if (role === 'user' && this.isSyntheticUserInterruption(msg.content)) {
       return {
         id: entry.uuid || crypto.randomUUID(),
         type: 'system',
@@ -2219,7 +2220,6 @@ export class SessionService {
 
     // Determine our normalized type
     let type: MessageEntry['type']
-    const role = msg.role
 
     if (role === 'user') {
       // Check if the content is a tool_result array
@@ -2383,8 +2383,8 @@ export class SessionService {
    * that follows exists, without the model-facing XML.
    */
   private backgroundContinueEntryToMessage(entry: RawEntry): MessageEntry | null {
-    if (entry.type !== 'user' || entry.message?.role !== 'user') return null
-    const content = entry.message.content
+    if (entry.type !== 'user' || resolveEntryMessageRole(entry) !== 'user') return null
+    const content = entry.message?.content
     if (!this.isTaskNotificationContent(content)) return null
     const notifications = this.extractTextBlocks(content)
       .flatMap((text) => text.match(TASK_NOTIFICATION_BLOCKS_RE) ?? [])
@@ -2511,7 +2511,7 @@ export class SessionService {
   }
 
   private shouldHideTranscriptEntry(entry: RawEntry): boolean {
-    const role = entry.message?.role
+    const role = resolveEntryMessageRole(entry)
     const content = entry.message?.content
 
     if (role === 'user') {
@@ -2531,10 +2531,10 @@ export class SessionService {
   }
 
   private isVisibleTranscriptMessageEntry(entry: RawEntry): boolean {
-    if (!entry.message?.role) return false
+    if (!resolveEntryMessageRole(entry)) return false
     // Collaboration deliveries are persisted as isMeta prompts; they carry a real
     // cross-session message the user must see, so they are the one exception.
-    if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message.content)) return false
+    if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message?.content)) return false
     if (
       entry.type !== 'user' &&
       entry.type !== 'assistant' &&
@@ -2712,7 +2712,7 @@ export class SessionService {
     const messages: MessageEntry[] = []
 
     for (const entry of entries) {
-      if (!entry.message?.role || entry.isMeta) continue
+      if (!entry.message || !resolveEntryMessageRole(entry) || entry.isMeta) continue
       if (this.shouldHideTranscriptEntry(entry)) continue
       if (entry.type !== 'user' && entry.type !== 'assistant' && entry.type !== 'system') {
         continue
@@ -2934,8 +2934,8 @@ export class SessionService {
 
     // 4. Look for first non-meta user message as title
     for (const e of entries) {
-      if (e.type === 'user' && !e.isMeta && e.message?.role === 'user') {
-        const title = extractTranscriptUserTitle(e.message.content)
+      if (e.type === 'user' && !e.isMeta && resolveEntryMessageRole(e) === 'user') {
+        const title = extractTranscriptUserTitle(e.message?.content)
         if (title) return title
       }
     }
@@ -3691,7 +3691,7 @@ export class SessionService {
 
       if (
         !entry.isMeta &&
-        !!entry.message?.role &&
+        !!resolveEntryMessageRole(entry) &&
         (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
       ) {
         transcriptMessageCount += 1
@@ -5105,7 +5105,6 @@ export class SessionService {
     repositoryOptions?: CreateSessionRepositoryOptions,
     permissionMode?: string,
     agentProfile: 'standard' | 'lean' = 'standard',
-    launchProviderId?: string,
   ): Promise<{ sessionId: string; workDir: string; agentProfile: 'standard' | 'lean' }> {
     if (agentProfile === 'lean' && permissionMode === 'plan') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
     // Default to user home directory when no workDir specified
@@ -5125,9 +5124,6 @@ export class SessionService {
     const absWorkDir = preparedWorkspace.workDir
     const { additionalDirectories: configuredDirectories } = await new DesktopUiPreferencesService().getProjectDirectories(preparedWorkspace.repository?.requestedWorkDir || absWorkDir)
     const additionalDirectories = await validateProjectAdditionalDirectories(absWorkDir, configuredDirectories)
-    if (launchProviderId === ANTIGRAVITY_PROVIDER_ID && additionalDirectories.length > 0) {
-      throw new ApiError(400, 'Antigravity does not support additional folders. Choose a project without additional folders or switch providers.', 'ANTIGRAVITY_UNSUPPORTED')
-    }
     registerCanonicalFilesystemAccessRoot(absWorkDir)
     console.log(
       `[SessionService] createSession: requested workDir=${JSON.stringify(
@@ -5462,16 +5458,13 @@ export class SessionService {
         extra: {} as Record<string, unknown>,
         permissionMode: undefined as string | undefined,
         runtime: {} as { runtimeProviderId?: string | null, runtimeModelId?: string, effortLevel?: string, openAIFastMode?: boolean } }
-      let detachesAntigravity = false
       await streamBoundedHistory(found.filePath, entry => {
         const record = entry as RawEntry
         if (record.type === 'session-meta') {
           // Unknown extension fields merge as patches. The runtime selection does
           // not: a complete selection without effortLevel means auto, so it is
           // reduced exactly like the launch metadata projection instead.
-          // /clear 清空界面历史，也必须与原 Antigravity 对话解绑。
-          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, antigravitySessionId, ...extension } = entry
-          detachesAntigravity ||= typeof antigravitySessionId === 'string'
+          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, ...extension } = entry
           Object.assign(preserved.extra, extension)
           if (runtimeProviderId === null || typeof runtimeProviderId === 'string') preserved.runtime.runtimeProviderId = runtimeProviderId
           if (typeof runtimeModelId === 'string') preserved.runtime.runtimeModelId = runtimeModelId
@@ -5536,21 +5529,13 @@ export class SessionService {
 
       if (!this.shouldPersistSession()) return
       this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
-      const replacement = [initialEntry, metaEntry, ...(customTitleEntry ? [customTitleEntry] : [])]
-        .map(entry => JSON.stringify(entry)).join('\n') + '\n'
-      if (detachesAntigravity) {
-        // 替换文件而不是原地截断，确保已缓存的历史游标不会读到旧 ACP 回合。
-        const tempFilePath = `${found.filePath}.clear-${crypto.randomUUID()}.tmp`
-        try {
-          await fs.writeFile(tempFilePath, replacement, { flag: 'wx', mode: 0o600 })
-          if (!this.shouldPersistSession()) return
-          await fs.rename(tempFilePath, found.filePath)
-        } finally {
-          await fs.rm(tempFilePath, { force: true })
-        }
-      } else {
-        await fs.writeFile(found.filePath, replacement, 'utf-8')
-      }
+      await fs.writeFile(
+        found.filePath,
+        [initialEntry, metaEntry, ...(customTitleEntry ? [customTitleEntry] : [])]
+          .map(entry => JSON.stringify(entry))
+          .join('\n') + '\n',
+        'utf-8',
+      )
       if (customTitleEntry) {
         this.syncIndexedSessionTitle(sessionId, customTitleEntry.customTitle)
       }
@@ -5571,31 +5556,6 @@ export class SessionService {
     } finally {
       this.clearingTaskNotificationSessions.delete(sessionId)
     }
-  }
-
-  async appendAntigravityMessages(
-    sessionId: string,
-    nativeSessionId: string,
-    messages: Record<string, unknown>[],
-    isCurrent: () => boolean,
-  ): Promise<void> {
-    await this.withSessionMetadataMutation(sessionId, async () => {
-      const launchInfo = await this.getSessionLaunchInfo(sessionId)
-      if (!this.shouldPersistSession() || !isCurrent() || launchInfo?.antigravitySessionId !== nativeSessionId) {
-        throw new Error('Antigravity session is no longer active')
-      }
-      const handle = await fs.open(launchInfo.filePath, constants.O_WRONLY | constants.O_APPEND)
-      try {
-        if (!this.shouldPersistSession() || !isCurrent()) throw new Error('Antigravity session is no longer active')
-        const timestamp = new Date().toISOString()
-        await handle.writeFile(messages.map(message => JSON.stringify({
-          ...message, sessionId, cwd: launchInfo.workDir, timestamp,
-        }) + '\n').join(''), 'utf-8')
-      } finally {
-        await handle.close()
-      }
-      this.invalidateSessionListCache()
-    })
   }
 
   async appendSessionMetadata(
@@ -5754,7 +5714,6 @@ export class SessionService {
         ? { runtimeProviderId: metadata.runtimeProviderId }
         : {}),
       ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
-      ...(metadata.antigravitySessionId ? { antigravitySessionId: metadata.antigravitySessionId } : {}),
       ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
         ? { effortLevel: metadata.effortLevel }
         : {}),
@@ -5873,7 +5832,7 @@ export class SessionService {
       if (typeof entry.uuid !== 'string') return true
       if (removedIds.has(entry.uuid)) return false
       if (
-        entry.message?.role &&
+        resolveEntryMessageRole(entry) &&
         (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system')
       ) {
         return remainingMessageIds.has(entry.uuid)
@@ -6199,8 +6158,8 @@ export class SessionService {
     for (const entry of entries) {
       const notification = entry.type === PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE
         ? this.parsePersistedTaskNotification(entry.taskNotification, entry.timestamp)
-        : entry.message?.role === 'user'
-          ? this.parseTaskNotificationContent(entry.message.content, entry.timestamp)
+        : resolveEntryMessageRole(entry) === 'user'
+          ? this.parseTaskNotificationContent(entry.message?.content, entry.timestamp)
           : this.parseQueuedTaskNotification(entry)
       if (notification) {
         notifications.set(sessionTaskNotificationIdentity(notification), notification)
@@ -6237,7 +6196,7 @@ export class SessionService {
       }
 
       // Only process transcript entries (user / assistant / system with messages)
-      if (!entry.message?.role) continue
+      if (!resolveEntryMessageRole(entry)) continue
 
       // Checked before the isMeta skip: the batch of settled agents is isMeta.
       const backgroundContinue = this.backgroundContinueEntryToMessage(entry)
@@ -6249,7 +6208,7 @@ export class SessionService {
       // Skip meta entries (CLI internal bookkeeping). Collaboration deliveries
       // are the exception: the isMeta prompt carries a real cross-session
       // message that must render as an ordinary user-position bubble.
-      if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message.content)) continue
+      if (entry.isMeta && !parseSessionCollaborationEnvelope(entry.message?.content)) continue
 
       // Anything else hidden here is system plumbing. What the assistant does in
       // response to a projected notification is ordinary conversation, so it is

@@ -8,6 +8,7 @@ import {
 } from '../services/analytics/index.js'
 import type { ToolUseContext } from '../Tool.js'
 import {
+  clearThreadGoalHook,
   ensureThreadGoalHookFromTranscript,
   isGoalPromptHookCommand,
 } from '../goals/goalState.js'
@@ -100,6 +101,18 @@ export function formatGoalWaitingForTeamStatusOutput(reason: string): string {
   return normalizedReason
     ? `Goal waiting for teammates: ${normalizedReason}`
     : 'Goal waiting for teammates: more work is required'
+}
+
+export function formatGoalEvaluatorErrorClearedOutput(errorDetail: string): string {
+  const sanitized = errorDetail
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500)
+  return sanitized
+    ? `Goal cleared: ${sanitized}`
+    : 'Goal cleared: Goal evaluator failed'
 }
 
 export async function* handleStopHooks(
@@ -246,6 +259,7 @@ export async function* handleStopHooks(
     const hookInfos: StopHookInfo[] = []
     let goalCompleted = false
     let goalContinuationReason: string | null = null
+    let goalEvaluatorError: string | null = null
 
     // Goal hook's preventContinuation and blockingError arrive as separate
     // generator yields — preventContinuation comes first, but blockingError.command
@@ -286,9 +300,12 @@ export async function* handleStopHooks(
               attachment.hookEvent === 'SubagentStop')
           ) {
             if (attachment.type === 'hook_non_blocking_error') {
-              hookErrors.push(
-                attachment.stderr || `Exit code ${attachment.exitCode}`,
-              )
+              const detail =
+                attachment.stderr || `Exit code ${attachment.exitCode}`
+              hookErrors.push(detail)
+              if (isGoalPromptHookCommand(attachment.command)) {
+                goalEvaluatorError ??= detail
+              }
               // Non-blocking errors always have output
               hasOutput = true
             } else if (attachment.type === 'hook_error_during_execution') {
@@ -444,6 +461,15 @@ export async function* handleStopHooks(
     if (goalCompleted) {
       yield createCommandInputMessage(
         '<local-command-stdout>Goal marked complete.</local-command-stdout>',
+      )
+    }
+
+    if (goalEvaluatorError) {
+      if (!toolUseContext.agentId) {
+        clearThreadGoalHook(toolUseContext, getSessionId())
+      }
+      yield createCommandInputMessage(
+        `<local-command-stdout>${formatGoalEvaluatorErrorClearedOutput(goalEvaluatorError)}</local-command-stdout>`,
       )
     }
 

@@ -1,4 +1,4 @@
-import { DARK_THEME_MODES, LIGHT_THEME_MODES, THEME_MODES } from '../types/settings'
+import { DARK_THEME_MODES, LEGACY_THEME_MIGRATIONS, LIGHT_THEME_MODES, THEME_MODES } from '../types/settings'
 import {
   WORKSPACE_STORAGE_KEY,
   WORKSPACE_STORAGE_VERSION,
@@ -195,16 +195,12 @@ function migrateSessionRuntime(storage: StorageLike, report: DesktopMigrationRep
 }
 
 /**
- * The 「纸 · 墨 · 印」 redesign replaced three theme keys with six.
- *
- * `light` was the warm workspace, labelled 经典暖色 in the picker, so it lands
- * on `warm-classic` — the palette carrying the same name. Without this it
- * would fail the enum check and silently reset those users to the default,
- * which reads as "the app forgot my theme" rather than as a rename.
+ * Direction C consolidated the desktop palettes into two canonical grounds:
+ * pure white (`white`) and matte charcoal (`dark`). Forward-migrate every
+ * legacy light/dark theme key to its matching ground so upgrading users keep
+ * their light/dark preference instead of silently resetting.
  */
-const RENAMED_THEMES: Record<string, string> = {
-  light: 'warm-classic',
-}
+const RENAMED_THEMES: Readonly<Record<string, string>> = LEGACY_THEME_MIGRATIONS
 
 /**
  * Rename-aware normalization for any key holding a theme name. The applied

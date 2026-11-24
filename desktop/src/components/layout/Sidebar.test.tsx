@@ -2686,13 +2686,13 @@ describe('Sidebar', () => {
 
     expect(screen.getByRole('button', { name: /First Session/ }).parentElement).toHaveClass('mb-px')
     expect(screen.getByRole('button', { name: /First Session/ })).toHaveClass('sidebar-session-row--selected')
-    // Both the batch selection and the open session are the white card lifted
-    // off the sidebar ground: paper fill, hairline ring, raised shadow step.
+    // Both the batch selection and the open session use the calm flat editorial highlight.
     for (const name of [/First Session/, /Second Session/]) {
       expect(screen.getByRole('button', { name })).toHaveClass(
         'bg-[var(--color-sidebar-item-active)]',
-        'shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]',
+        'text-[var(--color-text-primary)]',
       )
+      expect(screen.getByRole('button', { name }).className).not.toContain('--shadow-raised')
     }
     expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('bg-[var(--color-sidebar-item-active)]')
     expect(screen.getByRole('button', { name: /Second Session/ })).toHaveClass('sidebar-session-row--active')

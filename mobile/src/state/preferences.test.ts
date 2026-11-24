@@ -151,4 +151,13 @@ describe('mobile preferences forward migration', () => {
     expect(result.liveActivityShowCommand).toBe(true)
     expect(result.keepAwake).toBe(true)
   })
+  test('migrates legacy multi-theme values cleanly to light or dark', () => {
+    for (const legacyLight of ['white', 'paper', 'warm-classic', 'celadon']) {
+      expect(migratePreferences(JSON.stringify({ appearance: legacyLight })).appearance).toBe('light')
+    }
+    for (const legacyDark of ['ink-blue', 'neutral-dark']) {
+      expect(migratePreferences(JSON.stringify({ appearance: legacyDark })).appearance).toBe('dark')
+    }
+    expect(migratePreferences(JSON.stringify({ appearance: 'unknown-theme' })).appearance).toBe('system')
+  })
 })

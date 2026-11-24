@@ -612,12 +612,11 @@ export function TabBar() {
       data-testid="tab-bar"
       data-desktop-drag-region={isDesktopRuntime ? true : undefined}
       /*
-        Scheme A minimalist borderless topbar: sits transparently on the
-        floating inset canvas with no bottom rule and no portaled resource
-        strip, leaving generous window drag breathing room beside quiet
-        capsule session tabs.
+        Editorial studio topbar: sits cleanly on the full-bleed canvas with a
+        crisp 1px hairline bottom divider, generous window drag breathing room,
+        and quiet capsule session tabs.
       */
-      className="flex min-h-[52px] items-stretch bg-transparent select-none"
+      className="flex min-h-[52px] items-stretch border-b border-[var(--color-border)] bg-transparent select-none"
     >
 
       <div data-testid="workspace-session-header" className="contents">

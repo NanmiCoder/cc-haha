@@ -9,6 +9,7 @@ import { useTranslation } from '../../i18n'
 import { EMPTY_WORKSPACE_TREE_VIEW, useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { basenameOf } from '../../lib/workspace/types'
 import { useRovingTree } from './treeKeyboard'
+import { useFixedVirtualWindow } from './useVirtualWindow'
 import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
@@ -158,6 +159,13 @@ export function WorkspaceFileTreePane({
     return entry && entry.state !== 'ok' ? [{ path, state: entry.state, error: entry.error }] : []
   }), [expanded, filter, sessionId, treeByKey])
 
+  const truncatedDirectories = useMemo(() => filter.trim() ? [] : ['', ...expanded].flatMap((path) => {
+    const entry = treeByKey[`${sessionId}::${path}`]
+    return entry && entry.state === 'ok' && entry.truncated
+      ? [{ path, shown: entry.entries.length, total: entry.totalCount ?? entry.entries.length }]
+      : []
+  }), [expanded, filter, sessionId, treeByKey])
+
   const rows = useMemo(() => {
     const query = filter.trim().toLowerCase()
     const out: TreeRow[] = []
@@ -229,23 +237,49 @@ export function WorkspaceFileTreePane({
     return out
   }, [expanded, filter, search, sessionId, treeByKey])
 
+  const syncTreeScrollTop = useCallback((nextScrollTop: number) => {
+    setTreeView(sessionId, { scrollTop: nextScrollTop })
+  }, [sessionId, setTreeView])
+
+  const treeWindow = useFixedVirtualWindow({
+    itemCount: rows.length,
+    itemHeight: 28,
+    overscan: 15,
+    threshold: 400,
+    scrollRef,
+    initialScrollTop: treeView.scrollTop,
+    resetKey: `${sessionId}::${filter}`,
+    onScrollTopChange: syncTreeScrollTop,
+  })
+  const visibleRows = treeWindow.virtualized
+    ? rows.slice(treeWindow.startIndex, treeWindow.endIndex)
+    : rows
+
   useLayoutEffect(() => {
     revealedPath.current = null
   }, [filter, selectedTreePath, sessionId])
 
   useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = treeView.scrollTop
+    if (scrollRef.current && scrollRef.current.scrollTop !== treeView.scrollTop) {
+      scrollRef.current.scrollTop = treeView.scrollTop
+    }
   }, [rows, sessionId, treeView.scrollTop])
 
   useLayoutEffect(() => {
     if (!selectedTreePath || !treeView.open || filter.trim()) return
     const identity = `${sessionId}::${selectedTreePath}`
     if (revealedPath.current === identity) return
+    const selectedIndex = rows.findIndex((candidate) => !candidate.isDirectory && candidate.path === selectedTreePath)
+    if (selectedIndex < 0) return
+    if (treeWindow.virtualized && (selectedIndex < treeWindow.startIndex || selectedIndex >= treeWindow.endIndex)) {
+      treeWindow.ensureIndexVisible(selectedIndex)
+      return
+    }
     const row = scrollRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
     if (!row) return
     row.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
     revealedPath.current = identity
-  }, [filter, rows, selectedTreePath, sessionId, treeView.open])
+  }, [filter, rows, selectedTreePath, sessionId, treeView.open, treeWindow])
 
   const handleActivate = (row: TreeRow) => {
     if (row.isDirectory) {
@@ -259,7 +293,11 @@ export function WorkspaceFileTreePane({
     selectedPath: selectedTreePath,
     onActivate: handleActivate,
     onToggleDirectory: (row) => { void toggleDirectory(sessionId, row.path) },
+    onEnsureVisible: treeWindow.ensureIndexVisible,
   })
+  const visibleActivePath = visibleRows.some((row) => row.path === activePath)
+    ? activePath
+    : visibleRows[0]?.path ?? null
 
   useEffect(() => {
     // Give the new active file the tab stop without moving DOM focus away from
@@ -295,6 +333,19 @@ export function WorkspaceFileTreePane({
       {searchError ? <p role="alert" className="px-3 pb-1 text-xs text-[var(--color-error)]">{searchError}</p> : null}
       {searching ? <p role="status" className="px-3 pb-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searching')}</p> : null}
       {search?.truncated ? <p role="status" className="px-3 pb-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searchResultsTruncated', { count: search.entries.length })}</p> : null}
+      {truncatedDirectories.length > 0 ? (
+        <div className="shrink-0 px-3 pb-1">
+          {truncatedDirectories.map((item) => (
+            <p key={item.path} role="status" className="text-xs text-[var(--color-text-tertiary)]">
+              {t('workspace.files.directoryTruncated', {
+                path: item.path || t('workspace.files.projectRoot'),
+                shown: item.shown,
+                total: item.total,
+              })}
+            </p>
+          ))}
+        </div>
+      ) : null}
       {treeFailures.length > 0 ? (
         <div className="max-h-[40%] shrink-0 overflow-y-auto px-2 py-1">
           {treeFailures.map((failure) => {
@@ -311,7 +362,17 @@ export function WorkspaceFileTreePane({
           })}
         </div>
       ) : null}
-      <div ref={scrollRef} onScroll={(event) => setTreeView(sessionId, { scrollTop: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-auto px-2 pb-2" role="tree" aria-label={t('workspace.files.tree')}>
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          const nextTop = event.currentTarget.scrollTop
+          treeWindow.onScroll(nextTop)
+          setTreeView(sessionId, { scrollTop: nextTop })
+        }}
+        className="min-h-0 flex-1 overflow-auto px-2 pb-2"
+        role="tree"
+        aria-label={t('workspace.files.tree')}
+      >
         {rootLoading && rows.length === 0 ? (
           <div className="flex items-center justify-center py-6">
             <Spinner size={16} label={t('common.loading')} />
@@ -321,65 +382,67 @@ export function WorkspaceFileTreePane({
             {t('workspace.files.empty')}
           </p>
         ) : (
-          rows.map((row) => {
-            const isSelected = !row.isDirectory && row.path === selectedTreePath
-            return (
-              <div
-                key={row.path}
-                ref={registerRow(row.path)}
-                role="treeitem"
-                // Exactly one row is tabbable; the arrow keys move the tab stop.
-                tabIndex={row.path === activePath ? 0 : -1}
-                aria-selected={isSelected}
-                aria-expanded={row.isDirectory ? row.expanded : undefined}
-                // Depth is conveyed by padding for sighted users; without this
-                // it reaches assistive tech as a flat list.
-                aria-level={row.depth + 1}
-                data-testid={`workspace-tree-row-${row.path}`}
-                onClick={() => {
-                  setFocusedPath(row.path)
-                  handleActivate(row)
-                }}
-                onFocus={() => setFocusedPath(row.path)}
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  menuTriggerRef.current = event.currentTarget
-                  setContextMenu({ sessionId, row, x: event.clientX, y: event.clientY })
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+          <div style={treeWindow.virtualized ? { paddingTop: treeWindow.topSpacer, paddingBottom: treeWindow.bottomSpacer } : undefined}>
+            {visibleRows.map((row) => {
+              const isSelected = !row.isDirectory && row.path === selectedTreePath
+              return (
+                <div
+                  key={row.path}
+                  ref={registerRow(row.path)}
+                  role="treeitem"
+                  // Exactly one row is tabbable; the arrow keys move the tab stop.
+                  tabIndex={row.path === visibleActivePath ? 0 : -1}
+                  aria-selected={isSelected}
+                  aria-expanded={row.isDirectory ? row.expanded : undefined}
+                  // Depth is conveyed by padding for sighted users; without this
+                  // it reaches assistive tech as a flat list.
+                  aria-level={row.depth + 1}
+                  data-testid={`workspace-tree-row-${row.path}`}
+                  onClick={() => {
+                    setFocusedPath(row.path)
+                    handleActivate(row)
+                  }}
+                  onFocus={() => setFocusedPath(row.path)}
+                  onContextMenu={(event) => {
                     event.preventDefault()
-                    const rect = event.currentTarget.getBoundingClientRect()
                     menuTriggerRef.current = event.currentTarget
-                    setContextMenu({ sessionId, row, x: rect.left, y: rect.bottom })
-                    return
-                  }
-                  handleKeyDown(event, row)
-                }}
-                style={{ paddingLeft: 6 + row.depth * 16 }}
-                className={[
-                  'relative flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
-                  isSelected
-                    ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
-                ].join(' ')}
-              >
-                {Array.from({ length: row.depth }, (_, depth) => (
-                  <span key={depth} aria-hidden="true" data-workspace-tree-guide className="pointer-events-none absolute inset-y-0 border-l border-[var(--color-border)]" style={{ left: 13 + depth * 16 }} />
-                ))}
-                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
-                  {row.isDirectory
-                    ? row.expanded
-                      ? <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
-                      : <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
-                    : <WorkspaceFileIcon path={row.path} />}
-                </span>
-                <span className="min-w-0 flex-1 truncate" title={row.path}>
-                  {row.name || basenameOf(row.path)}
-                </span>
-              </div>
-            )
-          })
+                    setContextMenu({ sessionId, row, x: event.clientX, y: event.clientY })
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                      event.preventDefault()
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      menuTriggerRef.current = event.currentTarget
+                      setContextMenu({ sessionId, row, x: rect.left, y: rect.bottom })
+                      return
+                    }
+                    handleKeyDown(event, row)
+                  }}
+                  style={{ paddingLeft: 6 + row.depth * 16 }}
+                  className={[
+                    'relative flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                    isSelected
+                      ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
+                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
+                  ].join(' ')}
+                >
+                  {Array.from({ length: row.depth }, (_, depth) => (
+                    <span key={depth} aria-hidden="true" data-workspace-tree-guide className="pointer-events-none absolute inset-y-0 border-l border-[var(--color-border)]" style={{ left: 13 + depth * 16 }} />
+                  ))}
+                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
+                    {row.isDirectory
+                      ? row.expanded
+                        ? <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+                        : <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
+                      : <WorkspaceFileIcon path={row.path} />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate" title={row.path}>
+                    {row.name || basenameOf(row.path)}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
       {menu ? (

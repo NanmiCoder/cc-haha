@@ -161,28 +161,30 @@ describe('index.html pre-hydration theme script', () => {
     expect(bare![1]!.toUpperCase()).toBe(THEME_BACKGROUNDS.white.toUpperCase())
   })
 
-  it('keeps neutral dark when browser chrome painting throws after resolution', () => {
-    seedStorage({ theme: 'neutral-dark', follow: '0' })
+  it('keeps dark theme when browser chrome painting throws after resolution', () => {
+    seedStorage({ theme: 'dark', follow: '0' })
     const query = vi.spyOn(document, 'querySelector').mockImplementation(() => { throw new Error('browser chrome unavailable') })
     try {
       // eslint-disable-next-line no-new-func -- exercise the shipped catch path
       new Function(bootstrapScript)()
-      expect(document.documentElement.getAttribute('data-theme')).toBe('neutral-dark')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
       expect(document.documentElement.style.colorScheme).toBe('dark')
     } finally {
       query.mockRestore()
     }
   })
 
-  // Dirty values are reachable, not hypothetical: the inline script runs
-  // before runDesktopPersistenceMigrations() has had a chance to drop them,
-  // so both implementations must agree on garbage too.
-  const storedThemes: Array<string | undefined> = [undefined, ...THEME_MODES, 'light', 'solarized', '']
+  // Dirty and legacy values are reachable, not hypothetical: the inline script
+  // runs before runDesktopPersistenceMigrations() has had a chance to rewrite
+  // them, so both implementations must agree on legacy themes and garbage too.
+  const storedThemes: Array<string | undefined> = [
+    undefined, ...THEME_MODES, 'light', 'paper', 'warm-classic', 'celadon', 'ink-blue', 'neutral-dark', 'solarized', '',
+  ]
   const storedFollows: Array<string | undefined> = [undefined, '0', '1', 'yes', 'true', '']
   // A palette from the other ground is the interesting dirty value here: it is
   // a real theme name, just not a valid preference for this half.
-  const storedLightThemes: Array<string | undefined> = [undefined, ...LIGHT_THEME_MODES, 'ink-blue', 'neon']
-  const storedDarkThemes: Array<string | undefined> = [undefined, ...DARK_THEME_MODES, 'celadon', 'neon']
+  const storedLightThemes: Array<string | undefined> = [undefined, ...LIGHT_THEME_MODES, 'warm-classic', 'ink-blue', 'neon']
+  const storedDarkThemes: Array<string | undefined> = [undefined, ...DARK_THEME_MODES, 'neutral-dark', 'celadon', 'neon']
   const appearances: SystemAppearance[] = ['dark', 'light']
 
   it('agrees with resolveAppliedTheme across every stored combination', () => {
@@ -237,22 +239,35 @@ describe('index.html pre-hydration theme script', () => {
     stubMatchMedia(true)
 
     const result = runBootstrapScript()
-    expect(result.theme).toBe('neutral-dark')
+    expect(result.theme).toBe('dark')
     expect(result.colorScheme).toBe('dark')
+  })
+
+  it('forward-migrates legacy persisted themes before hydration', () => {
+    for (const legacyLight of ['light', 'paper', 'warm-classic', 'celadon']) {
+      seedStorage({ theme: legacyLight, follow: '0' })
+      stubMatchMedia(true)
+      expect(runBootstrapScript().theme, legacyLight).toBe('white')
+    }
+    for (const legacyDark of ['ink-blue', 'neutral-dark']) {
+      seedStorage({ theme: legacyDark, follow: '0' })
+      stubMatchMedia(false)
+      expect(runBootstrapScript().theme, legacyDark).toBe('dark')
+    }
   })
 
   it('keeps the chosen palette for each ground', () => {
     seedStorage({
-      theme: 'ink-blue',
+      theme: 'dark',
       follow: '1',
-      lightTheme: 'celadon' satisfies LightThemeMode,
-      darkTheme: 'ink-blue' satisfies DarkThemeMode,
+      lightTheme: 'white' satisfies LightThemeMode,
+      darkTheme: 'dark' satisfies DarkThemeMode,
     })
 
     stubMatchMedia(false)
-    expect(runBootstrapScript().theme).toBe('celadon')
+    expect(runBootstrapScript().theme).toBe('white')
 
     stubMatchMedia(true)
-    expect(runBootstrapScript().theme).toBe('ink-blue')
+    expect(runBootstrapScript().theme).toBe('dark')
   })
 })

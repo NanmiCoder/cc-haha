@@ -248,7 +248,7 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
                     title={title}
                     className={`flex h-[30px] w-full items-center gap-1.5 rounded-[var(--radius-sm)] pl-8 pr-2 text-left text-[13px] transition-[background,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                       session.id === activeTabId
-                        ? 'bg-[var(--color-sidebar-item-active)] font-medium text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
+                        ? 'bg-[var(--color-sidebar-item-active)] font-medium text-[var(--color-text-primary)]'
                         : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)]'
                     }`}
                   >

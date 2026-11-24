@@ -56,44 +56,30 @@ describe('resolveAppliedTheme', () => {
     for (const systemAppearance of ['dark', 'light'] as const) {
       expect(resolveAppliedTheme({
         followSystem: false,
-        theme: 'warm-classic',
+        theme: 'dark',
         lightTheme: 'white',
         darkTheme: 'dark',
         systemAppearance,
-      })).toBe('warm-classic')
+      })).toBe('dark')
     }
   })
 
   it('resolves each ground to the palette chosen for it', () => {
-    // Two palettes sit on each ground, so a dark OS does not simply mean the
-    // one literally named `dark`.
     expect(resolveAppliedTheme({
       followSystem: true,
       theme: 'white',
-      lightTheme: 'celadon',
-      darkTheme: 'ink-blue',
+      lightTheme: 'white',
+      darkTheme: 'dark',
       systemAppearance: 'dark',
-    })).toBe('ink-blue')
+    })).toBe('dark')
 
     expect(resolveAppliedTheme({
       followSystem: true,
-      theme: 'white',
-      lightTheme: 'celadon',
-      darkTheme: 'ink-blue',
+      theme: 'dark',
+      lightTheme: 'white',
+      darkTheme: 'dark',
       systemAppearance: 'light',
-    })).toBe('celadon')
-  })
-
-  it('resolves a ground to its preference, not to the last applied palette', () => {
-    // Evening: the app is on ink-blue. Morning: it must return to warm
-    // classic rather than to the palette it happens to be sitting on.
-    expect(resolveAppliedTheme({
-      followSystem: true,
-      theme: 'ink-blue',
-      lightTheme: 'warm-classic',
-      darkTheme: 'ink-blue',
-      systemAppearance: 'light',
-    })).toBe('warm-classic')
+    })).toBe('white')
   })
 })
 
@@ -177,20 +163,26 @@ describe('stored appearance preferences', () => {
     expect(readStoredFollowSystemTheme(window.localStorage)).toBe(false)
   })
 
-  it('seeds each ground from a manual theme sitting on it', () => {
-    window.localStorage.setItem('cc-haha-theme', 'celadon')
-    expect(readStoredLightTheme(window.localStorage)).toBe('celadon')
+  it('forward-migrates legacy persisted themes to white or dark', () => {
+    for (const legacyLight of ['light', 'paper', 'warm-classic', 'celadon']) {
+      window.localStorage.setItem('cc-haha-theme', legacyLight)
+      expect(readStoredTheme(window.localStorage), legacyLight).toBe('white')
+      expect(readStoredLightTheme(window.localStorage), legacyLight).toBe('white')
+    }
 
-    window.localStorage.setItem('cc-haha-theme', 'ink-blue')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('ink-blue')
+    for (const legacyDark of ['ink-blue', 'neutral-dark']) {
+      window.localStorage.setItem('cc-haha-theme', legacyDark)
+      expect(readStoredTheme(window.localStorage), legacyDark).toBe('dark')
+      expect(readStoredDarkTheme(window.localStorage), legacyDark).toBe('dark')
+    }
   })
 
   it('falls back to the defaults when the manual theme is on the other ground', () => {
-    window.localStorage.setItem('cc-haha-theme', 'ink-blue')
+    window.localStorage.setItem('cc-haha-theme', 'dark')
     expect(readStoredLightTheme(window.localStorage)).toBe('white')
 
-    window.localStorage.setItem('cc-haha-theme', 'celadon')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
+    window.localStorage.setItem('cc-haha-theme', 'white')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('dark')
   })
 
   it('rejects stored values outside their own ground', () => {
@@ -200,7 +192,7 @@ describe('stored appearance preferences', () => {
 
     expect(readStoredTheme(window.localStorage)).toBe('white')
     expect(readStoredLightTheme(window.localStorage)).toBe('white')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('dark')
   })
 
   it('survives storage that throws instead of returning a value', () => {
@@ -211,17 +203,17 @@ describe('stored appearance preferences', () => {
 
     expect(readStoredTheme(storage)).toBe('white')
     expect(readStoredLightTheme(storage)).toBe('white')
-    expect(readStoredDarkTheme(storage)).toBe('neutral-dark')
+    expect(readStoredDarkTheme(storage)).toBe('dark')
     expect(readStoredFollowSystemTheme(storage)).toBe(true)
   })
 
-  it('accepts neutral dark as a manual choice and a dark preference only', () => {
+  it('migrates legacy neutral dark into dark while keeping follow-system off', () => {
     window.localStorage.setItem('cc-haha-theme', 'neutral-dark')
     window.localStorage.setItem('cc-haha-light-theme', 'neutral-dark')
     window.localStorage.setItem('cc-haha-dark-theme', 'neutral-dark')
-    expect(readStoredTheme(window.localStorage)).toBe('neutral-dark')
+    expect(readStoredTheme(window.localStorage)).toBe('dark')
     expect(readStoredLightTheme(window.localStorage)).toBe('white')
-    expect(readStoredDarkTheme(window.localStorage)).toBe('neutral-dark')
+    expect(readStoredDarkTheme(window.localStorage)).toBe('dark')
     expect(readStoredFollowSystemTheme(window.localStorage)).toBe(false)
   })
 })

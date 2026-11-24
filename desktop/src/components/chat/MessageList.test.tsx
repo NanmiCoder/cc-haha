@@ -42,7 +42,6 @@ import {
   useSelectionMenuPlacementStore,
 } from '../../stores/selectionMenuPlacementStore'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useSideChatStore } from '../../stores/sideChatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTrajectoryViewStore } from '../../stores/trajectoryViewStore'
@@ -1621,34 +1620,6 @@ describe('MessageList nested tool calls', () => {
     fireEvent.click(screen.getByRole('button', { name: /Turn 4 of 4: Fourth prompt/ }))
 
     expect(scrollTop).not.toBe(600)
-  })
-
-  it('keeps a fixed-choice question inline from the tool event through permission submission', () => {
-    const input = {
-      allowFreeText: false,
-      questions: [{ question: 'Which format?', options: [{ label: 'Markdown' }, { label: 'HTML' }] }],
-    }
-    const tool = { toolName: 'AskUserQuestion', toolUseId: 'tool-format', input }
-    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ chatState: 'tool_executing' }) } })
-    const store = useChatStore.getState()
-    const send = vi.spyOn(wsManager, 'send').mockImplementation(() => {})
-    render(<MessageList />)
-
-    act(() => store.handleServerMessage(ACTIVE_TAB, { type: 'tool_use_complete', ...tool }))
-    expect(screen.queryByPlaceholderText('Type your answer...')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Submit' })).toHaveProperty('disabled', true)
-
-    act(() => store.handleServerMessage(ACTIVE_TAB, { type: 'permission_request', requestId: 'perm-format', ...tool }))
-    expect(screen.queryByRole('button', { name: 'Chat about this' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'HTML' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
-
-    expect(send.mock.calls.filter(([, message]) => message.type === 'permission_response')).toEqual([
-      [ACTIVE_TAB, {
-        type: 'permission_response', requestId: 'perm-format', allowed: true,
-        updatedInput: { ...input, answers: { 'Which format?': 'HTML' } },
-      }],
-    ])
   })
 
   it('filters duplicate unresolved AskUserQuestion cards while a matching permission is pending', () => {
@@ -6940,44 +6911,6 @@ describe('MessageList nested tool calls', () => {
 
     expect(await screen.findByRole('button', { name: 'Undo current turn changes' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull()
-  })
-
-  it('hides fork, rewind, edit replay, and quote side chat for Antigravity without affecting another session', async () => {
-    const agySessionId = 'agy-transcript'
-    const messages: UIMessage[] = [
-      { id: 'user-1', transcriptMessageId: 'transcript-user-1', type: 'user_text', content: 'Read the package.', timestamp: 1 },
-      { id: 'assistant-1', transcriptMessageId: 'transcript-assistant-1', type: 'assistant_text', content: 'Here are the package details.', timestamp: 2 },
-    ]
-    useChatStore.setState({ sessions: {
-      [agySessionId]: makeSessionState({ messages }),
-      [ACTIVE_TAB]: makeSessionState({ messages }),
-    } })
-    const checkpoints = vi.mocked(sessionsApi.getTurnCheckpoints).mockResolvedValue({
-      checkpoints: [{
-        target: { targetUserMessageId: 'transcript-user-1', userMessageIndex: 0, userMessageCount: 1 },
-        code: { available: false, filesChanged: [], insertions: 0, deletions: 0 },
-      }],
-    })
-    useSessionRuntimeStore.setState({ selections: { [agySessionId]: { providerId: 'antigravity-acp', modelId: 'gemini-3.8-flash' } } })
-
-    try {
-      const { rerender, unmount } = render(<MessageList sessionId={agySessionId} />)
-      await selectMessageText(screen.getByText('Here are the package details.'), 'package details')
-      expect(screen.getByRole('button', { name: 'Copy reply' })).toBeTruthy()
-      expect(screen.queryAllByRole('button', { name: /^(Fork a new conversation|Roll back conversation|Edit and resend|Ask in side chat)$/ })).toHaveLength(0)
-      expect(checkpoints).not.toHaveBeenCalled()
-
-      rerender(<MessageList sessionId={ACTIVE_TAB} />)
-      expect(await screen.findByRole('button', { name: 'Roll back conversation' })).toBeTruthy()
-      expect(screen.getAllByRole('button', { name: 'Fork a new conversation' })).toHaveLength(2)
-      expect(screen.getByRole('button', { name: 'Edit and resend' })).toBeTruthy()
-      await selectMessageText(screen.getByText('Here are the package details.'), 'package details')
-      expect(screen.getByRole('button', { name: 'Ask in side chat' })).toBeTruthy()
-      expect(checkpoints).toHaveBeenCalledExactlyOnceWith(ACTIVE_TAB, { signal: expect.any(AbortSignal) })
-      unmount()
-    } finally {
-      useSessionRuntimeStore.setState({ selections: {} })
-    }
   })
 
   it('does not offer transcript branching for a restored lean conversation', () => {

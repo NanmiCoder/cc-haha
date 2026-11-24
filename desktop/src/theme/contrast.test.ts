@@ -27,12 +27,7 @@ type Rgb = { r: number; g: number; b: number; a: number }
  */
 const THEME_BLOCKS = {
   white: [':root,\n[data-theme="white"]', ':root', '@theme'],
-  paper: ['[data-theme="paper"]', ':root', '@theme'],
-  'warm-classic': ['[data-theme="warm-classic"]', ':root', '@theme'],
-  celadon: ['[data-theme="celadon"]', ':root', '@theme'],
-  dark: ['[data-theme="dark"]', '[data-theme="dark"],\n[data-theme="ink-blue"],\n[data-theme="neutral-dark"]', ':root', '@theme'],
-  'ink-blue': ['[data-theme="ink-blue"]', '[data-theme="dark"],\n[data-theme="ink-blue"],\n[data-theme="neutral-dark"]', ':root', '@theme'],
-  'neutral-dark': ['[data-theme="neutral-dark"]', '[data-theme="dark"],\n[data-theme="ink-blue"],\n[data-theme="neutral-dark"]', ':root', '@theme'],
+  dark: ['[data-theme="dark"]', ':root', '@theme'],
 } as const
 
 /**
@@ -146,7 +141,7 @@ describe('default theme reading contrast', () => {
     '--color-surface-container-highest',
   ] as const
 
-  for (const theme of ['white', 'dark', 'neutral-dark'] as const) {
+  for (const theme of ['white', 'dark'] as const) {
     const selectors = THEME_BLOCKS[theme]
     const surface = parseColor(resolve('--color-surface', selectors))
 

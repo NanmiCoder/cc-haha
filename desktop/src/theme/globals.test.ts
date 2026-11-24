@@ -52,12 +52,7 @@ function getCssBetween(startMarker: string, endMarker: string) {
  */
 const themes = [
   ':root,\n[data-theme="white"]',
-  '[data-theme="paper"]',
-  '[data-theme="warm-classic"]',
-  '[data-theme="celadon"]',
   '[data-theme="dark"]',
-  '[data-theme="ink-blue"]',
-  '[data-theme="neutral-dark"]',
 ] as const
 
 describe('desktop theme tokens', () => {
@@ -184,17 +179,12 @@ describe('desktop theme tokens', () => {
     }
   })
 
-  it('keeps the neutral dark grounds, boundaries and reading tiers achromatic', () => {
-    const block = getThemeBlock('[data-theme="neutral-dark"]')
-    const tokens = [
-      'bg', 's0', 's1', 's2', 'bd', 'bd2', 'bd-strong', 'tab-edge', 'tab-sep',
-      't1', 't2', 't3', 'code',
-    ]
-    for (const token of tokens) {
-      const match = new RegExp(`--cc-${token}:\\s*#([\\da-f]{2})([\\da-f]{2})([\\da-f]{2});`, 'i').exec(block)
-      expect(match, `${token} must be an opaque neutral gray`).not.toBeNull()
-      expect(new Set(match!.slice(1)).size, `${token} must not have a color cast`).toBe(1)
-    }
+  it('removes muddy SVG surface grain and uses crisp geometric sans for --font-headline', () => {
+    expect(normalizedCss).toContain('--surface-grain: none;')
+    expect(normalizedCss).not.toContain('feTurbulence')
+    const themeBlock = getThemeBlock('@theme')
+    expect(themeBlock).toContain('--font-headline: "Plus Jakarta Sans", "Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;')
+    expect(themeBlock).not.toMatch(/--font-headline:[^;]*Noto Serif SC/)
   })
 
   it('uses dark terminal and syntax colors for every dark palette', () => {

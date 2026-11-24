@@ -11,9 +11,9 @@ import { isWorktreeSession } from './sidebarTaskGroups'
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
 
-/** The selected/active thread card lifted off the sidebar ground. */
+/** Soft editorial active highlight on the sidebar surface without heavy shadow clutter. */
 const SIDEBAR_ROW_RAISED =
-  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
+  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)]'
 
 const ICON_STROKE = 1.75
 

@@ -625,7 +625,7 @@ describe('AppShell boot flow', () => {
     expect(screen.queryByTestId('mobile-shell-stub')).not.toBeInTheDocument()
   })
 
-  it('frames the desktop main workspace as a floating inset canvas on the sidebar grain shell', async () => {
+  it('frames the desktop workspace as a full-bleed split separated by a hairline border without grain', async () => {
     mocks.layout = 'desktop'
 
     const { container } = render(<AppShell />)
@@ -633,16 +633,14 @@ describe('AppShell boot flow', () => {
     await screen.findByText('content loaded')
     const shell = container.querySelector('.app-shell')
     const main = screen.getByRole('main')
-    expect(shell).toHaveClass('bg-[var(--color-surface-sidebar)]', 'surface-grain')
-    expect(main).toHaveAttribute('data-canvas-inset', 'true')
+    expect(shell).toHaveClass('bg-[var(--color-surface-sidebar)]')
+    expect(shell).not.toHaveClass('surface-grain')
+    expect(main).toHaveAttribute('data-canvas-inset', 'false')
     expect(main).toHaveClass(
       'bg-[var(--color-surface)]',
-      'surface-grain',
-      'md:m-1.5',
-      'md:ml-0',
-      'md:rounded-[var(--radius-lg)]',
-      'md:border',
-      'md:border-[var(--color-border)]',
+      'border-l',
+      'border-[var(--color-border)]',
     )
+    expect(main).not.toHaveClass('surface-grain', 'md:m-1.5', 'md:rounded-[var(--radius-lg)]')
   })
 })

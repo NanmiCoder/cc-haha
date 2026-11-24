@@ -108,7 +108,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   'tonal-outline':
     `control-bevel bg-transparent text-[var(--color-brand)] border border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-brand)] hover:border-[var(--color-brand)] hover:text-[var(--color-on-primary)] ${DISABLED_FADE}`,
   ghost:
-    `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] [&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] ${DISABLED_FADE}`,
   danger:
     // Foreground from a token, not `white`: dark's --color-error is a light red
     // that white text is unreadable on.
@@ -118,7 +118,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   'danger-outline':
     `control-bevel bg-transparent text-[var(--color-error)] border border-[var(--color-error)] hover:bg-[var(--color-error-soft)] ${DISABLED_FADE}`,
   'danger-ghost':
-    `bg-transparent text-[var(--color-error)] hover:bg-[var(--color-error-soft)] [&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97] ${DISABLED_FADE}`,
+    `bg-transparent text-[var(--color-error)] hover:bg-[var(--color-error-soft)] ${DISABLED_FADE}`,
   link:
     `bg-transparent text-[var(--color-brand)] underline-offset-2 hover:underline hover:text-[var(--color-brand-hover)] px-0 ${DISABLED_FADE}`,
 }
@@ -192,6 +192,7 @@ const BASE_CLASSES = [
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
   'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]',
   'disabled:cursor-not-allowed disabled:pointer-events-none disabled:translate-y-0',
+  '[&:active:not(:disabled):not([aria-haspopup])]:scale-[0.98]',
   'motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100',
 ].join(' ')
 

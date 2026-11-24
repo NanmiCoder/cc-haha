@@ -130,7 +130,6 @@ import { installFakeBrowserGuests, isBrowserPageShown } from '../test/fakeBrowse
 import { createDefaultSessionState, useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useSessionStore } from '../stores/sessionStore'
-import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
@@ -183,7 +182,6 @@ afterEach(() => {
   viewportMocks.isMobile = false
   useTabStore.setState({ tabs: [], activeTabId: null })
   useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
-  useSessionRuntimeStore.setState({ selections: {} })
   useChatStore.setState({ sessions: {} })
   useSettingsStore.setState({ locale: 'en' })
   useTeamStore.getState().stopMemberPolling()
@@ -544,31 +542,6 @@ describe('ActiveSession task polling', () => {
     expect(headerEntry).toHaveLength(1)
     fireEvent.click(headerEntry[0]!)
     expect(openSideChat).toHaveBeenCalledWith(id)
-  })
-
-  it.each([false, true])('does not offer Side Chat for Antigravity (mobile: %s)', (isMobile) => {
-    viewportMocks.isMobile = isMobile
-    const id = `agy-side-parent-${isMobile ? 'mobile' : 'desktop'}`
-    useSettingsStore.setState({ locale: 'en' })
-    useTabStore.setState({ activeTabId: id, tabs: [{ sessionId: id, title: 'Main', type: 'session', status: 'idle' }] })
-    useSessionStore.setState({ sessions: [{ id, title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
-    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true } } })
-    useSessionRuntimeStore.setState({ selections: { [id]: { providerId: 'antigravity-acp', modelId: 'agent-default' } } })
-    if (!isMobile) useWorkspaceStore.getState().setLayout(id, 'split')
-
-    render(<ActiveSession sessionId={id} />)
-    expect(screen.getByTestId('message-list')).toBeInTheDocument()
-    expect(screen.queryAllByRole('button', { name: 'Side chat' })).toHaveLength(0)
-    if (!isMobile) {
-      expect(screen.getByTestId('workspace-launcher-review')).toBeInTheDocument()
-      expect(screen.queryByTestId('workspace-launcher-side-chat')).not.toBeInTheDocument()
-      act(() => { useWorkspaceStore.getState().openTarget(id, { kind: 'terminal', cwd: '/repo', dock: 'side' }) })
-      fireEvent.click(screen.getByTestId('workspace-add-tab-side'))
-      const menu = within(screen.getByTestId('workspace-add-menu'))
-      expect(menu.queryByRole('menuitem', { name: 'Side chat' })).not.toBeInTheDocument()
-      expect(menu.getByTestId('workspace-menu-review')).toBeInTheDocument()
-    }
-    expect(openSideChat).not.toHaveBeenCalled()
   })
 
   it('does not offer side chats for restored lean sessions', () => {

@@ -402,7 +402,7 @@ function MessageCapability({ capability }: { capability: UserMessageCapability }
       {capability.kind === 'computer' || capability.kind === 'plugin' ? (
         <Glyph name={capability.kind === 'computer' ? 'monitor' : 'plug'} size={13} color={colors.run} />
       ) : (
-        <Icon name={capability.kind === 'team' ? 'users' : capability.kind === 'command' ? 'terminal' : 'sparkle'} size={13} color={colors.run} />
+        <Icon name={capability.kind === 'team' ? 'users' : capability.kind === 'command' ? 'terminal' : 'layers'} size={13} color={colors.run} />
       )}
       <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 12.5, lineHeight: 17, fontWeight: '600', color: colors.run }}>
         {capability.label}

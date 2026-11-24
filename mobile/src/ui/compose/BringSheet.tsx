@@ -46,7 +46,7 @@ const materials: { kind: MaterialKind; title: string; icon: IconName }[] = [
 ]
 
 function EntryIcon({ group, color }: { group: BringGroup; color: string }) {
-  if (group === 'skill') return <Icon name="sparkle" size={16} color={color} />
+  if (group === 'skill') return <Icon name="layers" size={16} color={color} />
   if (group === 'command') return <Icon name="terminal" size={16} color={color} />
   if (group === 'connector') return <Glyph name="plug" size={16} color={color} />
   if (group === 'agent') return <Glyph name="bot" size={16} color={color} />

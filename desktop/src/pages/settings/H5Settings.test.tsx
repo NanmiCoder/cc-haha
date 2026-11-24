@@ -133,16 +133,16 @@ it('activates and deletes providers through the existing API without connection 
   await waitFor(() => expect(remove).toHaveBeenCalledWith('fixture-provider'))
   expect(probe).not.toHaveBeenCalled()
 })
-it.each(['ink-blue', 'neutral-dark'])('changes browser appearance to %s without writing connected computer settings', async (theme) => {
+it.each(['dark', 'white'] as const)('changes browser appearance to %s without writing connected computer settings', async (theme) => {
   useUIStore.setState({ activeSettingsTab: 'general', followSystemTheme: true })
   const update = vi.spyOn(settingsApi, 'updateUser')
   render(<H5Settings />)
-  expect(screen.getByRole('option', { name: theme === 'neutral-dark' ? 'Neutral Dark' : 'Ink Blue' })).toHaveValue(theme)
+  expect(screen.getByRole('option', { name: theme === 'dark' ? 'Dark' : 'Light' })).toHaveValue(theme)
   fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: theme } })
   expect(useUIStore.getState().theme).toBe(theme)
   expect(useUIStore.getState().followSystemTheme).toBe(false)
   expect(window.localStorage.getItem('cc-haha-theme')).toBe(theme)
-  expect(document.documentElement.style.colorScheme).toBe('dark')
+  expect(document.documentElement.style.colorScheme).toBe(theme === 'dark' ? 'dark' : 'light')
   expect(update).not.toHaveBeenCalled()
 })
 

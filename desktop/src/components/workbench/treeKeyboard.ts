@@ -22,14 +22,17 @@ export type RovingTreeOptions<Row extends RovingTreeRow> = {
   selectedPath?: string | null
   onActivate: (row: Row) => void
   onToggleDirectory?: (row: Row) => void
+  /** Called before focusing a row so a virtualized tree can scroll it into the DOM. */
+  onEnsureVisible?: (index: number) => void
 }
 
 export function useRovingTree<Row extends RovingTreeRow>(
   rows: readonly Row[],
-  { selectedPath, onActivate, onToggleDirectory }: RovingTreeOptions<Row>,
+  { selectedPath, onActivate, onToggleDirectory, onEnsureVisible }: RovingTreeOptions<Row>,
 ) {
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
   const nodes = useRef(new Map<string, HTMLElement>())
+  const pendingFocusPath = useRef<string | null>(null)
 
   // A path that scrolled out of the visible set (a collapsed parent, a filter)
   // must not take the tab stop with it, or the tree becomes unreachable again.
@@ -38,24 +41,41 @@ export function useRovingTree<Row extends RovingTreeRow>(
     : rows.find((row) => row.path === selectedPath)?.path ?? rows[0]?.path ?? null
 
   const registerRow = useCallback((path: string) => (node: HTMLElement | null) => {
-    if (node) nodes.current.set(path, node)
-    else nodes.current.delete(path)
+    if (node) {
+      nodes.current.set(path, node)
+      if (pendingFocusPath.current === path) {
+        pendingFocusPath.current = null
+        node.focus()
+      }
+    } else {
+      nodes.current.delete(path)
+    }
   }, [])
 
-  const focusRow = useCallback((path: string) => {
+  const focusRow = useCallback((path: string, index?: number) => {
     setFocusedPath(path)
-    nodes.current.get(path)?.focus()
-  }, [])
+    const existing = nodes.current.get(path)
+    if (existing) {
+      pendingFocusPath.current = null
+      existing.focus()
+      return
+    }
+    if (index !== undefined) {
+      pendingFocusPath.current = path
+      onEnsureVisible?.(index)
+    }
+  }, [onEnsureVisible])
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLElement>, row: Row) => {
     const index = rows.findIndex((candidate) => candidate.path === row.path)
     if (index < 0) return
 
     const moveTo = (next: number) => {
-      const target = rows[Math.max(0, Math.min(rows.length - 1, next))]
+      const clamped = Math.max(0, Math.min(rows.length - 1, next))
+      const target = rows[clamped]
       if (!target) return
       event.preventDefault()
-      focusRow(target.path)
+      focusRow(target.path, clamped)
     }
 
     switch (event.key) {

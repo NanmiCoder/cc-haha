@@ -46,7 +46,6 @@ import {
   toCcSwitchScanResult,
 } from '../services/ccSwitchImport.js'
 import { fetchProviderModels } from '../services/providerModelCatalog.js'
-import { ANTIGRAVITY_PROVIDER_ID, discoverAntigravity, getAntigravityStatus } from '../services/antigravityAcp.js'
 
 const providerService = new ProviderService()
 
@@ -131,12 +130,6 @@ export async function handleProvidersApi(
       throw ApiError.notFound(`Unknown Magpie route: ${action}`)
     }
 
-    if (id === ANTIGRAVITY_PROVIDER_ID) {
-      if (action !== 'discover' || segments.length !== 4) throw ApiError.notFound('Unknown Antigravity route')
-      if (req.method !== 'POST') throw methodNotAllowed(req.method)
-      return Response.json(await discoverAntigravity())
-    }
-
     // GET /api/providers/presets
     // Carries retired presets too (flagged `deprecated`), so a consumer resolving a saved
     // provider's presetId still finds it. Filter on `deprecated` to build add-provider choices.
@@ -146,15 +139,7 @@ export async function handleProvidersApi(
 
     // GET /api/providers/auth-status[?providerId=<id>]
     if (id === 'auth-status' && req.method === 'GET') {
-      const providerId = readAuthStatusProviderId(url)
-      if (providerId === ANTIGRAVITY_PROVIDER_ID) {
-        const { status } = getAntigravityStatus()
-        return Response.json({
-          hasAuth: status !== 'not_installed' && status !== 'login_required',
-          source: 'none', activeProvider: 'Antigravity', localAgentStatus: status,
-        })
-      }
-      const status = await providerService.checkAuthStatus(providerId)
+      const status = await providerService.checkAuthStatus(readAuthStatusProviderId(url))
       return Response.json(status)
     }
 
@@ -195,7 +180,7 @@ export async function handleProvidersApi(
         // picker shows its alias rows like one, from the mapping the user saved.
         const deepSeekAccountModels =
           await providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID)
-        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels, localAgent: getAntigravityStatus() })
+        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)

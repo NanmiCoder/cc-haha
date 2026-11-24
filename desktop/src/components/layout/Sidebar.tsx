@@ -76,9 +76,9 @@ const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
 const MOD_KEY = detectPlatform() === 'mac' ? '⌘' : 'Ctrl+'
-/** The selected row is a paper card lifted off the sidebar ground. */
+/** Soft editorial active highlight on the sidebar surface without heavy shadow clutter. */
 const SIDEBAR_ROW_RAISED =
-  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
+  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)]'
 const ICON_STROKE = 1.75
 const PROJECT_GROUP_VISIBLE_COUNT = SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT
 // Long enough to notice a mistaken archive and take it back.
