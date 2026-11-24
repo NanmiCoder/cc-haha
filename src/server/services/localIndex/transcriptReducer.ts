@@ -553,8 +553,11 @@ export function resolveEntryMessageRole(
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return undefined
   }
-  if (typeof message.role === 'string' && message.role.trim().length > 0) {
-    return message.role
+  if (typeof message.role === 'string') {
+    const trimmedRole = message.role.trim()
+    if (trimmedRole.length > 0) {
+      return trimmedRole
+    }
   }
   if (entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system') {
     return entry.type

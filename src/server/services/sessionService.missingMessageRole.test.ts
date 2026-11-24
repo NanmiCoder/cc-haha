@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { reduceTranscript } from './localIndex/transcriptReducer.js'
+import { openLocalIndexDatabase } from './localIndex/database.js'
+import { createSessionIndex } from './localIndex/sessionIndex.js'
+import {
+  SESSION_SUMMARY_PARSER_VERSION,
+  createSessionProjector,
+} from './localIndex/sessionProjector.js'
+import { reduceTranscript, resolveEntryMessageRole } from './localIndex/transcriptReducer.js'
 import { SessionService } from './sessionService.js'
 import { projectTrajectoryRows, type ProjectionEntry } from './trajectoryProjection.js'
 
@@ -240,10 +246,157 @@ test('Issue #1993 fallback safety: user entries omitting message.role fall back 
       timestamp: '2026-11-23T15:49:02.000Z',
       sessionId,
     },
+    {
+      type: 'assistant',
+      uuid: 'assistant-string-message',
+      timestamp: '2026-11-23T15:49:03.000Z',
+      sessionId,
+      message: 'not-an-object',
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant-array-message',
+      timestamp: '2026-11-23T15:49:04.000Z',
+      sessionId,
+      message: ['not-a-record'],
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant-padded-role',
+      parentUuid: 'u-missing-role-1',
+      timestamp: '2026-11-23T15:49:05.000Z',
+      sessionId,
+      message: {
+        role: ' assistant ',
+        content: [{ type: 'text', text: 'Padded role stays assistant' }],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant-blank-role',
+      parentUuid: 'assistant-padded-role',
+      timestamp: '2026-11-23T15:49:06.000Z',
+      sessionId,
+      message: {
+        role: '   ',
+        content: [{ type: 'text', text: 'Blank role falls back to assistant' }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'user-padded-role',
+      parentUuid: 'assistant-blank-role',
+      timestamp: '2026-11-23T15:49:07.000Z',
+      sessionId,
+      message: {
+        role: ' user ',
+        content: 'Padded user prompt',
+      },
+    },
   ])
+
+  expect(resolveEntryMessageRole({ type: 'assistant', message: { role: ' assistant ' } })).toBe('assistant')
+  expect(resolveEntryMessageRole({ type: 'assistant', message: { role: '   ' } })).toBe('assistant')
+  expect(resolveEntryMessageRole({ type: 'assistant', message: null })).toBeUndefined()
+  expect(resolveEntryMessageRole({ type: 'assistant', message: 'raw' as unknown as { role?: string } })).toBeUndefined()
+  expect(resolveEntryMessageRole({ type: 'assistant', message: [] as unknown as { role?: string } })).toBeUndefined()
 
   const messages = await service.getSessionMessages(sessionId, { includeSubagents: false })
   expect(messages.map(m => ({ id: m.id, type: m.type }))).toEqual([
     { id: 'u-missing-role-1', type: 'user' },
+    { id: 'assistant-padded-role', type: 'assistant' },
+    { id: 'assistant-blank-role', type: 'assistant' },
+    { id: 'user-padded-role', type: 'user' },
   ])
+
+  const { sessions } = await service.listSessions()
+  const listed = sessions.find(item => item.id === sessionId)
+  expect(listed?.title).toBe('User prompt without nested message.role')
+  expect(listed?.messageCount).toBe(4)
+})
+
+test('Issue #1993 local index upgrade: parser version bump rebuilds pre-indexed transcripts without touching the file', async () => {
+  const entries: Record<string, unknown>[] = [
+    ...buildIssue1993Entries(),
+    {
+      parentUuid: '39e42023-09cb-49f6-87bf-3982ee459098',
+      type: 'assistant',
+      uuid: '8b28fa40-9e3c-4f25-8ab1-b3d8671de551',
+      timestamp: '2026-11-23T15:48:59.500Z',
+      sessionId,
+      message: {
+        id: 'chatcmpl-96b23cb0ee3c414f',
+        model: 'qwen3.5-27b-uncensored',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_missing_role_1',
+            name: 'Read',
+            input: { file_path: 'README.md' },
+          },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+      },
+    },
+  ]
+  await seedTranscript(entries)
+  const fileStat = await stat(transcriptPath)
+  const candidate = {
+    path: transcriptPath,
+    sessionId,
+    projectPath: 'fixture-project',
+    fallbackCreatedAt: '2026-11-23T15:48:45.000Z',
+    fallbackModifiedAt: '2026-11-23T15:48:45.000Z',
+    fallbackWorkDir: null,
+    modifiedAtMs: fileStat.mtimeMs,
+  }
+
+  const database = openLocalIndexDatabase({ path: join(directory, 'local-index.sqlite') })
+  const index = createSessionIndex(database)
+  try {
+    // Simulate a transcript already indexed before parser version bump, with stale pre-fix counts
+    const oldProjector = createSessionProjector({
+      database,
+      index,
+      scope: directory,
+      parserVersion: SESSION_SUMMARY_PARSER_VERSION - 1,
+    })
+    await oldProjector.projectSource(candidate)
+    database.write(operation => operation.run(
+      'UPDATE sessions SET message_count = 1, modified_at = ? WHERE transcript_path = ?',
+      '2026-11-23T15:48:45.000Z',
+      transcriptPath,
+    ))
+
+    const upgradedProjector = createSessionProjector({
+      database,
+      index,
+      scope: directory,
+    })
+    const result = await upgradedProjector.projectSource(candidate)
+    expect(result).toMatchObject({
+      kind: 'indexed',
+      action: 'rebuild',
+      projection: {
+        summary: {
+          messageCount: 4,
+          modifiedAt: '2026-11-23T15:48:59.500Z',
+        },
+      },
+    })
+    expect(database.read(operation => operation.get<{ parser_version: number }>(
+      'SELECT parser_version FROM source_files WHERE path = ?',
+      transcriptPath,
+    )?.parser_version)).toBe(SESSION_SUMMARY_PARSER_VERSION)
+    expect(database.read(operation => operation.get<{ message_count: number; modified_at: string }>(
+      'SELECT message_count, modified_at FROM sessions WHERE transcript_path = ?',
+      transcriptPath,
+    ))).toEqual({
+      message_count: 4,
+      modified_at: '2026-11-23T15:48:59.500Z',
+    })
+  } finally {
+    database.close()
+  }
 })

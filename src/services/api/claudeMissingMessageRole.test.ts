@@ -228,3 +228,108 @@ test('Issue #1993 write-path (commitFallbackResponse): non-streaming fallback re
   expect(assistants).toHaveLength(1)
   expect(assistants[0]?.message.role).toBe('assistant')
 })
+
+test('Issue #1993 write-path normalization: blank, padded, and non-string roles normalize to "assistant" on streaming and fallback paths', async () => {
+  const model = 'qwen3.5-27b-uncensored'
+  const malformedRoles: unknown[] = ['   ', ' assistant ', 123, { bad: true }]
+
+  for (const [idx, rawRole] of malformedRoles.entries()) {
+    const events: Array<Record<string, unknown>> = [
+      {
+        type: 'message_start',
+        message: {
+          id: `chatcmpl-malformed-stream-${idx}`,
+          type: 'message',
+          role: rawRole,
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `Reply ${idx}` } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } },
+      { type: 'message_stop' },
+    ]
+
+    requestCount = 0
+    handler = () => new Response(sseEncode(events), { headers: { 'content-type': 'text/event-stream' } })
+
+    const streamAssistants: AssistantMessage[] = []
+    for await (const message of queryModelWithStreaming({
+      messages: [createUserMessage({ content: 'hello' })],
+      systemPrompt: asSystemPrompt([]),
+      thinkingConfig: { type: 'disabled' },
+      tools: [],
+      signal: new AbortController().signal,
+      options: {
+        model,
+        querySource: 'insights',
+        agents: [],
+        isNonInteractiveSession: true,
+        hasAppendSystemPrompt: false,
+        mcpTools: [],
+        enablePromptCaching: false,
+        getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+      },
+    })) {
+      if (message.type === 'assistant') {
+        streamAssistants.push(message)
+      }
+    }
+
+    expect(streamAssistants).toHaveLength(1)
+    expect(streamAssistants[0]?.message.role).toBe('assistant')
+
+    // Non-streaming fallback with the same malformed role
+    requestCount = 0
+    handler = async (req) => {
+      const body = await req.json() as { stream?: boolean }
+      if (body.stream === true) {
+        return new Response(JSON.stringify({
+          type: 'error',
+          error: { type: 'not_found_error', message: 'streaming endpoint unavailable' },
+        }), { status: 404, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        id: `chatcmpl-malformed-fallback-${idx}`,
+        type: 'message',
+        role: rawRole,
+        model,
+        content: [{ type: 'text', text: `Fallback ${idx}` }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 5, output_tokens: 4 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+
+    const fallbackAssistants: AssistantMessage[] = []
+    for await (const message of queryModelWithStreaming({
+      messages: [createUserMessage({ content: 'hello' })],
+      systemPrompt: asSystemPrompt([]),
+      thinkingConfig: { type: 'disabled' },
+      tools: [],
+      signal: new AbortController().signal,
+      options: {
+        model,
+        querySource: 'insights',
+        agents: [],
+        isNonInteractiveSession: true,
+        hasAppendSystemPrompt: false,
+        mcpTools: [],
+        enablePromptCaching: false,
+        getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+      },
+    })) {
+      if (message.type === 'assistant') {
+        fallbackAssistants.push(message)
+      }
+    }
+
+    expect(fallbackAssistants).toHaveLength(1)
+    expect(fallbackAssistants[0]?.message.role).toBe('assistant')
+  }
+})
