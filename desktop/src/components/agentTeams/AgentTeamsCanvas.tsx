@@ -1012,6 +1012,7 @@ export function AgentTeamsCanvas({
             const from = layout.byId.get(dependencyId)
             if (!from) return null
             const satisfied = from.task.status === 'completed'
+            const flowing = !snapshot.deletedAt && satisfied && to.task.status !== 'completed'
             const justCompleted = satisfied && previousTasksById.get(dependencyId)?.status !== 'completed'
             const fresh = justCompleted || justUnlockedIds.has(to.task.id)
             const owner = taskOwnerVisual(from.task, snapshot, uniqueMembers, from.depth)
@@ -1029,7 +1030,7 @@ export function AgentTeamsCanvas({
                   strokeWidth={fresh ? 3 : focusedChain && related ? 2.5 : 2}
                   strokeDasharray="7 7"
                   opacity={related ? (satisfied ? 0.95 : 0.8) : 0.2}
-                  className={`${satisfied ? 'agent-teams-flow' : ''} ${fresh ? 'agent-teams-unlocked' : ''}`}
+                  className={`${flowing ? 'agent-teams-flow' : ''} ${fresh ? 'agent-teams-unlocked' : ''}`}
                 />
                 <circle
                   cx={to.x - 4}
