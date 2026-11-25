@@ -117,6 +117,9 @@ describe('desktop theme tokens', () => {
     '--color-brand-hover',
     '--color-border-focus',
     '--color-surface-selected',
+    '--color-menu-item-active',
+    '--color-surface-menu-glass',
+    '--color-surface-menu-glass-border',
     '--color-surface-dialog',
     '--color-switch-checked-bg',
     '--color-switch-thumb',
@@ -429,6 +432,20 @@ describe('overlay opacity contract', () => {
         expect(alphaOf(value), `${token} fill "${value}" is too sheer`).toBeGreaterThanOrEqual(0.8)
       }
     }
+  })
+
+  it('keeps the dark composer menu overlay opaque enough that text behind cannot ghost through (#2013)', () => {
+    // The composer menus float over the frosted composer card, where the nested
+    // backdrop-filter does not reliably hide light text. The shared page-glass
+    // fill stayed at 0.82; only these two menus get the dense sheet.
+    const dark = getThemeBlock('[data-theme="dark"]')
+    const value = new RegExp('--color-surface-menu-glass:\\s*([^;]+);').exec(dark)?.[1]
+    expect(value, '--color-surface-menu-glass should be declared in the dark theme').toBeDefined()
+    expect(alphaOf(value!.trim()), `dark menu fill "${value}" is too sheer`).toBeGreaterThanOrEqual(0.94)
+
+    const pageGlass = new RegExp('--color-surface-glass:\\s*([^;]+);').exec(dark)?.[1]
+    expect(pageGlass, 'the dense fill must stay scoped to the composer menus').toBeDefined()
+    expect(alphaOf(pageGlass!.trim())).toBeLessThan(0.9)
   })
 
   it('uses frosted dialog glass on .dialog-panel with top specular rim and ambient shadow', () => {

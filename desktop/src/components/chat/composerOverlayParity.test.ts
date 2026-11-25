@@ -31,6 +31,8 @@ const COMPOSERS = {
   ComposerCapabilityMenu: source('./ComposerCapabilityMenu.tsx'),
 }
 const SLASH_COMMAND_MENU = source('./SlashCommandMenu.tsx')
+const SUGGESTION_ROW = source('./ComposerSuggestionRow.tsx')
+const COMPOSER_REFERENCE_MENU = source('./ComposerReferenceMenu.tsx')
 const MENU_STYLES = source('./composerMenuStyles.ts')
 
 /** Every className string that carries a frosted-glass floating popover surface. */
@@ -67,6 +69,27 @@ describe('composer overlay chrome', () => {
     for (const token of [OVERLAY_RADIUS, 'dropdown-glass', 'popover-motion']) {
       expect(recipe).toContain(token)
     }
+  })
+
+  it('shares one suggestion-row selection recipe across the slash and reference menus (#2013)', () => {
+    // These two menus paint on the dense menu sheet, where the page hover wash
+    // is invisible in dark. Both row implementations must take the shared
+    // recipes rather than re-spelling the tint and rim per file.
+    for (const [name, code] of Object.entries({
+      SlashCommandMenu: SLASH_COMMAND_MENU,
+      ComposerSuggestionRow: SUGGESTION_ROW,
+    })) {
+      expect(code, `${name} must use the shared selected-row recipe`).toContain('COMPOSER_MENU_ITEM_SELECTED')
+      expect(code, `${name} must use the shared hover recipe`).toContain('COMPOSER_MENU_ITEM_HOVER')
+    }
+    for (const [name, code] of Object.entries({
+      SlashCommandMenu: SLASH_COMMAND_MENU,
+      ComposerReferenceMenu: COMPOSER_REFERENCE_MENU,
+    })) {
+      expect(code, `${name} must use the dense composer menu sheet`).toContain('composer-menu-glass')
+    }
+    expect(MENU_STYLES).toContain('--color-menu-item-active')
+    expect(MENU_STYLES).toContain('ring-[var(--color-brand)]')
   })
 
   it('renders the same slash menu and capability menu in both composers', () => {

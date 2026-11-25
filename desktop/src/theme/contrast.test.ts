@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import css from './globals.css?raw'
+import rawCss from './globals.css?raw'
+
+// `core.autocrlf` checkouts carry CRLF, and `blockBody` splits on the literal
+// `selector {` text, so normalize before parsing (as globals.test.ts does).
+const css = rawCss.replace(/\r\n/g, '\n')
 
 /**
  * Contrast guard for the status palette.
@@ -117,6 +121,14 @@ function contrast(fg: Rgb, bg: Rgb): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 }
 
+/** Resolves a token whose value embeds `var()` (e.g. `rgba(var(--x), 0.1)`). */
+function expandVars(token: string, selectors: readonly string[]): string {
+  return resolve(token, selectors).replace(
+    /var\((--[\w-]+)\)/g,
+    (_, name: string) => resolve(name, selectors),
+  )
+}
+
 /** WCAG AA for small text, including ordinary descriptions and metadata. */
 const AA_SMALL_TEXT = 4.5
 
@@ -175,12 +187,26 @@ describe('default theme reading contrast', () => {
       // This is an icon (3:1), not a text description. Its token alpha and
       // the chevron's own 0.95 opacity both reduce the final contrast.
       const trough = parseColor(resolve('--color-surface-sidebar', selectors))
-      const value = resolve('--color-text-secondary-a68', selectors).replace(
-        /var\((--[\w-]+)\)/g,
-        (_, token: string) => resolve(token, selectors),
-      )
-      const icon = parseColor(value)
+      const icon = parseColor(expandVars('--color-text-secondary-a68', selectors))
       expect(contrast(flatten({ ...icon, a: icon.a * 0.95 }, trough), trough)).toBeGreaterThanOrEqual(AA_CONTROL_BOUNDARY)
+    })
+
+    it(`keeps the ${theme} selected menu row visible against its glass sheet (#2013)`, () => {
+      // Composer menus are translucent sheets, so the sheet and the row both
+      // have to be composited before measuring. Re-using the page's
+      // `--color-surface-hover` for the keyboard-selected row left it ~1.02:1
+      // against the dark sheet — visually absent.
+      const surface = parseColor(resolve('--color-surface', selectors))
+      const sheet = flatten(parseColor(expandVars('--color-surface-menu-glass', selectors)), surface)
+      const row = flatten(parseColor(expandVars('--color-menu-item-active', selectors)), sheet)
+      expect(contrast(row, sheet), `${theme}: selected menu row fill vs menu sheet`).toBeGreaterThanOrEqual(1.15)
+
+      // The brand rim is the primary cue; it is non-text UI, so hold it to 3:1.
+      const rim = parseColor(resolve('--color-brand', selectors))
+      expect(contrast(rim, sheet), `${theme}: selected row brand rim vs menu sheet`).toBeGreaterThanOrEqual(AA_CONTROL_BOUNDARY)
+
+      const description = flatten(parseColor(resolve('--color-text-tertiary', selectors)), row)
+      expect(contrast(description, row), `${theme}: tertiary description on the selected menu row`).toBeGreaterThanOrEqual(AA_SMALL_TEXT)
     })
   }
 })

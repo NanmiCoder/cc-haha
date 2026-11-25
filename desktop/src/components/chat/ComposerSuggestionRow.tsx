@@ -1,4 +1,5 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from 'react'
+import { COMPOSER_MENU_ITEM_HOVER, COMPOSER_MENU_ITEM_SELECTED } from './composerMenuStyles'
 
 type Props = Omit<HTMLAttributes<HTMLDivElement>, 'children'> & {
   id: string
@@ -15,14 +16,15 @@ type Props = Omit<HTMLAttributes<HTMLDivElement>, 'children'> & {
 /**
  * Shared dense row for composer capability and reference suggestions — the
  * 「素」 menu item: 32px minimum, the small row corner, 13px label, and the
- * hover fill doubling as the keyboard highlight.
+ * brand menu tint doubling as the hover/keyboard highlight (the plain page
+ * hover wash disappears against the lifted glass sheet on dark, #2013).
  */
 export const ComposerSuggestionRow = forwardRef<HTMLDivElement, Props>(function ComposerSuggestionRow({
   id, label, description, details, icon, trailing, selected = false, touch = false, className = '', ...rest
 }, ref) {
   return <div ref={ref} id={id} role="option" tabIndex={-1} aria-selected={selected}
     aria-labelledby={`${id}-label`} aria-describedby={description || details ? `${id}-description` : undefined}
-    className={`flex ${touch ? 'min-h-11' : 'min-h-8'} min-w-0 cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${selected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'} ${className}`} {...rest}>
+    className={`flex ${touch ? 'min-h-11' : 'min-h-8'} min-w-0 cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${selected ? COMPOSER_MENU_ITEM_SELECTED : COMPOSER_MENU_ITEM_HOVER} ${className}`} {...rest}>
     {icon}
     {details ? <span className="min-w-0 flex-1 space-y-0.5">
       <span id={`${id}-label`} title={label} className="block truncate text-[13px] font-medium text-[var(--color-text-primary)]">{label}</span>

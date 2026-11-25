@@ -165,7 +165,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
 
   let offset = 0
   return (
-    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`} onMouseDown={event => event.preventDefault()}>
+    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `dropdown-glass composer-menu-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`} onMouseDown={event => event.preventDefault()}>
       <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="scrollbar-autohide min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
         {visibleGroups.map(group => {
           const start = offset

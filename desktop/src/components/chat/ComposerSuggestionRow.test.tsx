@@ -12,6 +12,11 @@ it('separates the accessible name from detail and forwards selection, events and
   const option = screen.getByRole('option', { name: 'Design' })
   expect(option).toHaveAccessibleDescription('Build interfaces')
   expect(option).toHaveAttribute('aria-selected', 'true')
+  // Regression (#2013): the plain hover wash is invisible on the lifted dark
+  // glass sheet; the selected row must use the brand menu tint and rim.
+  expect(option).toHaveClass('bg-[var(--color-menu-item-active)]')
+  expect(option).toHaveClass('ring-[var(--color-brand)]')
+  expect(option).not.toHaveClass('bg-[var(--color-surface-hover)]')
   expect(ref.current).toBe(option)
   fireEvent.mouseEnter(option)
   fireEvent.click(option)
