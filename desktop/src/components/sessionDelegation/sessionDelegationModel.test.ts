@@ -4,6 +4,7 @@ import {
   buildDelegatedSessionRows,
   delegationChangeSummaries,
   delegationDecisionBatches,
+  getFailedCollaborationStart,
 } from './sessionDelegationModel'
 
 const deepseek = { providerId: 'deepseek', modelId: 'deepseek-flash[1m]' }
@@ -108,4 +109,59 @@ it('keeps only unfinished changes and decision batches for the surfaces that sho
   expect(delegationDecisionBatches(snapshot)).toEqual([])
   snapshot.batches[0]!.state = 'review'
   expect(delegationDecisionBatches(snapshot).map(batch => batch.id)).toEqual(['batch'])
+})
+
+describe('getFailedCollaborationStart', () => {
+  it('extracts error and parent session for a failed delegated child session', () => {
+    const snapshot: SessionDelegationSnapshot = {
+      batches: [],
+      models: [],
+      changes: [],
+      status: {
+        revision: 2,
+        members: [
+          { sessionId: 'root', rootSessionId: 'root', parentSessionId: null, state: 'idle', stopped: false },
+          { sessionId: 'child-1', rootSessionId: 'root', parentSessionId: 'root', state: 'failed', stopped: false },
+        ],
+        messages: [
+          {
+            id: 'msg-1',
+            sourceSessionId: 'root',
+            targetSessionId: 'child-1',
+            content: 'Investigate bug',
+            kind: 'assignment',
+            status: 'queued',
+            error: 'Error creating worktree: Filename too long',
+          },
+        ],
+      },
+    }
+
+    expect(getFailedCollaborationStart(snapshot, 'child-1')).toEqual({
+      sessionId: 'child-1',
+      error: 'Error creating worktree: Filename too long',
+      sourceSessionId: 'root',
+    })
+    expect(getFailedCollaborationStart(snapshot, 'root')).toBeNull()
+    expect(getFailedCollaborationStart(null, 'child-1')).toBeNull()
+  })
+
+  it('falls back to session row error when status payload is absent', () => {
+    const snapshot: SessionDelegationSnapshot = {
+      batches: [],
+      models: [],
+      changes: [],
+      sessions: [
+        { sessionId: 'child-2', state: 'failed', paused: false, error: 'provider removed' },
+        { sessionId: 'child-3', state: 'running', paused: false },
+      ],
+    }
+
+    expect(getFailedCollaborationStart(snapshot, 'child-2')).toEqual({
+      sessionId: 'child-2',
+      error: 'provider removed',
+      sourceSessionId: null,
+    })
+    expect(getFailedCollaborationStart(snapshot, 'child-3')).toBeNull()
+  })
 })

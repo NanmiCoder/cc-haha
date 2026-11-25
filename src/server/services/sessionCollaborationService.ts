@@ -78,6 +78,8 @@ export type SessionCollaborationDependencies = {
     stop(sessionId: string): Promise<void>
   }
   now?: () => Date
+  /** Optional push notification when collaboration creates, fails, or resumes a session. */
+  onNotify?: (sessionIds: string[], targetSessionId?: string) => void
 }
 type StoredBatch = SessionDelegationBatch & { input: string; stopEpoch: number }
 type Store = { batches?: Record<string, StoredBatch>; modelChanges?: Record<string, SessionModelChange & { input: string; continuations?: string[]; stopEpoch?: number }>; version: 1; revision: number; members: Record<string, CollaborationMember>; messages: CollaborationMessage[]; stopEpochs?: Record<string, number>; creations?: Record<string, { input: string; rootSessionId?: string; stopEpoch?: number; result?: { sessionId: string; workDir?: string; messageId: string; title?: string }; failure?: { message: string; code: string; status: number } }> }
@@ -738,6 +740,7 @@ export class SessionCollaborationService {
       if (creationKey) this.store.creations![creationKey]!.result = { ...created, messageId: message.id, title: collaborationSessionTitle(input) }
       return message
     })
+    this.notify([callerSessionId, created.sessionId], created.sessionId)
     await this.pump()
     return this.describeCreation({ ...created, messageId: message.id, title: collaborationSessionTitle(input) })
   }
@@ -943,11 +946,13 @@ export class SessionCollaborationService {
   }
 
   async resume(sessionId: string): Promise<void> {
-    await this.mutate(() => {
+    const rootSessionId = await this.mutate(() => {
       const member = this.ensureMember(sessionId); member.stopped = false; member.state = 'idle'
       this.appendPendingContinuation(member)
       for (const message of this.store.messages) if (message.targetSessionId === sessionId) { delete message.error; delete message.errorCode }
+      return member.rootSessionId
     })
+    this.notify([rootSessionId, sessionId], sessionId)
     await this.pump()
   }
 
@@ -1043,6 +1048,12 @@ export class SessionCollaborationService {
     })
   }
 
+  private notify(sessionIds: string[], targetSessionId?: string): void {
+    if (!this.deps.onNotify) return
+    const unique = [...new Set(sessionIds.filter(Boolean))]
+    if (unique.length > 0) this.deps.onNotify(unique, targetSessionId)
+  }
+
   private pump(): Promise<void> {
     // Runtime callbacks can await hooks while admission is in progress. The
     // current drain will observe their mutations; never await it recursively.
@@ -1077,12 +1088,12 @@ export class SessionCollaborationService {
         if (admission.running) await this.deps.runtime.enqueue(admission.message.targetSessionId, admission.message)
         else await this.deps.runtime.start(admission.message.targetSessionId, admission.message)
       } catch (error) {
-        await this.mutate(() => {
+        const failedSessions = await this.mutate(() => {
           const message = this.store.messages.find(item => item.id === admission.message.id)!
-          if (message.status === 'cancelled' || message.status === 'consumed') return
+          if (message.status === 'cancelled' || message.status === 'consumed') return null
           message.status = 'queued'
           const member = this.store.members[message.targetSessionId]!
-          if (member.stopped) return
+          if (member.stopped) return null
           message.error = error instanceof Error ? error.message : String(error)
           if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') message.errorCode = error.code
           if (!member.stopped && !admission.running) {
@@ -1090,8 +1101,11 @@ export class SessionCollaborationService {
             if (member.rootSessionId !== member.sessionId) {
               this.append(member.sessionId, member.rootSessionId, `Unable to start session ${member.sessionId}: ${message.error}`, 'failed')
             }
+            return { sessionIds: [member.rootSessionId, member.sessionId], targetSessionId: member.sessionId }
           }
+          return null
         })
+        if (failedSessions) this.notify(failedSessions.sessionIds, failedSessions.targetSessionId)
       }
     }
   }

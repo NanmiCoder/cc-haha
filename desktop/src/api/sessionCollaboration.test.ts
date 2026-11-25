@@ -16,6 +16,8 @@ describe('session delegation API', () => {
     expect(api.post).toHaveBeenLastCalledWith('/api/session-collaboration/parent/batches/batch%2Fone/confirm', { expectedRevision: 4 })
     sessionCollaborationApi.cancelChange('parent', 'change/one', 3)
     expect(api.post).toHaveBeenLastCalledWith('/api/session-collaboration/parent/model-changes/change%2Fone/cancel', { expectedRevision: 3 })
+    sessionCollaborationApi.resume('child/one')
+    expect(api.post).toHaveBeenLastCalledWith('/api/session-collaboration/child%2Fone/resume', {})
   })
   it('preserves immediate, pause-only and idempotency intent', () => {
     const input = { requestId: 'stable', mode: 'immediate' as const, resume: false, selections: [{ sessionId: 'child', runtime: { providerId: null, modelId: 'model' } }] }

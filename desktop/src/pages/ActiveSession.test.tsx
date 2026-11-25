@@ -137,6 +137,7 @@ import { useTeamPlanStore } from '../stores/teamPlanStore'
 import type { TeamPlanRecord } from '../../../src/shared/teamPlan'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { useSessionDelegationStore } from '../stores/sessionDelegationStore'
+import { useUIStore } from '../stores/uiStore'
 import { sessionCollaborationApi, type SessionDelegationSnapshot } from '../api/sessionCollaboration'
 import { useTrajectoryViewStore } from '../stores/trajectoryViewStore'
 import {
@@ -3550,5 +3551,82 @@ describe('ActiveSession delegated sessions', () => {
     fireEvent.click(within(panel).getByRole('button', { name: 'Change models' }))
     expect(await screen.findByRole('dialog', { name: 'Session assignments' })).toBeInTheDocument()
     expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(panelStaysOpen)
+  })
+
+  it('shows startup failure details and retry action instead of blank starter for a failed delegated session', async () => {
+    viewportMocks.isMobile = false
+    const childId = 'failed-child'
+    const failedSnapshot: SessionDelegationSnapshot = {
+      batches: [],
+      models: [],
+      changes: [],
+      status: {
+        revision: 2,
+        members: [
+          { sessionId: 'root-session', rootSessionId: 'root-session', parentSessionId: null, state: 'idle', stopped: false },
+          { sessionId: childId, rootSessionId: 'root-session', parentSessionId: 'root-session', state: 'failed', stopped: false },
+        ],
+        messages: [
+          {
+            id: 'assign-1',
+            sourceSessionId: 'root-session',
+            targetSessionId: childId,
+            content: 'Review architecture',
+            kind: 'assignment',
+            status: 'queued',
+            error: 'Error creating worktree: Filename too long',
+          },
+        ],
+      },
+    }
+    const getSpy = vi.spyOn(sessionCollaborationApi, 'get').mockResolvedValue(failedSnapshot)
+    const resumeSpy = vi.spyOn(sessionCollaborationApi, 'resume').mockResolvedValue({ ok: true })
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: childId, tabs: [{ sessionId: childId, title: 'Failed child', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({
+      sessions: [{ id: childId, title: 'Failed child', messageCount: 0, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }],
+    })
+    useChatStore.setState({
+      sessions: { [childId]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [] } },
+    })
+
+    render(<ActiveSession />)
+    const banner = await screen.findByTestId('collaboration-start-failed-banner')
+    expect(within(banner).getByRole('alert')).toHaveTextContent('Delegated session failed to start')
+    expect(within(banner).getByRole('alert')).toHaveTextContent('Error creating worktree: Filename too long')
+    expect(screen.queryByTestId('empty-session-hero')).not.toBeInTheDocument()
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry start' }))
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith(childId))
+    await waitFor(() => expect(getSpy.mock.calls.length).toBeGreaterThanOrEqual(2))
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Open source session' }))
+    expect(useTabStore.getState().activeTabId).toBe('root-session')
+  })
+
+  it('surfaces an error toast when retrying a failed delegated session rejects', async () => {
+    viewportMocks.isMobile = false
+    const childId = 'failed-child-toast'
+    vi.spyOn(sessionCollaborationApi, 'get').mockResolvedValue({
+      batches: [],
+      models: [],
+      changes: [],
+      sessions: [{ sessionId: childId, state: 'failed', paused: false, error: 'worktree blocked' }],
+    })
+    vi.spyOn(sessionCollaborationApi, 'resume').mockRejectedValue(new Error('host offline'))
+    const addToast = vi.spyOn(useUIStore.getState(), 'addToast')
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: childId, tabs: [{ sessionId: childId, title: 'Failed child', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({
+      sessions: [{ id: childId, title: 'Failed child', messageCount: 0, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }],
+    })
+    useChatStore.setState({
+      sessions: { [childId]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [] } },
+    })
+
+    render(<ActiveSession />)
+    const banner = await screen.findByTestId('collaboration-start-failed-banner')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry start' }))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'host offline' }))
   })
 })

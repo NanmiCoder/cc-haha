@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { clearFilesystemAccessRootsForTests } from './filesystemAccessRoots.js'
-import { getRepositoryContext } from './repositoryLaunchService.js'
+import { buildWorktreeAddGitArgs, getRepositoryContext } from './repositoryLaunchService.js'
 
 const execFile = promisify(execFileCallback)
 let fixture: string | undefined
@@ -48,3 +48,24 @@ test('repository context resolves every canonical worktree beyond the directory 
     }
   }
 }, 30_000)
+
+test('buildWorktreeAddGitArgs enables core.longpaths only on Windows', () => {
+  expect(buildWorktreeAddGitArgs('worktree-desktop-main-12345678', 'C:\\repo\\.claude\\worktrees\\slug', 'main', 'win32')).toEqual([
+    '-c',
+    'core.longpaths=true',
+    'worktree',
+    'add',
+    '-b',
+    'worktree-desktop-main-12345678',
+    'C:\\repo\\.claude\\worktrees\\slug',
+    'main',
+  ])
+  expect(buildWorktreeAddGitArgs('worktree-desktop-main-12345678', '/repo/.claude/worktrees/slug', 'main', 'darwin')).toEqual([
+    'worktree',
+    'add',
+    '-b',
+    'worktree-desktop-main-12345678',
+    '/repo/.claude/worktrees/slug',
+    'main',
+  ])
+})

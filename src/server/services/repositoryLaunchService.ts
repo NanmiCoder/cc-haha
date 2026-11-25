@@ -642,6 +642,23 @@ function safeWorktreeSlug(branchName: string, sessionId: string): string {
   return slug
 }
 
+export function buildWorktreeAddGitArgs(
+  branchName: string,
+  worktreePath: string,
+  baseRef: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return [
+    ...(platform === 'win32' ? ['-c', 'core.longpaths=true'] : []),
+    'worktree',
+    'add',
+    '-b',
+    branchName,
+    worktreePath,
+    baseRef,
+  ]
+}
+
 async function createDesktopWorktree(
   context: RepositoryContextResult,
   branch: ResolvedBranch,
@@ -662,7 +679,7 @@ async function createDesktopWorktree(
   await fs.mkdir(path.dirname(worktreePath), { recursive: true })
   const result = await runGit(
     context.repoRoot,
-    ['worktree', 'add', '-b', branchName, worktreePath, branch.baseRef],
+    buildWorktreeAddGitArgs(branchName, worktreePath, branch.baseRef),
     WORKTREE_TIMEOUT_MS,
   )
   if (result.code !== 0) {

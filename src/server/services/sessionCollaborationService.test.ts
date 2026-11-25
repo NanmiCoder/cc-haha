@@ -676,3 +676,30 @@ test('a failed reservation persistence write cannot leave an invisible admission
   await service.send('root', 'peer', 'retry after storage recovery', 'storage-recovery')
   expect(started.map(message => message.id)).toEqual(['storage-recovery'])
 })
+
+test('notifies affected sessions on create, initial startup failure, and resume', async () => {
+  const notifications: Array<{ sessionIds: string[]; targetSessionId?: string }> = []
+  deps.onNotify = (sessionIds, targetSessionId) => {
+    notifications.push({ sessionIds, targetSessionId })
+  }
+  deps.runtime.start = async (id, message) => {
+    if (id !== 'root') throw new Error('Error creating worktree: Filename too long')
+    started.push(message)
+  }
+  service = new SessionCollaborationService(deps)
+
+  const created = await service.create('root', { prompt: 'diagnose bug' })
+  expect(created.state).toBe('failed')
+  expect(notifications).toEqual([
+    { sessionIds: ['root', created.sessionId], targetSessionId: created.sessionId },
+    { sessionIds: ['root', created.sessionId], targetSessionId: created.sessionId },
+  ])
+
+  deps.runtime.start = async (_, message) => { started.push(message) }
+  await service.resume(created.sessionId)
+  expect(notifications).toHaveLength(3)
+  expect(notifications[2]).toEqual({
+    sessionIds: ['root', created.sessionId],
+    targetSessionId: created.sessionId,
+  })
+})

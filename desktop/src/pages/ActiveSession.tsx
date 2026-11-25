@@ -1,8 +1,13 @@
 import { SessionDelegationReviewBar } from '@/components/sessionDelegation/SessionDelegationReviewBar'
 import { SessionDelegationDialog } from '@/components/sessionDelegation/SessionDelegationDialog'
 import { DelegatedSessionsManageButton, DelegationChangeStatusList, DelegationSyncNotice } from '@/components/sessionDelegation/DelegationActivityExtras'
+import { getFailedCollaborationStart } from '@/components/sessionDelegation/sessionDelegationModel'
+import { sessionCollaborationApi } from '@/api/sessionCollaboration'
 import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore, useSessionDelegationSync } from '@/stores/sessionDelegationStore'
+import { useUIStore } from '@/stores/uiStore'
 import { openSessionSource } from '@/lib/sessionNavigation'
+import { Button } from '@/components/ui/Button'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
@@ -580,8 +585,33 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   }, [activeTabId, backgroundTasks, pruneDismissedBackgroundTaskKeys])
 
   useSessionDelegationSync(active ? activeTabId : null)
+  const delegationSnapshot = useSessionDelegationStore((state) =>
+    activeTabId ? state.bySession[activeTabId]?.snapshot ?? null : null)
   const delegatedSessions = useSessionDelegationStore((state) =>
     activeTabId ? state.bySession[activeTabId]?.rows ?? EMPTY_DELEGATED_SESSION_ROWS : EMPTY_DELEGATED_SESSION_ROWS)
+  const failedCollaborationStart = useMemo(
+    () => (isEmpty ? getFailedCollaborationStart(delegationSnapshot, activeTabId) : null),
+    [activeTabId, delegationSnapshot, isEmpty],
+  )
+  const [retryingCollaborationStart, setRetryingCollaborationStart] = useState(false)
+  useEffect(() => {
+    setRetryingCollaborationStart(false)
+  }, [activeTabId])
+  const handleRetryCollaborationStart = useCallback(async () => {
+    if (!activeTabId || retryingCollaborationStart) return
+    setRetryingCollaborationStart(true)
+    try {
+      await sessionCollaborationApi.resume(activeTabId)
+      await useSessionDelegationStore.getState().refresh(activeTabId, { fresh: true })
+    } catch (error) {
+      useUIStore.getState().addToast({
+        type: 'error',
+        message: error instanceof Error ? error.message : t('delegation.startFailedFallback'),
+      })
+    } finally {
+      setRetryingCollaborationStart(false)
+    }
+  }, [activeTabId, retryingCollaborationStart, t])
   const delegationAccessories = useMemo(() => activeTabId
     ? {
         sessions: {
@@ -722,7 +752,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const isActivityRailOpen = showActivityRail && isActivityPanelOpen
   // Suggestions and recent sessions need the open column under a hero
   // composer; squeezed by a side panel, the terminal or a phone, they go.
-  const showNewSessionStarter = isEmpty && !showRightPanel && !compactEmptyHero && !isMobileLayout
+  const showNewSessionStarter = isEmpty && !failedCollaborationStart && !showRightPanel && !compactEmptyHero && !isMobileLayout
   // Where the session runs, first: the project by the name the sidebar shows,
   // then the branch git reports for it (「素」 su-01: folder · branch · …).
   const headerProjectLabel = session && (session.projectRoot || session.workDir)
@@ -900,6 +930,38 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             </div>
           )}
           {isEmpty ? (
+            failedCollaborationStart ? (
+              <div
+                data-testid="collaboration-start-failed-banner"
+                className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 py-8"
+              >
+                <div className="flex w-full max-w-[600px] flex-col gap-3">
+                  <ErrorState
+                    tone="strong"
+                    size="lg"
+                    title={t('delegation.startFailedTitle')}
+                    detail={
+                      <span className="whitespace-pre-wrap break-words">
+                        {failedCollaborationStart.error || t('delegation.startFailedFallback')}
+                      </span>
+                    }
+                    onRetry={() => void handleRetryCollaborationStart()}
+                    retryLabel={retryingCollaborationStart ? t('delegation.retryingStart') : t('delegation.retryStart')}
+                  />
+                  {failedCollaborationStart.sourceSessionId ? (
+                    <div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => openSessionSource(failedCollaborationStart.sourceSessionId!)}
+                      >
+                        {t('delegation.openSourceSession')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
             // The new-session page (「素」, su-12): mark, question, one line of
             // context, then the composer and the starter row below it. The hero
             // bottom-aligns and the starter top-aligns, so the composer between
@@ -926,6 +988,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                 </p>
               </div>
             </div>
+            )
           ) : (
             <>
               {!isMobileLayout && (

@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  applyWindowsGitLongpathsEnv,
   buildConversationCliSpawnOptions,
   ConversationService,
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
@@ -1851,6 +1852,46 @@ describe('ConversationService', () => {
 
   test('default CLI shutdown wait covers the CLI graceful cleanup budget', () => {
     expect(DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS).toBeGreaterThanOrEqual(6_000)
+  })
+
+  test('applyWindowsGitLongpathsEnv appends core.longpaths on Windows without clobbering existing git config entries', () => {
+    const empty: Record<string, string> = {}
+    applyWindowsGitLongpathsEnv(empty, 'win32')
+    expect(empty).toEqual({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.longpaths',
+      GIT_CONFIG_VALUE_0: 'true',
+    })
+
+    const existing: Record<string, string> = {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'safe.directory',
+      GIT_CONFIG_VALUE_0: '*',
+    }
+    applyWindowsGitLongpathsEnv(existing, 'win32')
+    expect(existing).toEqual({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'safe.directory',
+      GIT_CONFIG_VALUE_0: '*',
+      GIT_CONFIG_KEY_1: 'core.longpaths',
+      GIT_CONFIG_VALUE_1: 'true',
+    })
+
+    const explicit: Record<string, string> = {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.longpaths',
+      GIT_CONFIG_VALUE_0: 'false',
+    }
+    applyWindowsGitLongpathsEnv(explicit, 'win32')
+    expect(explicit).toEqual({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.longpaths',
+      GIT_CONFIG_VALUE_0: 'false',
+    })
+
+    const nonWindows: Record<string, string> = {}
+    applyWindowsGitLongpathsEnv(nonWindows, 'darwin')
+    expect(nonWindows).toEqual({})
   })
 
   test('isolates SDK output callbacks so one broken client cannot swallow turn completion', () => {

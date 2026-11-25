@@ -137,3 +137,30 @@ export function delegationChangeSummaries(snapshot: SessionDelegationSnapshot | 
 export function delegationDecisionBatches(snapshot: SessionDelegationSnapshot | null | undefined): SessionDelegationBatch[] {
   return snapshot?.batches.filter(batch => batch.state === 'review' || batch.state === 'failed' || batch.state === 'launching') ?? []
 }
+
+export type FailedCollaborationStart = {
+  sessionId: string
+  error: string | null
+  sourceSessionId: string | null
+}
+
+/** Detects a delegated child session whose initial startup failed so empty-session UI shows the error instead of a blank starter. */
+export function getFailedCollaborationStart(
+  snapshot: SessionDelegationSnapshot | null | undefined,
+  sessionId: string | null | undefined,
+): FailedCollaborationStart | null {
+  if (!snapshot || !sessionId) return null
+  const member = snapshot.status?.members.find(item => item.sessionId === sessionId)
+  const sessionRow = snapshot.sessions?.find(item => item.sessionId === sessionId)
+  const isDelegatedChild = member ? member.parentSessionId !== null : Boolean(sessionRow)
+  const state = member?.state ?? sessionRow?.state
+  if (!isDelegatedChild || state !== 'failed') return null
+  const failedMessage = [...(snapshot.status?.messages ?? [])]
+    .reverse()
+    .find(message => message.targetSessionId === sessionId && message.status === 'queued' && Boolean(message.error))
+  return {
+    sessionId,
+    error: failedMessage?.error ?? sessionRow?.error ?? null,
+    sourceSessionId: failedMessage?.sourceSessionId ?? member?.parentSessionId ?? null,
+  }
+}
