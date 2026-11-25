@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, ClipboardEvent } from 'react'
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react'
 import {
   listPendingPermissions,
   useChatStore,
@@ -248,6 +248,8 @@ export function AskUserQuestion({
   const composingRef = useRef(false)
   const activitySentForRequest = useRef<string | null>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const focusAfterTabChangeRef = useRef(false)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const imageLoadGenRef = useRef(0)
   const mountedRef = useRef(true)
@@ -264,6 +266,15 @@ export function AskUserQuestion({
       imageLoadGenRef.current += 1
     }
   }, [])
+
+  // Ctrl/⌘+→ moves focus with the question so the next answer can be typed
+  // immediately. Clicks and option auto-advance leave focus where the user put
+  // it, so this only runs when the shortcut asked for it.
+  useEffect(() => {
+    if (!focusAfterTabChangeRef.current) return
+    focusAfterTabChangeRef.current = false
+    textareaRef.current?.focus()
+  }, [clampedActiveTab])
 
   // If the server rejects attachment materialization and restores the pending
   // permission, reopen the card with the user's draft intact so they can retry.
@@ -862,8 +873,43 @@ export function AskUserQuestion({
   // Gates the Next button: ChatGPT's `canAdvance`, so a step forward cannot
   // silently drop a question the user never answered.
   const activeAnswered = isQuestionAnswered(safeActiveTab)
+  const hasMultipleQuestions = questions.length > 1
+  const isLastQuestion = safeActiveTab >= questions.length - 1
+  // Same gate as the Next button below: the shortcut is only an alternative
+  // control for that button, so it must not skip an unanswered question.
+  const canGoToNextQuestion = hasMultipleQuestions && !isLastQuestion && activeAnswered
+  // Mirrors the Submit button's `disabled` condition.
+  const canSubmit = allAnswered && (expired || Boolean(pendingRequest))
   const hasActiveSelection = (selections[safeActiveTab]?.length ?? 0) > 0
   const activeImages = canAttachImages ? (imagesByQuestion[safeActiveTab] ?? []) : []
+  const isMac = detectPlatform() === 'mac'
+
+  // Keyboard shortcuts belong to the whole card, not just the textarea: after
+  // picking options with the keyboard the focus sits on the option button, and
+  // Ctrl/⌘+Enter has to keep working there. They bubble up here; claiming the
+  // default in this handler is what keeps the textarea's word-wise cursor
+  // movement from also firing on Ctrl/⌘+→.
+  const handleShortcutKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // IME candidate navigation uses Enter and the arrow keys too.
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+    if (event.key === 'Enter') {
+      // Always claim the chord, even when submission is gated: falling through
+      // would trigger the focused option button's default Enter activation and
+      // silently toggle the answer instead.
+      event.preventDefault()
+      event.stopPropagation()
+      if (canSubmit) handleSubmit()
+      return
+    }
+    if (event.key !== 'ArrowRight' || !canGoToNextQuestion) return
+    event.preventDefault()
+    event.stopPropagation()
+    // Move focus to the next question's answer area once it renders; the
+    // textarea is shared across questions, so this lands on the right one.
+    focusAfterTabChangeRef.current = true
+    setActiveTab(safeActiveTab + 1)
+  }
   const submittedImages: AttachmentPreview[] = resultAttachments.length > 0
     ? resultAttachments
     : (canAttachImages ? allLocalImages : [])
@@ -877,11 +923,14 @@ export function AskUserQuestion({
         : terminalWithoutAnswers ? 'question.completed' : 'question.answered'
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border ${
-      submitted
-        ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
-        : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
-    }`}>
+    <div
+      className={`overflow-hidden rounded-[var(--radius-lg)] border ${
+        submitted
+          ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
+          : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
+      }`}
+      onKeyDown={handleShortcutKeyDown}
+    >
       {/* Header: 42px, the shared card head of the ask / plan cards. */}
       <div className={`flex h-[42px] items-center gap-2 px-3.5 ${submitted ? '' : 'border-b border-[var(--color-border)]'}`}>
         <MessageCircleQuestion aria-hidden="true" size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
@@ -894,7 +943,7 @@ export function AskUserQuestion({
           // never answered at all, whatever happened to the answers
           <Badge className="shrink-0">{t(statusBadgeKey)}</Badge>
         )}
-        {!submitted && questions.length > 1 && (
+        {!submitted && hasMultipleQuestions && (
           <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
             <span className="font-medium text-[var(--color-text-primary)]">{safeActiveTab + 1}</span> / {questions.length}
           </span>
@@ -902,7 +951,7 @@ export function AskUserQuestion({
       </div>
 
       {/* Question tabs (only when there are several questions) */}
-      {!submitted && questions.length > 1 && (
+      {!submitted && hasMultipleQuestions && (
         <div className="flex gap-0.5 overflow-x-auto px-2.5 pt-2">
           {questions.map((q, i) => {
             const isActive = safeActiveTab === i
@@ -1049,19 +1098,13 @@ export function AskUserQuestion({
                 </div>
               )}
               <textarea
+                ref={textareaRef}
                 id={textareaId}
                 value={freeTexts[safeActiveTab] ?? ''}
                 onChange={(e) => handleFreeTextChange(safeActiveTab, e.target.value)}
                 onPaste={(e) => handlePaste(safeActiveTab, e)}
                 onCompositionStart={() => { composingRef.current = true }}
                 onCompositionEnd={() => { composingRef.current = false }}
-                onKeyDown={(e) => {
-                  if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && allAnswered) {
-                    e.preventDefault()
-                    handleSubmit()
-                  }
-                }}
                 placeholder={t('question.typePlaceholder')}
                 rows={3}
                 wrap="soft"
@@ -1123,11 +1166,11 @@ export function AskUserQuestion({
             size="base"
             // `expired` is the one state where a button may work without a live
             // request: it sends the answers as a message instead of answering.
-            disabled={!allAnswered || (!expired && !pendingRequest)}
+            disabled={!canSubmit}
             onClick={handleSubmit}
           >
             <span>{t(expired ? 'question.sendAsMessage' : 'question.submit')}</span>
-            <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{detectPlatform() === 'mac' ? '⌘↵' : 'Ctrl+↵'}</Kbd>
+            <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{isMac ? '⌘↵' : 'Ctrl+↵'}</Kbd>
           </Button>
           <Button
             variant="ghost"
@@ -1142,17 +1185,20 @@ export function AskUserQuestion({
           {/* Only on multi-question input, and never on the last one. Pushed to
               the end of the row so it stays out of the way of Submit, which is
               the action that actually ends the exchange. */}
-          {questions.length > 1 && safeActiveTab < questions.length - 1 && (
+          {hasMultipleQuestions && !isLastQuestion && (
             <Button
               variant="secondary"
               size="base"
               className="ml-auto"
-              disabled={!activeAnswered}
+              disabled={!canGoToNextQuestion}
               onClick={() => setActiveTab(safeActiveTab + 1)}
               icon={<ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} />}
               iconPosition="end"
             >
               {t('question.next')}
+              <Kbd size="xs" appearance="subtle" aria-hidden="true" className="ml-0.5">
+                {isMac ? '⌘→' : 'Ctrl+→'}
+              </Kbd>
             </Button>
           )}
         </div>

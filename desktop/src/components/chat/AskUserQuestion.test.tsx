@@ -1295,6 +1295,105 @@ describe('AskUserQuestion', () => {
       expect(screen.queryByRole('button', { name: /next/i })).toBeNull()
     })
 
+    // #2014: Ctrl/⌘+→ is the keyboard form of the Next button, and shares its
+    // gate. fireEvent returns false when the event was default-prevented.
+    const keyDownOn = (
+      target: HTMLElement,
+      key: string,
+      modifiers: { ctrlKey?: boolean; metaKey?: boolean } = { ctrlKey: true },
+    ) => fireEvent.keyDown(target, { key, ...modifiers })
+    const pressNextShortcut = (modifiers: { ctrlKey?: boolean; metaKey?: boolean } = { ctrlKey: true }) =>
+      keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'ArrowRight', modifiers)
+    const sentPermissionResponses = () =>
+      sendMock.mock.calls.filter(([, message]) => message.type === 'permission_response')
+
+    it('advances with Ctrl+→ once the question on screen is answered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+
+      // The card owns the key while it can advance, so the textarea's word-wise
+      // cursor movement must not also run.
+      expect(pressNextShortcut()).toBe(false)
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(screen.queryByText('First question?')).toBeNull()
+    })
+
+    it('accepts ⌘+→ so macOS matches the button hint', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      pressNextShortcut({ metaKey: true })
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+    })
+
+    it('ignores Ctrl+→ while the question is unanswered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      // Not prevented: with nothing answered, the textarea keeps Ctrl+→ for
+      // its own word-wise cursor movement.
+      expect(pressNextShortcut()).toBe(true)
+
+      expect(screen.getByText('First question?')).toBeTruthy()
+      expect(screen.queryByText('Second question?')).toBeNull()
+    })
+
+    it('ignores Ctrl+→ on the last question and does not submit', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      pressNextShortcut()
+      typeCustomAnswer('custom-q2')
+
+      expect(pressNextShortcut()).toBe(true)
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(sentPermissionResponses()).toHaveLength(0)
+    })
+
+    it('ignores Ctrl+→ on a single-question card', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{ questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] }}
+        />,
+      )
+
+      // Not prevented: no next question exists, so the textarea keeps the key.
+      expect(pressNextShortcut()).toBe(true)
+      expect(screen.getByText('Ship it?')).toBeTruthy()
+    })
+
+    it('moves focus to the next question after Ctrl+→ advances', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      const firstOption = screen.getByRole('button', { name: /^A1$/ })
+      firstOption.focus()
+
+      keyDownOn(firstOption, 'ArrowRight')
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer...'))
+    })
+
+    it('does not steal the arrow keys while an IME is composing', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      const textarea = screen.getByPlaceholderText('Type your answer...')
+      typeCustomAnswer('custom-q1')
+
+      fireEvent.compositionStart(textarea)
+      pressNextShortcut()
+      expect(screen.getByText('First question?')).toBeTruthy()
+
+      fireEvent.compositionEnd(textarea)
+      pressNextShortcut()
+      expect(screen.getByText('Second question?')).toBeTruthy()
+    })
+
     it('submits every answer after walking the questions', () => {
       render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
 
@@ -1314,6 +1413,56 @@ describe('AskUserQuestion', () => {
           },
         },
       })
+    })
+
+    // Keyboard pickers leave focus on the option button, so Ctrl+Enter has to
+    // work from there too — it used to be wired to the textarea alone.
+    it('submits with Ctrl+Enter from an option, not just from the textarea', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      const secondOption = screen.getByRole('button', { name: /^A2$/ })
+      fireEvent.click(secondOption)
+
+      expect(fireEvent.keyDown(secondOption, { key: 'Enter', ctrlKey: true })).toBe(false)
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...TWO_QUESTIONS,
+          answers: {
+            'First question?': 'A1',
+            'Second question?': 'A2',
+          },
+        },
+      })
+    })
+
+    it('claims Ctrl+Enter without submitting before every question is answered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      const option = screen.getByRole('button', { name: /^A1$/ })
+
+      // Prevented so it cannot fall through to the focused option's default
+      // Enter activation, but nothing is submitted.
+      expect(keyDownOn(option, 'Enter')).toBe(false)
+      expect(sentPermissionResponses()).toHaveLength(0)
+    })
+
+    it('submits once when Ctrl+Enter is pressed in the textarea', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+
+      fireEvent.keyDown(screen.getByPlaceholderText('Type your answer...'), {
+        key: 'Enter',
+        ctrlKey: true,
+      })
+
+      expect(sentPermissionResponses()).toHaveLength(1)
     })
   })
 
