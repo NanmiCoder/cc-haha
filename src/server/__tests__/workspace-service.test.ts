@@ -224,6 +224,26 @@ describe('WorkspaceService', () => {
     }
   })
 
+  it('compares staged files and later working-tree edits against an empty tree before the first commit', async () => {
+    const repoDir = await makeTempDir('workspace-service-unborn-')
+    git(repoDir, 'init')
+    const service = new WorkspaceService(async () => repoDir)
+    const file = path.join(repoDir, 'README.md')
+    await fs.writeFile(file, 'staged\n')
+    git(repoDir, 'add', '--', 'README.md')
+    await fs.appendFile(file, 'working tree\n')
+
+    const status = await service.getStatus('session')
+    expect(status).toMatchObject({
+      state: 'ok',
+      changedFiles: [{ path: 'README.md', status: 'added', additions: 2, deletions: 0 }],
+    })
+    const diff = await service.getDiff('session', 'README.md')
+    expect(diff.state).toBe('ok')
+    expect(diff.diff).toContain('+staged')
+    expect(diff.diff).toContain('+working tree')
+  })
+
   it('returns git status for modified, added, deleted, and untracked files', async () => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? repoDir : null)
