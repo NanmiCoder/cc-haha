@@ -720,18 +720,22 @@ describe('fetchProviderModels', () => {
 
   test('derives Vertex AI publisher model catalog URLs for bare aiplatform roots and supports ambient AWS credentials', async () => {
     expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/models',
     ])
     expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com/v1', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/models',
     ])
     expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'gemini' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/publishers/google/models',
       'https://aiplatform.googleapis.com/v1/models',
     ])
     expect(buildModelsUrlCandidates('https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google', { apiFormat: 'google_vertex' })).toEqual([
+      'https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models',
       'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models',
     ])
 
@@ -788,5 +792,15 @@ describe('fetchProviderModels', () => {
       if (previousBearer === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK
       else process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
     }
+  })
+
+  test('lists Vertex publisher models from the regional inference URL and returns usable model IDs', async () => {
+    const catalog = 'https://us-east5-aiplatform.googleapis.com/v1beta1/publishers/anthropic/models'
+    const baseUrl = 'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/old:rawPredict'
+    stubFetch(url => url === catalog
+      ? jsonResponse({ publisherModels: [{ name: 'publishers/anthropic/models/claude-sonnet-4-6' }] })
+      : jsonResponse({}, 404))
+    expect(await fetchProviderModels({ baseUrl, apiKey: 'test-api-key', apiFormat: 'google_vertex', isFullUrl: true }))
+      .toEqual({ ok: true, endpoint: catalog, models: [{ id: 'claude-sonnet-4-6' }] })
   })
 })

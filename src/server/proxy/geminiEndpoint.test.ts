@@ -45,6 +45,14 @@ describe('buildGeminiEndpoint', () => {
       .toBe('http://127.0.0.1:3425/v1beta/models/devin/gemini%204%2Bneon:generateContent')
   })
 
+  test('retargets a full action URL and preserves unrelated gateway parameters', () => {
+    const base = 'https://gateway.example/v1beta/models/old:streamGenerateContent?route=a&alt=sse#fragment'
+    expect(buildGeminiEndpoint(base, 'models/team/new', false))
+      .toBe('https://gateway.example/v1beta/models/team/new:generateContent?route=a')
+    expect(buildGeminiEndpoint(base, 'team/new', true))
+      .toBe('https://gateway.example/v1beta/models/team/new:streamGenerateContent?route=a&alt=sse')
+  })
+
   test('supports Google Vertex AI publisher, location, and Express Mode base URLs', () => {
     expect(buildGeminiEndpoint('https://aiplatform.googleapis.com/v1/publishers/google', 'gemini-2.5-pro', true))
       .toBe('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse')
