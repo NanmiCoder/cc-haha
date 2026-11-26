@@ -314,7 +314,7 @@ function SelectedChips({ selected, onRemove }: { selected: BringItem[]; onRemove
   )
 }
 
-function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputRef }: {
+function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputRef, antigravity = false }: {
   value: string
   onChange(value: string): void
   focused: boolean
@@ -322,8 +322,11 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
   onBlur(): void
   onCancel(): void
   inputRef: React.RefObject<ComponentRef<typeof TextInput> | null>
+  antigravity?: boolean
 }) {
   const colors = useColors()
+  const searchLabel = antigravity ? '搜索斜杠命令' : '搜索技能、命令、连接器、Agent'
+  const searchPlaceholder = antigravity ? '搜斜杠命令' : '搜技能、命令、连接器、Agent'
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
       <View
@@ -344,12 +347,12 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
         <Icon name="search" size={18} color={colors.ink3} strokeWidth={2} />
         <TextInput
           ref={inputRef}
-          accessibilityLabel="搜索技能、命令、连接器、Agent"
+          accessibilityLabel={searchLabel}
           value={value}
           onChangeText={onChange}
           onFocus={onFocus}
           onBlur={onBlur}
-          placeholder="搜技能、命令、连接器、Agent"
+          placeholder={searchPlaceholder}
           placeholderTextColor={colors.ink3}
           autoCapitalize="none"
           autoCorrect={false}
@@ -395,6 +398,7 @@ export function BringSheet({
   client,
   workDir,
   lean,
+  antigravity = false,
   candidates,
   loading,
   error,
@@ -413,6 +417,7 @@ export function BringSheet({
   client: ApiClient | null
   workDir?: string
   lean: boolean
+  antigravity?: boolean
   candidates: ComposerCandidate[]
   loading: boolean
   error: string
@@ -424,7 +429,7 @@ export function BringSheet({
   onApply(next: { draft: string; references: ComposerReference[] }): void
   /** 「运行方式」一组：Agent 团队（只对下一条消息生效）和操作电脑。 */
   team: boolean
-  onTeam(value: boolean): void
+  onTeam?(value: boolean): void
   computer: ComputerUse
   onComputerSelected(value: boolean): void
 }) {
@@ -464,17 +469,20 @@ export function BringSheet({
       alive = false
     }
   }, [visible])
-  const extras = useBringExtras(client, workDir, visible && !lean)
-  const items = useMemo(() => assembleBringItems({ candidates, lean, extras }), [candidates, lean, extras])
+  const extras = useBringExtras(client, workDir, visible && !lean && !antigravity)
+  const items = useMemo(
+    () => assembleBringItems({ candidates, lean, antigravity, extras }),
+    [candidates, lean, antigravity, extras]
+  )
   const cards = useMemo(
     () =>
       bringEntries(
         items,
-        lean
+        lean || antigravity
           ? { connector: false, agent: false, workflow: false }
           : { connector: !!extras.connectors, agent: !!extras.agents, workflow: !!extras.workflows }
       ),
-    [items, lean, extras]
+    [items, lean, antigravity, extras]
   )
   const hasEntries = cards.length > 0
   const quick = useMemo(() => resolveRecents(recents, items), [recents, items])
@@ -547,6 +555,7 @@ export function BringSheet({
             onBlur={() => setFocused(false)}
             onCancel={cancelSearch}
             inputRef={input}
+            antigravity={antigravity}
           />
           {chipsVisible ? <SelectedChips selected={selected} onRemove={toggle} /> : null}
           {notice ? (
@@ -576,7 +585,7 @@ export function BringSheet({
           ))
         ) : (
           <Text style={{ paddingVertical: 24, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-            {loading ? '正在读取…' : '没有匹配的技能、命令或连接器'}
+            {loading ? '正在读取…' : antigravity ? '没有匹配的斜杠命令' : '没有匹配的技能、命令或连接器'}
           </Text>
         )
       ) : page === 'connector' ? (
@@ -702,7 +711,7 @@ export function BringSheet({
             <Text style={{ padding: 8, fontSize: 14, color: colors.err }}>{error}</Text>
           ) : (
             <Text style={{ padding: 16, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-              这台电脑上暂时没有可带的技能或命令
+              {antigravity ? '当前没有可用的斜杠命令' : '这台电脑上暂时没有可带的技能或命令'}
             </Text>
           )}
           {/* 轻量档位不支持团队和操作电脑：和桌面一样整组不显示。 */}
@@ -715,6 +724,7 @@ export function BringSheet({
                 team={team}
                 onTeam={onTeam}
                 lean={lean}
+                antigravity={antigravity}
                 computer={computer}
                 computerSelected={selected.some((item) => item.reference && isComputerUseReference(item.reference))}
                 onComputerSelected={(value) => {

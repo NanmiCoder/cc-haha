@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { expect, test } from 'bun:test'
 import {
   decisionResponse,
@@ -229,4 +230,54 @@ test('Antigravity fixed-option questions disable free text and permission attrib
       remember: true,
     })
   ).toEqual({ type: 'permission_response', requestId: 'ag-1', allowed: true })
+  expect(
+    decisionResponse({
+      requestId: 'ag-2',
+      toolName: 'run_command',
+      input: { CommandLine: 'ls' },
+      supportsAllowAlways: false,
+      allowed: true,
+      remember: true,
+    })
+  ).toEqual({ type: 'permission_response', requestId: 'ag-2', allowed: true })
+})
+
+test('Approval forwards top-level request.supportsAllowAlways === false into decisionResponse', () => {
+  const script = `
+    import { mock } from 'bun:test'
+    import assert from 'node:assert/strict'
+    const React = require(${JSON.stringify(import.meta.resolve('react'))})
+    mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
+      ...React, default: React,
+      useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({ Card: 'Card', Mono: 'Mono', useColors: () => ({}) }))
+    mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./decision/PlanDecision'))}, () => ({ PlanDecision: 'PlanDecision' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./decision/PlanDocument'))}, () => ({ PlanDocument: 'PlanDocument' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./decision/QuestionDecision'))}, () => ({ QuestionDecision: 'QuestionDecision' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./decision/ToolDecision'))}, () => ({ ToolDecision: 'ToolDecision' }))
+    const { Approval } = require(${JSON.stringify(import.meta.resolve('./Approval'))})
+    const sent = []
+    const el = Approval({
+      request: {
+        type: 'permission_request',
+        requestId: 'ag-top-1',
+        toolName: 'run_command',
+        input: { CommandLine: 'bun test' },
+        supportsAllowAlways: false,
+      },
+      send: (msg) => { sent.push(msg); return true },
+      ready: true,
+    })
+    assert.equal(el.type, 'ToolDecision')
+    el.props.respond({ allowed: true, remember: true })
+    assert.deepEqual(sent, [{ type: 'permission_response', requestId: 'ag-top-1', allowed: true }])
+  `
+  expect(() =>
+    execFileSync(process.execPath, ['--no-env-file', '-e', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+  ).not.toThrow()
 })

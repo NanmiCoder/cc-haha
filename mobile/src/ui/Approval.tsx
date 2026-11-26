@@ -84,13 +84,17 @@ export function Approval({
     setSubmission({ ready, serverError, sent: false })
 
   function respond(
-    options: Omit<Parameters<typeof decisionResponse>[0], 'requestId' | 'toolName' | 'input'>
+    options: Omit<
+      Parameters<typeof decisionResponse>[0],
+      'requestId' | 'toolName' | 'input' | 'supportsAllowAlways'
+    >
   ) {
     const accepted = send(
       decisionResponse({
         requestId: request.requestId,
         toolName: request.toolName,
         input,
+        supportsAllowAlways: request.supportsAllowAlways,
         ...options,
       })
     )

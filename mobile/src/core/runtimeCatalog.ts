@@ -17,6 +17,26 @@ export const ANTIGRAVITY_PERMISSION_MODES: readonly PermissionMode[] = [
   'acceptEdits',
   'auto',
   'plan',
+  'bypassPermissions',
+]
+
+/** Antigravity 草稿态原生斜杠命令（与桌面端对齐，在会话返回实时列表前提供）。 */
+export const ANTIGRAVITY_DRAFT_SLASH_COMMANDS: readonly {
+  name: string
+  description: string
+}[] = [
+  { name: 'swarm', description: '调度多个 Antigravity Agent 在共享任务板协作' },
+  { name: 'plan', description: '先规划复杂任务，再执行修改' },
+  { name: 'boost', description: '为当前任务启用更深入的推理分析' },
+  { name: 'teamwork', description: '按角色拆分并协同处理复杂项目' },
+  { name: 'goal', description: '持续执行长任务直到完全达成目标' },
+  { name: 'grill-me', description: '通过问答访谈对齐方案与设计细节' },
+  { name: 'compact', description: '压缩当前对话上下文' },
+  { name: 'browser', description: '使用浏览器自动化工具' },
+  { name: 'schedule', description: '创建一次性定时器或周期性计划任务' },
+  { name: 'learn', description: '沉淀本次修正或配置以便后续复用' },
+  { name: 'model', description: '切换 Antigravity 模型与思考强度' },
+  { name: 'permissions', description: '选择权限模式' },
 ]
 
 export type AntigravityConnectionStatus =

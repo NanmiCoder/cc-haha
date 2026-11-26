@@ -520,6 +520,8 @@ function ChatSession({
   const isAntigravity = isAntigravityProvider(
     runtime?.providerId ?? session?.runtimeProviderId
   )
+  const teamOn = team && !lean
+  if (lean && team) setTeam(false)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
   const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
   const permissionMode = state.permissionMode ?? session?.permissionMode
@@ -842,7 +844,12 @@ function ChatSession({
   function submit(): boolean {
     if (workspaceMissing) return false
     try {
-      const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
+      const message = buildComposerMessage(
+        serializeComposer(draft, isAntigravity ? [] : references),
+        attachments,
+        teamOn,
+        { antigravity: isAntigravity }
+      )
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
         if (approval) return false
@@ -852,7 +859,7 @@ function ChatSession({
             id: `queued-${++queueSeq.current}`,
             text: draft.trim(),
             attachments,
-            team,
+            team: teamOn,
             references,
             message,
           },
@@ -1564,7 +1571,7 @@ function ChatSession({
               setAttachments(value)
               setError('')
             }}
-            team={team}
+            team={teamOn}
             onTeam={setTeam}
             computer={computer}
             lean={lean}
@@ -1742,11 +1749,7 @@ function ChatSession({
         workDir={session?.workDir ?? undefined}
         lockedProviderId={isAntigravity ? ANTIGRAVITY_PROVIDER_ID : undefined}
         excludeProviderIds={isAntigravity ? undefined : EXCLUDE_ANTIGRAVITY}
-        allowedModes={
-          isAntigravity && permissionMode !== 'bypassPermissions'
-            ? ANTIGRAVITY_PERMISSION_MODES
-            : undefined
-        }
+        allowedModes={isAntigravity ? ANTIGRAVITY_PERMISSION_MODES : undefined}
       />
       <SelectTextSheet
         visible={panel === 'select'}

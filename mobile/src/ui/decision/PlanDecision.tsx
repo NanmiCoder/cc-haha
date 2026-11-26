@@ -89,6 +89,11 @@ export function PlanDecision({
   const path = planFilePath(input)
   const locked = !ready || sent
   const isAntigravity = isAntigravityProvider(runtime?.providerId)
+  const executionModes = isAntigravity
+    ? planExecutionModes.filter((option) => option.id !== 'bypassPermissions')
+    : planExecutionModes
+  const effectiveMode: PlanExecutionMode =
+    isAntigravity && mode === 'bypassPermissions' ? 'acceptEdits' : mode
   const execution = executionRuntime ?? runtime
   const executionLabel = execution
     ? (executionRuntime && executionModelName) || execution.modelId
@@ -209,15 +214,17 @@ export function PlanDecision({
             </Text>
             <Segmented<PlanExecutionMode>
               label="执行权限"
-              options={planExecutionModes.map((option) => ({
+              options={executionModes.map((option) => ({
                 label: option.title,
                 value: option.id as PlanExecutionMode,
               }))}
-              value={mode}
-              onChange={setMode}
+              value={effectiveMode}
+              onChange={(next) =>
+                setMode(isAntigravity && next === 'bypassPermissions' ? 'acceptEdits' : next)
+              }
               disabled={locked}
             />
-            {mode === 'bypassPermissions' ? (
+            {effectiveMode === 'bypassPermissions' ? (
               <Callout>执行时跳过所有工具审批，只在你信任的项目里用。</Callout>
             ) : null}
             <Pressable
@@ -287,7 +294,7 @@ export function PlanDecision({
                   onPress={() =>
                     attempt(
                       approve({
-                        mode,
+                        mode: effectiveMode,
                         ...(executionRuntime ? { runtime: executionRuntime } : {}),
                       })
                     )

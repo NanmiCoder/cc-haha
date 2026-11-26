@@ -200,6 +200,7 @@ export function decisionResponse(options: {
   requestId: string
   toolName: string
   input: Record<string, unknown>
+  supportsAllowAlways?: unknown
   allowed: boolean
   answers?: Record<string, string>
   plan?: { mode: PlanExecutionMode; runtime?: RuntimeConfig }
@@ -239,7 +240,11 @@ export function decisionResponse(options: {
     type: 'permission_response',
     requestId,
     allowed,
-    ...(options.remember && input.supportsAllowAlways !== false
+    ...(options.remember &&
+    permissionSupportsAllowAlways(
+      { supportsAllowAlways: options.supportsAllowAlways },
+      input
+    )
       ? { rule: 'always' as const }
       : {}),
   }

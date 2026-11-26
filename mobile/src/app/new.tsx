@@ -3,6 +3,7 @@ import { ChatComposer } from '../ui/ChatComposer'
 import { RunSheet } from '../ui/compose/RunSheet'
 import { runCapsule } from '../ui/compose/runLogic'
 import { useComputerUse } from '../core/useComputerUse'
+import { isComputerUseReference } from '../core/computerUse'
 import { WherePage } from '../ui/newtask/WherePage'
 import { serializeComposer, type ComposerReference } from '../core/composerReferences'
 import { KeyboardViewport } from '../ui/KeyboardViewport'
@@ -202,7 +203,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   )
   const isAntigravity = engine === 'antigravity' && antigravityInstalled
   const lean = !isAntigravity && profile === 'lean'
-  const teamOn = team && !lean && !isAntigravity
+  const teamOn = team && !lean
   const effectiveWorktree = !isAntigravity && worktree
   const antigravityBlocked =
     isAntigravity &&
@@ -242,7 +243,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         antigravityRuntime.current ?? defaultAntigravitySelection(antigravity)
       antigravityRuntime.current = chosen
       setRuntime(chosen)
-      setTeam(false)
+      setReferences((previous) => previous.filter(isComputerUseReference))
       if (worktree) {
         const reset = toggleWorktree(repo, branch, false)
         setBranch(reset.branch)
@@ -297,7 +298,12 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     setBusy(true)
     setError('')
     try {
-      const message = buildComposerMessage(serializeComposer(content, references), attachments, teamOn)
+      const message = buildComposerMessage(
+        serializeComposer(content, isAntigravity ? [] : references),
+        attachments,
+        teamOn,
+        { antigravity: isAntigravity }
+      )
       validateMessageSize(message, client.host.auth)
       // Refresh at submission: a checkout may have changed while this draft was open.
       const context = path.trim()

@@ -74,6 +74,7 @@ function clientFixture(
     requests.push(url.pathname + url.search)
     if (url.pathname === `/api/providers/${ANTIGRAVITY_PROVIDER_ID}/discover`) {
       expect(init.method).toBe('POST')
+      expect(isPublicBusinessPathAllowed(url, init.method)).toBe(true)
       return {
         ok: true,
         status: 200,
