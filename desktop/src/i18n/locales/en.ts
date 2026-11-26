@@ -3544,6 +3544,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.editResendStale': 'This message was just acknowledged and can no longer be replaced. Wait a moment and try again.',
   'chat.workspaceChangesFallbackLabel': 'Workspace changed files',
   'chat.workspaceChangesFallbackTitle': 'Current workspace changes ({count})',
+  'chat.workspaceChangesFallbackPartial': 'The workspace scan was limited. Some changed files may be missing from this list.',
   'chat.workspaceChangesFallbackExplanation': 'This conversation is too long for turn previews or file undo. This list shows current workspace changes and may include changes from other turns or outside this conversation.',
   'chat.workspaceChangesFallbackUnavailable': 'This conversation is too long for turn previews or file undo. Current workspace changes could not be verified, so no file list is available.',
   'chat.workspaceChangesFallbackEmpty': 'No current workspace changes were found.',
