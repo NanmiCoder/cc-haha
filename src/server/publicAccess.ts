@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflowRunDetail, projectRemoteWorkflowRuns, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 import { parseResumeRequest } from './ws/resumableStreams.js'
 import type { TunnelGateway } from './p2p/mux.js'
@@ -73,9 +73,18 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       [...url.searchParams.keys()].every(key => key === 'path')
   }
   // Read-only catalogs for the phone's "+" sheet. Connector detail and every
-  // connector action (authenticate, prepare, remove…) and every workflow
-  // mutation or run detail remain desktop-only.
-  if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
+  // connector action (authenticate, prepare, remove…) remain desktop-only.
+  if (parts[1] === 'connectors') return parts.length === 2 && method === 'GET'
+  // Read-only workflow catalog and run history/details for paired phones.
+  // Saved workflow definitions with scripts (`/api/workflows/:name`) and all
+  // mutations (`/save`, `/validate`, DELETE) remain desktop-only.
+  if (parts[1] === 'workflows') {
+    if (method !== 'GET') return false
+    if (parts.length === 2) return true
+    if (parts[2] === 'session-runs') return parts.length === 4
+    if (parts[2] === 'runs') return parts.length === 3 || parts.length === 5
+    return false
+  }
   if (parts[1] === 'voice') {
     // Phones reuse the host's prepared recognizer. Download, deletion and
     // shared preference changes stay on the desktop's settings surface.
@@ -600,6 +609,10 @@ export class PublicAccessServer {
         }
         if (route === 'api/connectors' && request.method === 'GET' && response.ok) return json(projectRemoteConnectors(await response.json() as Record<string, unknown>))
         if (route === 'api/workflows' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflows(await response.json() as Record<string, unknown>))
+        if (route === 'api/workflows/runs' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflowRuns(await response.json() as Record<string, unknown>))
+        if (request.method === 'GET' && response.ok && /^api\/workflows\/runs\/[^/]+\/[^/]+$/.test(route)) {
+          return json(projectRemoteWorkflowRunDetail(await response.json() as Record<string, unknown>))
+        }
         // Native apps authenticate with a bearer; browsers use the cookie and keep the full agent view.
         if (request.headers.get('Authorization') !== null && request.method === 'GET' && response.ok &&
           /^api\/agents(\/|$)/.test(route)) {
