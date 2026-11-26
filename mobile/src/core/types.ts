@@ -100,6 +100,8 @@ export type PermissionRequest = Extract<
 > & {
   /** Optional subagent / swarm worker attribution when forwarded from a child run. */
   subagentName?: string
+  /** Explicitly false when the underlying runtime (e.g. agy acp default mode) does not offer allow_always. */
+  supportsAllowAlways?: boolean
 }
 export type ComputerUsePermissionRequest = Extract<
   ServerMessage,

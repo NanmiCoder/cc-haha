@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   decisionResponse,
   permissionSubagentName,
+  permissionSupportsAllowAlways,
   planPermissionUpdates,
   questionAllowsFreeText,
   questionAnswerInput,
@@ -214,4 +215,18 @@ test('Antigravity fixed-option questions disable free text and permission attrib
   expect(permissionSubagentName({}, { subagentName: 'research' })).toBe('research')
   expect(permissionSubagentName({ subagentName: '   ' }, { subagentName: 'fallback' })).toBeUndefined()
   expect(permissionSubagentName({}, {})).toBeUndefined()
+
+  expect(permissionSupportsAllowAlways({}, {})).toBe(true)
+  expect(permissionSupportsAllowAlways({ supportsAllowAlways: true }, {})).toBe(true)
+  expect(permissionSupportsAllowAlways({ supportsAllowAlways: false }, {})).toBe(false)
+  expect(permissionSupportsAllowAlways({}, { supportsAllowAlways: false })).toBe(false)
+  expect(
+    decisionResponse({
+      requestId: 'ag-1',
+      toolName: 'Bash',
+      input: { command: 'ls', supportsAllowAlways: false },
+      allowed: true,
+      remember: true,
+    })
+  ).toEqual({ type: 'permission_response', requestId: 'ag-1', allowed: true })
 })

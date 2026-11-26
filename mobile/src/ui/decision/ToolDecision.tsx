@@ -11,7 +11,10 @@ import {
   useColors,
 } from '../kit'
 import { Text } from '../Text'
-import { permissionSubagentName } from '../approvalData'
+import {
+  permissionSubagentName,
+  permissionSupportsAllowAlways,
+} from '../approvalData'
 import {
   appendSuggestion,
   approvalDescription,
@@ -69,6 +72,7 @@ export function ToolDecision({
   const [remember, setRemember] = useState(false)
   const toolName = request.toolName
   const subagentName = permissionSubagentName(request, input)
+  const canRemember = permissionSupportsAllowAlways(request, input)
   const locked = !ready || sent
   const change = isFileChange(toolName) ? fileChange(toolName, input) : null
   const attribution = subagentName ? (
@@ -169,7 +173,7 @@ export function ToolDecision({
         style={{ flex: 1 }}
         disabled={!ready}
         onPress={() =>
-          respond({ allowed: true, remember })
+          respond({ allowed: true, remember: canRemember && remember })
         }
       />
     </View>
@@ -205,14 +209,16 @@ export function ToolDecision({
             <DiffView lines={change.lines} numbers="single" />
           </ScrollView>
         </View>
-        <Checkbox
-          checked={remember}
-          onChange={setRemember}
-          disabled={locked}
-          accessibilityLabel={rememberLabel(toolName)}
-        >
-          {rememberLabel(toolName)}
-        </Checkbox>
+        {canRemember ? (
+          <Checkbox
+            checked={remember}
+            onChange={setRemember}
+            disabled={locked}
+            accessibilityLabel={rememberLabel(toolName)}
+          >
+            {rememberLabel(toolName)}
+          </Checkbox>
+        ) : null}
         {decide}
         {sent ? null : stop}
       </DecisionSurface>
@@ -235,16 +241,18 @@ export function ToolDecision({
           {subject.text}
         </CodeBlock>
       </ScrollView>
-      <Checkbox
-        checked={remember}
-        onChange={setRemember}
-        disabled={locked}
-        accessibilityLabel={
-          rememberLabel(toolName)
-        }
-      >
-        {rememberLabel(toolName)}
-      </Checkbox>
+      {canRemember ? (
+        <Checkbox
+          checked={remember}
+          onChange={setRemember}
+          disabled={locked}
+          accessibilityLabel={
+            rememberLabel(toolName)
+          }
+        >
+          {rememberLabel(toolName)}
+        </Checkbox>
+      ) : null}
       {decide}
       {sent ? null : stop}
     </DecisionSurface>

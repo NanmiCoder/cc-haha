@@ -110,6 +110,17 @@ export function questionAllowsFreeText(input: Record<string, unknown>): boolean 
   return input.allowFreeText !== false
 }
 
+/** False iff the runtime explicitly states allow_always is unavailable (e.g. agy acp default mode). */
+export function permissionSupportsAllowAlways(
+  request?: { supportsAllowAlways?: unknown } | null,
+  input?: Record<string, unknown>
+): boolean {
+  return (
+    request?.supportsAllowAlways !== false &&
+    input?.supportsAllowAlways !== false
+  )
+}
+
 /** Optional subagent or swarm worker attribution carried on a permission request or its input. */
 export function permissionSubagentName(
   request?: { subagentName?: unknown } | null,
@@ -228,6 +239,8 @@ export function decisionResponse(options: {
     type: 'permission_response',
     requestId,
     allowed,
-    ...(options.remember ? { rule: 'always' as const } : {}),
+    ...(options.remember && input.supportsAllowAlways !== false
+      ? { rule: 'always' as const }
+      : {}),
   }
 }
