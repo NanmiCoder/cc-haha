@@ -18,25 +18,29 @@ type LookupState = { status: 'loading' } | TraceCallLookup | { status: 'error'; 
  * capture switch lives here too, so turning it on never means a trip to
  * Settings.
  */
-export function RawRequestTab({ sessionId, row }: { sessionId: string; row: TrajectoryRow }) {
+export function RawRequestTab({ sessionId, agentId, row }: { sessionId: string; agentId?: string; row: TrajectoryRow }) {
   const t = useTranslation()
   const captureEnabled = useSettingsStore((state) => state.traceCapture?.enabled === true)
   const setCaptureEnabled = useSettingsStore((state) => state.setTraceCaptureEnabled)
   const [state, setState] = useState<LookupState>({ status: 'loading' })
   // Live appends re-create the row object; only a change to its timing can change the match.
-  const matchKey = `${row.id}:${row.startTs ?? ''}:${row.ts}:${row.endTs ?? ''}`
+  const matchKey = `${agentId ?? 'main'}:${row.id}:${row.startTs ?? ''}:${row.ts}:${row.endTs ?? ''}`
 
   useEffect(() => {
     const controller = new AbortController()
     setState({ status: 'loading' })
-    findTraceCallForRow(row, (from, to) => trajectoryApi.getTraceCallsNear(sessionId, from, to, { signal: controller.signal })).then(
+    findTraceCallForRow(
+      row,
+      (from, to) => trajectoryApi.getTraceCallsNear(sessionId, from, to, { signal: controller.signal }),
+      { agentId },
+    ).then(
       (lookup) => { if (!controller.signal.aborted) setState(lookup) },
       (error: unknown) => {
         if (!controller.signal.aborted) setState({ status: 'error', error: error instanceof Error ? error.message : String(error) })
       },
     )
     return () => controller.abort()
-  }, [matchKey, sessionId])
+  }, [agentId, matchKey, sessionId])
 
   const captureSwitch = (
     <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5">
@@ -69,7 +73,7 @@ export function RawRequestTab({ sessionId, row }: { sessionId: string; row: Traj
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[12px] text-[var(--color-text-tertiary)]">{t('trajectory.request.closest')}</p>
-      <TraceSectionStateProvider scopeId={`trajectory:${sessionId}:${state.call.id}`}>
+      <TraceSectionStateProvider scopeId={`trajectory:${sessionId}:${agentId ?? 'main'}:${state.call.id}`}>
         <RawRequestDetail sessionId={sessionId} call={state.call} revisionKey={state.revisionKey} at={state.at} />
       </TraceSectionStateProvider>
     </div>

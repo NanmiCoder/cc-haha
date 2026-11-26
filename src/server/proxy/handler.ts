@@ -104,6 +104,8 @@ type ProxyFetchOptions = ReturnType<typeof getProxyFetchOptions>
 type UpstreamRequestInit = RequestInit & ProxyFetchOptions & { decompress?: boolean }
 type ProxyTraceContext = {
   sessionId: string
+  querySource?: string
+  agentId?: string
   provider: TraceProviderInfo
   anthropicRequest: AnthropicRequest
   protocolTrace?: ProtocolTraceObserver
@@ -644,6 +646,8 @@ const HOP_BY_HOP_HEADERS = new Set([
 const INTERNAL_CLIENT_HEADERS = new Set([
   OUTPUT_BUDGET_SOURCE_HEADER,
   'x-claude-code-session-id',
+  'x-cc-haha-trace-agent-id',
+  'x-cc-haha-trace-query-source',
   'x-claude-remote-container-id',
   'x-claude-remote-session-id',
   'x-client-app',
@@ -2243,8 +2247,12 @@ function buildProxyTraceContext(
 ): ProxyTraceContext | null {
   const sessionId = req.headers.get('x-claude-code-session-id')?.trim()
   if (!sessionId) return null
+  const agentId = req.headers.get('x-cc-haha-trace-agent-id')?.trim().slice(0, 128) || undefined
+  const querySource = req.headers.get('x-cc-haha-trace-query-source')?.trim().slice(0, 128) || undefined
   return {
     sessionId,
+    ...(querySource ? { querySource } : {}),
+    ...(agentId ? { agentId } : {}),
     provider: {
       id: config.id,
       name: config.name,
@@ -2285,6 +2293,8 @@ function startProxyTraceCall({
     id: callId,
     sessionId: context.sessionId,
     source: 'proxy',
+    ...(context.querySource ? { querySource: context.querySource } : {}),
+    ...(context.agentId ? { agentId: context.agentId } : {}),
     provider: context.provider,
     model,
     status: 'pending',
@@ -2389,6 +2399,8 @@ async function recordProxyTrace({
     ...(callId ? { id: callId } : {}),
     sessionId: context.sessionId,
     source: 'proxy',
+    ...(context.querySource ? { querySource: context.querySource } : {}),
+    ...(context.agentId ? { agentId: context.agentId } : {}),
     provider: context.provider,
     model,
     startedAt,

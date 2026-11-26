@@ -17,6 +17,8 @@ import {
 import type { TraceBodySnapshot, TraceProviderInfo, TraceResponseCapture } from './traceCapture.js'
 
 const TRACE_SESSION_HEADER = 'x-claude-code-session-id'
+const TRACE_AGENT_ID_HEADER = 'x-cc-haha-trace-agent-id'
+const TRACE_QUERY_SOURCE_HEADER = 'x-cc-haha-trace-query-source'
 
 function hashString(str: string): string {
   return createHash('sha256').update(str).digest('hex')
@@ -224,11 +226,13 @@ export function createDumpPromptsFetch(
   options?: {
     traceSessionId?: string
     querySource?: string
+    agentId?: string
   },
 ): ClientOptions['fetch'] {
   const filePath = getDumpPromptsPath(agentIdOrSessionId)
   const traceEnabled = shouldCaptureApiTrace()
   const traceSessionId = options?.traceSessionId ?? agentIdOrSessionId
+  const traceAgentId = options?.agentId?.trim() || undefined
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const state = dumpState.get(agentIdOrSessionId) ?? {
@@ -272,6 +276,12 @@ export function createDumpPromptsFetch(
             if (!headers.has(TRACE_SESSION_HEADER)) {
               headers.set(TRACE_SESSION_HEADER, traceSessionId)
             }
+            if (traceAgentId && !headers.has(TRACE_AGENT_ID_HEADER)) {
+              headers.set(TRACE_AGENT_ID_HEADER, traceAgentId)
+            }
+            if (options?.querySource && !headers.has(TRACE_QUERY_SOURCE_HEADER)) {
+              headers.set(TRACE_QUERY_SOURCE_HEADER, options.querySource)
+            }
             return headers
           })(),
         }
@@ -297,6 +307,7 @@ export function createDumpPromptsFetch(
         sessionId: traceSessionId,
         source: 'anthropic',
         querySource: options?.querySource,
+        ...(traceAgentId ? { agentId: traceAgentId } : {}),
         provider: traceProvider,
         model: traceModel,
         status: 'pending',
@@ -342,6 +353,7 @@ export function createDumpPromptsFetch(
           sessionId: traceSessionId,
           source: 'anthropic',
           querySource: options?.querySource,
+          ...(traceAgentId ? { agentId: traceAgentId } : {}),
           provider: traceProvider,
           model: traceModel,
           status: 'error',
@@ -391,6 +403,7 @@ export function createDumpPromptsFetch(
           sessionId: traceSessionId,
           source: 'anthropic' as const,
           querySource: options?.querySource,
+          ...(traceAgentId ? { agentId: traceAgentId } : {}),
           provider: traceProvider,
           model: traceModel,
           startedAt: timestamp,

@@ -183,6 +183,80 @@ describe('GET /api/sessions/:id/trajectory', () => {
     expect((await json<{ error: string }>(`/api/sessions/00000000-0000-0000-0000-000000000000/trajectory`, 404)).error).toBe('NOT_FOUND')
   })
 
+  it('resolves missing subagent agentId from subagent metadata for one-shot built-ins, running calls, and nested subagents', async () => {
+    await writeJsonl(transcriptPath(), [
+      prompt('u-1', 'Explore the codebase'),
+      toolCall('a-1', 'msg_1', 'toolu_explore', 'Agent'),
+      // One-shot built-ins (Explore / Plan) omit the `agentId:` trailer in tool_result text.
+      toolResult('r-1', 'toolu_explore', 'Found 3 files.'),
+      toolCall('a-2', 'msg_2', 'toolu_running', 'Agent'),
+    ])
+    const subagentsDir = path.join(sessionDir(), 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-explore42.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_explore' }),
+    )
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-running99.meta.json'),
+      JSON.stringify({ agentType: 'Plan', toolUseId: 'toolu_running' }),
+    )
+    // Nested subagent with the same toolUseId under a different owner must not collide with main.
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-nested7.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_explore', ownerAgentId: 'explore42' }),
+    )
+    await writeJsonl(path.join(subagentsDir, 'agent-explore42.jsonl'), [
+      prompt('s-1', 'Nested search', { isSidechain: true, agentId: 'explore42' }),
+      toolCall('s-2', 'msg_s1', 'toolu_explore', 'Agent', { isSidechain: true }),
+      toolResult('s-3', 'toolu_explore', 'Nested findings.', { isSidechain: true }),
+    ])
+
+    const main = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory`)
+    expect(main.rows.find(row => row.id === 't:toolu_explore')?.agentId).toBe('explore42')
+    expect(main.rows.find(row => row.id === 't:toolu_running')?.agentId).toBe('running99')
+
+    const nested = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory?agentId=explore42`)
+    expect(nested.rows.find(row => row.id === 't:toolu_explore')?.agentId).toBe('nested7')
+
+    // Live appends also resolve missing agentIds from subagent metadata.
+    await fs.appendFile(transcriptPath(), lines([toolCall('a-3', 'msg_3', 'toolu_live', 'Agent')]))
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-live55.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_live' }),
+    )
+    const live = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory?after=${main.tailToken}`)
+    expect(live.rows.find(row => row.id === 't:toolu_live')?.agentId).toBe('live55')
+  })
+
+  it('normalizes agent-prefixed ownerAgentId and blocks legacy nested fallback when an oversized meta file is skipped', async () => {
+    await writeJsonl(transcriptPath(), baseTranscript())
+    const subagentsDir = path.join(sessionDir(), 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    // Oversized meta file (> 64 KiB) must mark metadata incomplete so legacy nested fallback refuses to guess.
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-oversized1.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_legacy', description: 'x'.repeat(70 * 1024) }),
+    )
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-rootOnly.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_legacy' }),
+    )
+    await fs.writeFile(
+      path.join(subagentsDir, 'agent-prefixedChild.meta.json'),
+      JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_prefixed', ownerAgentId: 'agent-parent1' }),
+    )
+    await writeJsonl(path.join(subagentsDir, 'agent-parent1.jsonl'), [
+      prompt('p-1', 'Nested parent', { isSidechain: true, agentId: 'parent1' }),
+      toolCall('p-2', 'msg_p1', 'toolu_legacy', 'Agent', { isSidechain: true }),
+      toolCall('p-3', 'msg_p2', 'toolu_prefixed', 'Agent', { isSidechain: true }),
+    ])
+
+    const nested = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory?agentId=parent1`)
+    expect(nested.rows.find(row => row.id === 't:toolu_legacy')?.agentId).toBeUndefined()
+    expect(nested.rows.find(row => row.id === 't:toolu_prefixed')?.agentId).toBe('prefixedChild')
+  })
+
   it('builds snapshot rows from the sidecar, filtering side queries and per scope', async () => {
     await writeJsonl(transcriptPath(), baseTranscript())
     const blob = (k: string, h: string, body: Record<string, unknown>) => ({ t: 'blob', k, h, ts: '2026-10-04T01:00:00Z', ...body })
@@ -202,6 +276,7 @@ describe('GET /api/sessions/:id/trajectory', () => {
       blob('tools', '00000000000000a2', { json: 'duplicate blob is ignored' }),
       { t: 'req', ts: '2026-10-04T01:00:00.500Z', scope: 'main', sys: '0000000000000001', tools: '00000000000000a2', qs: 'repl_main_thread:outputStyle:Explanatory', model: 'm', toolCount: 2, sysChars: 20 },
       { t: 'req', ts: '2026-10-04T01:00:00.600Z', scope: 'sub1', sys: '0000000000000002', tools: '00000000000000a1', qs: 'agent:builtin', model: 'm', toolCount: 1, sysChars: 27 },
+      { t: 'req', ts: '2026-10-04T01:00:00.700Z', scope: 'wf1', sys: '0000000000000002', tools: '00000000000000a1', qs: 'workflow_agent', model: 'm', toolCount: 1, sysChars: 27 },
     ]).replace('"not json at all"', 'not json at all'))
 
     const body = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory`)
@@ -216,6 +291,8 @@ describe('GET /api/sessions/:id/trajectory', () => {
 
     const sub = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory?agentId=sub1`)
     expect(sub.snapshots!.map(row => [row.id, row.snapshot?.change, row.snapshot?.sys])).toEqual([['s:sub1:0', 'initial', '0000000000000002']])
+    const wf = await json<TrajectoryPage>(`/api/sessions/${SESSION_ID}/trajectory?agentId=wf1`)
+    expect(wf.snapshots!.map(row => [row.id, row.snapshot?.change, row.snapshot?.querySource])).toEqual([['s:wf1:0', 'initial', 'workflow_agent']])
 
     const sys = await json<TrajectorySnapshotBlob>(`/api/sessions/${SESSION_ID}/trajectory/snapshots/0000000000000001`)
     expect(sys).toEqual({ hash: '0000000000000001', kind: 'sys', text: 'You are Claude Code.' })
