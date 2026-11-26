@@ -641,6 +641,15 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
           }
         }
 
+        const hasStopSequence = (body.inferenceConfig as { stopSequences?: string[] } | undefined)?.stopSequences?.includes('SUCCESS')
+        const requestedFields = body.additionalModelResponseFieldPaths as string[] | undefined
+        const finalStop = {
+          stopReason: hasStopSequence ? 'stop_sequence' : 'end_turn',
+          ...(hasStopSequence && requestedFields?.includes('/stop_sequence') && {
+            additionalModelResponseFields: { stop_sequence: 'SUCCESS' },
+          }),
+        }
+
         // Non-streaming Converse
         if (url.pathname === '/model/us.anthropic.claude-sonnet-4-6-v1%3A0/converse') {
           const firstText = String(bodyMessages[0]?.content?.[0]?.text ?? '')
@@ -667,7 +676,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
                   content: [{ text: 'ok' }],
                 },
               },
-              stopReason: 'end_turn',
+              ...finalStop,
               usage: { inputTokens: 15, outputTokens: 3, totalTokens: 18 },
             },
             { headers: { 'x-amzn-requestid': 'amzn-converse-1' } },
@@ -687,7 +696,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
                   delta: { text: 'Bedrock verified signed thinking, redacted content, and both PNG images.' },
                 }),
                 encodeBedrockEventStreamFrame('contentBlockStop', { contentBlockIndex: 0 }),
-                encodeBedrockEventStreamFrame('messageStop', { stopReason: 'end_turn' }),
+                encodeBedrockEventStreamFrame('messageStop', finalStop),
                 encodeBedrockEventStreamFrame('metadata', {
                   usage: { inputTokens: 280, outputTokens: 24, cacheReadInputTokens: 64, cacheWriteInputTokens: 16 },
                 }),
@@ -884,6 +893,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
             model: 'us.anthropic.claude-sonnet-4-6-v1:0',
             max_tokens: 4096,
             stream: true,
+            stop_sequences: ['FAILURE', 'SUCCESS'],
             thinking: { type: 'enabled', budget_tokens: 2048 },
             tools: [{ name: 'Read', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }],
             messages: [
@@ -924,6 +934,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
         .join('')
       expect(finalText).toBe('Bedrock verified signed thinking, redacted content, and both PNG images.')
       const finalDelta = turn2Events.find((e) => e.event === 'message_delta')
+      expect(finalDelta?.data.delta).toEqual({ stop_reason: 'stop_sequence', stop_sequence: 'SUCCESS' })
       expect(finalDelta?.data.usage).toEqual({
         input_tokens: 280,
         output_tokens: 24,
@@ -953,6 +964,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
             model: 'us.anthropic.claude-sonnet-4-6-v1:0',
             max_tokens: 256,
             stream: false,
+            stop_sequences: ['SUCCESS', 'FAILURE'],
             messages: [{ role: 'user', content: 'Non-stream Bedrock' }],
           }),
         }),
@@ -962,6 +974,7 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
       const nonStreamBedrockJson = await nonStreamBedrockRes.json() as { id: string; type: string; content: Array<{ text: string }> }
       expect(nonStreamBedrockJson.id).toBe('msg_amzn-converse-1')
       expect(nonStreamBedrockJson.content[0]?.text).toBe('ok')
+      expect(nonStreamBedrockJson).toMatchObject({ stop_reason: 'stop_sequence', stop_sequence: 'SUCCESS' })
 
       // Non-streaming Bedrock malformed_tool_use returns 502 and finalizes a single trace call (no pending leak)
       const malformedSessionId = 'bedrock-converse-malformed-trace-session'

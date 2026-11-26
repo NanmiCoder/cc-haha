@@ -314,4 +314,36 @@ describe('bedrockConverseToAnthropic', () => {
       },
     })
   })
+
+  test('returns matching Converse and ConverseStream stop sequences for native and gateway fields', async () => {
+    const model = 'us.anthropic.claude-sonnet-4-6-v1:0'
+    for (const [stopReason, additionalModelResponseFields, expected] of [
+      ['stop_sequence', { stop_sequence: 'SUCCESS' }, 'SUCCESS'],
+      ['stop_sequence', { stop_sequence: 'SUCCESS', delta: { stop_sequence: 'legacy' } }, 'SUCCESS'],
+      ['stop_sequence', { delta: { stop_sequence: 'legacy' } }, 'legacy'],
+      ['stop_sequence', undefined, null],
+      ['stop_sequence', { stop_sequence: 12 }, null],
+      ['end_turn', { stop_sequence: 'irrelevant' }, null],
+      ['max_tokens', undefined, null],
+      [undefined, { stop_sequence: 'unconfirmed' }, null],
+    ] as const) {
+      const stop = { stopReason, additionalModelResponseFields }
+      const delta = { stop_reason: stopReason ?? 'end_turn', stop_sequence: expected }
+      const output = { message: { role: 'assistant', content: [{ text: 'done' }] } }
+      expect(bedrockConverseResponseToAnthropic({ output, ...stop }, model)).toMatchObject(delta)
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encodeBedrockEventStreamFrame('messageStop', stop))
+          controller.close()
+        },
+      })
+      const events = await collectSseEvents(bedrockConverseStreamToAnthropic(stream, model))
+      if (stopReason === undefined) {
+        expect(events.at(-1)?.event).toBe('error')
+        expect(events.some(e => e.event === 'message_delta')).toBe(false)
+      } else {
+        expect(events.find(e => e.event === 'message_delta')?.data.delta).toEqual(delta)
+      }
+    }
+  })
 })

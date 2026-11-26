@@ -38,6 +38,14 @@ function tokens(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
+function readStopSequence(reason: unknown, fields: unknown): string | null {
+  if (reason !== 'stop_sequence') return null
+  const additional = record(fields)
+  if (typeof additional?.stop_sequence === 'string') return additional.stop_sequence
+  const nested = record(additional?.delta)?.stop_sequence
+  return typeof nested === 'string' ? nested : null
+}
+
 function mapStopReason(stopReason: string | undefined, hasToolCalls: boolean): string {
   switch (stopReason) {
     case 'tool_use':
@@ -266,11 +274,7 @@ export class BedrockConverseToAnthropicConverter {
         if (typeof body.stopReason === 'string' && body.stopReason) {
           this.stopReason = body.stopReason
         }
-        const additional = record(body.additionalModelResponseFields)
-        const stopSeq = record(additional?.delta)?.stop_sequence
-        if (typeof stopSeq === 'string') {
-          this.stopSequence = stopSeq
-        }
+        this.stopSequence = readStopSequence(body.stopReason, body.additionalModelResponseFields)
         return
       }
 
@@ -590,8 +594,6 @@ export function bedrockConverseResponseToAnthropic(
   }
 
   const stopReason = typeof root?.stopReason === 'string' ? root.stopReason : undefined
-  const additional = record(root?.additionalModelResponseFields)
-  const stopSeq = record(additional?.delta)?.stop_sequence
 
   return {
     id: requestId ? `msg_${requestId}` : `msg_${Date.now()}`,
@@ -600,7 +602,7 @@ export function bedrockConverseResponseToAnthropic(
     content,
     model,
     stop_reason: mapStopReason(stopReason, hasToolCalls),
-    stop_sequence: typeof stopSeq === 'string' ? stopSeq : null,
+    stop_sequence: readStopSequence(stopReason, root?.additionalModelResponseFields),
     usage: toAnthropicUsage(record(root?.usage)),
   }
 }
