@@ -28,6 +28,10 @@ export const PROMPT_SNAPSHOT_MAX_BLOB_CHARS = 1024 * 1024
 const MAX_CONSECUTIVE_FAILURES = 3
 const MAIN_SCOPE = 'main'
 const FALSY_FLAG_VALUES = new Set(['0', 'false', 'off'])
+const DESKTOP_ENTRYPOINTS = new Set([
+  'claude-desktop',
+  'claude-desktop-team-worker',
+])
 
 export type PromptSnapshotArgs = {
   systemPrompt: readonly string[]
@@ -91,8 +95,15 @@ let state = createState()
 let toolHashCache = new WeakMap<object, ToolHashCacheEntry>()
 let resolveSnapshotPath: () => string = getPromptSnapshotPath
 
+function isDesktopEntrypoint(): boolean {
+  const entrypoint =
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT?.trim() ||
+    process.env.CLAUDE_CODE_ENTRYPOINT?.trim()
+  return entrypoint !== undefined && DESKTOP_ENTRYPOINTS.has(entrypoint)
+}
+
 function isEnabled(): boolean {
-  if (process.env.CLAUDE_CODE_ENTRYPOINT !== 'claude-desktop') return false
+  if (!isDesktopEntrypoint()) return false
   const flag = process.env.CC_HAHA_PROMPT_SNAPSHOT
   if (flag !== undefined && FALSY_FLAG_VALUES.has(flag.trim().toLowerCase())) {
     return false
