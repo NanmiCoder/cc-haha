@@ -4,7 +4,7 @@ import type {
   CachedApkStatus,
   DownloadProgressEvent,
 } from '../../modules/cchaha-updater'
-import type { AndroidReleaseManifest } from '../core/androidUpdateModel'
+import { buildAndroidUpdateViewModel, type AndroidReleaseManifest } from '../core/androidUpdateModel'
 import type { Host } from '../core/types'
 import {
   AndroidUpdateController,
@@ -312,6 +312,219 @@ describe('AndroidUpdateController', () => {
     h.setNow(tAfterFailureBackoff + SILENT_CHECK_COOLDOWN_MS + 1)
     await h.controller.maybeSilentCheck()
     expect(h.calls.fetchGitHubManifest).toBe(3)
+    h.controller.dispose()
+  })
+
+  test('restores an undownloaded desktop release without fetching during the cooldown', async () => {
+    const manifest = makeManifest('0.1.7', SHA_17)
+    const first = createHarness({ connection: {
+      host: makeHost(), credential: 'lan-token',
+      fetchLatest: async () => ({ supported: true, available: true, manifest, cachedSizeBytes: 65_000_000 }),
+    } })
+    await first.controller.initialize({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true, preferDesktop: true })
+    const release = first.controller.getSnapshot().release
+    first.controller.dispose()
+
+    const next = createHarness({ storage: first.storage })
+    await next.controller.initialize({ scheduleStartupCheck: false })
+    await next.controller.maybeSilentCheck()
+    expect(next.controller.getSnapshot()).toMatchObject({ status: 'available', release, totalBytes: 65_000_000 })
+    expect(buildAndroidUpdateViewModel(next.controller.getSnapshot()).homeDot).not.toBeNull()
+    expect(next.calls.fetchGitHubManifest).toBe(0)
+    await next.controller.dismissAvailableVersion()
+    next.controller.dispose()
+
+    const dismissed = createHarness({ storage: first.storage })
+    await dismissed.controller.initialize({ scheduleStartupCheck: false })
+    expect(dismissed.controller.getSnapshot().release).toEqual(release)
+    expect(buildAndroidUpdateViewModel(dismissed.controller.getSnapshot()).homeDot).toBeNull()
+    dismissed.setNow(1_700_000_000_000 + SILENT_CHECK_COOLDOWN_MS)
+    dismissed.setFetchManifest(async () => JSON.stringify(makeManifest('0.1.8', SHA_18)))
+    await dismissed.controller.maybeSilentCheck()
+    expect(dismissed.calls.fetchGitHubManifest).toBe(1)
+    expect(buildAndroidUpdateViewModel(dismissed.controller.getSnapshot()).homeDot).not.toBeNull()
+    dismissed.controller.dispose()
+
+    const updated = createHarness({ storage: first.storage, installedVersion: '0.1.8' })
+    await updated.controller.initialize({ scheduleStartupCheck: false })
+    expect(updated.controller.getSnapshot()).toMatchObject({ status: 'idle', release: null })
+    expect((await updated.store.load()).available).toBeNull()
+    updated.controller.dispose()
+  })
+
+  test('never restores a downloaded APK superseded by a later successful check', async () => {
+    const first = createHarness()
+    await first.controller.initialize({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true })
+    await first.controller.download('github')
+    first.setFetchManifest(async () => JSON.stringify(makeManifest('0.1.8', SHA_18)))
+    await first.controller.checkForUpdates({ manual: true })
+    first.controller.dispose()
+
+    const next = createHarness({ storage: first.storage })
+    next.setGetCachedApk(async (sha) => ({
+      ready: sha === SHA_17, verified: sha === SHA_17, partialBytes: 0,
+      totalBytes: null, sizeBytes: null, versionName: null, versionCode: null,
+    }))
+    await next.controller.initialize({ scheduleStartupCheck: false })
+    expect(next.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_18 } })
+    expect((await next.store.load()).downloaded).toBeNull()
+    next.controller.dispose()
+  })
+
+  test('a download requested while refreshing cannot replace a newly discovered release', async () => {
+    const h = createHarness()
+    await h.controller.start({ scheduleStartupCheck: false })
+    await h.controller.checkForUpdates({ manual: true })
+    h.setNow(1_700_000_000_000 + SILENT_CHECK_COOLDOWN_MS)
+    const started = Promise.withResolvers<void>()
+    const manifest = Promise.withResolvers<string>()
+    h.setFetchManifest(() => { started.resolve(); return manifest.promise })
+    const finished = Promise.withResolvers<{ sha256: string; versionName: string; versionCode: number; sizeBytes: number }>()
+    h.setDownloadApk(() => finished.promise)
+    const refresh = h.controller.maybeSilentCheck()
+    await started.promise
+    const download = h.controller.download('github')
+    manifest.resolve(JSON.stringify(makeManifest('0.1.8', SHA_18)))
+    await refresh
+    finished.resolve({ sha256: SHA_17, versionName: '0.1.7', versionCode: 12, sizeBytes: 100 })
+    await download
+    expect(h.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_18 } })
+    expect(h.calls.downloadApk).toHaveLength(0)
+    h.controller.dispose()
+  })
+
+  test('a foreground refresh waits for startup restoration and preserves a known update on failure', async () => {
+    const first = createHarness()
+    await first.controller.start({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true })
+    first.controller.dispose()
+    const read = Promise.withResolvers<void>()
+    const next = createHarness({
+      storage: {
+        ...first.storage,
+        getItem: async (key) => { await read.promise; return first.storage.getItem(key) },
+      },
+    })
+    const fetch = Promise.withResolvers<string>()
+    next.setFetchManifest(() => fetch.promise)
+    const start = next.controller.start({ scheduleStartupCheck: false })
+    const foreground = next.controller.handleAppForeground()
+    await Promise.resolve()
+    await Promise.resolve()
+    try {
+      expect(next.calls.fetchGitHubManifest).toBe(0)
+      read.resolve()
+      await Promise.all([start, foreground])
+      expect(next.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_17 } })
+      expect(next.calls.fetchGitHubManifest).toBe(0)
+      next.setNow(1_700_000_000_000 + SILENT_CHECK_COOLDOWN_MS)
+      const refresh = next.controller.maybeSilentCheck()
+      fetch.reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' }))
+      await refresh
+      expect(next.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_17 } })
+    } finally {
+      read.resolve()
+      fetch.resolve(JSON.stringify(makeManifest('0.1.7', SHA_17)))
+      await Promise.all([start, foreground])
+      next.controller.dispose()
+    }
+  })
+
+  test('rediscovers v1 check-only state once and keeps the dismissed version hidden', async () => {
+    const h = createHarness()
+    await h.storage.setItem('cc-haha.android-update', JSON.stringify({
+      version: 1, lastCheckedAt: 1_700_000_000_000, dismissedVersion: '0.1.7',
+      downloaded: null, partial: null, pendingInstall: null,
+    }))
+    await h.controller.start({ scheduleStartupCheck: false })
+    await h.controller.maybeSilentCheck()
+    expect(h.calls.fetchGitHubManifest).toBe(1)
+    expect(h.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_17 } })
+    expect(buildAndroidUpdateViewModel(h.controller.getSnapshot()).homeDot).toBeNull()
+    h.controller.dispose()
+    const next = createHarness({ storage: h.storage })
+    await next.controller.start({ scheduleStartupCheck: false })
+    await next.controller.maybeSilentCheck()
+    expect(next.calls.fetchGitHubManifest).toBe(0)
+    next.controller.dispose()
+  })
+
+  test('rechecks after an evicted legacy APK leaves no release to restore', async () => {
+    const first = createHarness()
+    await first.controller.start({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true })
+    await first.controller.download('github')
+    const saved = await first.store.load()
+    await first.storage.setItem('cc-haha.android-update', JSON.stringify({
+      version: 1, downloaded: saved.downloaded, lastCheckedAt: saved.lastCheckedAt,
+      partial: null, pendingInstall: null, dismissedVersion: null,
+    }))
+    first.controller.dispose()
+    const next = createHarness({ storage: first.storage })
+    await next.controller.start({ scheduleStartupCheck: false })
+    await next.controller.maybeSilentCheck()
+    expect(next.calls.fetchGitHubManifest).toBe(1)
+    expect(next.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_17 } })
+    next.controller.dispose()
+  })
+
+  test('a temporarily unavailable installed version cannot erase an already discovered update', async () => {
+    const first = createHarness()
+    await first.controller.start({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true })
+    first.controller.dispose()
+    const next = createHarness({ storage: first.storage, installedVersion: '' })
+    await next.controller.start({ scheduleStartupCheck: false })
+    await next.controller.handleAppForeground()
+    await next.controller.checkForUpdates({ manual: true })
+    expect((await next.store.load()).available?.manifest.sha256).toBe(SHA_17)
+    expect(next.controller.getSnapshot().status).not.toBe('up-to-date')
+    next.setInstalledVersion('0.1.7')
+    await next.controller.handleAppForeground()
+    expect((await next.store.load()).available).toBeNull()
+    expect(next.controller.getSnapshot()).toMatchObject({ status: 'idle', release: null })
+    next.controller.dispose()
+  })
+
+  test('a late silent failure cannot restore the release that was installed during the check', async () => {
+    const h = createHarness()
+    await h.controller.start({ scheduleStartupCheck: false })
+    await h.controller.checkForUpdates({ manual: true })
+    h.setNow(1_700_000_000_000 + SILENT_CHECK_COOLDOWN_MS)
+    const started = Promise.withResolvers<void>()
+    const result = Promise.withResolvers<string>()
+    h.setFetchManifest(() => { started.resolve(); return result.promise })
+    const refresh = h.controller.maybeSilentCheck()
+    await started.promise
+    h.setInstalledVersion('0.1.7')
+    await h.controller.handleAppForeground()
+    result.reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' }))
+    await refresh
+    expect(h.controller.getSnapshot()).toMatchObject({ status: 'idle', release: null })
+    expect((await h.store.load()).available).toBeNull()
+    h.controller.dispose()
+  })
+
+  test('a temporarily missing relay manifest preserves the known update and retries after failure backoff', async () => {
+    const h = createHarness({ connection: {
+      host: makeHost(), credential: 'lan-token',
+      fetchLatest: async () => ({ supported: true, available: false }),
+    } })
+    await h.controller.start({ scheduleStartupCheck: false })
+    await h.controller.checkForUpdates({ manual: true })
+    const expiresAt = 1_700_000_000_000 + SILENT_CHECK_COOLDOWN_MS
+    h.setNow(expiresAt)
+    h.setFetchManifest(async () => { throw Object.assign(new Error('timeout'), { code: 'TIMEOUT' }) })
+    await h.controller.maybeSilentCheck()
+    expect(h.controller.getSnapshot()).toMatchObject({ status: 'available', release: { sha256: SHA_17 } })
+    await h.controller.maybeSilentCheck()
+    expect(h.calls.fetchGitHubManifest).toBe(2)
+    h.setNow(expiresAt + SILENT_FAILURE_COOLDOWN_MS)
+    h.setFetchManifest(async () => JSON.stringify(makeManifest('0.1.8', SHA_18)))
+    await h.controller.maybeSilentCheck()
+    expect(h.controller.getSnapshot().release?.sha256).toBe(SHA_18)
     h.controller.dispose()
   })
 
