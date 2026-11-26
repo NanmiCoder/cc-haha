@@ -1300,12 +1300,33 @@ describe('AskUserQuestion', () => {
     const keyDownOn = (
       target: HTMLElement,
       key: string,
-      modifiers: { ctrlKey?: boolean; metaKey?: boolean } = { ctrlKey: true },
+      modifiers: {
+        ctrlKey?: boolean
+        metaKey?: boolean
+        altKey?: boolean
+        shiftKey?: boolean
+        repeat?: boolean
+      } = { ctrlKey: true },
     ) => fireEvent.keyDown(target, { key, ...modifiers })
-    const pressNextShortcut = (modifiers: { ctrlKey?: boolean; metaKey?: boolean } = { ctrlKey: true }) =>
-      keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'ArrowRight', modifiers)
+    const pressNextShortcut = (
+      modifiers: { ctrlKey?: boolean; metaKey?: boolean; repeat?: boolean } = { ctrlKey: true },
+    ) => keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'ArrowRight', modifiers)
     const sentPermissionResponses = () =>
       sendMock.mock.calls.filter(([, message]) => message.type === 'permission_response')
+    const mockPlatform = (target: 'mac' | 'win') => {
+      const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(
+        target === 'mac' ? 'MacIntel' : 'Win32',
+      )
+      const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+        target === 'mac'
+          ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)'
+          : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      )
+      return () => {
+        platformSpy.mockRestore()
+        userAgentSpy.mockRestore()
+      }
+    }
 
     it('advances with Ctrl+→ once the question on screen is answered', () => {
       render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
@@ -1320,13 +1341,116 @@ describe('AskUserQuestion', () => {
       expect(screen.queryByText('First question?')).toBeNull()
     })
 
-    it('accepts ⌘+→ so macOS matches the button hint', () => {
+    it('uses ⌘+→ on macOS and leaves Ctrl+→ free for system shortcuts', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        typeCustomAnswer('custom-q1')
+        // Ctrl+→ switches macOS Spaces and must not be claimed on macOS.
+        expect(pressNextShortcut({ ctrlKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        expect(pressNextShortcut({ metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('ignores Win/Meta+→ on Windows and ignores simultaneous Ctrl+⌘ chords', () => {
+      const restore = mockPlatform('win')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        typeCustomAnswer('custom-q1')
+        expect(pressNextShortcut({ metaKey: true })).toBe(true)
+        expect(pressNextShortcut({ ctrlKey: true, metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        expect(pressNextShortcut({ ctrlKey: true })).toBe(false)
+        fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+        const option = screen.getByRole('button', { name: /^A2$/ })
+        expect(keyDownOn(option, 'Enter', { ctrlKey: true, metaKey: true })).toBe(true)
+        expect(sentPermissionResponses()).toHaveLength(0)
+      } finally {
+        restore()
+      }
+    })
+
+    it('preserves macOS ⌘+→ end-of-line editing mid-line in the textarea and advances at line end', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+        typeCustomAnswer('first line\nsecond line')
+
+        // Mid-line caret: let macOS jump to end of line instead of switching tabs.
+        textarea.setSelectionRange(3, 3)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Active text selection: also preserve native editing.
+        textarea.setSelectionRange(0, 5)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Caret at end of the first line (before '\n'): native ⌘→ is a no-op, so advance.
+        textarea.setSelectionRange(10, 10)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('supports Ctrl/⌘+← to return to the previous question without breaking textarea editing', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+        expect(screen.getByText('Second question?')).toBeTruthy()
+
+        // Inside textarea with caret past start: preserve native line-start editing.
+        const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+        typeCustomAnswer('draft-q2')
+        textarea.setSelectionRange(4, 4)
+        expect(keyDownOn(textarea, 'ArrowLeft', { metaKey: true })).toBe(true)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+
+        // Caret at very start of textarea: step back to Q1.
+        textarea.setSelectionRange(0, 0)
+        expect(keyDownOn(textarea, 'ArrowLeft', { metaKey: true })).toBe(false)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Already on Q1: ArrowLeft does nothing and is not prevented.
+        expect(keyDownOn(screen.getByRole('button', { name: /^A1$/ }), 'ArrowLeft', { metaKey: true })).toBe(true)
+
+        // Advance back to Q2, then step back from an option button.
+        expect(keyDownOn(screen.getByRole('button', { name: /^A1$/ }), 'ArrowRight', { metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+        expect(keyDownOn(screen.getByRole('button', { name: /^A2$/ }), 'ArrowLeft', { metaKey: true })).toBe(false)
+        expect(screen.getByText('First question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('ignores repeated keydown events on ArrowRight and Enter', () => {
       render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
 
       typeCustomAnswer('custom-q1')
-      pressNextShortcut({ metaKey: true })
+      expect(pressNextShortcut({ ctrlKey: true, repeat: true })).toBe(false)
+      expect(screen.getByText('First question?')).toBeTruthy()
 
+      expect(pressNextShortcut({ ctrlKey: true })).toBe(false)
       expect(screen.getByText('Second question?')).toBeTruthy()
+
+      typeCustomAnswer('custom-q2')
+      expect(keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'Enter', { ctrlKey: true, repeat: true })).toBe(false)
+      expect(sentPermissionResponses()).toHaveLength(0)
     })
 
     it('ignores Ctrl+→ while the question is unanswered', () => {
@@ -1366,7 +1490,7 @@ describe('AskUserQuestion', () => {
       expect(screen.getByText('Ship it?')).toBeTruthy()
     })
 
-    it('moves focus to the next question after Ctrl+→ advances', () => {
+    it('moves focus to the next question first option when advancing from an option, and keeps textarea focus when typing', () => {
       render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
 
       typeCustomAnswer('custom-q1')
@@ -1376,7 +1500,74 @@ describe('AskUserQuestion', () => {
       keyDownOn(firstOption, 'ArrowRight')
 
       expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /^A2$/ }))
+
+      // Going back from the textarea keeps focus in the textarea.
+      const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+      textarea.focus()
+      textarea.setSelectionRange(0, 0)
+      keyDownOn(textarea, 'ArrowLeft')
+      expect(screen.getByText('First question?')).toBeTruthy()
+      expect(document.activeElement).toBe(textarea)
+    })
+
+    it('focuses the textarea when advancing from an option onto a free-text-only question', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [
+              { header: 'Q1', question: 'First question?', options: [{ label: 'A1' }] },
+              { header: 'Q2', question: 'Explain why?' },
+            ],
+          }}
+        />,
+      )
+
+      typeCustomAnswer('note')
+      const option = screen.getByRole('button', { name: /^A1$/ })
+      option.focus()
+      keyDownOn(option, 'ArrowRight')
+
+      expect(screen.getByText('Explain why?')).toBeTruthy()
       expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer...'))
+    })
+
+    it('keeps card focus when clicking Next onto the last question so Ctrl+Enter still submits', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      // Mouse click (detail: 1) unmounts Next on the last question; focus stays on the card.
+      fireEvent.click(nextButton(), { detail: 1 })
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(document.activeElement).not.toBe(document.body)
+
+      typeCustomAnswer('custom-q2')
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter', ctrlKey: true })
+      expect(sentPermissionResponses()).toHaveLength(1)
+    })
+
+    it('ignores keyboard shortcuts once the card has been submitted', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={TWO_QUESTIONS}
+          result={{
+            answers: {
+              'First question?': 'A1',
+              'Second question?': 'A2',
+            },
+            attachments: [
+              { id: 'img-1', type: 'image', name: 'shot.png', previewUrl: 'data:image/png;base64,AA==' },
+            ],
+          }}
+        />,
+      )
+
+      const previewButton = screen.getByRole('button', { name: /shot\.png/i })
+      expect(keyDownOn(previewButton, 'ArrowRight', { ctrlKey: true })).toBe(true)
+      expect(keyDownOn(previewButton, 'Enter', { ctrlKey: true })).toBe(true)
+      expect(screen.getByText('First question?')).toBeTruthy()
     })
 
     it('does not steal the arrow keys while an IME is composing', () => {
@@ -1949,37 +2140,55 @@ describe('AskUserQuestion', () => {
     })
   })
 
-  it('shows platform-aware submit shortcut keycap label', () => {
+  it('shows platform-aware shortcut keycaps without duplicate arrows and hides them on touch H5', () => {
     const platformSpy = vi.spyOn(navigator, 'platform', 'get')
     const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get')
+    const multiInput = {
+      questions: [
+        { header: 'Q1', question: 'First?', options: [{ label: 'Yes' }] },
+        { header: 'Q2', question: 'Second?', options: [{ label: 'No' }] },
+      ],
+    }
 
     try {
       platformSpy.mockReturnValue('Win32')
       userAgentSpy.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
 
-      const { rerender } = render(
-        <AskUserQuestion
-          toolUseId="tool-1"
-          input={{
-            questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
-          }}
-        />,
-      )
-      expect(screen.getByRole('button', { name: 'Submit' }).textContent).toContain('Ctrl+↵')
+      const { rerender } = render(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const winSubmit = screen.getByRole('button', { name: 'Submit' })
+      const winNext = screen.getByRole('button', { name: 'Next' })
+      expect(winSubmit.textContent).toContain('Ctrl+↵')
+      expect(winSubmit.querySelector('kbd')?.className).toContain('bg-[var(--color-surface-container)]')
+      expect(winNext.textContent).toContain('Ctrl+→')
+      // Desktop shows the keycap instead of a redundant trailing ArrowRight icon.
+      expect(winNext.querySelector('svg')).toBeNull()
 
       platformSpy.mockReturnValue('MacIntel')
       userAgentSpy.mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
 
-      rerender(
-        <AskUserQuestion
-          toolUseId="tool-1"
-          input={{
-            questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
-          }}
-        />,
-      )
-      expect(screen.getByRole('button', { name: 'Submit' }).textContent).toContain('⌘↵')
+      rerender(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const macSubmit = screen.getByRole('button', { name: 'Submit' })
+      const macNext = screen.getByRole('button', { name: 'Next' })
+      expect(macSubmit.textContent).toContain('⌘↵')
+      expect(macNext.textContent).toContain('⌘→')
+      expect(macNext.querySelector('svg')).toBeNull()
+
+      // Once all questions are answered, Submit's keycap switches to inverse styling.
+      fireEvent.click(screen.getByRole('button', { name: /^Yes$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^No$/ }))
+      expect(screen.getByRole('button', { name: 'Submit' }).querySelector('kbd')?.className)
+        .toContain('bg-[var(--color-inverse-surface)]')
+
+      // Touch H5 hides keyboard keycaps and restores the directional arrow icon on Next.
+      document.documentElement.setAttribute('data-touch-h5', 'true')
+      rerender(<AskUserQuestion key="touch" toolUseId="tool-2" input={multiInput} />)
+      const touchSubmit = screen.getByRole('button', { name: 'Submit' })
+      const touchNext = screen.getByRole('button', { name: 'Next' })
+      expect(touchSubmit.querySelector('kbd')).toBeNull()
+      expect(touchNext.querySelector('kbd')).toBeNull()
+      expect(touchNext.querySelector('svg')).not.toBeNull()
     } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
       platformSpy.mockRestore()
       userAgentSpy.mockRestore()
     }

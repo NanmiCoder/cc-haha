@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/Button'
 import { Kbd } from '@/components/ui/Kbd'
 import { detectPlatform } from '@/lib/workspace/shortcuts'
 import { isInlineImagePath } from '../../lib/attachmentImages'
+import { isTouchH5Document } from '../../lib/touchH5'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
@@ -119,6 +120,20 @@ function parseInput(input: unknown): Question[] {
 type QuestionSelections = Record<number, string[]>
 type QuestionFreeTexts = Record<number, string>
 type QuestionImages = Record<number, ComposerAttachment[]>
+type TabChangeFocusTarget = 'textarea' | 'answer' | 'card' | null
+
+function isCursorAtLineEnd(textarea: HTMLTextAreaElement): boolean {
+  const start = textarea.selectionStart ?? textarea.value.length
+  const end = textarea.selectionEnd ?? textarea.value.length
+  if (start !== end) return false
+  return end >= textarea.value.length || textarea.value[end] === '\n'
+}
+
+function isCursorAtTextStart(textarea: HTMLTextAreaElement): boolean {
+  const start = textarea.selectionStart ?? 0
+  const end = textarea.selectionEnd ?? 0
+  return start === 0 && end === 0
+}
 
 function getSelectedAnswer(question: Question, selected: string[] | undefined) {
   if (!selected || selected.length === 0) return ''
@@ -247,9 +262,11 @@ export function AskUserQuestion({
   const [hasSentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
   const composingRef = useRef(false)
   const activitySentForRequest = useRef<string | null>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const firstOptionRef = useRef<HTMLButtonElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const focusAfterTabChangeRef = useRef(false)
+  const focusAfterTabChangeRef = useRef<TabChangeFocusTarget>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const imageLoadGenRef = useRef(0)
   const mountedRef = useRef(true)
@@ -267,13 +284,23 @@ export function AskUserQuestion({
     }
   }, [])
 
-  // Ctrl/⌘+→ moves focus with the question so the next answer can be typed
-  // immediately. Clicks and option auto-advance leave focus where the user put
-  // it, so this only runs when the shortcut asked for it.
+  // Keep keyboard focus inside the newly shown question after keyboard tab
+  // navigation or when a control unmounts (e.g. clicking Next onto the last
+  // question). Typists stay in the textarea; option pickers land on the first
+  // option (or textarea on free-text-only questions).
   useEffect(() => {
-    if (!focusAfterTabChangeRef.current) return
-    focusAfterTabChangeRef.current = false
-    textareaRef.current?.focus()
+    const focusTarget = focusAfterTabChangeRef.current
+    if (!focusTarget) return
+    focusAfterTabChangeRef.current = null
+    if (focusTarget === 'textarea') {
+      textareaRef.current?.focus()
+      return
+    }
+    if (focusTarget === 'answer') {
+      ;(firstOptionRef.current ?? textareaRef.current)?.focus()
+      return
+    }
+    cardRef.current?.focus({ preventScroll: true })
   }, [clampedActiveTab])
 
   // If the server rejects attachment materialization and restores the pending
@@ -651,7 +678,7 @@ export function AskUserQuestion({
     event.target.value = ''
   }
 
-  const handleSelect = (qIndex: number, label: string) => {
+  const handleSelect = (qIndex: number, label: string, optIndex?: number) => {
     if (submitted) return
     markUserActivity()
     // Computed from the render snapshot rather than inside the updater: React
@@ -689,7 +716,18 @@ export function AskUserQuestion({
       }
       return { ...prev, [qIndex]: [label] }
     })
-    if (shouldAdvance) setActiveTab(qIndex + 1)
+    if (shouldAdvance) {
+      const nextOptionCount = questions[qIndex + 1]?.options?.length ?? 0
+      const focusWouldDrop =
+        typeof optIndex === 'number' &&
+        optIndex >= nextOptionCount &&
+        document.activeElement instanceof HTMLElement &&
+        Boolean(cardRef.current?.contains(document.activeElement))
+      if (focusWouldDrop) {
+        focusAfterTabChangeRef.current = 'card'
+      }
+      setActiveTab(qIndex + 1)
+    }
   }
 
   const handleFreeTextChange = (qIndex: number, value: string) => {
@@ -875,40 +913,73 @@ export function AskUserQuestion({
   const activeAnswered = isQuestionAnswered(safeActiveTab)
   const hasMultipleQuestions = questions.length > 1
   const isLastQuestion = safeActiveTab >= questions.length - 1
+  const canGoToPreviousQuestion = !submitted && hasMultipleQuestions && safeActiveTab > 0
   // Same gate as the Next button below: the shortcut is only an alternative
   // control for that button, so it must not skip an unanswered question.
-  const canGoToNextQuestion = hasMultipleQuestions && !isLastQuestion && activeAnswered
+  const canGoToNextQuestion = !submitted && hasMultipleQuestions && !isLastQuestion && activeAnswered
   // Mirrors the Submit button's `disabled` condition.
-  const canSubmit = allAnswered && (expired || Boolean(pendingRequest))
+  const canSubmit = !submitted && allAnswered && (expired || Boolean(pendingRequest))
   const hasActiveSelection = (selections[safeActiveTab]?.length ?? 0) > 0
   const activeImages = canAttachImages ? (imagesByQuestion[safeActiveTab] ?? []) : []
   const isMac = detectPlatform() === 'mac'
+  const isTouchH5 = isTouchH5Document()
+
+  const navigateToQuestion = (nextIndex: number, focusTarget: TabChangeFocusTarget) => {
+    focusAfterTabChangeRef.current = focusTarget
+    setActiveTab(nextIndex)
+  }
 
   // Keyboard shortcuts belong to the whole card, not just the textarea: after
   // picking options with the keyboard the focus sits on the option button, and
-  // Ctrl/⌘+Enter has to keep working there. They bubble up here; claiming the
-  // default in this handler is what keeps the textarea's word-wise cursor
-  // movement from also firing on Ctrl/⌘+→.
+  // Ctrl/⌘+Enter has to keep working there.
   const handleShortcutKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (submitted) return
     // IME candidate navigation uses Enter and the arrow keys too.
     if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+    if (event.altKey || event.shiftKey) return
+    // Reject bare keys and simultaneous Ctrl+⌘ chords.
+    if (event.ctrlKey === event.metaKey) return
+
     if (event.key === 'Enter') {
       // Always claim the chord, even when submission is gated: falling through
       // would trigger the focused option button's default Enter activation and
       // silently toggle the answer instead.
       event.preventDefault()
       event.stopPropagation()
-      if (canSubmit) handleSubmit()
+      if (!event.repeat && canSubmit) handleSubmit()
       return
     }
-    if (event.key !== 'ArrowRight' || !canGoToNextQuestion) return
-    event.preventDefault()
-    event.stopPropagation()
-    // Move focus to the next question's answer area once it renders; the
-    // textarea is shared across questions, so this lands on the right one.
-    focusAfterTabChangeRef.current = true
-    setActiveTab(safeActiveTab + 1)
+
+    // Match the platform's own navigation modifier so macOS keeps Ctrl+Arrow
+    // free (Mission Control / readline) and Windows/Linux keeps Win+Arrow free.
+    const isPrimaryNavModifier = isMac ? event.metaKey : event.ctrlKey
+    if (!isPrimaryNavModifier) return
+
+    const textareaTarget = event.target instanceof HTMLTextAreaElement ? event.target : null
+
+    if (event.key === 'ArrowRight') {
+      if (!canGoToNextQuestion) return
+      // On macOS, ⌘→ jumps to the end of the line in a textarea (MacBooks have
+      // no End key). Preserve that while editing mid-line; once at line end,
+      // native ⌘→ is a no-op so advancing is conflict-free.
+      if (isMac && textareaTarget && !isCursorAtLineEnd(textareaTarget)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      navigateToQuestion(safeActiveTab + 1, textareaTarget ? 'textarea' : 'answer')
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      if (!canGoToPreviousQuestion) return
+      // Preserve text navigation (⌘← line-start on macOS, Ctrl+← word-left on
+      // Windows/Linux) whenever the caret is not already at the very start.
+      if (textareaTarget && !isCursorAtTextStart(textareaTarget)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      navigateToQuestion(safeActiveTab - 1, textareaTarget ? 'textarea' : 'answer')
+    }
   }
   const submittedImages: AttachmentPreview[] = resultAttachments.length > 0
     ? resultAttachments
@@ -924,12 +995,14 @@ export function AskUserQuestion({
 
   return (
     <div
-      className={`overflow-hidden rounded-[var(--radius-lg)] border ${
+      ref={cardRef}
+      tabIndex={submitted ? undefined : -1}
+      className={`overflow-hidden rounded-[var(--radius-lg)] border focus:outline-none ${
         submitted
           ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
           : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
       }`}
-      onKeyDown={handleShortcutKeyDown}
+      onKeyDown={submitted ? undefined : handleShortcutKeyDown}
     >
       {/* Header: 42px, the shared card head of the ask / plan cards. */}
       <div className={`flex h-[42px] items-center gap-2 px-3.5 ${submitted ? '' : 'border-b border-[var(--color-border)]'}`}>
@@ -1009,8 +1082,9 @@ export function AskUserQuestion({
                 return (
                   <button
                     key={optIndex}
+                    ref={optIndex === 0 ? firstOptionRef : undefined}
                     type="button"
-                    onClick={() => handleSelect(safeActiveTab, opt.label)}
+                    onClick={() => handleSelect(safeActiveTab, opt.label, optIndex)}
                     disabled={submitted}
                     aria-pressed={isSelected}
                     className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
@@ -1170,7 +1244,16 @@ export function AskUserQuestion({
             onClick={handleSubmit}
           >
             <span>{t(expired ? 'question.sendAsMessage' : 'question.submit')}</span>
-            <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{isMac ? '⌘↵' : 'Ctrl+↵'}</Kbd>
+            {!isTouchH5 && (
+              <Kbd
+                size="xs"
+                appearance={canSubmit ? 'inverse' : 'subtle'}
+                aria-hidden="true"
+                className={canSubmit ? 'ml-0.5 opacity-85' : 'ml-0.5'}
+              >
+                {isMac ? '⌘↵' : 'Ctrl+↵'}
+              </Kbd>
+            )}
           </Button>
           <Button
             variant="ghost"
@@ -1191,14 +1274,24 @@ export function AskUserQuestion({
               size="base"
               className="ml-auto"
               disabled={!canGoToNextQuestion}
-              onClick={() => setActiveTab(safeActiveTab + 1)}
-              icon={<ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} />}
+              onClick={(event) => {
+                const targetIndex = safeActiveTab + 1
+                const isKeyboardClick = event.detail === 0
+                const nextButtonWillUnmount = targetIndex >= questions.length - 1
+                navigateToQuestion(
+                  targetIndex,
+                  isKeyboardClick ? 'answer' : nextButtonWillUnmount ? 'card' : null,
+                )
+              }}
+              icon={isTouchH5 ? <ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} /> : undefined}
               iconPosition="end"
             >
-              {t('question.next')}
-              <Kbd size="xs" appearance="subtle" aria-hidden="true" className="ml-0.5">
-                {isMac ? '⌘→' : 'Ctrl+→'}
-              </Kbd>
+              <span>{t('question.next')}</span>
+              {!isTouchH5 && (
+                <Kbd size="xs" appearance="subtle" aria-hidden="true" className="ml-0.5">
+                  {isMac ? '⌘→' : 'Ctrl+→'}
+                </Kbd>
+              )}
             </Button>
           )}
         </div>
