@@ -1932,6 +1932,43 @@ export function startFixtureServer({
               },
             ],
           })
+        if (action === 'optimize-prompt') {
+          if (method !== 'POST') {
+            return fail('Unsupported prompt optimization route', 405, 'METHOD_NOT_ALLOWED')
+          }
+          const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : ''
+          const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+          const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+          if (!uuid.test(requestId) || !prompt) {
+            return fail(
+              'Invalid prompt optimization request: requestId UUID and nonempty prompt are required',
+              400,
+              'BAD_REQUEST'
+            )
+          }
+          await Bun.sleep(150)
+          if (request.signal.aborted) {
+            return fail('Prompt optimization cancelled', 499, 'PROMPT_OPTIMIZE_CANCELLED')
+          }
+          return json({
+            requestId,
+            optimizedPrompt: `结合当前项目与上下文：${prompt}。请先定位相关实现文件与边界条件，再给出最小改动方案并补充回归测试。`,
+          })
+        }
+        if (action?.startsWith('optimize-prompt/')) {
+          if (method !== 'DELETE') {
+            return fail('Unsupported prompt optimization route', 405, 'METHOD_NOT_ALLOWED')
+          }
+          let requestId: string
+          try {
+            requestId = decodeURIComponent(action.slice('optimize-prompt/'.length))
+          } catch {
+            return fail('Invalid requestId', 400, 'BAD_REQUEST')
+          }
+          const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+          if (!uuid.test(requestId)) return fail('Invalid requestId', 400, 'BAD_REQUEST')
+          return json({ requestId, cancelled: true })
+        }
         const backgroundOutput = action?.match(/^background-tasks\/([^/]+)\/output$/)
         if (backgroundOutput) {
           if (method !== 'GET') return fail('Method not allowed', 405, 'METHOD_NOT_ALLOWED')
@@ -2528,8 +2565,42 @@ async function selfTest() {
       count,
       'Stop must cancel delayed streaming output'
     )
+    const optimizeReqId = crypto.randomUUID()
+    const optimizeProbe = await fetch(
+      `${base}/api/sessions/fixture-chat/optimize-prompt`,
+      { headers }
+    )
+    assert.equal(optimizeProbe.status, 405)
+    assert.equal(
+      ((await optimizeProbe.json()) as { message: string }).message,
+      'Unsupported prompt optimization route'
+    )
+    const optimizeResponse = await fetch(
+      `${base}/api/sessions/fixture-chat/optimize-prompt`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: optimizeReqId, prompt: '整理测试' }),
+      }
+    )
+    assert.equal(optimizeResponse.status, 200)
+    const optimized = (await optimizeResponse.json()) as {
+      requestId: string
+      optimizedPrompt: string
+    }
+    assert.equal(optimized.requestId, optimizeReqId)
+    assert.ok(optimized.optimizedPrompt.includes('整理测试'))
+    const cancelOptimize = await fetch(
+      `${base}/api/sessions/fixture-chat/optimize-prompt/${optimizeReqId}`,
+      { method: 'DELETE', headers }
+    )
+    assert.equal(cancelOptimize.status, 200)
+    assert.deepEqual(await cancelOptimize.json(), {
+      requestId: optimizeReqId,
+      cancelled: true,
+    })
     console.log(
-      'Fixture self-test passed: auth, paging/stale cursor, runtime, stream/tools, approval/question/plan, stop, retained background output'
+      'Fixture self-test passed: auth, paging/stale cursor, runtime, stream/tools, approval/question/plan, stop, retained background output, optimize-prompt'
     )
   } finally {
     for (const ws of sockets) ws.close()

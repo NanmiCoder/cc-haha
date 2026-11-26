@@ -33,6 +33,9 @@ import {
 import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { useVoiceDictation } from '../core/useVoiceDictation'
+import { isOptimizablePrompt } from '../core/promptOptimize'
+import { usePromptOptimize } from '../core/usePromptOptimize'
+import { PromptOptimizeButton, PromptOptimizeFeedback } from './compose/PromptOptimize'
 import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/VoiceInput'
 import { simulatedPhoneChrome } from './webChrome'
 import { subscribeWebKeyboard } from './webKeyboard'
@@ -327,6 +330,7 @@ export function ChatComposer({
   above,
   caption,
   onHeight,
+  newRequestId,
 }: {
   client: ApiClient | null
   sessionId?: string
@@ -362,6 +366,8 @@ export function ChatComposer({
   caption?: ReactNode
   /** 整块（含渐隐区）的高度，页面给内容留底边距用。 */
   onHeight?(height: number): void
+  /** 为提示词优化等幂等请求生成 v4 UUID（原生端由页面注入 expo-crypto）。 */
+  newRequestId?: () => string
 }) {
   const colors = useColors()
   const inset = useBottomInset()
@@ -409,6 +415,28 @@ export function ChatComposer({
     onSubmit: onSend,
     focus: () => requestAnimationFrame(() => input.current?.focus()),
   })
+  const promptOptimize = usePromptOptimize({
+    client,
+    sessionId,
+    contextKey: `${client?.host.id ?? ''}:${sessionId ?? 'new'}`,
+    draft,
+    blocked: disabled || !!picking || voice.live,
+    onDraft: (text) => {
+      unrendered.current = null
+      sent.current = null
+      onDraft(text)
+      moveCaret(text.length)
+    },
+    focus: () => requestAnimationFrame(() => input.current?.focus()),
+    newRequestId,
+  })
+  const canOptimizePrompt =
+    Boolean(client) &&
+    Boolean(sessionId) &&
+    !disabled &&
+    !picking &&
+    !voice.live &&
+    isOptimizablePrompt(draft)
   const referenceState = useRef({ references, onReferences })
   useEffect(() => {
     referenceState.current = { references, onReferences }
@@ -485,6 +513,7 @@ export function ChatComposer({
     }
     sendWhenRendered.current = false
     if (slot.kind === 'stop') return onStop?.()
+    promptOptimize.cancel()
     if (runShortcut(draft, references.length > 0 || attachments.length > 0)) {
       onDraft('')
       onOpenRun()
@@ -612,6 +641,7 @@ export function ChatComposer({
           editable={!disabled && !voice.live}
           onChangeText={(reported) => {
             voice.edited()
+            promptOptimize.edited()
             const value = fieldText(reported)
             const cursor =
               value === reported
@@ -654,6 +684,7 @@ export function ChatComposer({
           }}
         />
         <VoiceFeedback voice={voice} blocked={disabled} onError={onError} />
+        {!voice.live ? <PromptOptimizeFeedback optimize={promptOptimize} blocked={disabled || !!picking} /> : null}
         {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
@@ -676,11 +707,15 @@ export function ChatComposer({
           <VoiceMicrophone
             blocked={!client || disabled || !!picking}
             onPress={() => {
+              promptOptimize.edited()
               input.current?.blur()
               Keyboard.dismiss()
               void voice.start()
             }}
           />
+          {sessionId ? (
+            <PromptOptimizeButton optimize={promptOptimize} canOptimize={canOptimizePrompt} />
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={slot.label}
