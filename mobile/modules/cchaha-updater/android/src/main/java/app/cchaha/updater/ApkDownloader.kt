@@ -248,6 +248,7 @@ class ApkDownloader(
       if (finalFile.isFile) {
         val verified = tryVerifyExisting(finalFile, sha, version)
         if (verified != null) {
+          finalFile.setLastModified(nowMillis())
           cleanupOtherFiles(sha)
           return DownloadResult(
             sha256 = sha,

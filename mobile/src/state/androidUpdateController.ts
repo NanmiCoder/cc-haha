@@ -867,8 +867,12 @@ export class AndroidUpdateController {
 
     try {
       // Android can kill the process before the native promise resolves or rejects.
-      // Save the target first; recovery reads the actual byte count from disk.
-      await this.savePartial(release, source, this.snapshot.partialBytes, this.snapshot.totalBytes)
+      // Save the target first (best-effort); recovery reads the actual byte count from disk.
+      try {
+        await this.savePartial(release, source, this.snapshot.partialBytes, this.snapshot.totalBytes)
+      } catch {
+        // Storage failures must not block starting the native download.
+      }
       if (this.activeDownloadId !== downloadId) return
       const result = await this.nativeUpdater.downloadApk(
         JSON.stringify({
@@ -1008,10 +1012,14 @@ export class AndroidUpdateController {
     const partialBytes = cached?.partialBytes ?? 0
     const totalBytes = cached?.totalBytes ?? this.snapshot.totalBytes ?? release.sizeBytes
 
-    if (partialBytes > 0) {
-      await this.savePartial(release, source, partialBytes, totalBytes)
-    } else {
-      this.record = await this.store.update((cur) => ({ ...cur, partial: null }))
+    try {
+      if (partialBytes > 0) {
+        await this.savePartial(release, source, partialBytes, totalBytes)
+      } else {
+        this.record = await this.store.update((cur) => ({ ...cur, partial: null }))
+      }
+    } catch {
+      // Never strand the UI in downloading state if local storage writes fail.
     }
 
     const netAfter = await this.safeNetworkState()

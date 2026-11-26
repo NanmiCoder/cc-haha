@@ -430,6 +430,33 @@ describe('AndroidUpdateController', () => {
     await download
   })
 
+  test('does not block download or strand downloading state when persisting partial metadata fails', async () => {
+    const inner = makeMemoryStorage()
+    let failWrites = false
+    const storage = {
+      getItem: (key: string) => inner.getItem(key),
+      setItem: async (key: string, value: string) => {
+        if (failWrites) throw new Error('ENOSPC: storage full')
+        await inner.setItem(key, value)
+      },
+      removeItem: (key: string) => inner.removeItem(key),
+    }
+    const h = createHarness({ storage })
+    await h.controller.initialize({ scheduleStartupCheck: false })
+    await h.controller.checkForUpdates({ manual: true })
+
+    failWrites = true
+    h.setDownloadApk(async () => {
+      throw Object.assign(new Error('network dropped'), { code: 'NETWORK_ERROR' })
+    })
+    await h.controller.download('github')
+
+    expect(h.calls.downloadApk).toHaveLength(1)
+    expect(h.controller.getSnapshot().status).toBe('error')
+    expect(h.controller.getSnapshot().errorKind).toBe('github_unreachable')
+    h.controller.dispose()
+  })
+
   test('preserves partial bytes on download interruption and deletes partial on explicit cancel', async () => {
     const h = createHarness()
     await h.controller.initialize({ scheduleStartupCheck: false })
