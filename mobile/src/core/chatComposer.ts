@@ -103,17 +103,31 @@ export function restoreFileReferences(text: string): {
     attachments,
   }
 }
+const LEADING_SWARM_COMMAND = /^\/swarm(?:\s|$)/i
+
+export function withAntigravitySwarmRequest(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed) return '/swarm'
+  if (LEADING_SWARM_COMMAND.test(trimmed)) return trimmed
+  return `/swarm ${trimmed}`
+}
+
 export function buildComposerMessage(
   text: string,
   attachments: ComposerAttachment[],
-  team: boolean
+  team: boolean,
+  options?: { antigravity?: boolean }
 ): Extract<ClientMessage, { type: 'user_message' }> {
   const content = text.trim()
   if (!content && !attachments.length)
     throw new Error('请先写下消息或添加材料。')
   return {
     type: 'user_message',
-    content: team ? `${teamBlock}${content ? `\n\n${content}` : ''}` : content,
+    content: team
+      ? (options?.antigravity
+          ? withAntigravitySwarmRequest(content)
+          : `${teamBlock}${content ? `\n\n${content}` : ''}`)
+      : content,
     ...(attachments.length
       ? {
           attachments: attachments.map(

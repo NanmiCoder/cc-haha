@@ -1,5 +1,34 @@
 // desktop/src/types/provider.ts
 
+import type { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
+import type { ReasoningEffortLevel } from './settings'
+
+export type AntigravityStatusState = 'not_installed' | 'unchecked' | 'ready' | 'login_required' | 'error'
+
+export type AntigravityModelInfo = {
+  id: string
+  name: string
+  supportedReasoningEfforts?: ReasoningEffortLevel[]
+  defaultReasoningEffort?: ReasoningEffortLevel
+}
+
+export type AntigravityTierInfo = {
+  id?: string
+  name?: string
+}
+
+/** Discovered through the local server (`agy acp`), never a saved API provider. */
+export type AntigravityStatus = {
+  id: typeof ANTIGRAVITY_ACP_PROVIDER_ID
+  kind: 'acp'
+  status: AntigravityStatusState
+  models: AntigravityModelInfo[]
+  currentModelId?: string
+  currentEffortLevel?: ReasoningEffortLevel
+  version?: string
+  tier?: AntigravityTierInfo
+}
+
 export type ApiFormat =
   | 'anthropic'
   | 'openai_chat'

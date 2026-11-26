@@ -1484,4 +1484,24 @@ describe('Google Gemini API format in ProviderSettings', () => {
       }))
     })
   })
+
+  it('renders the Local agent runtimes Antigravity card when the server returns antigravity status', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({
+      providers: [],
+      activeId: null,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [{ id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro' }],
+        version: '1.5.17',
+      },
+    })
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('antigravity-provider-card')
+    expect(within(card).getByText('Antigravity')).toBeInTheDocument()
+    expect(within(card).getByText('1.5.17')).toBeInTheDocument()
+    expect(within(card).getByText('Ready')).toBeInTheDocument()
+  })
 })

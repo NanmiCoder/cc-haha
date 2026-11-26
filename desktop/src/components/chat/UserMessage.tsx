@@ -5,7 +5,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { Box, Puzzle, SquareSlash, UsersRound } from 'lucide-react'
 import type { UIAttachment } from '../../types/chat'
 import { useTranslation } from '../../i18n'
-import { stripAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { isAntigravitySwarmRequest, stripAgentTeamRequest } from '../../lib/agentTeamRequest'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { splitTextByUrls } from '../../lib/urlBoundary'
 import { hasCapabilitySentence, parseUserMessageSegments } from '../../lib/userMessageCapabilities'
@@ -99,7 +99,9 @@ export const UserMessage = memo(function UserMessage({
   // paths have to stay exactly as typed. Teammate traffic is rendered separately
   // below because agent-to-agent messages intentionally use Markdown.
   const display = useMemo(() => {
-    const agentTeam = modelContent ? stripAgentTeamRequest(modelContent).requested : false
+    const agentTeam = modelContent
+      ? (stripAgentTeamRequest(modelContent).requested || (isAntigravitySwarmRequest(modelContent) && !isAntigravitySwarmRequest(content)))
+      : false
     // A live bubble shows the composer's `@Label` projection; the model text
     // carries the capability itself, so read pills from it when it has them.
     const restored = modelContent ? extractRestoredUserDisplay(modelContent).content.trim() : ''

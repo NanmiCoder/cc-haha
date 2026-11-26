@@ -13,6 +13,12 @@ import {
 } from '../../core/sessionActivityModel'
 import type { BackgroundTask } from '../../core/operations'
 import type { Host } from '../../core/types'
+import {
+  workflowAgentStatusText,
+  type WorkflowActivityRun,
+  type WorkflowAgentRow,
+  type WorkflowPhaseRow,
+} from '../../core/workflows'
 import { DetentSheet } from '../DetentSheet'
 import { EmptyState, Icon, InlineError, Mono, Spinner, useColors, type IconName } from '../kit'
 import { Text } from '../Text'
@@ -22,12 +28,12 @@ import { MemberCard, UnassignedCard } from './TeamMembers'
 import { agentStatusText, clock } from './activityView'
 import { useNow } from './useNow'
 
-type Group = 'tasks' | 'subagents' | 'team' | 'commands'
+type Group = 'tasks' | 'workflow' | 'subagents' | 'team' | 'commands'
 type Confirm = { ids: string[]; all?: boolean; subject?: string }
 
 /**
- * 运行中底单：标题行「运行中 · 32:35」+ 右上「全部停止」，下面按 任务 → 团队 →
- * 子 Agent → 后台命令分组，组标题粘顶、可折叠。半高放不下，所以有任务或团队时子 Agent
+ * 运行中底单：标题行「运行中 · 32:35」+ 右上「全部停止」，下面按 任务 → 工作流 → 团队 →
+ * 子 Agent → 后台命令分组，组标题粘顶、可折叠。半高放不下，所以有任务、工作流或团队时子 Agent
  * 默认折起。有团队时任务都挂在各自成员名下（队长名下是会话自己的清单），不再单列。
  */
 export function ActivitySheet({
@@ -36,6 +42,7 @@ export function ActivitySheet({
   activity,
   elapsed,
   onOpenAgent,
+  onOpenWorkflowAgent,
   host,
   sessionId,
   onStopTurn,
@@ -49,6 +56,8 @@ export function ActivitySheet({
   elapsed?: string
   /** 点子 Agent 卡：底单先关闭，再把任务交给整合者去开全屏页。 */
   onOpenAgent(task: BackgroundTask): void
+  /** 点工作流子代理行：底单先关闭，再打开与普通子代理相同的详情页。 */
+  onOpenWorkflowAgent?(agent: WorkflowAgentRow): void
   host: Pick<Host, 'id'>
   /** 传入后，点后台命令行可以看它的完整输出。 */
   sessionId?: string
@@ -168,6 +177,14 @@ export function ActivitySheet({
           close()
           onOpenAgent(task)
         }}
+        onOpenWorkflowAgent={
+          onOpenWorkflowAgent
+            ? (agent) => {
+                close()
+                onOpenWorkflowAgent(agent)
+              }
+            : undefined
+        }
         onStop={(row) => setConfirm({ ids: [row.id], subject: row.command })}
         onOpenOutput={sessionId ? setDetail : undefined}
         launching={launching}
@@ -189,6 +206,7 @@ export function ActivitySheet({
 function Content({
   activity,
   onOpenAgent,
+  onOpenWorkflowAgent,
   onStop,
   onOpenOutput,
   launching,
@@ -196,6 +214,7 @@ function Content({
 }: {
   activity: SessionActivity
   onOpenAgent(task: BackgroundTask): void
+  onOpenWorkflowAgent?(agent: WorkflowAgentRow): void
   onStop(row: CommandRow): void
   onOpenOutput?(task: BackgroundTask): void
   launching?: number
@@ -204,11 +223,12 @@ function Content({
   const now = useNow(activity.runningCount > 0)
   const summaries = sectionSummaries(activity)
   const hasTasks = activity.tasks.length > 0
+  const hasWorkflow = activity.workflows.length > 0
   const team = activity.team
-  // 半高放不下全部：有任务或团队时子 Agent 默认折起来。
+  // 半高放不下全部：有任务、工作流或团队时子 Agent 默认折起来。
   const [open, setOpen] = useState<Partial<Record<Group, boolean>>>({})
   const isOpen = (group: Group) =>
-    open[group] ?? (group === 'subagents' ? !(hasTasks || team || launching) : true)
+    open[group] ?? (group === 'subagents' ? !(hasTasks || hasWorkflow || team || launching) : true)
   const toggle = (group: Group) => setOpen((value) => ({ ...value, [group]: !isOpen(group) }))
   const children: React.ReactNode[] = []
   const stickyHeaderIndices: number[] = []
@@ -235,6 +255,29 @@ function Content({
         <TaskCard tasks={activity.tasks} />
       </>
     )
+  if (hasWorkflow) {
+    const single = activity.workflows.length === 1 ? activity.workflows[0] : undefined
+    section(
+      'workflow',
+      '工作流',
+      summaries.workflows,
+      <>
+        {single && single.totalAgents > 0 ? (
+          <ProgressBar done={single.doneAgents} total={single.totalAgents} />
+        ) : null}
+        <View style={{ gap: 8 }}>
+          {activity.workflows.map((run) => (
+            <WorkflowCard
+              key={run.taskId}
+              run={run}
+              showHeader={activity.workflows.length > 1}
+              onOpenAgent={onOpenWorkflowAgent}
+            />
+          ))}
+        </View>
+      </>
+    )
+  }
   // 有团队时任务都在成员名下，团队顶上任务的位置。
   if (team || launching)
     section(
@@ -288,7 +331,7 @@ function Content({
         <EmptyState
           icon="list-checks"
           title={activity.loading ? '正在读取…' : '没有任务或后台活动'}
-          detail={activity.loading ? undefined : '任务清单、子 Agent、团队和后台命令开始后会显示在这里。'}
+          detail={activity.loading ? undefined : '任务清单、工作流、子 Agent、团队和后台命令开始后会显示在这里。'}
         />
       ) : (
         <ScrollView
@@ -451,6 +494,222 @@ function TaskLine({ task }: { task: PlanTask }) {
         </Text>
       ) : null}
     </View>
+  )
+}
+
+/* ───────────── 工作流 ───────────── */
+
+function WorkflowCard({
+  run,
+  showHeader,
+  onOpenAgent,
+}: {
+  run: WorkflowActivityRun
+  showHeader: boolean
+  onOpenAgent?(agent: WorkflowAgentRow): void
+}) {
+  const colors = useColors()
+  return (
+    <View style={[card(colors), { paddingVertical: 6 }]}>
+      {showHeader ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            paddingHorizontal: 14,
+            paddingTop: 4,
+            paddingBottom: 6,
+          }}
+        >
+          <Spinner size={14} thickness={2.2} />
+          <Text numberOfLines={1} style={{ flex: 1, fontSize: 14, fontWeight: '600', color: colors.ink }}>
+            {run.workflowName}
+          </Text>
+          {run.totalAgents > 0 ? (
+            <Mono style={{ fontSize: 12, color: colors.ink3 }}>
+              {`${run.doneAgents}/${run.totalAgents}`}
+            </Mono>
+          ) : null}
+        </View>
+      ) : null}
+      {run.phases.length === 0 ? (
+        <View
+          accessible
+          accessibilityLabel={`${run.workflowName}，运行中`}
+          style={{
+            minHeight: 44,
+            paddingHorizontal: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <Spinner size={15} thickness={2.4} />
+          <Text numberOfLines={1} style={{ flex: 1, fontSize: 15, fontWeight: '500', color: colors.ink }}>
+            {run.workflowName}
+          </Text>
+          <Text style={{ fontSize: 13, color: colors.run }}>运行中</Text>
+        </View>
+      ) : (
+        run.phases.map((phase, phaseIndex) => (
+          <WorkflowPhaseBlock
+            key={phase.id}
+            phase={phase}
+            first={phaseIndex === 0 && !showHeader}
+            onOpenAgent={onOpenAgent}
+          />
+        ))
+      )}
+    </View>
+  )
+}
+
+function WorkflowPhaseBlock({
+  phase,
+  first,
+  onOpenAgent,
+}: {
+  phase: WorkflowPhaseRow
+  first: boolean
+  onOpenAgent?(agent: WorkflowAgentRow): void
+}) {
+  const colors = useColors()
+  return (
+    <View>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          paddingHorizontal: 14,
+          paddingTop: first ? 6 : 12,
+          paddingBottom: 4,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{ flexShrink: 1, fontSize: 12.5, fontWeight: '600', color: colors.ink2 }}
+        >
+          {phase.title}
+        </Text>
+        <View style={{ flex: 1, height: 1, backgroundColor: colors.hair }} />
+        <Mono style={{ fontSize: 12, color: colors.ink3 }}>
+          {`${phase.done}/${phase.total}`}
+        </Mono>
+      </View>
+      {phase.agents.length === 0 ? (
+        <Text
+          style={{
+            fontSize: 13,
+            lineHeight: 18,
+            color: colors.ink3,
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+          }}
+        >
+          尚未开始
+        </Text>
+      ) : (
+        phase.agents.map((agent, index) => (
+          <View key={agent.id}>
+            {index > 0 ? (
+              <View style={{ height: 1, marginLeft: 40, backgroundColor: colors.hair }} />
+            ) : null}
+            <WorkflowAgentLine
+              agent={agent}
+              onPress={agent.openable && onOpenAgent ? () => onOpenAgent(agent) : undefined}
+            />
+          </View>
+        ))
+      )}
+    </View>
+  )
+}
+
+function WorkflowAgentLine({
+  agent,
+  onPress,
+}: {
+  agent: WorkflowAgentRow
+  onPress?(): void
+}) {
+  const colors = useColors()
+  const status = workflowAgentStatusText(agent.status)
+  const tone =
+    agent.status === 'running'
+      ? colors.run
+      : agent.status === 'completed'
+        ? colors.ok
+        : agent.status === 'failed'
+          ? colors.err
+          : colors.ink3
+  const rowContent = (
+    <View
+      style={{
+        minHeight: 44,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <View style={{ width: 16, height: 16, alignItems: 'center', justifyContent: 'center' }}>
+        {agent.status === 'running' ? (
+          <Spinner size={15} thickness={2.4} />
+        ) : agent.status === 'completed' ? (
+          <Icon name="circle-check" size={16} color={colors.ok} strokeWidth={2.2} />
+        ) : agent.status === 'failed' ? (
+          <Icon name="circle-alert" size={16} color={colors.err} strokeWidth={2.2} />
+        ) : agent.status === 'skipped' ? (
+          <Icon name="x" size={15} color={colors.ink3} strokeWidth={2.2} />
+        ) : (
+          <View
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 7,
+              boxShadow: `inset 0 0 0 1.5px ${colors.faint}`,
+            }}
+          />
+        )}
+      </View>
+      <Text
+        numberOfLines={1}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 15,
+          lineHeight: 20,
+          fontWeight: agent.status === 'running' ? '600' : '400',
+          color: agent.status === 'skipped' ? colors.ink3 : colors.ink,
+        }}
+      >
+        {agent.label}
+      </Text>
+      <Text style={{ flexShrink: 0, fontSize: 13, color: tone }}>{status}</Text>
+      {onPress ? (
+        <Icon name="chevron-right" size={15} color={colors.ink3} strokeWidth={2.2} />
+      ) : null}
+    </View>
+  )
+  if (!onPress) {
+    return (
+      <View accessible accessibilityLabel={`${agent.label}，${status}`}>
+        {rowContent}
+      </View>
+    )
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${agent.label}，${status}，打开对话`}
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
+    >
+      {rowContent}
+    </Pressable>
   )
 }
 

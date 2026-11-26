@@ -1,7 +1,9 @@
 import { Check, Ellipsis, Folder, GitBranch } from 'lucide-react'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { getSessionWorkspaceState } from '@/lib/sessionWorkspace'
 import type { TranslationKey } from '@/i18n'
@@ -65,12 +67,23 @@ export function SidebarSessionCard({
   onOpenMenu,
   t,
 }: SidebarSessionCardProps) {
+  const isAntigravity = session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
   const isWorktree = isWorktreeSession(session)
   const isMissingDir = getSessionWorkspaceState(session) === 'missing'
   const worktreeName = isWorktree ? extractWorktreeLabel(session.workDir) : null
   const hasMetadataRow = isWorktree || isMissingDir
   const title = session.title || t('tabs.untitled')
   const showHoverSwap = Boolean(!isBatchMode && !needsAttention && onOpenMenu)
+
+  const antigravityMark = isAntigravity ? (
+    <span
+      data-testid="sidebar-antigravity-badge"
+      title={t('settings.providers.antigravity.name')}
+      className="inline-flex shrink-0 items-center text-[var(--color-text-tertiary)]"
+    >
+      <ModelBrandIcon providerId={ANTIGRAVITY_ACP_PROVIDER_ID} size={12} />
+    </span>
+  ) : null
 
   const relativeTime = formatRelativeTime(session.modifiedAt, t)
   const updatedLabel = t('session.lastUpdated', { time: relativeTime })
@@ -176,6 +189,7 @@ export function SidebarSessionCard({
               <span className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${isActive || isSelected ? 'font-medium' : ''}`}>
                 {title}
               </span>
+              {antigravityMark}
               <SessionScheduleMark sessionId={session.id} />
             </span>
             <span className="order-1 mb-0.5 flex min-w-0 items-center gap-1.5 text-[11px] font-normal text-[var(--color-text-secondary)]">
@@ -192,6 +206,7 @@ export function SidebarSessionCard({
               <span className="min-w-0 flex-1 truncate text-[13px] leading-[18px]">
                 {title}
               </span>
+              {antigravityMark}
               <SessionScheduleMark sessionId={session.id} />
               {statusMeta}
             </span>

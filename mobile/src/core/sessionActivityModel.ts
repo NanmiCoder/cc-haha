@@ -1,7 +1,14 @@
 import type { ApiClient } from './client'
-import { isAgent, sessionPath, type BackgroundSnapshot, type BackgroundTask } from './operations'
+import { isAgent, isWorkflow, sessionPath, type BackgroundSnapshot, type BackgroundTask } from './operations'
 import { liveFor } from './subagentLive'
 import type { ClientMessage, SubagentLive, SubagentStep } from './types'
+import {
+  buildWorkflowActivityRuns,
+  loadSessionWorkflowRunsSafe,
+  type ReconstructedWorkflowRun,
+  type WorkflowActivityRun,
+  type WorkflowLiveRun,
+} from './workflows'
 import { describeStep } from '../ui/chat/steps'
 import {
   loadTaskList,
@@ -25,6 +32,8 @@ export type ActivityData = {
   /** 没有团队（404）时为 null。 */
   team: TeamWorkbenchSessionTimeline | null
   background: BackgroundTask[]
+  /** 磁盘重建的工作流运行（含当前会话中已启动的运行）。 */
+  workflowRuns: ReconstructedWorkflowRun[]
   /** 至少有一次读取结束（成功或失败）。 */
   loaded: boolean
   error: string
@@ -37,6 +46,7 @@ export const emptyActivityData: ActivityData = {
   tasks: [],
   team: null,
   background: [],
+  workflowRuns: [],
   loaded: false,
   error: '',
   stopping: {},
@@ -127,10 +137,11 @@ export type ActivityProgress = {
 export type SessionActivityModel = {
   progress: ActivityProgress
   tasks: PlanTask[]
+  workflows: WorkflowActivityRun[]
   subagents: SubagentRow[]
   team: TeamModel | null
   commands: CommandRow[]
-  /** 仅 running 的子 Agent + 后台命令。胶囊角标和底单标题共用这个数。 */
+  /** 仅 running 的子 Agent + 后台命令 + 运行中工作流。胶囊角标和底单标题共用这个数。 */
   runningCount: number
   /** 有待审批时 attention，其余 run。 */
   tone: 'run' | 'attention'
@@ -243,11 +254,12 @@ const lastLine = (text?: string) => {
 
 export function commandRows(
   background: readonly BackgroundTask[],
-  stopping: Record<string, true>
+  stopping: Record<string, true>,
+  workflowTaskIds?: ReadonlySet<string>
 ): CommandRow[] {
   return byStatus(
     background
-      .filter((task) => !isAgent(task))
+      .filter((task) => !isAgent(task) && !isWorkflow(task) && !workflowTaskIds?.has(task.taskId))
       .map((task) => ({
         id: task.taskId,
         task,
@@ -376,9 +388,12 @@ export function capsuleVisible(input: {
 }
 
 export function deriveActivity(
-  data: Pick<ActivityData, 'tasks' | 'team' | 'background' | 'stopping'>,
+  data: Pick<ActivityData, 'tasks' | 'team' | 'background' | 'stopping'> & {
+    workflowRuns?: ReconstructedWorkflowRun[]
+  },
   options: {
     live?: Record<string, SubagentLive>
+    workflows?: Record<string, WorkflowLiveRun>
     pendingApprovals?: number
     turnActive?: boolean
     workDir?: string | null
@@ -392,22 +407,35 @@ export function deriveActivity(
   const tasks = team ? [] : listed
   const progress = taskProgressOf(listed, source)
   const teamWorking = team?.members.some((row) => !row.lead && row.tone === 'run') === true
+  const workflows = buildWorkflowActivityRuns({
+    live: options.workflows,
+    reconstructed: data.workflowRuns,
+    background: data.background,
+  })
+  const workflowTaskIds = new Set<string>([
+    ...Object.keys(options.workflows ?? {}),
+    ...(data.workflowRuns ?? []).map((run) => run.taskId),
+  ])
   const subagents = subagentRows(data.background, options.live, data.stopping, options.workDir)
-  const commands = commandRows(data.background, data.stopping)
+  const commands = commandRows(data.background, data.stopping, workflowTaskIds)
+  const workflowRunning = workflows.reduce((sum, run) => sum + (run.runningAgents || 1), 0)
   const runningCount =
     subagents.filter((row) => row.status === 'running').length +
-    commands.filter((row) => row.status === 'running').length
+    commands.filter((row) => row.status === 'running').length +
+    workflowRunning
   const turnActive = options.turnActive === true
   return {
     progress,
     tasks,
+    workflows,
     subagents,
     team,
     commands,
     runningCount,
     tone: (options.pendingApprovals ?? 0) > 0 ? 'attention' : 'run',
-    capsuleVisible: teamWorking || capsuleVisible({ runningCount, progress, turnActive }),
-    active: turnActive || runningCount > 0 || teamWorking,
+    capsuleVisible:
+      teamWorking || workflows.length > 0 || capsuleVisible({ runningCount, progress, turnActive }),
+    active: turnActive || runningCount > 0 || teamWorking || workflows.length > 0,
   }
 }
 
@@ -421,10 +449,22 @@ export function sectionSummaries(model: SessionActivityModel) {
       .join(' · ')
   }
   const inProgress = model.tasks.filter((task) => task.state === 'active').length
+  const workflows =
+    model.workflows.length === 0
+      ? ''
+      : model.workflows.length === 1
+        ? [
+            model.workflows[0]!.workflowName,
+            model.workflows[0]!.totalAgents > 0
+              ? `${model.workflows[0]!.doneAgents}/${model.workflows[0]!.totalAgents} 完成`
+              : '运行中',
+          ].join(' · ')
+        : `${model.workflows.length} 个运行中`
   return {
     tasks: [`${model.progress.done}/${model.progress.total} 完成`, inProgress ? `${inProgress} 进行中` : '']
       .filter(Boolean)
       .join(' · '),
+    workflows,
     subagents: count(model.subagents, '已完成'),
     team: model.team?.summary ?? '',
     commands: count(model.commands, '已结束'),
@@ -438,22 +478,27 @@ export type ActivityFetchResult = {
   /** undefined = 这次没读；null = 没有团队。 */
   team?: TeamWorkbenchSessionTimeline | null
   background?: BackgroundTask[]
+  /** undefined = 这次没读。 */
+  workflowRuns?: ReconstructedWorkflowRun[]
   errors: string[]
 }
 export type ActivityFetcher = (
   signal: AbortSignal,
-  options: { team: boolean }
+  options: { team: boolean; workflows?: boolean }
 ) => Promise<ActivityFetchResult>
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : '读取失败')
 
-/** 一处拉取三份数据；某一份失败不影响其余，旧数据保留。 */
+/** 一处拉取活动数据；某一份失败不影响其余，旧数据保留。 */
 export function createActivityFetcher(client: ApiClient, sessionId: string): ActivityFetcher {
   return async (signal, options) => {
-    const [tasks, team, background] = await Promise.allSettled([
+    const [tasks, team, background, workflowRuns] = await Promise.allSettled([
       loadTaskList(client, sessionId, signal),
       options.team ? loadTeam(client, sessionId, signal) : Promise.resolve(undefined),
       client.get<BackgroundSnapshot>(`${sessionPath(sessionId)}/background-tasks`, { signal }),
+      options.workflows
+        ? loadSessionWorkflowRunsSafe(client, sessionId, signal)
+        : Promise.resolve(undefined),
     ])
     const errors: string[] = []
     const result: ActivityFetchResult = { errors }
@@ -464,6 +509,9 @@ export function createActivityFetcher(client: ApiClient, sessionId: string): Act
     } else errors.push(`团队：${reason(team.reason)}`)
     if (background.status === 'fulfilled') result.background = background.value.tasks ?? []
     else errors.push(`后台：${reason(background.reason)}`)
+    if (workflowRuns.status === 'fulfilled') {
+      if (workflowRuns.value !== undefined) result.workflowRuns = workflowRuns.value
+    } else errors.push(`工作流：${reason(workflowRuns.reason)}`)
     return result
   }
 }
@@ -483,11 +531,18 @@ export type PollInput = {
   teamActive: boolean
   /** 团队方案已确认、成员还没全部就位。 */
   teamLaunching?: boolean
+  /** 会话里有运行中的工作流。 */
+  workflowActive?: boolean
 }
 /** 下一次轮询的间隔；null = 不轮询（空闲、页面不可见或未启用）。 */
 export function pollDelay(input: PollInput): number | null {
   if (!input.enabled || !input.visible) return null
-  return input.turnActive || input.backgroundIds > 0 || input.running > 0 || input.teamActive || input.teamLaunching
+  return input.turnActive ||
+    input.backgroundIds > 0 ||
+    input.running > 0 ||
+    input.teamActive ||
+    input.teamLaunching ||
+    input.workflowActive
     ? ACTIVE_POLL_MS
     : null
 }
@@ -502,6 +557,8 @@ export type ActivityConfig = {
   teamPlanKey?: string
   /** 团队正在启动：每次都读团队，成员就位能马上显示。 */
   teamLaunching?: boolean
+  /** 会话里有运行中的工作流。 */
+  workflowActive?: boolean
 }
 export type ActivityTimers = {
   set(callback: () => void, delay: number): unknown
@@ -582,7 +639,8 @@ export class ActivityStore {
       !previous.visible ||
       previous.turnActive !== next.turnActive ||
       previous.backgroundKey !== next.backgroundKey ||
-      previous.teamLaunching !== next.teamLaunching
+      previous.teamLaunching !== next.teamLaunching ||
+      previous.workflowActive !== next.workflowActive
     )
       void this.refresh()
     else this.#schedule()
@@ -605,9 +663,18 @@ export class ActivityStore {
       this.#config.teamLaunching === true ||
       this.#teamAbsentAt === undefined ||
       this.#now() - this.#teamAbsentAt >= TEAM_RECHECK_MS
+    const includeWorkflows =
+      options.forceTeam === true ||
+      !this.#data.loaded ||
+      this.#config.workflowActive === true ||
+      this.#data.background.some((task) => isWorkflow(task) && task.status === 'running') ||
+      this.#data.workflowRuns.some((run) => run.status === 'running')
     this.#forceTeam = false
     try {
-      const result = await this.deps.fetch(controller.signal, { team: includeTeam })
+      const result = await this.deps.fetch(controller.signal, {
+        team: includeTeam,
+        workflows: includeWorkflows,
+      })
       if (controller.signal.aborted) return
       this.#apply(result)
     } catch (error) {
@@ -629,6 +696,7 @@ export class ActivityStore {
 
   #apply(result: ActivityFetchResult) {
     const background = result.background ?? this.#data.background
+    const workflowRuns = result.workflowRuns ?? this.#data.workflowRuns
     if (result.team === null) this.#teamAbsentAt = this.#now()
     else if (result.team) this.#teamAbsentAt = undefined
     // 已经不在运行的任务不再算“停止中”。
@@ -643,6 +711,7 @@ export class ActivityStore {
       tasks: result.tasks ?? this.#data.tasks,
       team: result.team === undefined ? this.#data.team : result.team,
       background,
+      workflowRuns,
       loaded: true,
       error: result.errors.join('；'),
       stopping,
@@ -663,6 +732,10 @@ export class ActivityStore {
       running: data.background.filter((task) => task.status === 'running').length,
       teamActive: !!data.team && teamModel(data.team)?.members.some((row) => row.tone === 'run') === true,
       teamLaunching: config.teamLaunching,
+      workflowActive:
+        config.workflowActive === true ||
+        data.background.some((task) => isWorkflow(task) && task.status === 'running') ||
+        data.workflowRuns.some((run) => run.status === 'running'),
     })
     if (delay === null) return
     this.#poll = this.#timers.set(() => {
@@ -702,10 +775,10 @@ export class ActivityStore {
     return this.#stop([taskId])
   }
 
-  /** 停止所有仍在运行的子 Agent 和后台命令。 */
+  /** 停止所有仍在运行的子 Agent 和后台命令（工作流随主会话停止，不在此单独停止）。 */
   stopAll() {
     const ids = this.#data.background
-      .filter((task) => task.status === 'running' && !task.stopping)
+      .filter((task) => task.status === 'running' && !task.stopping && !isWorkflow(task))
       .map((task) => task.taskId)
     return this.#stop(ids)
   }
@@ -714,7 +787,9 @@ export class ActivityStore {
     const targets = ids.filter(
       (id) =>
         !this.#data.stopping[id] &&
-        this.#data.background.some((task) => task.taskId === id && task.status === 'running')
+        this.#data.background.some(
+          (task) => task.taskId === id && task.status === 'running' && !isWorkflow(task)
+        )
     )
     if (!targets.length) return true
     const sent: string[] = []

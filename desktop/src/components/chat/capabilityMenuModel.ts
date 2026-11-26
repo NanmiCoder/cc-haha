@@ -114,6 +114,8 @@ export type CapabilityMenuComputerUse = {
 } | null
 
 export type CapabilityMenuInput = {
+  /** Antigravity ACP engine keeps attachments, Computer Use, and slash commands while hiding Claude-only rows. */
+  antigravity?: boolean
   /** Skill mention candidates (kind 'skill'), already loaded for the composer. */
   skills: ComposerReferenceCandidate[]
   /** Plugin mention candidates (kind 'plugin'), already loaded for the composer. */
@@ -470,6 +472,43 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
   const searchOnly = input.plugins
     .filter(plugin => !listedPluginIds.has(plugin.id))
     .map(plugin => mentionItem(plugin))
+
+  if (input.antigravity) {
+    return [
+      {
+        id: 'use',
+        title: t('chat.capabilities.sectionUse'),
+        showTitle: true,
+        items: [
+          {
+            key: 'add-files',
+            label: t('chat.addFiles'),
+            icon: { kind: 'lucide', icon: Paperclip },
+            action: { type: 'attachment' },
+          },
+        ],
+      },
+      {
+        id: 'run',
+        title: t('chat.capabilities.sectionRun'),
+        showTitle: true,
+        items: [agentTeamItem, computerUseItem],
+      },
+      {
+        id: 'more',
+        title: t('chat.capabilities.moreTools'),
+        showTitle: false,
+        items: [
+          {
+            key: 'slash-commands',
+            label: t('chat.slashCommands'),
+            icon: { kind: 'slash' },
+            action: { type: 'slashTrigger' },
+          },
+        ],
+      },
+    ]
+  }
 
   return [
     {

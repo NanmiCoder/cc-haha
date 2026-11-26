@@ -2193,4 +2193,63 @@ describe('AskUserQuestion', () => {
       userAgentSpy.mockRestore()
     }
   })
+
+  describe('fixed-option questions (allowFreeText: false)', () => {
+    const fixedInput = {
+      allowFreeText: false,
+      questions: [
+        {
+          question: 'Pick a target environment',
+          options: [{ label: 'Staging' }, { label: 'Production' }],
+        },
+      ],
+    }
+
+    it('hides free-text input, attach-image, and Chat about this while submitting exact option labels', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={fixedInput} />)
+
+      expect(screen.queryByPlaceholderText(/type/i)).toBeNull()
+      expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /chat about this/i })).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Staging$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...fixedInput,
+          answers: {
+            'Pick a target environment': 'Staging',
+          },
+        },
+      })
+    })
+
+    it('ignores stale free-text, image, and handoff drafts and becomes read-only once expired', () => {
+      useChatStore.setState({
+        askUserQuestionDrafts: {
+          [ACTIVE_TAB]: {
+            'tool-1': {
+              activeTab: 0,
+              selections: {},
+              freeTexts: { 0: 'stale custom note' },
+              handedOff: true,
+              sentAsMessage: true,
+            },
+          },
+        },
+      })
+      patchSession({ chatState: 'idle', pendingPermission: null })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={fixedInput} />)
+
+      expect(screen.getByText('Expired')).toBeTruthy()
+      expect((screen.getByRole('button', { name: /^Staging$/ }) as HTMLButtonElement).disabled).toBe(true)
+      expect(screen.queryByRole('button', { name: /send as new message/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /chat about this/i })).toBeNull()
+    })
+  })
 })

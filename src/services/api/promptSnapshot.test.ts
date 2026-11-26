@@ -14,6 +14,7 @@ type SnapshotRecord = Record<string, unknown> & { t: string }
 
 const ENV_KEYS = [
   'CLAUDE_CODE_ENTRYPOINT',
+  'CC_HAHA_TRANSCRIPT_ENTRYPOINT',
   'CC_HAHA_PROMPT_SNAPSHOT',
   'CLAUDE_CONFIG_DIR',
 ] as const
@@ -58,6 +59,7 @@ beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'prompt-snapshot-test-'))
   process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'config')
   process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+  delete process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT
   delete process.env.CC_HAHA_PROMPT_SNAPSHOT
   snapshotPath = join(tempDir, 'project', 'session-1', 'prompt-snapshots.jsonl')
   resetPromptSnapshotStateForTests({ resolvePath: () => snapshotPath })
@@ -82,9 +84,37 @@ describe('promptSnapshot gating', () => {
     expect(existsSync(snapshotPath)).toBe(false)
   })
 
+  test('writes snapshots under custom providers when CC_HAHA_TRANSCRIPT_ENTRYPOINT is claude-desktop', async () => {
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop'
+    recordPromptSnapshot(baseArgs())
+    recordUserContextSnapshot({ userContext: { currentDate: 'today' } })
+    await flushPromptSnapshotWritesForTests()
+    const records = readRecords()
+    expect(records.some(r => r.t === 'req')).toBe(true)
+    expect(records.some(r => r.t === 'ctx')).toBe(true)
+  })
+
+  test('writes snapshots for desktop team workers', async () => {
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop-team-worker'
+    recordPromptSnapshot(baseArgs())
+    await flushPromptSnapshotWritesForTests()
+    expect(readRecords().some(r => r.t === 'req')).toBe(true)
+  })
+
+  test('explicit non-desktop CC_HAHA_TRANSCRIPT_ENTRYPOINT disables snapshots', async () => {
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'sdk-cli'
+    recordPromptSnapshot(baseArgs())
+    await flushPromptSnapshotWritesForTests()
+    expect(existsSync(snapshotPath)).toBe(false)
+  })
+
   test.each(['0', 'false', 'OFF'])(
     'escape hatch CC_HAHA_PROMPT_SNAPSHOT=%s writes nothing',
     async value => {
+      process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop'
       process.env.CC_HAHA_PROMPT_SNAPSHOT = value
       recordPromptSnapshot(baseArgs())
       recordUserContextSnapshot({ userContext: { currentDate: 'today' } })

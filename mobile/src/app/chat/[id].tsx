@@ -20,12 +20,18 @@ import {
   type ComposerAttachment,
 } from '../../core/chatComposer'
 import { notificationPermissionResponse, runtimeMatches } from '../../core/chatActions'
+import {
+  ANTIGRAVITY_PERMISSION_MODES,
+  ANTIGRAVITY_PROVIDER_ID,
+  isAntigravityProvider,
+} from '../../core/runtimeCatalog'
 import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
 import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
 import { sessionHistory } from '../../core/historyCache'
 import { foregroundTransitions } from '../../core/appVisibility'
 import { foregroundGate } from '../../core/foregroundGate'
 import { newStreamId } from '../../core/resumableStream'
+import { randomRequestId } from '../../core/requestId'
 import type { LinkPath } from '../../core/hostLink'
 import { hostLinkFor, nativeSocketFactory, watchDeviceNetwork } from '../../state/api'
 import { takeSessionStale } from '../../core/sessionStale'
@@ -52,7 +58,9 @@ import { teamMembersAllStopped, useSessionActivity } from '../../core/sessionAct
 import { registerSessionSender } from '../../core/sessionSender'
 import { ActivityCapsule } from '../../ui/activity/ActivityCapsule'
 import { ActivitySheet } from '../../ui/activity/ActivitySheet'
+import { WorkflowHistorySheet } from '../../ui/activity/WorkflowHistorySheet'
 import { useNow } from '../../ui/activity/useNow'
+import { toAgentIdRef } from '../../core/workflows'
 import { StatusCaption } from '../../ui/chat/StatusCaption'
 import { ContextMenuHeader, ContextSheet, useContextInspection } from '../../ui/chat/ContextSheet'
 import { contextSummary } from '../../ui/chat/contextUsage'
@@ -114,13 +122,14 @@ import {
 import { showsReconnectBanner, useConnectionNotice } from '../../ui/chat/connectionNotice'
 import { simulatedPhoneChrome } from '../../ui/webChrome'
 
-type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'context' | null
+type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'workflows' | 'context' | null
 type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
 }
 /** 离最新处（倒置列表的起点）不到这么远就算停在最新处。 */
 const LATEST_SLOP = 120
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 const toggle = (set: ReadonlySet<string>, key: string) => {
   const next = new Set(set)
@@ -511,6 +520,11 @@ function ChatSession({
           effortLevel: session.effortLevel,
         }
       : undefined)
+  const isAntigravity = isAntigravityProvider(
+    runtime?.providerId ?? session?.runtimeProviderId
+  )
+  const teamOn = team && !lean
+  if (lean && team) setTeam(false)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
   const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
   const permissionMode = state.permissionMode ?? session?.permissionMode
@@ -559,16 +573,18 @@ function ChatSession({
     turnActive: state.turnActive,
     backgroundTaskIds: state.backgroundTaskIds,
     live: state.subagents,
+    workflows: state.workflows,
     pendingApprovals: state.permissions.length,
     workDir: session?.workDir ?? undefined,
     send: sendRaw,
     teamPlan: teamPlan.plan,
   })
-  // 队长这一轮结束了、已确认的成员还在跑：停止照样要给（同桌面的 background 停止）。
+  // 队长这一轮结束了、已确认的成员或工作流还在跑：停止照样要给（同桌面的 background 停止）。
   const teamWorking =
     !state.turnActive &&
     (teamPlan.plan?.state === 'launching' || teamPlan.plan?.state === 'running') &&
     !teamMembersAllStopped(activity.team)
+  const workflowWorking = !state.turnActive && (activity.workflows?.length ?? 0) > 0
 
   // 分支只用于副标题与菜单；取不到就只显示项目名。只在真正和电脑重新对齐后重读：
   // 续传、换到直连这类接回不读历史，也不该在回前台时顺带多发一个请求。
@@ -833,7 +849,12 @@ function ChatSession({
   function submit(): boolean {
     if (workspaceMissing) return false
     try {
-      const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
+      const message = buildComposerMessage(
+        serializeComposer(draft, isAntigravity ? [] : references),
+        attachments,
+        teamOn,
+        { antigravity: isAntigravity }
+      )
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
         if (approval) return false
@@ -843,7 +864,7 @@ function ChatSession({
             id: `queued-${++queueSeq.current}`,
             text: draft.trim(),
             attachments,
-            team,
+            team: teamOn,
             references,
             message,
           },
@@ -1275,6 +1296,12 @@ function ChatSession({
       count: activity.runningCount || undefined,
       onPress: () => openPanel('activity'),
     },
+    {
+      key: 'workflows',
+      label: 'Workflow 记录',
+      icon: 'layers',
+      onPress: () => openPanel('workflows'),
+    },
   ]
 
   const messageActions = (item: ChatItem): MessageAction[] => {
@@ -1290,14 +1317,16 @@ function ChatSession({
         group: true,
         label: '编辑后重新发送',
         icon: 'pencil',
-        detail: busy
-          ? '这一轮结束后才能用'
-          : !persisted
-            ? '等电脑保存这条消息后可用'
-            : item.editableText === undefined
-              ? '带材料的消息请复制文字后重新添加材料'
-              : '回退到这条消息，电脑上的文件不动',
-        disabled: busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
+        detail: isAntigravity
+          ? 'Antigravity 暂不支持回退编辑'
+          : busy
+            ? '这一轮结束后才能用'
+            : !persisted
+              ? '等电脑保存这条消息后可用'
+              : item.editableText === undefined
+                ? '带材料的消息请复制文字后重新添加材料'
+                : '回退到这条消息，电脑上的文件不动',
+        disabled: isAntigravity || busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
         busy: menuBusy === 'edit',
       })
     actions.push({
@@ -1305,12 +1334,14 @@ function ChatSession({
       group: item.type !== 'user',
       label: '从这里分叉',
       icon: 'git-fork',
-      detail: lean
-        ? '轻量档位不支持分叉'
-        : !persisted
-          ? '等电脑保存这条消息后可用'
-          : '保留到这条，另开一段新会话',
-      disabled: lean || !persisted || working || menuBusy === 'edit',
+      detail: isAntigravity
+        ? 'Antigravity 暂不支持分叉'
+        : lean
+          ? '轻量档位不支持分叉'
+          : !persisted
+            ? '等电脑保存这条消息后可用'
+            : '保留到这条，另开一段新会话',
+      disabled: isAntigravity || lean || !persisted || working || menuBusy === 'edit',
       busy: menuBusy === 'fork',
     })
     return actions
@@ -1551,13 +1582,13 @@ function ChatSession({
               setAttachments(value)
               setError('')
             }}
-            team={team}
+            team={teamOn}
             onTeam={setTeam}
             computer={computer}
             lean={lean}
             empty={!hasItems}
             busy={busy}
-            background={teamWorking}
+            background={teamWorking || workflowWorking}
             queueing={busy}
             disabled={!ready || state.configPending || workspaceMissing || working}
             run={runCapsule({
@@ -1573,6 +1604,9 @@ function ChatSession({
             onError={setError}
             above={above}
             caption={caption}
+            newRequestId={() =>
+              randomRequestId(Platform.OS === 'web' ? globalThis.crypto : { getRandomValues })
+            }
           />
         )}
       </KeyboardViewport>
@@ -1637,6 +1671,19 @@ function ChatSession({
             params: { host: hostId, id, taskId: task.taskId, toolUseId: task.toolUseId ?? '' },
           })
         }}
+        onOpenWorkflowAgent={(agent) => {
+          if (!agent.agentId) return
+          setPanel(null)
+          router.push({
+            pathname: '/subagent',
+            params: {
+              host: hostId,
+              id,
+              toolUseId: toAgentIdRef(agent.agentId),
+              title: agent.label,
+            },
+          })
+        }}
         onStopTurn={() => {
           // 和「停止这段会话」一样：停下来就不再自动追加，排队的内容回到输入框由用户决定要不要发。
           if (state.turnActive && dispatch({ type: 'stop_generation' })) withdrawQueued()
@@ -1646,6 +1693,13 @@ function ChatSession({
           setPanel(null)
           router.push({ pathname: '/member', params: { host: hostId, id, agent: member.id } })
         }}
+      />
+      <WorkflowHistorySheet
+        visible={panel === 'workflows'}
+        onClose={() => setPanel(null)}
+        client={client}
+        sessionId={id}
+        liveWorkflows={state.workflows}
       />
       <MessageMenu
         item={selected?.item ?? null}
@@ -1680,11 +1734,13 @@ function ChatSession({
       <ConfirmSheet
         visible={panel === 'stop'}
         onClose={closePanel}
-        title={teamWorking ? '停止团队？' : '停止这段会话？'}
+        title={teamWorking ? '停止团队？' : workflowWorking ? '停止工作流？' : '停止这段会话？'}
         message={
           teamWorking
             ? '成员会停在当前步骤，已经改好的文件会保留。之后发一条消息，团队就从这里接着做。'
-            : '当前生成和后台任务都会停下，已经改好的文件会保留。'
+            : workflowWorking
+              ? '正在运行的工作流和子代理都会停下，已经改好的文件会保留。'
+              : '当前生成和后台任务都会停下，已经改好的文件会保留。'
         }
         confirmLabel="停止"
         destructive
@@ -1727,6 +1783,9 @@ function ChatSession({
         }
         error={sheetError}
         workDir={session?.workDir ?? undefined}
+        lockedProviderId={isAntigravity ? ANTIGRAVITY_PROVIDER_ID : undefined}
+        excludeProviderIds={isAntigravity ? undefined : EXCLUDE_ANTIGRAVITY}
+        allowedModes={isAntigravity ? ANTIGRAVITY_PERMISSION_MODES : undefined}
       />
       <SelectTextSheet
         visible={panel === 'select'}

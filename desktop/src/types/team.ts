@@ -48,6 +48,7 @@ export type TeamMember = {
 
 export type TeamDetail = {
   name: string
+  description?: string
   incarnationId?: string
   leadAgentId?: string
   leadSessionId?: string

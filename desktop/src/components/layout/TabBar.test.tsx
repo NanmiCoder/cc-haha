@@ -3932,5 +3932,67 @@ describe('TabBar', () => {
         expect(useTabStore.getState().activeTabId).toBe('a')
       })
     })
+
+    it('renders a subtle 12px ModelBrandIcon badge only on Antigravity session tabs', async () => {
+      const { TabBar } = await import('./TabBar')
+      const { useTabStore } = await import('../../stores/tabStore')
+      const { useSessionStore } = await import('../../stores/sessionStore')
+      const { useChatStore } = await import('../../stores/chatStore')
+
+      useTabStore.setState({
+        tabs: [
+          { sessionId: 'std-1', title: 'Standard Session', type: 'session', status: 'idle' },
+          { sessionId: 'ag-1', title: 'Antigravity Session', type: 'session', status: 'idle' },
+        ],
+        activeTabId: 'ag-1',
+      })
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: 'std-1',
+            title: 'Standard Session',
+            createdAt: '2026-11-26T00:00:00.000Z',
+            modifiedAt: '2026-11-26T00:00:00.000Z',
+            messageCount: 1,
+            projectPath: '/repo',
+            projectRoot: '/repo',
+            workDir: '/repo',
+            workDirExists: true,
+          },
+          {
+            id: 'ag-1',
+            title: 'Antigravity Session',
+            createdAt: '2026-11-26T00:00:00.000Z',
+            modifiedAt: '2026-11-26T00:00:00.000Z',
+            messageCount: 1,
+            projectPath: '/repo',
+            projectRoot: '/repo',
+            workDir: '/repo',
+            workDirExists: true,
+            runtimeProviderId: 'antigravity-acp',
+            runtimeModelId: 'gemini-3.8-pro',
+          },
+        ],
+      })
+      useChatStore.setState({
+        sessions: {},
+        disconnectSession: vi.fn(),
+      } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+      await act(async () => {
+        render(<TabBar />)
+      })
+
+      const standardTab = screen.getByText('Standard Session').closest('.tab-strip-item') as HTMLElement
+      const agTab = screen.getByText('Antigravity Session').closest('.tab-strip-item') as HTMLElement
+
+      expect(within(standardTab).queryByTestId('tab-antigravity-badge')).not.toBeInTheDocument()
+      const badge = within(agTab).getByTestId('tab-antigravity-badge')
+      const svg = badge.querySelector('svg')
+      expect(svg).not.toBeNull()
+      expect(svg).toHaveAttribute('width', '12')
+      expect(svg).toHaveAttribute('height', '12')
+      expect(svg).toHaveAttribute('data-brand', 'google')
+    })
   })
 })

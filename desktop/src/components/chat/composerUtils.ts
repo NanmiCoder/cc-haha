@@ -382,9 +382,13 @@ function getSlashCommandMatchRank(command: SlashCommandOption, filter: string): 
 export function filterSlashCommands(
   commands: ReadonlyArray<SlashCommandOption>,
   filter: string,
+  options?: { showAllWhenEmpty?: boolean },
 ): SlashCommandOption[] {
   const normalized = filter.trim().toLowerCase()
   if (!normalized.trim()) {
+    if (options?.showAllWhenEmpty) {
+      return [...commands]
+    }
     return [
       ...FREQUENT_SLASH_COMMAND_NAMES.flatMap(name => commands.filter(command =>
         command.name.trim().toLowerCase() === name && (!command.kind || command.kind === 'command'),

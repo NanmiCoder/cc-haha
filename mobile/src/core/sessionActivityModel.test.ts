@@ -757,4 +757,65 @@ describe('createActivityFetcher', () => {
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]).toStartWith('任务：')
   })
+  test('workflows=true 时读取 session-runs；403/404 视为无工作流不报错', async () => {
+    const { api, paths } = fixture({
+      ...routes,
+      '/api/workflows/session-runs/s%2F1': {
+        body: {
+          runs: [{ runId: 'wf_1', taskId: 'wf-t1', workflowName: 'spec', status: 'running', startedAt: 1, updatedAt: 2, agents: [] }],
+        },
+      },
+    })
+    const result = await createActivityFetcher(api, 's/1')(new AbortController().signal, { team: false, workflows: true })
+    expect(result.workflowRuns).toHaveLength(1)
+    expect(result.errors).toEqual([])
+    expect(paths).toContain('/api/workflows/session-runs/s%2F1')
+
+    const disabled = fixture({ ...routes, '/api/workflows/session-runs/s%2F1': { status: 403, body: { error: 'WORKFLOWS_DISABLED' } } })
+    const safe = await createActivityFetcher(disabled.api, 's/1')(new AbortController().signal, { team: false, workflows: true })
+    expect(safe.workflowRuns).toEqual([])
+    expect(safe.errors).toEqual([])
+  })
+})
+
+describe('工作流分组与隔离', () => {
+  test('local_workflow 不进入后台命令分组，不参与单项或全部停止', async () => {
+    const wfTask = bg({ taskId: 'wf-1', taskType: 'local_workflow', description: 'spec' })
+    const bashTask = bg({ taskId: 'c1', taskType: 'local_bash', description: 'bun test' })
+    expect(commandRows([wfTask, bashTask], {}).map((row) => row.id)).toEqual(['c1'])
+
+    const model = deriveActivity(data({ background: [wfTask, bashTask] }), {
+      workflows: {
+        'wf-1': {
+          taskId: 'wf-1',
+          runId: 'wf_r1',
+          workflowName: 'spec',
+          status: 'running',
+          startedAt: 1000,
+          updatedAt: 2000,
+          progress: [
+            { type: 'workflow_phase', index: 1, title: '调研' },
+            { type: 'workflow_agent', index: 1, label: '读代码', state: 'progress', phaseIndex: 1, agentId: 'a1' },
+            { type: 'workflow_agent', index: 2, label: '查接口', state: 'done', phaseIndex: 1, agentId: 'a2' },
+          ],
+        },
+      },
+    })
+    expect(model.commands.map((row) => row.id)).toEqual(['c1'])
+    expect(model.workflows).toHaveLength(1)
+    expect(model.workflows[0]?.phases[0]?.title).toBe('调研')
+    expect(model.runningCount).toBe(2) // 1 bash + 1 running workflow agent
+    expect(model.capsuleVisible).toBe(true)
+    expect(model.active).toBe(true)
+    expect(sectionSummaries(model).workflows).toBe('spec · 1/2 完成')
+
+    const h = harness({ background: [wfTask, bashTask] })
+    h.store.configure(config({ workflowActive: true }))
+    await settle()
+    expect(h.timers.pending).toBe(1)
+    expect(h.store.stopTask('wf-1')).toBe(true)
+    expect(h.sent).toEqual([])
+    h.store.stopAll()
+    expect(h.sent).toEqual([{ type: 'stop_background_task', taskId: 'c1' }])
+  })
 })

@@ -63,6 +63,7 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
+import { AntigravityProviderCard } from './AntigravityProviderCard'
 import {
   highlightSegments,
   initialProviderTab,
@@ -722,6 +723,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           <Spinner size={20} tone="brand" label={t('common.loading')} />
         </div>
       ) : null}
+
+      {(!searching || terms.some((term) => 'antigravity'.includes(term) || 'agy'.includes(term) || 'local'.includes(term))) && (
+        <AntigravityProviderCard browserMode={browserMode} />
+      )}
 
       {/* Create Modal — conditionally rendered so state resets on close */}
       {showCreateModal && (

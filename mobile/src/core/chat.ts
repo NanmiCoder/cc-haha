@@ -14,6 +14,7 @@ import {
   restoreImageReplay,
 } from './chatComposer'
 import { reduceSubagents } from './subagentLive'
+import { pruneInactiveRunningWorkflows, reduceWorkflowRuns } from './workflows'
 import { isTeammateEnvelope, teammateMessages } from './teammateEnvelope'
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -657,11 +658,17 @@ export function appendPendingUserMessage(
   )
 }
 
-/** 子 Agent 的实时轨迹另存一份（state.subagents），供运行中底单使用。 */
+/** 子 Agent 与工作流的实时轨迹另存一份（state.subagents / state.workflows），供运行中底单使用。 */
 export function chatReducer(state: ChatState, event: ServerEvent): ChatState {
   const next = reduceChat(state, event)
   const subagents = reduceSubagents(next.subagents, event)
-  return subagents === next.subagents ? next : { ...next, subagents }
+  const workflows = reduceWorkflowRuns(next.workflows, event)
+  if (subagents === next.subagents && workflows === next.workflows) return next
+  return {
+    ...next,
+    ...(subagents !== next.subagents ? { subagents } : {}),
+    ...(workflows !== next.workflows ? { workflows } : {}),
+  }
 }
 
 function reduceChat(state: ChatState, event: ServerEvent): ChatState {
@@ -671,11 +678,16 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
         ? { ...state, connected: true }
         : state
     case 'session_state': {
+      const workflows =
+        event.activeBackgroundTaskIds !== undefined
+          ? pruneInactiveRunningWorkflows(state.workflows, event.activeBackgroundTaskIds)
+          : state.workflows
       const next = {
         ...state,
         turnActive: event.turnState === 'running',
         backgroundTaskIds:
           event.activeBackgroundTaskIds ?? state.backgroundTaskIds,
+        ...(workflows !== state.workflows ? { workflows } : {}),
       }
       return { ...next, status: permissionStatus(next) }
     }

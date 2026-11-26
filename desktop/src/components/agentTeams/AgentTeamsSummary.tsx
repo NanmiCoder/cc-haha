@@ -98,7 +98,9 @@ export function AgentTeamsStrip({
       type="button"
       data-testid="agent-teams-strip"
       onClick={onOpen}
-      title={snapshot.team.name}
+      title={snapshot.team.name.startsWith('agy-swarm-') && snapshot.team.description
+        ? snapshot.team.description
+        : snapshot.team.name}
       className={[
         'mt-2 flex min-w-0 w-full max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-left transition-colors',
         'hover:border-[var(--color-outline)]',

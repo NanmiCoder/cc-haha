@@ -41,6 +41,8 @@ export type WherePageProps = {
   busy?: boolean
   /** Git 状态读取失败时的“重新读取”。 */
   onRetry?(): void
+  /** 是否支持新开工作树（Antigravity 引擎不支持）。 */
+  worktreeSupported?: boolean
 }
 
 const sectionTitle = { paddingTop: 14, paddingBottom: 6, paddingHorizontal: 4 } as const
@@ -50,7 +52,7 @@ const sectionTitle = { paddingTop: 14, paddingBottom: 6, paddingHorizontal: 4 } 
  * “完成”收起。“浏览电脑上的目录”在本页内推进到目录浏览，不再另开一层。
  */
 export function WherePage(props: WherePageProps) {
-  const { visible, onClose, projects, path, onPath, repo, branch, onBranch, worktree, onWorktree, client, hostName, busy, onRetry } = props
+  const { visible, onClose, projects, path, onPath, repo, branch, onBranch, worktree, onWorktree, client, hostName, busy, onRetry, worktreeSupported = true } = props
   const colors = useColors()
   const bottom = useBottomInset()
   const [view, setView] = useState<'main' | 'browse'>('main')
@@ -67,7 +69,7 @@ export function WherePage(props: WherePageProps) {
     }
   }
   const rows = recentProjectRows(projects, path)
-  const model = wherePageModel({ repo, path, branch, worktree, query })
+  const model = wherePageModel({ repo, path, branch, worktree, query, worktreeSupported })
   const cancel = () => {
     for (const step of cancelRestore(opening, { path, branch, worktree })) {
       if (step.type === 'path') onPath(step.value)
@@ -169,33 +171,35 @@ export function WherePage(props: WherePageProps) {
               ) : (
                 <>
                   {/* 工作树放在分支列表上面：远端分支很多时不用滑到底也能看到。 */}
-                  <View
-                    style={{
-                      marginTop: 2,
-                      backgroundColor: colors.card,
-                      borderRadius: 16,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 12,
-                      paddingVertical: 10,
-                      paddingHorizontal: 14,
-                    }}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ fontSize: 16, color: colors.ink }}>新开一个工作树</Text>
-                      <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{model.worktree.detail}</Text>
-                    </View>
-                    <Switch
-                      label="新开一个工作树"
-                      value={model.worktree.on}
-                      disabled={busy || model.worktree.disabled}
-                      onValueChange={(enabled) => {
-                        const next = toggleWorktree(repo, branch, enabled)
-                        onBranch(next.branch)
-                        onWorktree(next.worktree)
+                  {model.worktree.hidden ? null : (
+                    <View
+                      style={{
+                        marginTop: 2,
+                        backgroundColor: colors.card,
+                        borderRadius: 16,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 12,
+                        paddingVertical: 10,
+                        paddingHorizontal: 14,
                       }}
-                    />
-                  </View>
+                    >
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={{ fontSize: 16, color: colors.ink }}>新开一个工作树</Text>
+                        <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{model.worktree.detail}</Text>
+                      </View>
+                      <Switch
+                        label="新开一个工作树"
+                        value={model.worktree.on}
+                        disabled={busy || model.worktree.disabled}
+                        onValueChange={(enabled) => {
+                          const next = toggleWorktree(repo, branch, enabled)
+                          onBranch(next.branch)
+                          onWorktree(next.worktree)
+                        }}
+                      />
+                    </View>
+                  )}
                   <View style={{ gap: 8, marginTop: 12 }}>
                     <SearchField value={query} onChangeText={setQuery} placeholder="搜索分支" editable={!busy} />
                     <Group>

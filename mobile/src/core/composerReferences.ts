@@ -2,6 +2,7 @@ import type { ApiClient } from './client'
 import type { RuntimeConfig } from './types'
 import type { SkillCommand } from './chatComposer'
 import { isCommandVisible, isReferenceVisible } from './capabilityVisibility'
+import { ANTIGRAVITY_DRAFT_SLASH_COMMANDS, isAntigravityProvider } from './runtimeCatalog'
 
 export type ComposerReference = {
   kind: 'skill' | 'plugin'
@@ -70,6 +71,36 @@ export function serializeComposer(text: string, references: ComposerReference[] 
 export async function loadComposerCandidates(client: ApiClient, context: {
   sessionId?: string; workDir?: string; runtime?: RuntimeConfig; lean: boolean
 }, signal: AbortSignal): Promise<ComposerCandidate[]> {
+  // Antigravity isolates Claude Code skills, plugins and commands: expose only
+  // Antigravity's native slash commands (plus local host shortcuts).
+  if (isAntigravityProvider(context.runtime?.providerId)) {
+    let rawCommands: SkillCommand[] = []
+    if (context.sessionId) {
+      const response = await client.get<{ commands: SkillCommand[] }>(
+        `/api/sessions/${encodeURIComponent(context.sessionId)}/slash-commands`,
+        { signal }
+      )
+      rawCommands = Array.isArray(response?.commands) ? response.commands : []
+    }
+    const sourceCommands: SkillCommand[] = rawCommands.length > 0
+      ? rawCommands
+      : ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((command) => ({ ...command, kind: 'command' as const }))
+    const candidates: ComposerCandidate[] = []
+    for (const command of sourceCommands.filter(isCommandVisible)) {
+      if (!candidates.some((candidate) => candidate.name === command.name)) {
+        candidates.push({ ...command, kind: 'command' })
+      }
+    }
+    for (const command of [
+      { name: 'model', description: '切换 Antigravity 模型与思考强度' },
+      { name: 'permissions', description: '选择权限模式' },
+    ]) {
+      if (!candidates.some((candidate) => candidate.name === command.name)) {
+        candidates.push({ ...command, kind: 'command' })
+      }
+    }
+    return candidates
+  }
   const query = new URLSearchParams()
   if (context.workDir) query.set('cwd', context.workDir)
   if (context.runtime) query.set('providerId', context.runtime.providerId ?? 'claude-official')

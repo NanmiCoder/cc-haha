@@ -59,10 +59,12 @@ describe('subagentRunView 归一化成和主对话一致的时间线', () => {
 })
 
 describe('subagentHeader', () => {
-  test('名称取任务说明；状态以后台任务列表为准，找不到时退回 transcript 的状态', () => {
+  test('名称取任务说明或传入标题；状态以后台任务列表为准，找不到时退回 transcript 的状态', () => {
     expect(
       subagentHeader({ taskId: 't', status: 'running', description: ' explorer ', startedAt: '2026-10-25T10:00:00.000Z' }, { status: 'completed' })
     ).toEqual({ title: 'explorer', status: 'running', startedAt: Date.parse('2026-10-25T10:00:00.000Z') })
+    expect(subagentHeader(undefined, { status: 'running' }, '调研架构')).toEqual({ title: '调研架构', status: 'running' })
+    expect(subagentHeader(undefined, { status: 'completed', description: '服务端标题' }, '备选标题')).toEqual({ title: '服务端标题', status: 'completed' })
     expect(subagentHeader(undefined, { status: 'running' })).toEqual({ title: '子 Agent', status: 'running' })
     expect(subagentHeader(undefined, { status: 'weird' })).toMatchObject({ status: 'completed' })
     expect(subagentHeader(undefined, null)).toMatchObject({ title: '子 Agent', status: 'completed' })

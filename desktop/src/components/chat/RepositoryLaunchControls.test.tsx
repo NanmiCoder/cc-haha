@@ -1632,5 +1632,19 @@ describe('RepositoryLaunchControls', () => {
       expect(await within(menu).findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
       expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
     })
+
+    it('hides worktree controls while keeping directory and branch when worktreeSupported is false', async () => {
+      apiMocks.getRepositoryContext.mockResolvedValue(okRepositoryContext)
+      renderControls({ worktreeSupported: false, useWorktree: true })
+
+      // Worktree badge should not appear on the pill when unsupported
+      expect(screen.queryByText('Isolated')).not.toBeInTheDocument()
+
+      await openPill()
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      expect(await within(menu).findByRole('menuitem', { name: /Directory/ })).toBeInTheDocument()
+      expect(within(menu).getByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
+      expect(within(menu).queryAllByRole('menuitemradio')).toHaveLength(0)
+    })
   })
 })
