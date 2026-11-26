@@ -44,6 +44,38 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
 }
 
 describe('bedrockConverseToAnthropic', () => {
+  test.each(['model_context_window_exceeded', 'malformed_model_output', 'malformed_tool_use'])(
+    'keeps the upstream %s outcome in streaming and non-streaming responses',
+    async stopReason => {
+      const model = 'us.anthropic.claude-sonnet-4-6-v1:0'
+      const response = {
+        output: { message: { role: 'assistant', content: [{ text: 'Partial reply' }] } },
+        stopReason,
+      }
+      const frames = concatBytes([
+        encodeBedrockEventStreamFrame('messageStart', { role: 'assistant' }),
+        encodeBedrockEventStreamFrame('contentBlockDelta', { contentBlockIndex: 0, delta: { text: 'Partial reply' } }),
+        encodeBedrockEventStreamFrame('contentBlockStop', { contentBlockIndex: 0 }),
+        encodeBedrockEventStreamFrame('messageStop', { stopReason }),
+      ])
+      const upstream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frames)
+          controller.close()
+        },
+      })
+      const events = await collectSseEvents(bedrockConverseStreamToAnthropic(upstream, model))
+      if (stopReason === 'model_context_window_exceeded') {
+        expect(bedrockConverseResponseToAnthropic(response, model).stop_reason).toBe(stopReason)
+        expect(events.find(e => e.event === 'message_delta')?.data.delta).toMatchObject({ stop_reason: stopReason })
+      } else {
+        expect(() => bedrockConverseResponseToAnthropic(response, model)).toThrow(stopReason)
+        expect(events.at(-1)?.data.error).toMatchObject({ type: 'api_error', message: expect.stringContaining(stopReason) })
+        expect(events.some(e => e.event === 'message_stop')).toBe(false)
+      }
+    },
+  )
+
   test('decodes chunked binary AWS EventStream with thinking, signature, redactedContent, toolUse, text, and cache usage', async () => {
     const payload = concatBytes([
       encodeBedrockEventStreamFrame('messageStart', { role: 'assistant' }),

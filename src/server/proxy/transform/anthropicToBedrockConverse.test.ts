@@ -4,11 +4,51 @@ import {
   normalizeBedrockToolCallId,
 } from './anthropicToBedrockConverse.js'
 import { encodeGeminiThoughtSignature } from './anthropicToGemini.js'
+import { RequestCompatibilityError } from './requestCompatibility.js'
 import type { AnthropicRequest } from './types.js'
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
 describe('anthropicToBedrockConverse', () => {
+  test('respects hard output limits when a thinking model needs to adjust maxTokens', () => {
+    const request: AnthropicRequest = {
+      model: 'us.anthropic.claude-sonnet-4-5-v1:0',
+      max_tokens: 8192,
+      thinking: { type: 'enabled', budget_tokens: 4096 },
+      messages: [{ role: 'user', content: 'hello' }],
+    }
+    for (const limit of [2048, 4096]) {
+      expect(() => anthropicToBedrockConverse(request, {
+        requestCompatibility: { outputTokenLimit: limit },
+      })).toThrow(RequestCompatibilityError)
+    }
+    // The automatic 1024-token margin must fit inside the remaining headroom.
+    expect(anthropicToBedrockConverse({ ...request, max_tokens: 4096 }, {
+      requestCompatibility: { outputTokenLimit: 4097 },
+    }).inferenceConfig?.maxTokens).toBe(4097)
+    expect(() => anthropicToBedrockConverse({
+      ...request, model: 'amazon.nova-2-lite-v1:0', output_config: { effort: 'high' },
+    }, { requestCompatibility: { outputTokenLimit: 8192 } })).toThrow(RequestCompatibilityError)
+  })
+
+  test('forwards the modern and legacy JSON schema fields through native Converse outputConfig', () => {
+    const schema = { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'], additionalProperties: false }
+    const format = { type: 'json_schema', name: 'record', description: 'A record', schema }
+    for (const fields of [{ output_config: { format } }, { output_format: format }]) {
+      const request: AnthropicRequest = {
+        ...fields, model: 'amazon.nova-pro-v1:0', max_tokens: 1024, messages: [{ role: 'user', content: 'hello' }],
+      }
+      const result = anthropicToBedrockConverse(request)
+      expect(result.outputConfig?.textFormat).toEqual({
+        type: 'json_schema',
+        structure: { jsonSchema: { name: 'record', description: 'A record', schema: JSON.stringify(schema) } },
+      })
+      expect(() => anthropicToBedrockConverse(request, {
+        requestCompatibility: { structuredOutput: 'unsupported' },
+      })).toThrow(RequestCompatibilityError)
+    }
+  })
+
   test('converts system, messages, tools, images, documents, and serviceTier', () => {
     const req: AnthropicRequest = {
       model: 'us.anthropic.claude-sonnet-4-6-v1:0',
@@ -310,8 +350,9 @@ describe('anthropicToBedrockConverse', () => {
     expect(claudeAny.additionalModelRequestFields).toMatchObject({
       tool_choice: { type: 'any', disable_parallel_tool_use: true },
       thinking: { type: 'adaptive' },
-      output_config: { format: { type: 'json_schema', schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } },
     })
+    expect(claudeAny.additionalModelRequestFields?.output_config).toBeUndefined()
+    expect(claudeAny.outputConfig?.textFormat?.type).toBe('json_schema')
     expect(claudeAny.messages[1]!.content).toEqual([
       { toolUse: { toolUseId: 't1', name: 'Read', input: { path: 'a.ts' } } },
       { toolUse: { toolUseId: 't2', name: 'Read', input: {} } },

@@ -6,12 +6,13 @@
  * and AWS Bedrock Runtime REST API documentation.
  */
 
+import type { OutputConfig } from '@aws-sdk/client-bedrock-runtime'
 import type { AnthropicContentBlock, AnthropicImageSource, AnthropicRequest } from './types.js'
 import { stripLeadingBillingHeader } from './billingHeader.js'
 import { documentProvenanceText, searchResultToText } from './anthropicToOpenaiChat.js'
 import { decodeGeminiThoughtSignature } from './anthropicToGemini.js'
 import { normalizeOpenAIReasoningEffort } from './effort.js'
-import { resolveRequestCompatibility, type RequestCompatibilityOptions } from './requestCompatibility.js'
+import { RequestCompatibilityError, resolveRequestCompatibility, type RequestCompatibilityOptions } from './requestCompatibility.js'
 
 const BEDROCK_IMAGE_MIME_TYPES: Record<string, 'jpeg' | 'png' | 'gif' | 'webp'> = {
   'image/jpeg': 'jpeg',
@@ -93,6 +94,7 @@ export type BedrockConverseRequest = {
     stopSequences?: string[]
   }
   toolConfig?: BedrockToolConfig
+  outputConfig?: OutputConfig
   additionalModelRequestFields?: Record<string, unknown>
   additionalModelResponseFieldPaths?: string[]
   serviceTier?: { type: 'default' | 'flex' | 'priority' }
@@ -300,18 +302,15 @@ export function anthropicToBedrockConverse(
           type: 'enabled',
           budget_tokens: budget,
         }
-        // Bedrock requires maxTokens > thinking.budget_tokens. When the caller
-        // used the default budget (maxTokens omitted), Bedrock itself defaults
-        // to 4096 which rejects any budget_tokens >= 4096; match @ai-sdk/amazon-bedrock
-        // by setting maxTokens = budget + 4096 (respecting any higher hardLimit).
-        if (inferenceConfig.maxTokens === undefined) {
-          const desired = budget + 4096
-          const hardLimit = compatibility.outputBudget.hardLimit
-          inferenceConfig.maxTokens = hardLimit !== undefined && hardLimit > budget
-            ? Math.min(desired, hardLimit)
-            : desired
-        } else if (inferenceConfig.maxTokens <= budget) {
-          inferenceConfig.maxTokens = budget + 1024
+        // Bedrock requires maxTokens > budget_tokens. Reserve room for the
+        // answer within the endpoint limit or reject the conflicting budgets.
+        const hardLimit = compatibility.outputBudget.hardLimit
+        if (hardLimit !== undefined && hardLimit <= budget) {
+          throw new RequestCompatibilityError(`Bedrock thinking budget (${budget}) must be below the endpoint output limit (${hardLimit})`)
+        }
+        if (inferenceConfig.maxTokens === undefined || inferenceConfig.maxTokens <= budget) {
+          const desired = budget + (inferenceConfig.maxTokens === undefined ? 4096 : 1024)
+          inferenceConfig.maxTokens = hardLimit === undefined ? desired : Math.min(desired, hardLimit)
         }
       } else if (thinkingType === 'adaptive') {
         anthropicThinkingEnabled = true
@@ -321,7 +320,6 @@ export function anthropicToBedrockConverse(
       }
       if (effort && effort !== 'none') {
         additionalModelRequestFields.output_config = {
-          ...(isRecord(additionalModelRequestFields.output_config) ? additionalModelRequestFields.output_config : {}),
           effort,
         }
       }
@@ -347,20 +345,12 @@ export function anthropicToBedrockConverse(
         }
         // Per @ai-sdk/amazon-bedrock: Nova 2 rejects maxTokens when high reasoning is enabled.
         if (isBedrockNova2Model(body.model) && resolvedEffort === 'high') {
+          if (compatibility.outputBudget.hardLimit !== undefined) {
+            throw new RequestCompatibilityError('Nova 2 high reasoning cannot honor an endpoint output limit')
+          }
           delete inferenceConfig.maxTokens
         }
       }
-    }
-  }
-
-  // Structured output (native on Anthropic Claude models on Bedrock)
-  if (compatibility.structuredOutput && isAnthropic) {
-    additionalModelRequestFields.output_config = {
-      ...(isRecord(additionalModelRequestFields.output_config) ? additionalModelRequestFields.output_config : {}),
-      format: {
-        type: 'json_schema',
-        schema: compatibility.structuredOutput.schema,
-      },
     }
   }
 
@@ -400,6 +390,17 @@ export function anthropicToBedrockConverse(
       : {}),
   }
 
+  const format = compatibility.structuredOutput
+  if (format) {
+    result.outputConfig = {
+      textFormat: {
+        type: 'json_schema',
+        structure: {
+          jsonSchema: { name: format.name, description: format.description, schema: JSON.stringify(format.schema) },
+        },
+      },
+    }
+  }
   return result
 }
 
