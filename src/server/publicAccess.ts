@@ -106,6 +106,24 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       (parts[2] === 'open-permission-card' && method === 'POST')
   }
   if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || ((parts[3] === 'test' || parts[3] === 'pull') && method === 'POST'))
+  if (parts[1] === 'mobile-update') {
+    if (url.pathname === '/api/mobile-update/android/latest') {
+      return method === 'GET' && [...url.searchParams.keys()].every(key =>
+        key === 'refresh' && url.searchParams.getAll(key).length === 1 && url.searchParams.get(key) === '1',
+      )
+    }
+    if (url.pathname === '/api/mobile-update/android/prepare') {
+      return (method === 'GET' || method === 'POST') && [...url.searchParams.keys()].every(key =>
+        key === 'sha256' && url.searchParams.getAll(key).length === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get(key) ?? ''),
+      )
+    }
+    if (url.pathname === '/api/mobile-update/android/apk') {
+      return method === 'GET' && [...url.searchParams.keys()].every(key =>
+        key === 'sha256' && url.searchParams.getAll(key).length === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get(key) ?? ''),
+      )
+    }
+    return false
+  }
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {

@@ -2,6 +2,7 @@ import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useFonts } from 'expo-font'
 import { AppProvider } from '../state/AppContext'
+import { AndroidUpdateProvider } from '../state/AndroidUpdateContext'
 import { LiveActivityBridge } from '../widgets/LiveActivityBridge'
 import { PushRegistrationProvider } from '../state/PushRegistrationContext'
 import { NotificationBridge } from '../state/NotificationBridge'
@@ -113,11 +114,13 @@ export default function Layout() {
   return (
     <PreferencesProvider>
       <AppProvider>
-        <PushRegistrationProvider>
-          <DashboardProvider>
-            <Navigation />
-          </DashboardProvider>
-        </PushRegistrationProvider>
+        <AndroidUpdateProvider>
+          <PushRegistrationProvider>
+            <DashboardProvider>
+              <Navigation />
+            </DashboardProvider>
+          </PushRegistrationProvider>
+        </AndroidUpdateProvider>
       </AppProvider>
     </PreferencesProvider>
   )

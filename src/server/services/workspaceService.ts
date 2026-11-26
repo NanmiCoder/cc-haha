@@ -243,6 +243,7 @@ type GitRepoInfo =
       kind: 'ok'
       repoRoot: string
       branch: string | null
+      diffBase: string
     }
   | {
       kind: 'error'
@@ -485,7 +486,7 @@ export class WorkspaceService {
     const limitedEntries = scopedEntries.length > MAX_STATUS_ENTRIES
       ? scopedEntries.slice(0, MAX_STATUS_ENTRIES)
       : scopedEntries
-    const trackedStats = await this.getTrackedDiffStats(repoInfo.repoRoot, limitedEntries)
+    const trackedStats = await this.getTrackedDiffStats(repoInfo.repoRoot, limitedEntries, repoInfo.diffBase)
     if (trackedStats.kind === 'error') {
       return {
         state: 'error',
@@ -1153,7 +1154,7 @@ export class WorkspaceService {
     }
 
     const targetPath = statusEntry.repoPath
-    const diff = await this.runGitDiff(repoInfo.repoRoot, targetPath)
+    const diff = await this.runGitDiff(repoInfo.repoRoot, targetPath, repoInfo.diffBase)
     if (diff.kind === 'error') {
       return {
         state: 'error',
@@ -1910,15 +1911,38 @@ export class WorkspaceService {
         ),
       }
     }
-    const branchResult = await this.runGit(workDir, [
+    const branchArgs = [
       'rev-parse',
       '--abbrev-ref',
+      '--verify',
+      '--quiet',
       'HEAD',
-    ])
+    ]
+    const branchResult = await this.runGit(workDir, branchArgs)
+    if (branchResult.timedOut || branchResult.errorCode || branchResult.maxBufferExceeded) {
+      return {
+        kind: 'error',
+        message: this.formatGitError('Failed to inspect git HEAD', branchArgs, workDir, branchResult),
+      }
+    }
+
+    let diffBase = 'HEAD'
+    if (branchResult.code === 1) {
+      // An unborn HEAD has no commit. Git supplies the empty tree's id for
+      // this repository's object format without writing any object.
+      const emptyTreeArgs = ['hash-object', '-t', 'tree', '/dev/null']
+      const emptyTree = await this.runGit(workDir, emptyTreeArgs)
+      const emptyTreeSha = emptyTree.stdout.trim()
+      if (emptyTree.code !== 0 || !emptyTreeSha) {
+        return { kind: 'error', message: this.formatGitError('Failed to resolve empty tree', emptyTreeArgs, workDir, emptyTree) }
+      }
+      diffBase = emptyTreeSha
+    }
 
     return {
       kind: 'ok',
       repoRoot,
+      diffBase,
       branch:
         branchResult.code === 0
           ? branchResult.stdout.trim() || null
@@ -2118,6 +2142,7 @@ export class WorkspaceService {
   private async getTrackedDiffStats(
     workDir: string,
     entries: ScopedStatusEntry[],
+    diffBase: string,
   ): Promise<DiffStatsByRepoPathResult> {
     if (!entries.some((entry) => entry.status !== 'untracked')) {
       return { kind: 'ok', statsByRepoPath: new Map() }
@@ -2128,7 +2153,7 @@ export class WorkspaceService {
       '--numstat',
       '--find-renames',
       '--find-copies',
-      'HEAD',
+      diffBase,
       '--',
     ])
 
@@ -2142,7 +2167,7 @@ export class WorkspaceService {
             '--numstat',
             '--find-renames',
             '--find-copies',
-            'HEAD',
+            diffBase,
             '--',
           ],
           workDir,
@@ -2214,6 +2239,7 @@ export class WorkspaceService {
   private async runGitDiff(
     workDir: string,
     relativePath: string,
+    diffBase: string,
   ): Promise<{ kind: 'ok'; diff: string } | { kind: 'error'; message: string }> {
     const result = await this.runGit(workDir, [
       'diff',
@@ -2221,7 +2247,7 @@ export class WorkspaceService {
       '--binary',
       '--find-renames',
       '--find-copies',
-      'HEAD',
+      diffBase,
       '--',
       relativePath,
     ])
@@ -2237,7 +2263,7 @@ export class WorkspaceService {
             '--binary',
             '--find-renames',
             '--find-copies',
-            'HEAD',
+            diffBase,
             '--',
             relativePath,
           ],

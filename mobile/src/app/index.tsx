@@ -4,6 +4,7 @@ import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
+import { useAndroidUpdate } from '../state/AndroidUpdateContext'
 import { useDashboard } from '../state/DashboardContext'
 import { isH5, reconnectH5 } from '../state/h5'
 import { groupDashboard, type DashboardRow } from '../core/dashboard'
@@ -44,6 +45,7 @@ export default function Home() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
   const { ready, error: storageError } = useApp()
+  const { viewModel: updateViewModel } = useAndroidUpdate()
   const { host, error: credentialError, credentialIssue } = useConnection()
   const { snapshot, loading, fresh, error, failure, refresh } = useDashboard()
   const [searching, setSearching] = useState(false)
@@ -163,7 +165,21 @@ export default function Home() {
           >
             <Icon name="search" size={20} color={colors.ink} strokeWidth={2} />
           </FloatButton>
-          <FloatButton label="设置" onPress={() => router.push('/settings')}>
+          <FloatButton
+            label={
+              updateViewModel?.homeDot
+                ? `设置${updateViewModel.homeDot.accessibilitySuffix}`
+                : '设置'
+            }
+            dotColor={
+              updateViewModel?.homeDot
+                ? updateViewModel.homeDot.tone === 'ok'
+                  ? colors.ok
+                  : colors.run
+                : undefined
+            }
+            onPress={() => router.push('/settings')}
+          >
             <Icon name="settings" size={21} color={colors.ink} strokeWidth={1.9} />
           </FloatButton>
         </View>

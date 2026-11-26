@@ -83,10 +83,11 @@ const COMPAT_SUFFIXES = [
 ] as const
 
 const VERSION_SEGMENT_RE = /^v\d+(?:alpha|beta\d*)?$/i
+const GEMINI_ACTION_PATH_RE = /\/models\/.+:(?:generateContent|streamGenerateContent|rawPredict|streamRawPredict)$/i
 
 // Shapes seen in the wild for the same catalog: OpenAI's `data`, plus the
-// `models`/`items`/bare-array variants, and AWS Bedrock's `modelSummaries`.
-const MODEL_ARRAY_KEYS = ['data', 'models', 'items', 'modelSummaries'] as const
+// `models`/`items`/bare-array variants, Bedrock model summaries and Vertex publisher models.
+const MODEL_ARRAY_KEYS = ['data', 'models', 'items', 'modelSummaries', 'publisherModels'] as const
 const MODEL_ID_KEYS = ['id', 'modelId', 'slug', 'model', 'name'] as const
 const MODEL_OWNER_KEYS = ['owned_by', 'ownedBy', 'providerName', 'provider', 'vendor', 'owner'] as const
 
@@ -137,24 +138,37 @@ export function buildModelsUrlCandidates(
     throw new Error('Base URL is required to derive the models endpoint')
   }
 
-  // A full URL already points at a concrete endpoint (…/v1/chat/completions),
-  // so the catalog is derived from its root and there is nothing to fall back
-  // to.
-  if (options?.isFullUrl) {
-    return [deriveModelsUrlFromFullUrl(trimmed)]
+  const candidates: string[] = []
+  const isGemini = options?.apiFormat === 'gemini' || options?.apiFormat === 'google_vertex'
+  const parsedGeminiUrl = isGemini ? tryParseUrl(trimmed) : null
+  if (parsedGeminiUrl && isVertexEndpointUrl(parsedGeminiUrl.origin)) {
+    // Model Garden lists across projects at the publisher's top-level resource.
+    const publisher = parsedGeminiUrl.pathname.match(/\/publishers\/([^/]+)/i)?.[1] ?? 'google'
+    candidates.push(`${parsedGeminiUrl.origin}/v1beta1/publishers/${publisher}/models`)
   }
 
-  const candidates: string[] = []
+  // Full inference URLs can also expose a catalog at the API root.
+  if (options?.isFullUrl) {
+    try {
+      candidates.push(deriveModelsUrlFromFullUrl(trimmed))
+    } catch (err) {
+      if (candidates.length === 0) throw err
+    }
+    return dedupe(candidates).map(assertHttpUrl)
+  }
+
   const lastSegment = trimmed.slice(trimmed.lastIndexOf('/') + 1)
-  const isGemini = options?.apiFormat === 'gemini' || options?.apiFormat === 'google_vertex'
   const isVertex = options?.apiFormat === 'google_vertex' || (isGemini && isVertexEndpointUrl(trimmed))
   const isBedrock = options?.apiFormat === 'bedrock_converse'
   const isAzure = options?.apiFormat === 'azure_openai' || isAzureOpenaiEndpoint(trimmed)
+  const geminiActionCatalogUrl = parsedGeminiUrl ? deriveGeminiModelsUrlFromActionUrl(parsedGeminiUrl) : null
 
   if (isBedrock) {
     candidates.push(...buildBedrockModelsEndpoints(trimmed))
   } else if (isAzure) {
     candidates.push(...buildAzureModelsUrlCandidates(trimmed))
+  } else if (geminiActionCatalogUrl) {
+    candidates.push(geminiActionCatalogUrl)
   } else if (isGemini && /\/models$/i.test(trimmed)) {
     candidates.push(trimmed)
   } else if (isVertex && /\/publishers\/[^/]+$/i.test(trimmed)) {
@@ -348,6 +362,28 @@ export async function fetchProviderModels(
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '')
+}
+
+function tryParseUrl(value: string): URL | null {
+  try {
+    return new URL(value)
+  } catch {
+    return null
+  }
+}
+
+function deriveGeminiModelsUrlFromActionUrl(parsed: URL): string | null {
+  const pathname = stripTrailingSlashes(parsed.pathname)
+  if (!GEMINI_ACTION_PATH_RE.test(pathname)) return null
+  const modelsUrl = new URL(parsed.toString())
+  modelsUrl.pathname = pathname.replace(GEMINI_ACTION_PATH_RE, '/models')
+  modelsUrl.hash = ''
+  for (const value of modelsUrl.searchParams.getAll('alt')) {
+    if (value.toLowerCase() === 'sse') {
+      modelsUrl.searchParams.delete('alt', value)
+    }
+  }
+  return modelsUrl.toString()
 }
 
 /** `true` when the URL has a scheme separator with a host behind it. */
