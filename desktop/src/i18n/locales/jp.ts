@@ -3545,6 +3545,7 @@ export const jp: Record<TranslationKey, string> = {
   'chat.editResendStale': 'このメッセージは直前に受理されたため、置き換えられなくなりました。少し待ってからもう一度お試しください。',
   'chat.workspaceChangesFallbackLabel': 'ワークスペースの変更ファイル',
   'chat.workspaceChangesFallbackTitle': '現在のワークスペースの変更（{count}）',
+  'chat.workspaceChangesFallbackPartial': 'ワークスペースのスキャン範囲が限られているため、変更されたファイルの一部が表示されていない可能性があります。',
   'chat.workspaceChangesFallbackExplanation': '会話が長すぎるため、ターンごとのプレビューやファイルの取り消しは利用できません。この一覧は現在のワークスペース全体の変更を示し、他のターンやこの会話外の変更を含む場合があります。',
   'chat.workspaceChangesFallbackUnavailable': '会話が長すぎるため、ターンごとのプレビューやファイルの取り消しは利用できません。現在のワークスペースの変更を確認できないため、ファイル一覧は表示できません。',
   'chat.workspaceChangesFallbackEmpty': '現在のワークスペースに変更は見つかりませんでした。',
