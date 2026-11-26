@@ -15,6 +15,25 @@ export type QueuedMessage = {
   message: ClientMessage
 }
 
+/**
+ * Move one queued message to `toIndex` without sending or editing anything.
+ * Returns the same array when nothing would change so React can skip a render.
+ */
+export function moveQueueItem<T extends { id: string }>(
+  items: T[],
+  id: string,
+  toIndex: number,
+): T[] {
+  const fromIndex = items.findIndex((item) => item.id === id)
+  if (fromIndex < 0 || items.length < 2) return items
+  const target = Math.max(0, Math.min(items.length - 1, Math.trunc(toIndex)))
+  if (!Number.isFinite(target) || target === fromIndex) return items
+  const next = [...items]
+  const [moved] = next.splice(fromIndex, 1)
+  next.splice(target, 0, moved!)
+  return next
+}
+
 export type QueueGate = {
   ready: boolean
   turnActive: boolean

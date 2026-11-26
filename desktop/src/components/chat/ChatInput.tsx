@@ -10,10 +10,10 @@ import { formatBytes } from '@/lib/formatBytes'
 import { checkUserMessageBudget } from '@/lib/userMessageBudget'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowUp, CornerDownRight, Cpu, Feather, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
+import { ArrowUp, Cpu, Feather, Gauge, Plus, ShieldCheck, Square } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
-import { IconButton } from '@/components/ui/IconButton'
+import { QueuedMessageList } from './QueuedMessageList'
 import { useTranslation } from '../../i18n'
 import {
   hasPendingAskUserQuestion,
@@ -218,8 +218,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const [memberRuntimeSaving, setMemberRuntimeSaving] = useState(false)
   const [launchReady, setLaunchReady] = useState(true)
   const [launchTransitioning, setLaunchTransitioning] = useState(false)
-  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
-  const [editingQueuedMessageText, setEditingQueuedMessageText] = useState('')
   const composingRef = useRef(false)
   const composerRef = useRef<MentionComposerHandle>(null)
   const composerContainerRef = useRef<HTMLDivElement>(null)
@@ -265,9 +263,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     clearComposerPrefill,
     clearComposerInsertion,
     queueUserMessage,
-    updateQueuedUserMessage,
-    removeQueuedUserMessage,
-    sendQueuedUserMessage,
+    flushQueuedUserMessages,
     setPreparingTurn,
     dismissPromptSuggestion,
   } = useChatStore(useShallow((s) => ({
@@ -276,9 +272,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     clearComposerPrefill: s.clearComposerPrefill,
     clearComposerInsertion: s.clearComposerInsertion,
     queueUserMessage: s.queueUserMessage,
-    updateQueuedUserMessage: s.updateQueuedUserMessage,
-    removeQueuedUserMessage: s.removeQueuedUserMessage,
-    sendQueuedUserMessage: s.sendQueuedUserMessage,
+    flushQueuedUserMessages: s.flushQueuedUserMessages,
     setPreparingTurn: s.setPreparingTurn,
     dismissPromptSuggestion: s.dismissPromptSuggestion,
   })))
@@ -306,6 +300,28 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const composerPrefill = sessionState?.composerPrefill ?? null
   const composerInsertion = sessionState?.composerInsertion ?? null
   const queuedUserMessages = sessionState?.queuedUserMessages ?? []
+  const queuedMessagesPaused = sessionState?.queuedMessagesPaused
+  const queuedMessagesPausedReason = queuedMessagesPaused === 'turn-error'
+    ? t('chat.pendingMessagePausedTurnError')
+    : queuedMessagesPaused === 'send-failed'
+      ? t('chat.pendingMessagePausedSendFailed')
+      : undefined
+  // A prompt can outlive the completion that should have released it — a
+  // message queued just as the turn finished, or a completion missed across a
+  // reconnect (#1988). The store also drains on server idle snapshots; this
+  // reconciles the open composer the moment it is rendered idle with a queue.
+  useEffect(() => {
+    // Wait for the authoritative reconnect snapshot: the pre-sync permission
+    // snapshot also reports idle, and sending before session_state arrives
+    // would let that stale answer clobber the turn we just started.
+    if (
+      !activeTabId ||
+      chatState !== 'idle' ||
+      sessionState?.awaitingReconnectSync === true ||
+      queuedUserMessages.length === 0
+    ) return
+    flushQueuedUserMessages(activeTabId)
+  }, [activeTabId, chatState, queuedUserMessages.length, sessionState?.awaitingReconnectSync, flushQueuedUserMessages])
   const promptSuggestion = sessionState?.promptSuggestion ?? null
   const nextPromptSuggestionsEnabled = useSettingsStore((state) => state.nextPromptSuggestionsEnabled)
   const runtimeSelection = useSessionRuntimeStore((state) =>
@@ -605,8 +621,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashFilter('')
     setAtFilter('')
     setAtCursorPos(-1)
-    setEditingQueuedMessageId(null)
-    setEditingQueuedMessageText('')
     previousActiveTabIdRef.current = activeTabId
   }, [activeTabId, invalidatePendingPastes, saveComposerDraft, setComposerAttachments, setComposerInput])
 
@@ -1635,25 +1649,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (activeTabId) removeWorkspaceReference(activeTabId, id)
   }
 
-  const startEditingQueuedMessage = (messageId: string, content: string) => {
-    setEditingQueuedMessageId(messageId)
-    setEditingQueuedMessageText(content)
-  }
-
-  const saveQueuedMessageEdit = () => {
-    if (!activeTabId || !editingQueuedMessageId) return
-    const nextContent = editingQueuedMessageText.trim()
-    if (!nextContent) return
-    updateQueuedUserMessage(activeTabId, editingQueuedMessageId, nextContent)
-    setEditingQueuedMessageId(null)
-    setEditingQueuedMessageText('')
-  }
-
-  const cancelQueuedMessageEdit = () => {
-    setEditingQueuedMessageId(null)
-    setEditingQueuedMessageText('')
-  }
-
   const insertSlashCommand = () => {
     if (isMemberSession) return
     promptHistory.resetHistory()
@@ -1876,101 +1871,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         }
       >
         {!isMemberSession && activeTabId && queuedUserMessages.length > 0 && (
-          // Docked top seam banner inset past the composer's 16px rounded top corners.
-          <div
-            data-testid="pending-user-message-list"
-            className="surface-glass composer-seam-above relative z-[var(--z-base)] mx-5 -mb-4 flex flex-col gap-1.5 rounded-t-[var(--radius-2xl)] border border-b-0 border-[var(--color-surface-glass-border)] px-3 pb-5 pt-2.5"
-          >
-            {queuedUserMessages.map((message) => {
-              const isEditing = editingQueuedMessageId === message.id
-              return (
-                <div
-                  key={message.id}
-                  data-testid="pending-user-message"
-                  className={[
-                    'flex min-h-9 min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] py-1 pl-3 pr-1',
-                    'border border-dashed border-[var(--color-outline)] bg-[var(--color-surface-container-low)]',
-                    'text-[13px] text-[var(--color-text-secondary)]',
-                  ].join(' ')}
-                >
-                  <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-                    {t('chat.pendingMessageQueuedLabel')}
-                  </span>
-                  {isEditing ? (
-                    <>
-                      <input
-                        value={editingQueuedMessageText}
-                        onChange={(event) => setEditingQueuedMessageText(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            saveQueuedMessageEdit()
-                          }
-                          if (event.key === 'Escape') {
-                            event.preventDefault()
-                            cancelQueuedMessageEdit()
-                          }
-                        }}
-                        aria-label={t('chat.pendingMessageEditInput')}
-                        className="min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
-                        autoFocus
-                      />
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={saveQueuedMessageEdit}
-                        disabled={!editingQueuedMessageText.trim()}
-                        className="shrink-0"
-                      >
-                        {t('common.save')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={cancelQueuedMessageEdit}
-                        className="shrink-0"
-                      >
-                        {t('common.cancel')}
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="min-w-0 flex-1 truncate font-medium" title={message.displayContent}>
-                        {message.displayContent}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={questionPending}
-                        onClick={() => sendQueuedUserMessage(activeTabId, message.id)}
-                        aria-label={t('chat.pendingMessageGuideNow')}
-                        title={t('chat.pendingMessageGuideNow')}
-                        className="shrink-0"
-                        icon={<CornerDownRight size={14} strokeWidth={1.75} aria-hidden="true" />}
-                      >
-                        {t('chat.pendingMessageGuide')}
-                      </Button>
-                      <IconButton
-                        icon={<Pencil size={14} strokeWidth={1.75} aria-hidden="true" />}
-                        label={t('chat.pendingMessageEdit')}
-                        size="sm"
-                        tone="muted"
-                        onClick={() => startEditingQueuedMessage(message.id, message.displayContent)}
-                      />
-                      <IconButton
-                        icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
-                        label={t('chat.pendingMessageDelete')}
-                        size="sm"
-                        tone="muted"
-                        hoverTone="danger"
-                        onClick={() => removeQueuedUserMessage(activeTabId, message.id)}
-                      />
-                    </>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+          <QueuedMessageList
+            sessionId={activeTabId}
+            messages={queuedUserMessages}
+            pausedReason={queuedMessagesPausedReason}
+            guideDisabled={questionPending}
+          />
         )}
 
         <div

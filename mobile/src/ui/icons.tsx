@@ -21,6 +21,14 @@ const icons = {
   ],
   'chevron-down': [['path', 'm6 9 6 6 6-6']],
   'chevron-up': [['path', 'm18 15-6-6-6 6']],
+  'grip-vertical': [
+    ['circle', 9, 5, 1],
+    ['circle', 9, 12, 1],
+    ['circle', 9, 19, 1],
+    ['circle', 15, 5, 1],
+    ['circle', 15, 12, 1],
+    ['circle', 15, 19, 1],
+  ],
   'chevron-left': [['path', 'm15 18-6-6 6-6']],
   'chevron-right': [['path', 'm9 18 6-6-6-6']],
   compose: [
