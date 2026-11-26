@@ -3,6 +3,7 @@ import { ChatComposer } from '../ui/ChatComposer'
 import { RunSheet } from '../ui/compose/RunSheet'
 import { runCapsule } from '../ui/compose/runLogic'
 import { useComputerUse } from '../core/useComputerUse'
+import { isComputerUseReference } from '../core/computerUse'
 import { WherePage } from '../ui/newtask/WherePage'
 import { serializeComposer, type ComposerReference } from '../core/composerReferences'
 import { KeyboardViewport } from '../ui/KeyboardViewport'
@@ -32,14 +33,26 @@ import {
   type ComposerAttachment,
 } from '../core/chatComposer'
 import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  ANTIGRAVITY_LOGIN_GUIDANCE,
+  ANTIGRAVITY_PERMISSION_MODES,
+  ANTIGRAVITY_PROVIDER_ID,
+  antigravityStatusLabel,
+  defaultAntigravitySelection,
+  discoverAntigravity,
+  parseAntigravityStatus,
   runtimeProviderIdentity,
   runtimeSelection,
+  type AntigravityStatus,
   type Model,
 } from '../core/runtimeCatalog'
-import { InlineError, TextButton, goBack, useColors } from '../ui/kit'
+import { Button, Callout, InlineError, Segmented, TextButton, goBack, useColors } from '../ui/kit'
 import { errorText } from '../ui/theme'
 import { TargetCard } from '../ui/newtask/TargetCard'
+import { toggleWorktree } from '../ui/newtask/whereModel'
 import { simulatedPhoneChrome } from '../ui/webChrome'
+
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 const repositoryUrl = (path: string) =>
   `/api/sessions/repository-context?workDir=${encodeURIComponent(path)}`
@@ -68,8 +81,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const [path, setPath] = useState(initialDir)
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [profile, setProfile] = useState<'standard' | 'lean'>('standard')
+  const [engine, setEngine] = useState<'cc-haha' | 'antigravity'>('cc-haha')
+  const [antigravity, setAntigravity] = useState<AntigravityStatus | null>(null)
+  const [refreshingAntigravity, setRefreshingAntigravity] = useState(false)
   const [mode, setMode] = useState<PermissionMode>('default')
   const [runtime, setRuntime] = useState<{ config: RuntimeConfig; name: string }>()
+  const standardRuntime = useRef<{ config: RuntimeConfig; name: string } | undefined>(undefined)
+  const antigravityRuntime = useRef<{ config: RuntimeConfig; name: string } | undefined>(undefined)
   const [team, setTeam] = useState(parked?.team ?? false)
   const [worktree, setWorktree] = useState(false)
   const [repo, setRepo] = useState<RepositoryContext | null>(null)
@@ -117,17 +135,19 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         if (!signal.aborted) setError(errorText(e))
       })
     Promise.all([
-      client.get<{ activeId: string | null }>('/api/providers', { signal }),
+      client.get<{ activeId: string | null; antigravity?: unknown }>('/api/providers', { signal }),
       client.get<{ model: { id: string } }>('/api/models/current', { signal }),
       client.get<{ level: string }>('/api/effort', { signal }),
       client.get<{ models: Model[] }>('/api/models', { signal }),
     ])
       .then(([provider, model, effort, catalog]) => {
-        if (signal.aborted || touchedRuntime.current) return
+        if (signal.aborted) return
+        setAntigravity(parseAntigravityStatus(provider.antigravity))
+        if (touchedRuntime.current) return
         const current = catalog.models.find(
           (value) => value.id === model.model.id
         ) ?? { id: model.model.id, name: model.model.id }
-        setRuntime({
+        const initial = {
           config: runtimeSelection(
             runtimeProviderIdentity(provider.activeId),
             current,
@@ -135,7 +155,9 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
             false
           ),
           name: current.name,
-        })
+        }
+        standardRuntime.current = initial
+        setRuntime(initial)
       })
       .catch((e) => {
         if (!signal.aborted) setError(errorText(e))
@@ -176,8 +198,65 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       controller.abort()
     }
   }, [client, path, repoEpoch])
-  const lean = profile === 'lean'
+  const antigravityInstalled = Boolean(
+    antigravity && antigravity.status !== 'not_installed'
+  )
+  const isAntigravity = engine === 'antigravity' && antigravityInstalled
+  const lean = !isAntigravity && profile === 'lean'
   const teamOn = team && !lean
+  const effectiveWorktree = !isAntigravity && worktree
+  const antigravityBlocked =
+    isAntigravity &&
+    (antigravity?.status === 'login_required' || antigravity?.status === 'error')
+  async function refreshAntigravityStatus() {
+    if (!client || refreshingAntigravity) return
+    setRefreshingAntigravity(true)
+    setError('')
+    try {
+      const fresh = await discoverAntigravity(client)
+      setAntigravity(fresh)
+      if (engine === 'antigravity') {
+        if (!fresh || fresh.status === 'not_installed') {
+          setEngine('cc-haha')
+          if (standardRuntime.current) setRuntime(standardRuntime.current)
+        } else {
+          const next = defaultAntigravitySelection(fresh)
+          antigravityRuntime.current = next
+          setRuntime(next)
+        }
+      }
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setRefreshingAntigravity(false)
+    }
+  }
+  function changeEngine(next: 'cc-haha' | 'antigravity') {
+    if (next === engine) return
+    setError('')
+    setEngine(next)
+    touchedRuntime.current = true
+    if (next === 'antigravity') {
+      if (runtime && runtime.config.providerId !== ANTIGRAVITY_PROVIDER_ID)
+        standardRuntime.current = runtime
+      const chosen =
+        antigravityRuntime.current ?? defaultAntigravitySelection(antigravity)
+      antigravityRuntime.current = chosen
+      setRuntime(chosen)
+      setReferences((previous) => previous.filter(isComputerUseReference))
+      if (worktree) {
+        const reset = toggleWorktree(repo, branch, false)
+        setBranch(reset.branch)
+        setWorktree(false)
+      }
+      if (!ANTIGRAVITY_PERMISSION_MODES.includes(mode)) changeMode('default')
+      if (antigravity?.status === 'unchecked') void refreshAntigravityStatus()
+      return
+    }
+    if (runtime?.config.providerId === ANTIGRAVITY_PROVIDER_ID)
+      antigravityRuntime.current = runtime
+    if (standardRuntime.current) setRuntime(standardRuntime.current)
+  }
   function changePath(value: string) {
     touchedPath.current = true
     setPath(value)
@@ -206,23 +285,50 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       (!content.trim() && !attachments.length && !references.length)
     )
       return
+    if (isAntigravity && antigravity?.status === 'login_required') {
+      setError(ANTIGRAVITY_LOGIN_GUIDANCE)
+      return
+    }
+    if (isAntigravity && antigravity?.status === 'error') {
+      setError(antigravity.error || 'Antigravity 状态异常，请先刷新状态。')
+      return
+    }
     const request = creation.begin()
     if (!request) return
     setBusy(true)
     setError('')
     try {
-      const message = buildComposerMessage(serializeComposer(content, references), attachments, teamOn)
+      const message = buildComposerMessage(
+        serializeComposer(content, isAntigravity ? [] : references),
+        attachments,
+        teamOn,
+        { antigravity: isAntigravity }
+      )
       validateMessageSize(message, client.host.auth)
       // Refresh at submission: a checkout may have changed while this draft was open.
       const context = path.trim()
         ? await client.get<RepositoryContext>(repositoryUrl(path.trim()))
         : null
       if (!request.isCurrent()) return
-      const repository = newTaskRepository(context, branch, worktree)
+      const repository = newTaskRepository(context, branch, effectiveWorktree)
+      const effectiveMode =
+        isAntigravity && !ANTIGRAVITY_PERMISSION_MODES.includes(mode)
+          ? 'default'
+          : mode
       const result = await client.createSession({
         workDir: path.trim() || undefined,
-        ...(lean ? { agentProfile: profile } : {}),
-        permissionMode: mode,
+        ...(isAntigravity
+          ? {
+              providerId: ANTIGRAVITY_PROVIDER_ID,
+              modelId: runtime?.config.modelId || ANTIGRAVITY_DEFAULT_MODEL,
+              ...(runtime?.config.effortLevel
+                ? { effortLevel: runtime.config.effortLevel }
+                : {}),
+            }
+          : lean
+            ? { agentProfile: profile }
+            : {}),
+        permissionMode: effectiveMode,
         ...(repository ? { repository } : {}),
       })
       if (!request.isCurrent()) return
@@ -247,13 +353,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       if (request.isCurrent()) setBusy(false)
     }
   }
-  const target = targetSummary({ path, projects, repo, branch, worktree })
+  const target = targetSummary({ path, projects, repo, branch, worktree: effectiveWorktree })
   const failure =
     connectionError ||
     error ||
     (repo?.state === 'missing_workdir' ? '这个目录不存在，请重新选择。' : '')
   const run = runCapsule({
-    mode,
+    mode: isAntigravity && !ANTIGRAVITY_PERMISSION_MODES.includes(mode) ? 'default' : mode,
     model: runtime?.name,
     effort: runtime?.config.effortLevel,
     disabled: busy,
@@ -302,10 +408,68 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
             name={target.name}
             branch={target.branch}
             status={target.status}
-            worktree={worktree}
+            worktree={effectiveWorktree}
             disabled={busy}
             onPress={() => setWhereOpen(true)}
           />
+          {antigravityInstalled ? (
+            <Segmented<'cc-haha' | 'antigravity'>
+              label="运行引擎"
+              height={40}
+              disabled={busy}
+              options={[
+                { label: 'cc-haha', value: 'cc-haha' },
+                { label: 'Antigravity', value: 'antigravity' },
+              ]}
+              value={isAntigravity ? 'antigravity' : 'cc-haha'}
+              onChange={changeEngine}
+            />
+          ) : null}
+          {isAntigravity && antigravity ? (
+            <Callout
+              tone={
+                antigravity.status === 'error'
+                  ? 'error'
+                  : antigravity.status === 'login_required'
+                    ? 'attention'
+                    : 'info'
+              }
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Text
+                  style={{
+                    flex: 1,
+                    fontSize: 13,
+                    lineHeight: 19,
+                    color:
+                      antigravity.status === 'error'
+                        ? colors.err
+                        : antigravity.status === 'login_required'
+                          ? colors.attnInk
+                          : colors.ink2,
+                  }}
+                >
+                  {antigravity.status === 'login_required'
+                    ? ANTIGRAVITY_LOGIN_GUIDANCE
+                    : antigravity.status === 'error'
+                      ? (antigravity.error || '无法读取 Antigravity 状态，请点击刷新重试。')
+                      : antigravity.status === 'unchecked'
+                        ? '正在检测电脑端 Antigravity 状态与可用模型…'
+                        : `Antigravity ${antigravityStatusLabel(antigravity)}${antigravity.tier?.name ? ` · ${antigravity.tier.name}` : ''}${antigravity.version ? ` · v${antigravity.version}` : ''}（不支持新开工作树）`}
+                </Text>
+                <Button
+                  title={refreshingAntigravity ? '刷新中' : '刷新'}
+                  size="sm"
+                  variant="outline"
+                  pill
+                  disabled={busy || refreshingAntigravity}
+                  onPress={() => {
+                    void refreshAntigravityStatus()
+                  }}
+                />
+              </View>
+            </Callout>
+          ) : null}
           <InlineError text={failure} />
         </ScrollView>
         <ChatComposer
@@ -324,7 +488,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
           lean={lean}
           empty
           busy={busy}
-          disabled={!client || busy || repo?.state === 'missing_workdir'}
+          disabled={!client || busy || repo?.state === 'missing_workdir' || antigravityBlocked}
           run={run}
           onOpenRun={() => setRunOpen(true)}
           onSend={() => void create()}
@@ -336,20 +500,33 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         visible={runOpen}
         onClose={() => setRunOpen(false)}
         client={client}
-        mode={mode}
+        mode={isAntigravity && !ANTIGRAVITY_PERMISSION_MODES.includes(mode) ? 'default' : mode}
         onMode={changeMode}
         runtime={runtime?.config}
         onRuntime={(value, model) => {
           touchedRuntime.current = true
-          setRuntime((previous) => ({
-            config: value,
-            name: model?.name ?? (previous?.config.modelId === value.modelId ? previous.name : value.modelId),
-          }))
+          setRuntime((previous) => {
+            const next = {
+              config: value,
+              name: model?.name ?? (previous?.config.modelId === value.modelId ? previous.name : value.modelId),
+            }
+            if (value.providerId === ANTIGRAVITY_PROVIDER_ID)
+              antigravityRuntime.current = next
+            else standardRuntime.current = next
+            return next
+          })
         }}
         lean={lean}
         disabled={busy ? { mode: '正在创建任务。', runtime: '正在创建任务。' } : undefined}
-        profile={{ value: profile, onChange: changeProfile, disabled: busy ? '正在创建任务。' : undefined }}
+        profile={
+          isAntigravity
+            ? undefined
+            : { value: profile, onChange: changeProfile, disabled: busy ? '正在创建任务。' : undefined }
+        }
         workDir={path || undefined}
+        lockedProviderId={isAntigravity ? ANTIGRAVITY_PROVIDER_ID : undefined}
+        excludeProviderIds={isAntigravity ? undefined : EXCLUDE_ANTIGRAVITY}
+        allowedModes={isAntigravity ? ANTIGRAVITY_PERMISSION_MODES : undefined}
       />
 
       <WherePage
@@ -361,12 +538,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         repo={repo}
         branch={branch}
         onBranch={setBranch}
-        worktree={worktree}
+        worktree={effectiveWorktree}
         onWorktree={setWorktree}
         client={client}
         hostName={host?.name}
         busy={busy}
         onRetry={() => setRepoEpoch((value) => value + 1)}
+        worktreeSupported={!isAntigravity}
       />
     </SafeAreaView>
   )

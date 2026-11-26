@@ -9,6 +9,7 @@ import { pickChatMaterial } from './chatMaterials'
 import { Icon, Mono, Spinner, useColors } from './kit'
 import { errorText } from './theme'
 import type { RuntimeConfig } from '../core/types'
+import { isAntigravityProvider } from '../core/runtimeCatalog'
 import {
   candidateTypeLabel,
   composerTrigger,
@@ -182,12 +183,14 @@ function CandidateCard({
   loading,
   error,
   references,
+  antigravity = false,
   onChoose,
 }: {
   candidates: ComposerCandidate[]
   loading: boolean
   error: string
   references: ComposerReference[]
+  antigravity?: boolean
   onChoose(candidate: ComposerCandidate): void
 }) {
   const colors = useColors()
@@ -245,7 +248,9 @@ function CandidateCard({
             )
           })
         ) : (
-          <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>
+          <Text style={{ padding: 14, color: colors.ink3 }}>
+            {antigravity ? '没有匹配的斜杠命令' : '没有匹配的技能或命令'}
+          </Text>
         )}
       </ScrollView>
     </View>
@@ -343,7 +348,7 @@ export function ChatComposer({
   attachments: ComposerAttachment[]
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
-  onTeam(value: boolean): void
+  onTeam?(value: boolean): void
   /** Computer authorization; the current message's selection lives in references. */
   computer: ComputerUse
   lean: boolean
@@ -441,11 +446,12 @@ export function ChatComposer({
   useEffect(() => {
     referenceState.current = { references, onReferences }
   }, [references, onReferences])
-  const trigger = composerTrigger(draft, selection.start, selection.end)
-  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger
-  const needsCatalog = bringOpen || showCandidates
   const providerId = runtime?.providerId
+  const isAntigravity = isAntigravityProvider(providerId)
   const hasRuntime = !!runtime
+  const trigger = composerTrigger(draft, selection.start, selection.end)
+  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger && (!isAntigravity || trigger.kind === '/')
+  const needsCatalog = bringOpen || showCandidates
   useEffect(() => {
     if (!client || !needsCatalog) return
     const controller = new AbortController()
@@ -551,7 +557,8 @@ export function ChatComposer({
     setBringOpen(true)
   }
 
-  const chips = attachments.length > 0 || references.length > 0 || team
+  const teamActive = team && Boolean(onTeam)
+  const chips = attachments.length > 0 || references.length > 0 || teamActive
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -580,6 +587,7 @@ export function ChatComposer({
           loading={loading}
           error={catalogError}
           references={references}
+          antigravity={isAntigravity}
           onChoose={choose}
         />
       ) : null}
@@ -623,7 +631,7 @@ export function ChatComposer({
                 icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} /> : undefined}
               />
             ))}
-            {team ? (
+            {teamActive && onTeam ? (
               <Pill
                 label="团队"
                 accessibilityLabel="关闭这条消息的 Agent 团队"
@@ -688,7 +696,7 @@ export function ChatComposer({
         {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="添加：技能、命令、材料"
+            accessibilityLabel={isAntigravity ? '添加：命令、材料' : '添加：技能、命令、材料'}
             accessibilityState={{ expanded: bringOpen }}
             onPress={openBring}
             style={({ pressed }) => ({
@@ -751,6 +759,7 @@ export function ChatComposer({
         client={client}
         workDir={workDir}
         lean={lean}
+        antigravity={isAntigravity}
         candidates={candidates}
         loading={loading}
         error={catalogError}
@@ -758,7 +767,7 @@ export function ChatComposer({
         draft={draft}
         picking={picking}
         onPick={(kind) => void pick(kind)}
-        team={team}
+        team={teamActive}
         onTeam={onTeam}
         computer={computer}
         onComputerSelected={(value) => {

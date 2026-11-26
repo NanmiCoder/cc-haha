@@ -20,6 +20,7 @@ export function RunToggles({
   team,
   onTeam,
   lean,
+  antigravity = false,
   computer,
   computerSelected,
   onComputerSelected,
@@ -29,8 +30,9 @@ export function RunToggles({
   visible: boolean
   client: ApiClient | null
   team: boolean
-  onTeam(value: boolean): void
+  onTeam?(value: boolean): void
   lean: boolean
+  antigravity?: boolean
   computer: ComputerUse
   computerSelected: boolean
   onComputerSelected(value: boolean): void
@@ -51,11 +53,14 @@ export function RunToggles({
   useEffect(() => {
     if (visible) refresh()
   }, [visible, refresh])
-  const disarm = useCallback(() => onTeam(false), [onTeam])
-  const teams = useTeamsSetting(client, epoch, team, disarm)
+  const disarm = useCallback(() => onTeam?.(false), [onTeam])
+  // Antigravity runs native `/swarm` without depending on Claude Code's experimental Agent Teams flag.
+  const claudeTeams = useTeamsSetting(onTeam && !antigravity ? client : null, epoch, Boolean(onTeam && !antigravity && team), disarm)
+  const teams = antigravity ? 'on' : claudeTeams
   const reasons = runSheetReasons({ lean, teams })
 
   function toggleTeam(value: boolean) {
+    if (!onTeam) return
     if (!value) onTeam(false)
     else if (accepted) onTeam(true)
     else setTeamConsent(true)
@@ -64,30 +69,36 @@ export function RunToggles({
   return (
     <>
       <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
-        <View style={{ minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 }}>
-          <View style={{ flex: 1, gap: 2, paddingVertical: 8 }}>
-            <Text style={{ fontSize: 16, color: colors.ink }}>Agent 团队</Text>
-            <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{teamNote(reasons.team)}</Text>
-          </View>
-          <Switch label="Agent 团队" value={team} disabled={!!reasons.team} onValueChange={toggleTeam} />
-        </View>
-        <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
+        {onTeam ? (
+          <>
+            <View style={{ minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 }}>
+              <View style={{ flex: 1, gap: 2, paddingVertical: 8 }}>
+                <Text style={{ fontSize: 16, color: colors.ink }}>Agent 团队</Text>
+                <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{teamNote(reasons.team)}</Text>
+              </View>
+              <Switch label="Agent 团队" value={team} disabled={!!reasons.team} onValueChange={toggleTeam} />
+            </View>
+            <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
+          </>
+        ) : null}
         <ComputerUseRow computer={computer} selected={computerSelected} onSelected={onComputerSelected} />
       </View>
-      <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
-        <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>
-          队长会拆分任务并协调多个成员。每个成员会独立调用模型，可能增加用量和费用。
-        </Text>
-        <Button
-          title="使用团队"
-          onPress={() => {
-            onAccept()
-            setTeamConsent(false)
-            onTeam(true)
-          }}
-        />
-        <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
-      </Sheet>
+      {onTeam ? (
+        <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
+          <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>
+            队长会拆分任务并协调多个成员。每个成员会独立调用模型，可能增加用量和费用。
+          </Text>
+          <Button
+            title="使用团队"
+            onPress={() => {
+              onAccept()
+              setTeamConsent(false)
+              onTeam(true)
+            }}
+          />
+          <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
+        </Sheet>
+      ) : null}
       <ComputerUseConsent computer={computer} />
     </>
   )

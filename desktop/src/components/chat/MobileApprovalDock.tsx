@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState, type FormEvent } from 'react'
 import { ArrowUp, ListChecks, MessageCircleQuestion, Shield } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { listPendingPermissions, useChatStore, type PendingPermission } from '../../stores/chatStore'
@@ -57,9 +58,16 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
   if (!current) return null
 
   const kind = kindOf(current)
+  const inputSupportsAllowAlways =
+    current.input && typeof current.input === 'object' && !Array.isArray(current.input)
+      ? (current.input as { supportsAllowAlways?: unknown }).supportsAllowAlways
+      : undefined
+  const allowAlways = current.supportsAllowAlways !== false && inputSupportsAllowAlways !== false
   const position = pending.length > 1 ? t('mobile.approval.position', { index: 1, total: pending.length }) : null
 
-  let Icon = PERMISSION_TOOL_ICONS[current.toolName] ?? Shield
+  let Icon = PERMISSION_TOOL_ICONS[current.toolName]
+    ?? (current.antigravityToolName ? PERMISSION_TOOL_ICONS[current.antigravityToolName] : undefined)
+    ?? Shield
   let title: string
   let detail = ''
   if (kind === 'question') {
@@ -71,9 +79,12 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
     title = t('permission.planReadyTitle')
     detail = current.description ?? ''
   } else {
-    title = getPermissionTitle(current.toolName, current.input, t, current.displayName)
+    title = getPermissionTitle(current.toolName, current.input, t, current.displayName, current.antigravityToolName)
     detail = extractToolDetails(current.toolName, current.input, t).primary || current.description || current.toolName
   }
+  const toolDescription = kind === 'tool' && current.description && current.description !== detail
+    ? current.description
+    : null
 
   const submitReason = (event: FormEvent) => {
     event.preventDefault()
@@ -97,14 +108,24 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 text-[var(--color-text-primary)]">{title}</h2>
+            {current.subagentName ? (
+              <Badge tone="info" size="xs" data-testid="mobile-approval-subagent-badge" className="shrink-0">
+                {t('permission.fromSubagent', { name: current.subagentName })}
+              </Badge>
+            ) : null}
             {position ? (
               <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-on-warning-container)]">{position}</span>
             ) : null}
           </div>
+          {toolDescription ? (
+            <p className="mt-0.5 truncate text-[12px] leading-[1.4] text-[var(--color-text-tertiary)]">
+              {toolDescription}
+            </p>
+          ) : null}
           {detail ? (
             <p
               className={`mt-0.5 line-clamp-2 break-words text-[12px] leading-[1.5] text-[var(--color-text-secondary)] ${
-                kind === 'tool' ? 'font-mono' : ''
+                kind === 'tool' && detail !== current.description ? 'font-mono' : ''
               }`}
             >
               {detail}
@@ -137,13 +158,15 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             <Button variant="ghost" size="md" onClick={() => setDetailOpen(true)}>
               {t('mobile.approval.viewDetails')}
             </Button>
-            <Button
-              variant="ghost"
-              size="md"
-              onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
-            >
-              {t('permission.allowForSession')}
-            </Button>
+            {allowAlways ? (
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
+              >
+                {t('permission.allowForSession')}
+              </Button>
+            ) : null}
           </div>
           {reasonOpen ? (
             <form onSubmit={submitReason} className="flex items-center gap-2">
@@ -202,6 +225,9 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             input={current.input}
             description={current.description}
             displayName={current.displayName}
+            antigravityToolName={current.antigravityToolName}
+            subagentName={current.subagentName}
+            supportsAllowAlways={current.supportsAllowAlways}
           />
         )}
       </MobileBottomSheet>

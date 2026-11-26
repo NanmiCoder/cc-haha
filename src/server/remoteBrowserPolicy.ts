@@ -1,5 +1,6 @@
 import type { RequestCompatibility, SavedProvider } from './types/provider.js'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS, normalizeAutoQuestionSettings } from '../shared/autoQuestionSettings.js'
+import { ANTIGRAVITY_PROVIDER_ID } from './services/antigravityAcp.js'
 
 export type ApiRequestContext = { remoteBrowser?: boolean; remoteDeviceId?: string; remoteDeviceExpiresAt?: number }
 // `nextPromptSuggestionsEnabled` is readable so a remote desktop-class browser,
@@ -21,6 +22,7 @@ export function replaceRemoteCompatibility(current: RequestCompatibility | undef
 export function remoteProviderRouteAllowed(parts: string[], method: string): boolean {
   const id = parts[2]
   if (!id) return method === 'GET' || method === 'POST'
+  if (id === ANTIGRAVITY_PROVIDER_ID) return parts.length === 4 && parts[3] === 'discover' && method === 'POST'
   if (parts.length === 3) {
     if (['presets', 'auth-status'].includes(id)) return method === 'GET'
     if (id === 'official') return method === 'POST'

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Alert, Pressable, View } from 'react-native'
 import type { ApiClient } from '../../core/client'
+import { ANTIGRAVITY_PROVIDER_ID } from '../../core/runtimeCatalog'
 import {
   difficultyLabel,
   suggestionDiffers,
@@ -22,6 +23,8 @@ import { RuntimeSheet } from '../RuntimePicker'
 import { Text } from '../Text'
 import { NoteInput, QuietButton } from '../decision/parts'
 import type { TeamPlanController } from './useTeamPlan'
+
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 type Provider = { id: string; name: string }
 
@@ -410,6 +413,7 @@ export function TeamPlanSheet({
                 : teamRuntimeConfig(plan.members[0]?.runtime ?? leader)
             }
             busy={locked}
+            excludeProviderIds={EXCLUDE_ANTIGRAVITY}
             onApply={(value) => {
               const runtime = teamRuntime(value)
               const target = picker

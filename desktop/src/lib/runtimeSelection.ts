@@ -1,5 +1,9 @@
 import { OFFICIAL_DEFAULT_MODEL_ID } from '../constants/modelCatalog'
 import {
+  ANTIGRAVITY_ACP_DEFAULT_EFFORTS,
+  ANTIGRAVITY_ACP_PROVIDER_ID,
+} from '../constants/antigravityAcp'
+import {
   OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
   OPENAI_OFFICIAL_MODELS,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -154,7 +158,8 @@ export function reconcileRuntimeSelection(
   const isOfficial = selection.providerId === null ||
     selection.providerId === OPENAI_OFFICIAL_PROVIDER_ID ||
     selection.providerId === GROK_OFFICIAL_PROVIDER_ID ||
-    selection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+    selection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID ||
+    selection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
   if (!provider && !isOfficial && context.hasLoadedProviders) {
     // Deleted/recreated providers must not carry their old model or effort into
     // the default provider. Use the same choice for rendering and transport.
@@ -193,6 +198,15 @@ export function normalizeRuntimeSelection(
     selection.providerId === null
   ) {
     return selection
+  }
+
+  if (selection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+    if (ANTIGRAVITY_ACP_DEFAULT_EFFORTS.includes(selection.effortLevel)) return selection
+    if (selection.effortLevel === 'max') {
+      return { ...selection, effortLevel: 'xhigh' }
+    }
+    const { effortLevel: _unsupportedEffort, ...runtime } = selection
+    return runtime
   }
 
   if (selection.providerId === GROK_OFFICIAL_PROVIDER_ID || selection.providerId === OPENAI_OFFICIAL_PROVIDER_ID) {

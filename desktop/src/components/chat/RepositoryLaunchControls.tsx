@@ -67,6 +67,8 @@ type Props = {
   branchAutomatic?: boolean
   /** Reports whether the branch now held is one chosen on its own, so a parent can keep `branchAutomatic`. */
   onBranchAutomaticChange?: (automatic: boolean) => void
+  /** False for engines that do not support isolated Git worktrees (e.g. Antigravity ACP). */
+  worktreeSupported?: boolean
 }
 
 export type RepositoryLaunchControlsHandle = {
@@ -187,7 +189,9 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   visible = true,
   branchAutomatic = false,
   onBranchAutomaticChange,
+  worktreeSupported = true,
 }, ref) {
+  const effectiveUseWorktree = worktreeSupported && useWorktree
   const t = useTranslation()
   const addToast = useUIStore((state) => state.addToast)
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
@@ -222,8 +226,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   latestWorkDirRef.current = workDir
   const latestBranchRef = useRef(branch)
   latestBranchRef.current = branch
-  const latestUseWorktreeRef = useRef(useWorktree)
-  latestUseWorktreeRef.current = useWorktree
+  const latestUseWorktreeRef = useRef(effectiveUseWorktree)
+  latestUseWorktreeRef.current = effectiveUseWorktree
   /**
    * The branch these controls last chose on their own. Only that one follows
    * the repository when it is read again; a branch the user picked or
@@ -436,10 +440,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
     // the checkout moved does not launch on the branch it used to be on.
     if (branchExists && branch !== automaticBranchRef.current) return
 
-    const fallbackBranch = automaticLaunchBranch(context, useWorktree)
+    const fallbackBranch = automaticLaunchBranch(context, effectiveUseWorktree)
     setAutomaticBranch(fallbackBranch)
     if (fallbackBranch !== branch) onBranchChange(fallbackBranch)
-  }, [branch, context, onBranchChange, setAutomaticBranch, useWorktree, workDir])
+  }, [branch, context, onBranchChange, setAutomaticBranch, effectiveUseWorktree, workDir])
 
   const closeMenu = useCallback(() => {
     setMenuOpen(false)
@@ -501,7 +505,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }, [branchFilter, context])
 
   const warning = useMemo(() => {
-    if (context?.state !== 'ok' || !selectedBranch || useWorktree) return null
+    if (context?.state !== 'ok' || !selectedBranch || effectiveUseWorktree) return null
     // A branch that points where HEAD already points cannot be blocked by
     // uncommitted changes — git only moves the ref, it rewrites nothing. That
     // is exactly the branch you just created off the one you are standing on,
@@ -689,7 +693,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       context.branches.length === 0 ||
       !!selectedBranch ||
       // Nothing to wait for: no branch is chosen for a detached HEAD.
-      launchesDetachedInPlace(context, useWorktree)
+      launchesDetachedInPlace(context, effectiveUseWorktree)
     )
   )
 
@@ -730,14 +734,14 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // default branch when none is chosen.
   const branchLabel = selectedBranch?.name ?? context?.currentBranch ?? (detachedCommit ? `HEAD ${detachedCommit}` : t('repoLaunch.noBranch'))
   const isolatedBaseLabel = selectedBranch?.name ?? (context?.state === 'ok' ? automaticLaunchBranch(context, true) : null) ?? t('repoLaunch.noBranch')
-  const worktreeLabel = useWorktree ? t('repoLaunch.worktreeIsolated') : t('repoLaunch.worktreeCurrent')
+  const worktreeLabel = effectiveUseWorktree ? t('repoLaunch.worktreeIsolated') : t('repoLaunch.worktreeCurrent')
   const summary = [repoLabel, branchPillName].filter(Boolean).join(' / ')
   const pillTitle = [
     workDir,
     selectedBranchName
       ? `${t('repoLaunch.branch')}: ${selectedBranchName}`
       : detachedCommit ? `${t('repoLaunch.detachedHead')}: ${detachedCommit}` : null,
-    useWorktree ? worktreeLabel : null,
+    effectiveUseWorktree ? worktreeLabel : null,
   ].filter(Boolean).join('\n')
 
   const branchSubtitle = selectedBranch
@@ -989,18 +993,18 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
         </button>
       )}
 
-      {isGitReady && (
+      {isGitReady && worktreeSupported && (
         <>
           <div className="mx-1 my-1 h-px bg-[var(--color-border-separator)]" />
           <button
             type="button"
             role="menuitemradio"
-            aria-checked={!useWorktree}
+            aria-checked={!effectiveUseWorktree}
             aria-labelledby={worktreeCurrentLabelId}
             onClick={() => selectWorktreeMode(false)}
-            className={worktreeCardClassName(!useWorktree)}
+            className={worktreeCardClassName(!effectiveUseWorktree)}
           >
-            <WorktreeRadio selected={!useWorktree} />
+            <WorktreeRadio selected={!effectiveUseWorktree} />
             <span className="min-w-0 flex-1">
               <span id={worktreeCurrentLabelId} className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('repoLaunch.worktreeCurrent')}
@@ -1014,12 +1018,12 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
           <button
             type="button"
             role="menuitemradio"
-            aria-checked={useWorktree}
+            aria-checked={effectiveUseWorktree}
             aria-labelledby={worktreeIsolatedLabelId}
             onClick={() => selectWorktreeMode(true)}
-            className={worktreeCardClassName(useWorktree)}
+            className={worktreeCardClassName(effectiveUseWorktree)}
           >
-            <WorktreeRadio selected={useWorktree} />
+            <WorktreeRadio selected={effectiveUseWorktree} />
             <span className="min-w-0 flex-1">
               <span id={worktreeIsolatedLabelId} className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('repoLaunch.worktreeIsolated')}
@@ -1096,7 +1100,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
         </>
       )}
 
-      {useWorktree && isGitReady && (
+      {effectiveUseWorktree && isGitReady && (
         <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)]">
           <GitFork size={12} strokeWidth={2} aria-hidden="true" />
           {t('repoLaunch.worktreeBadge')}

@@ -132,4 +132,42 @@ describe('SidebarSessionCard', () => {
     expect(screen.getByLabelText('Waiting for your approval')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument()
   })
+
+  it('shows a subtle Antigravity badge only on antigravity-acp sessions', () => {
+    const { rerender } = render(
+      <div className="group/session-row relative mb-px">
+        <SidebarSessionCard
+          session={makeSession({ runtimeProviderId: null })}
+          variant="project"
+          isActive={false}
+          isSelected={false}
+          isRunning={false}
+          needsAttention={false}
+          isBatchMode={false}
+          onClick={vi.fn()}
+          onContextMenu={vi.fn()}
+          t={t}
+        />
+      </div>,
+    )
+    expect(screen.queryByTestId('sidebar-antigravity-badge')).not.toBeInTheDocument()
+
+    rerender(
+      <div className="group/session-row relative mb-px">
+        <SidebarSessionCard
+          session={makeSession({ runtimeProviderId: 'antigravity-acp' })}
+          variant="project"
+          isActive={false}
+          isSelected={false}
+          isRunning={false}
+          needsAttention={false}
+          isBatchMode={false}
+          onClick={vi.fn()}
+          onContextMenu={vi.fn()}
+          t={t}
+        />
+      </div>,
+    )
+    expect(screen.getByTestId('sidebar-antigravity-badge')).toBeInTheDocument()
+  })
 })

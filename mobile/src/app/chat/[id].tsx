@@ -20,6 +20,11 @@ import {
   type ComposerAttachment,
 } from '../../core/chatComposer'
 import { notificationPermissionResponse, runtimeMatches } from '../../core/chatActions'
+import {
+  ANTIGRAVITY_PERMISSION_MODES,
+  ANTIGRAVITY_PROVIDER_ID,
+  isAntigravityProvider,
+} from '../../core/runtimeCatalog'
 import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
 import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
 import { sessionHistory } from '../../core/historyCache'
@@ -124,6 +129,7 @@ type RewindPreview = {
 }
 /** 离最新处（倒置列表的起点）不到这么远就算停在最新处。 */
 const LATEST_SLOP = 120
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 const toggle = (set: ReadonlySet<string>, key: string) => {
   const next = new Set(set)
@@ -514,6 +520,11 @@ function ChatSession({
           effortLevel: session.effortLevel,
         }
       : undefined)
+  const isAntigravity = isAntigravityProvider(
+    runtime?.providerId ?? session?.runtimeProviderId
+  )
+  const teamOn = team && !lean
+  if (lean && team) setTeam(false)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
   const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
   const permissionMode = state.permissionMode ?? session?.permissionMode
@@ -838,7 +849,12 @@ function ChatSession({
   function submit(): boolean {
     if (workspaceMissing) return false
     try {
-      const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
+      const message = buildComposerMessage(
+        serializeComposer(draft, isAntigravity ? [] : references),
+        attachments,
+        teamOn,
+        { antigravity: isAntigravity }
+      )
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
         if (approval) return false
@@ -848,7 +864,7 @@ function ChatSession({
             id: `queued-${++queueSeq.current}`,
             text: draft.trim(),
             attachments,
-            team,
+            team: teamOn,
             references,
             message,
           },
@@ -1301,14 +1317,16 @@ function ChatSession({
         group: true,
         label: '编辑后重新发送',
         icon: 'pencil',
-        detail: busy
-          ? '这一轮结束后才能用'
-          : !persisted
-            ? '等电脑保存这条消息后可用'
-            : item.editableText === undefined
-              ? '带材料的消息请复制文字后重新添加材料'
-              : '回退到这条消息，电脑上的文件不动',
-        disabled: busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
+        detail: isAntigravity
+          ? 'Antigravity 暂不支持回退编辑'
+          : busy
+            ? '这一轮结束后才能用'
+            : !persisted
+              ? '等电脑保存这条消息后可用'
+              : item.editableText === undefined
+                ? '带材料的消息请复制文字后重新添加材料'
+                : '回退到这条消息，电脑上的文件不动',
+        disabled: isAntigravity || busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
         busy: menuBusy === 'edit',
       })
     actions.push({
@@ -1316,12 +1334,14 @@ function ChatSession({
       group: item.type !== 'user',
       label: '从这里分叉',
       icon: 'git-fork',
-      detail: lean
-        ? '轻量档位不支持分叉'
-        : !persisted
-          ? '等电脑保存这条消息后可用'
-          : '保留到这条，另开一段新会话',
-      disabled: lean || !persisted || working || menuBusy === 'edit',
+      detail: isAntigravity
+        ? 'Antigravity 暂不支持分叉'
+        : lean
+          ? '轻量档位不支持分叉'
+          : !persisted
+            ? '等电脑保存这条消息后可用'
+            : '保留到这条，另开一段新会话',
+      disabled: isAntigravity || lean || !persisted || working || menuBusy === 'edit',
       busy: menuBusy === 'fork',
     })
     return actions
@@ -1562,7 +1582,7 @@ function ChatSession({
               setAttachments(value)
               setError('')
             }}
-            team={team}
+            team={teamOn}
             onTeam={setTeam}
             computer={computer}
             lean={lean}
@@ -1763,6 +1783,9 @@ function ChatSession({
         }
         error={sheetError}
         workDir={session?.workDir ?? undefined}
+        lockedProviderId={isAntigravity ? ANTIGRAVITY_PROVIDER_ID : undefined}
+        excludeProviderIds={isAntigravity ? undefined : EXCLUDE_ANTIGRAVITY}
+        allowedModes={isAntigravity ? ANTIGRAVITY_PERMISSION_MODES : undefined}
       />
       <SelectTextSheet
         visible={panel === 'select'}

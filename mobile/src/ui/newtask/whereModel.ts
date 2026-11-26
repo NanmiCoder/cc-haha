@@ -29,19 +29,23 @@ export function wherePageModel({
   branch,
   worktree,
   query,
+  worktreeSupported = true,
 }: {
   repo: RepositoryContext | null
   path: string
   branch: string | null
   worktree: boolean
   query: string
+  /** Antigravity sessions do not support git worktree launch. */
+  worktreeSupported?: boolean
 }) {
+  const effectiveWorktree = worktreeSupported && worktree
   const reason = gitUnavailableReason(repo, path)
   const ok = repo?.state === 'ok'
   const noCommits = ok && repo.headCommit === null
   const short = ok && repo.headCommit ? repo.headCommit.slice(0, 7) : null
   const base = worktreeBase(repo, null)
-  const rows = gitBranchOptions(repo, query, worktree).map((option) => ({
+  const rows = gitBranchOptions(repo, query, effectiveWorktree).map((option) => ({
     name: option.name,
     current: option.current,
     selected: branch === option.name,
@@ -56,23 +60,26 @@ export function wherePageModel({
     /** 非 Git 目录整块隐藏分支与工作树；其余不可用原因（读取中、出错）显示说明。 */
     gitHidden: repo?.state === 'not_git_repo',
     follow: {
-      title: worktree ? '使用默认起始分支' : '沿用电脑当前提交',
-      detail: worktree
+      title: effectiveWorktree ? '使用默认起始分支' : '沿用电脑当前提交',
+      detail: effectiveWorktree
         ? `新工作树基于 ${base ?? '可用分支'}`
         : ['不切分支，停在电脑现在的位置', short].filter(Boolean).join(' · '),
       selected: !branch,
     },
     rows,
     noMatch: Boolean(query.trim()) && ok && rows.length === 0,
-    warning: gitLaunchWarning(repo, branch, worktree),
+    warning: gitLaunchWarning(repo, branch, effectiveWorktree),
     worktree: {
-      on: worktree && !noCommits,
-      disabled: noCommits,
-      detail: noCommits
-        ? '仓库还没有提交，暂时无法创建工作树'
-        : worktree
-          ? `发送时基于 ${worktreeBase(repo, branch) ?? '所选分支'} 创建独立目录`
-          : '在独立目录工作，保留电脑当前的改动',
+      hidden: !worktreeSupported,
+      on: effectiveWorktree && !noCommits,
+      disabled: !worktreeSupported || noCommits,
+      detail: !worktreeSupported
+        ? 'Antigravity 会话暂不支持新开工作树'
+        : noCommits
+          ? '仓库还没有提交，暂时无法创建工作树'
+          : effectiveWorktree
+            ? `发送时基于 ${worktreeBase(repo, branch) ?? '所选分支'} 创建独立目录`
+            : '在独立目录工作，保留电脑当前的改动',
     },
   }
 }

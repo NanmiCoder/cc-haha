@@ -3,14 +3,23 @@
  */
 export type ToolKind = 'command' | 'edit' | 'write' | 'web' | 'read' | 'other'
 
-const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit'])
+const EDIT_TOOLS = new Set([
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'edit_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+])
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
 
 export function toolKind(toolName: string): ToolKind {
-  if (toolName === 'Bash' || toolName === 'PowerShell') return 'command'
+  if (toolName === 'Bash' || toolName === 'PowerShell' || toolName === 'run_command')
+    return 'command'
   if (EDIT_TOOLS.has(toolName)) return 'edit'
   // Write 可能新建也可能覆盖已有文件，协议里没有区分。
-  if (toolName === 'Write') return 'write'
+  if (toolName === 'Write' || toolName === 'write_file' || toolName === 'write_to_file')
+    return 'write'
   if (toolName === 'WebFetch' || toolName === 'WebSearch') return 'web'
   if (READ_TOOLS.has(toolName)) return 'read'
   return 'other'
@@ -101,11 +110,14 @@ export function approvalSubject(
   input: Record<string, unknown>
 ): { text: string; prompt?: string } {
   const kind = toolKind(toolName)
-  if (kind === 'command' && text(input.command))
-    return { text: String(input.command), prompt: '$ ' }
+  if (kind === 'command' && (text(input.command) ?? text(input.CommandLine)))
+    return { text: String(input.command ?? input.CommandLine), prompt: '$ ' }
   const value =
     kind === 'edit' || kind === 'write'
-      ? (text(input.file_path) ?? text(input.notebook_path))
+      ? (text(input.file_path) ??
+        text(input.Path) ??
+        text(input.TargetFile) ??
+        text(input.notebook_path))
       : kind === 'web'
         ? (text(input.url) ?? text(input.query))
         : kind === 'read'

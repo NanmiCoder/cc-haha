@@ -95,6 +95,11 @@ export type CreateSessionRequest = {
   workDir?: string
   repository?: CreateSessionRepositoryOptions
   permissionMode?: PermissionMode
+  /** For creation-time compatibility checks and runtime engine binding. */
+  launchProviderId?: string
+  providerId?: string
+  modelId?: string
+  effortLevel?: string
 }
 export type BranchSessionRequest = {
   targetMessageId: string

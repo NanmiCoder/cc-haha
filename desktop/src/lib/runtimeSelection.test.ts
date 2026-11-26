@@ -256,3 +256,33 @@ describe('built-in DeepSeek Account runtime selection', () => {
       .toEqual({ providerId: 'deepseek-account', modelId: 'deepseek-flash[1m]' })
   })
 })
+
+describe('built-in Antigravity ACP runtime selection', () => {
+  const saved: SavedProvider = {
+    id: 'saved', name: 'Saved', presetId: 'custom', apiKey: 'fixture',
+    baseUrl: 'http://127.0.0.1:9999', apiFormat: 'anthropic',
+    models: { main: 'saved-main', haiku: '', sonnet: '', opus: '' },
+  }
+
+  it('keeps an Antigravity ACP selection during provider reconciliation', () => {
+    const selection = { providerId: 'antigravity-acp', modelId: 'gemini-3.8-pro', effortLevel: 'high' as const }
+    const context = { activeId: saved.id, providers: [saved], hasLoadedProviders: true }
+    expect(reconcileRuntimeSelection(selection, context)).toBe(selection)
+  })
+
+  it('preserves supported Antigravity thinking levels and maps max to xhigh', () => {
+    for (const effortLevel of ['low', 'medium', 'high', 'xhigh'] as const) {
+      const selection = { providerId: 'antigravity-acp', modelId: 'gemini-3.8-pro', effortLevel }
+      expect(normalizeRuntimeSelection(selection)).toBe(selection)
+    }
+    expect(normalizeRuntimeSelection({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'max',
+    })).toEqual({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'xhigh',
+    })
+  })
+})

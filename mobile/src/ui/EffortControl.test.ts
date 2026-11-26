@@ -40,3 +40,60 @@ test('effort control distinguishes unavailable sources and applies only effort t
   `
   expect(() => execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })).not.toThrow()
 })
+
+test('EffortControl and EffortSheet wire Antigravity refresh button to refreshAntigravity instead of cached reload', () => {
+  const script = `
+    import { mock } from 'bun:test'
+    import assert from 'node:assert/strict'
+    const React = require(${JSON.stringify(import.meta.resolve('react'))})
+    mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({ ...React, default: React, useState: (value) => [value, () => {}] }))
+    mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({ Pressable: 'Pressable', View: 'View' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({ Callout:'Callout', InlineError:'InlineError', Loading:'Loading', Sheet:'Sheet', TextButton:'TextButton', useColors:()=>({}) }))
+    mock.module(${JSON.stringify(import.meta.resolve('./newtask/ChoiceRow'))}, () => ({ ChoiceRow:'ChoiceRow' }))
+    let reloads = 0, refreshes = 0
+    const choice = {
+      directory: { sources: [] },
+      providerId: 'antigravity-acp',
+      source: { id: 'antigravity-acp', auth: 'missing', runtimeStatus: 'login_required' },
+      loading: false,
+      refreshingAntigravity: false,
+      catalogReady: true,
+      canSetEffort: true,
+      models: [],
+      reload() { reloads++ },
+      async refreshAntigravity() { refreshes++ },
+    }
+    mock.module(${JSON.stringify(import.meta.resolve('./RuntimePicker'))}, () => ({ useRuntimeChoice: () => choice }))
+    const { EffortControl, EffortSheet } = require(${JSON.stringify(import.meta.resolve('./EffortControl'))})
+    const runtime = { providerId: 'antigravity-acp', modelId: 'agent-default', effortLevel: 'high' }
+    function all(root, type) {
+      if (!root || typeof root !== 'object') return []
+      return [...(root.type === type ? [root] : []), ...[root.props?.children].flat(Infinity).flatMap(child => all(child, type))]
+    }
+    for (const [status, auth] of [['login_required', 'missing'], ['error', 'error'], ['unchecked', 'ready'], ['ready', 'ready']]) {
+      choice.source = { id: 'antigravity-acp', auth, runtimeStatus: status }
+      const before = refreshes
+      const controlBtn = all(EffortControl({ client: {}, runtime, onApply: () => {} }), 'TextButton')[0]
+      assert.equal(controlBtn.props.title, '重新读取')
+      controlBtn.props.onPress()
+      assert.equal(refreshes, before + 1, 'EffortControl must call refreshAntigravity for ' + status)
+      const sheetBtn = all(EffortSheet({ visible: true, onClose: () => {}, client: {}, runtime, onApply: () => {} }), 'TextButton')[0]
+      assert.equal(sheetBtn.props.title, '重新读取')
+      sheetBtn.props.onPress()
+      assert.equal(refreshes, before + 2, 'EffortSheet must call refreshAntigravity for ' + status)
+    }
+    assert.equal(reloads, 0, 'Antigravity refresh must not call cached reload when directory is present')
+
+    // Falls back to reload when directory failed to load (null) or for non-Antigravity providers
+    choice.directory = null
+    all(EffortSheet({ visible: true, onClose: () => {}, client: {}, runtime, onApply: () => {} }), 'TextButton')[0].props.onPress()
+    assert.equal(reloads, 1)
+    choice.directory = { sources: [] }
+    choice.providerId = 'openai-official'
+    choice.source = { id: 'openai-official', auth: 'missing' }
+    all(EffortControl({ client: {}, runtime: { providerId: 'openai-official', modelId: 'o3' }, onApply: () => {} }), 'TextButton')[0].props.onPress()
+    assert.equal(reloads, 2)
+  `
+  expect(() => execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })).not.toThrow()
+})

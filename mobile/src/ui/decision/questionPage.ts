@@ -6,22 +6,29 @@ import {
   type QuestionFlow,
 } from './questionFlow'
 
+export type QuestionPageState = {
+  ready: boolean
+  sent: boolean
+  allowFreeText?: boolean
+}
+
 /** 分步页每一屏需要的派生状态：标题、进度、提示、按钮文案与可用性。 */
 export function questionPageModel(
   flow: QuestionFlow,
   questions: Question[],
-  state: { ready: boolean; sent: boolean }
+  state: QuestionPageState
 ) {
+  const allowFreeText = state.allowFreeText !== false
   const total = questions.length
   const index = Math.min(Math.max(0, flow.index), Math.max(0, total - 1))
   const current = questions[index]
-  const values = questionFlowValues(flow, questions)
+  const values = questionFlowValues(flow, questions, allowFreeText)
   const answered = Boolean(current && values[current.question])
   const last = index >= total - 1
-  const customActive = Boolean(current && flow.custom[current.question]?.trim())
+  const customActive = allowFreeText && Boolean(current && flow.custom[current.question]?.trim())
   const picked = !current ? 0 : customActive ? 1 : (flow.answers[current.question]?.length ?? 0)
   const multiple = Boolean(current?.multiSelect)
-  const complete = canSubmitQuestions(flow, questions, state.ready)
+  const complete = canSubmitQuestions(flow, questions, state.ready, allowFreeText)
   return {
     index,
     total,
@@ -29,6 +36,7 @@ export function questionPageModel(
     last,
     multiple,
     answered,
+    allowFreeText,
     customActive,
     /** “2/3”；只有一道题时不显示进度。 */
     position: total > 1 ? `${index + 1}/${total}` : null,
@@ -39,7 +47,7 @@ export function questionPageModel(
     canBack: index > 0 && !state.sent,
     primaryLabel: last ? '提交' : '下一题',
     primaryEnabled: !state.sent && state.ready && answered && (!last || complete),
-    discussEnabled: state.ready && !state.sent,
+    discussEnabled: allowFreeText && state.ready && !state.sent,
   }
 }
 
@@ -47,12 +55,12 @@ export function questionPageModel(
 export function primaryQuestionStep(
   flow: QuestionFlow,
   questions: Question[],
-  state: { ready: boolean; sent: boolean }
+  state: QuestionPageState
 ): { type: 'open'; index: number } | { type: 'submit'; answers: Record<string, string> } | null {
   const model = questionPageModel(flow, questions, state)
   if (!model.primaryEnabled) return null
   return model.last
-    ? { type: 'submit', answers: questionFlowValues(flow, questions) }
+    ? { type: 'submit', answers: questionFlowValues(flow, questions, model.allowFreeText) }
     : { type: 'open', index: model.index + 1 }
 }
 
@@ -60,7 +68,7 @@ export function primaryQuestionStep(
 export function backQuestionStep(
   flow: QuestionFlow,
   questions: Question[],
-  state: { ready: boolean; sent: boolean }
+  state: QuestionPageState
 ): QuestionAction | null {
   const model = questionPageModel(flow, questions, state)
   return model.canBack ? { type: 'open', index: model.index - 1 } : null

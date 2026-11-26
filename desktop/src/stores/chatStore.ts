@@ -24,6 +24,7 @@ import { useUIStore } from './uiStore'
 import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import { ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
@@ -152,6 +153,9 @@ export type PendingPermission = {
   input: unknown
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
   planRuntimeSubmission?: {
     previousSelection?: RuntimeSelection
     stagedSelection?: RuntimeSelection
@@ -394,9 +398,13 @@ function hasPendingPermissionRequests(session: PerSessionState): boolean {
 }
 
 function isDelegatedPermissionRequest(
-  permission: Pick<PendingPermission, 'displayName'>,
+  permission: Pick<PendingPermission, 'displayName' | 'antigravityToolName' | 'subagentName'>,
 ): boolean {
-  return Boolean(permission.displayName?.trim())
+  if (permission.subagentName?.trim()) return true
+  const displayName = permission.displayName?.trim()
+  if (!displayName) return false
+  if (displayName === 'Antigravity') return false
+  return true
 }
 
 function hasOnlyDelegatedPendingPermissions(
@@ -3867,17 +3875,38 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const reconciled = reconcileProviderRuntimeSelection(sessionId, selection)
       if (reconciled !== selection) get().setSessionRuntime(sessionId, selection)
     } else {
-      const providers = useProviderStore.getState()
-      const settings = useSettingsStore.getState()
-      const configuredDefault = resolveActiveProviderRuntimeSelection(
-        providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id,
-      )
-      if (configuredDefault) {
-        const defaultSelection = reconcileProviderRuntimeSelection(sessionId, {
-          ...configuredDefault, effortLevel: settings.effortLevel,
+      const knownSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
+      if (knownSession?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+        const antigravity = useProviderStore.getState().antigravity
+        const modelId = knownSession.runtimeModelId
+          ?? antigravity?.currentModelId
+          ?? antigravity?.models[0]?.id
+          ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+        const matchedModel = antigravity?.models.find((model) => model.id === modelId)
+        const supportedEfforts = matchedModel?.supportedReasoningEfforts
+        const rawEffort = knownSession.effortLevel ?? antigravity?.currentEffortLevel
+        const effortLevel = Array.isArray(supportedEfforts)
+          ? (rawEffort && supportedEfforts.includes(rawEffort) ? rawEffort : matchedModel?.defaultReasoningEffort)
+          : rawEffort
+        const antigravitySelection = reconcileProviderRuntimeSelection(sessionId, {
+          providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+          modelId,
+          ...(effortLevel ? { effortLevel } : {}),
         })
-        useSessionRuntimeStore.getState().setSelection(sessionId, defaultSelection)
-        get().setSessionRuntime(sessionId, defaultSelection)
+        useSessionRuntimeStore.getState().setSelection(sessionId, antigravitySelection)
+      } else {
+        const providers = useProviderStore.getState()
+        const settings = useSettingsStore.getState()
+        const configuredDefault = resolveActiveProviderRuntimeSelection(
+          providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id,
+        )
+        if (configuredDefault) {
+          const defaultSelection = reconcileProviderRuntimeSelection(sessionId, {
+            ...configuredDefault, effortLevel: settings.effortLevel,
+          })
+          useSessionRuntimeStore.getState().setSelection(sessionId, defaultSelection)
+          get().setSessionRuntime(sessionId, defaultSelection)
+        }
       }
     }
     wsManager.send(sessionId, outgoing)
@@ -5933,6 +5962,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             input: msg.input,
             description: msg.description,
             ...(msg.displayName ? { displayName: msg.displayName } : {}),
+            ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+            ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+            ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
           }
           const pendingPermissions = {
             ...getPendingPermissionRecord(s),
@@ -5985,6 +6017,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     input: msg.input,
                     description: msg.description,
                     ...(msg.displayName ? { displayName: msg.displayName } : {}),
+                    ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+                    ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+                    ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
                     timestamp: Date.now(),
                   }],
           }

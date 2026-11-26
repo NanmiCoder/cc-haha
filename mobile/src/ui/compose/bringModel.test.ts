@@ -391,6 +391,22 @@ describe('assembling every source', () => {
     expect(bringEntries(lean).flat().map((entry) => entry.group)).toEqual(['skill', 'command'])
   })
 
+  test('Antigravity isolates Claude skills, connectors, agents and workflows and exposes slash commands only', () => {
+    const ag = assembleBringItems({
+      candidates,
+      lean: false,
+      antigravity: true,
+      extras: {
+        connectors,
+        agents: [{ agentType: 'reviewer', description: '审代码' }],
+        workflows: [{ name: 'ship', description: '发版' }],
+      },
+    })
+    expect(new Set(ag.map((item) => item.group))).toEqual(new Set(['command']))
+    expect(ag.map((item) => item.key)).toEqual(['command:review', 'command:security-review', 'command:compact'])
+    expect(bringEntries(ag, { connector: false, agent: false, workflow: false }).flat().map((entry) => entry.group)).toEqual(['command'])
+  })
+
   test('search finds connectors (including suggestions), agents and workflows, grouped in order', () => {
     const searchable = assembleBringItems({
       candidates,

@@ -21,6 +21,8 @@ import { useCLITaskStore } from '../../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { StatusDot } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -124,6 +126,14 @@ export function TabBar() {
     () => tabs.filter((tab) => isSessionTab(tab)).map((tab) => tab.sessionId),
     [tabs],
   )
+  const antigravitySessionIds = useSessionStore(useShallow((state) =>
+    sessionTabIds.filter((sessionId) =>
+      state.sessions.some((session) =>
+        session.id === sessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID,
+      ),
+    ),
+  ))
+  const antigravitySessionSet = useMemo(() => new Set(antigravitySessionIds), [antigravitySessionIds])
   const activeChatSessionIds = useChatStore(useShallow((s) =>
     sessionTabIds.filter((sessionId) => {
       const sessionState = s.sessions[sessionId]
@@ -648,6 +658,8 @@ export function TabBar() {
               closeLabel={t('tabs.closeTab', { title: displayTitle })}
               isRunning={runningSessionIds.has(tab.sessionId)}
               needsAttention={attentionSet.has(tab.sessionId)}
+              isAntigravity={antigravitySessionSet.has(tab.sessionId)}
+              antigravityLabel={t('settings.providers.antigravity.name')}
               isActive={tab.sessionId === activeTabId}
               isDragOver={dragOverIndex === index}
               isDragging={tab.sessionId === draggingSessionId}
@@ -838,6 +850,8 @@ const TabItem = forwardRef<HTMLDivElement, {
   closeLabel: string
   isRunning: boolean
   needsAttention: boolean
+  isAntigravity: boolean
+  antigravityLabel: string
   isActive: boolean
   isDragOver: boolean
   isDragging: boolean
@@ -848,7 +862,7 @@ const TabItem = forwardRef<HTMLDivElement, {
   onClose: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onMouseDown: (event: React.MouseEvent) => void
-}>(({ tab, displayTitle, closeLabel, isRunning, needsAttention, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, attentionLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
+}>(({ tab, displayTitle, closeLabel, isRunning, needsAttention, isAntigravity, antigravityLabel, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, attentionLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
   // Chat tabs carry no glyph at all; the dot only appears when there is
   // something to say. Everything else identifies its section with one.
   //
@@ -894,6 +908,16 @@ const TabItem = forwardRef<HTMLDivElement, {
       <span className={`min-w-0 flex-1 truncate text-[12px] tabular-nums ${isActive ? 'font-medium' : ''}`}>
         {displayTitle}
       </span>
+
+      {isAntigravity && (
+        <span
+          data-testid="tab-antigravity-badge"
+          title={antigravityLabel}
+          className="ml-1 inline-flex shrink-0 items-center text-[var(--color-text-tertiary)]"
+        >
+          <ModelBrandIcon providerId={ANTIGRAVITY_ACP_PROVIDER_ID} size={12} />
+        </span>
+      )}
 
       <span className={`ml-1.5 flex-shrink-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
         <IconButton

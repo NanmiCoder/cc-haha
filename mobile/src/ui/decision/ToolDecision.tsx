@@ -12,6 +12,10 @@ import {
 } from '../kit'
 import { Text } from '../Text'
 import {
+  permissionSubagentName,
+  permissionSupportsAllowAlways,
+} from '../approvalData'
+import {
   appendSuggestion,
   approvalDescription,
   approvalSubject,
@@ -67,8 +71,25 @@ export function ToolDecision({
   const [note, setNote] = useState('')
   const [remember, setRemember] = useState(false)
   const toolName = request.toolName
+  const subagentName = permissionSubagentName(request, input)
+  const canRemember = permissionSupportsAllowAlways(request, input)
   const locked = !ready || sent
   const change = isFileChange(toolName) ? fileChange(toolName, input) : null
+  const attribution = subagentName ? (
+    <View
+      style={{
+        borderRadius: 6,
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        backgroundColor: colors.fill,
+        maxWidth: 160,
+      }}
+    >
+      <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 16, color: colors.ink2 }}>
+        来自 {subagentName}
+      </Text>
+    </View>
+  ) : undefined
 
   const stop = onStop ? (
     <QuietButton title="停止整个任务" onPress={onStop} />
@@ -78,9 +99,12 @@ export function ToolDecision({
     return (
       <DecisionSurface label="拒绝并说明">
         <View style={{ gap: 4 }}>
-          <Text accessibilityRole="header" style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink }}>
-            {denyTitle(toolName)}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text accessibilityRole="header" style={{ flex: 1, fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink }}>
+              {denyTitle(toolName)}
+            </Text>
+            {attribution}
+          </View>
           <Mono numberOfLines={1} style={{ fontSize: 12.5, lineHeight: 17, color: colors.ink3 }}>
             {denySummary(toolName, input)}
           </Mono>
@@ -149,7 +173,7 @@ export function ToolDecision({
         style={{ flex: 1 }}
         disabled={!ready}
         onPress={() =>
-          respond({ allowed: true, remember })
+          respond({ allowed: true, remember: canRemember && remember })
         }
       />
     </View>
@@ -158,7 +182,7 @@ export function ToolDecision({
   if (change)
     return (
       <DecisionSurface label="审批" style={{ height: Math.max(360, height - 196) }}>
-        <DecisionHeader title={approvalTitle(toolName)} position={position} />
+        <DecisionHeader title={approvalTitle(toolName)} position={position} right={attribution} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {/* 相对项目目录显示；仍放不下就从头部省略，文件名永远看得见。 */}
           <Mono
@@ -185,14 +209,16 @@ export function ToolDecision({
             <DiffView lines={change.lines} numbers="single" />
           </ScrollView>
         </View>
-        <Checkbox
-          checked={remember}
-          onChange={setRemember}
-          disabled={locked}
-          accessibilityLabel={rememberLabel(toolName)}
-        >
-          {rememberLabel(toolName)}
-        </Checkbox>
+        {canRemember ? (
+          <Checkbox
+            checked={remember}
+            onChange={setRemember}
+            disabled={locked}
+            accessibilityLabel={rememberLabel(toolName)}
+          >
+            {rememberLabel(toolName)}
+          </Checkbox>
+        ) : null}
         {decide}
         {sent ? null : stop}
       </DecisionSurface>
@@ -203,7 +229,7 @@ export function ToolDecision({
   const command = toolKind(toolName) === 'command'
   return (
     <DecisionSurface label="审批">
-      <DecisionHeader title={approvalTitle(toolName)} position={position} />
+      <DecisionHeader title={approvalTitle(toolName)} position={position} right={attribution} />
       {description ? (
         <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>{description}</Text>
       ) : null}
@@ -215,16 +241,18 @@ export function ToolDecision({
           {subject.text}
         </CodeBlock>
       </ScrollView>
-      <Checkbox
-        checked={remember}
-        onChange={setRemember}
-        disabled={locked}
-        accessibilityLabel={
-          rememberLabel(toolName)
-        }
-      >
-        {rememberLabel(toolName)}
-      </Checkbox>
+      {canRemember ? (
+        <Checkbox
+          checked={remember}
+          onChange={setRemember}
+          disabled={locked}
+          accessibilityLabel={
+            rememberLabel(toolName)
+          }
+        >
+          {rememberLabel(toolName)}
+        </Checkbox>
+      ) : null}
       {decide}
       {sent ? null : stop}
     </DecisionSurface>

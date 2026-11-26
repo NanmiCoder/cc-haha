@@ -2,7 +2,11 @@ import { useState, type ReactNode } from 'react'
 import { Pressable, View } from 'react-native'
 import type { ApiClient } from '../core/client'
 import type { RuntimeConfig } from '../core/types'
-import { currentModelEfforts, effortUnavailableReason } from '../core/runtimeCatalog'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  currentModelEfforts,
+  effortUnavailableReason,
+} from '../core/runtimeCatalog'
 import { useRuntimeChoice } from './RuntimePicker'
 import { Callout, InlineError, Loading, Sheet, TextButton, useColors } from './kit'
 import { ChoiceRow } from './newtask/ChoiceRow'
@@ -38,15 +42,34 @@ export function EffortSheet({
     if (visible) setEpoch(epoch + 1)
   }
   const choice = useRuntimeChoice({ client, initial: runtime, defaultScope, active: visible, epoch })
+  const isAntigravity =
+    runtime?.providerId === ANTIGRAVITY_PROVIDER_ID ||
+    choice.providerId === ANTIGRAVITY_PROVIDER_ID
   const current =
     runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
   const options = choice.canSetEffort ? (current?.efforts ?? []) : []
-  const waiting = choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready')
+  const authReady =
+    choice.source?.auth === 'ready' && choice.source?.runtimeStatus !== 'unchecked'
+  const waiting =
+    choice.loading ||
+    Boolean(choice.refreshingAntigravity) ||
+    (!choice.catalogReady && !choice.error && authReady)
   const reason = effortUnavailableReason(choice)
+  const refresh = () => {
+    if (
+      isAntigravity &&
+      typeof choice.refreshAntigravity === 'function' &&
+      choice.directory !== null
+    ) {
+      void choice.refreshAntigravity()
+      return
+    }
+    choice.reload()
+  }
   return (
     <Sheet inline={inline} visible={visible} onClose={onClose} title="思考强度">
       <InlineError text={choice.error} />
-      {waiting ? <Loading /> : options.length && choice.source?.auth === 'ready' ? (
+      {waiting ? <Loading /> : options.length && authReady ? (
         <View>
           {options.map((value) => (
             <ChoiceRow
@@ -55,7 +78,7 @@ export function EffortSheet({
               selected={value === (runtime?.effortLevel ?? current?.defaultEffort)}
               disabled={disabled}
               onPress={() => {
-                if (!runtime || choice.source?.auth !== 'ready') return
+                if (!runtime || !authReady) return
                 // 只换强度，模型 id 原样带回。
                 onApply({ ...runtime, effortLevel: value })
                 onClose()
@@ -67,7 +90,11 @@ export function EffortSheet({
         <Callout>{reason}</Callout>
       )}
       {warning ? <Callout>{warning}</Callout> : null}
-      <TextButton title="重新读取" disabled={waiting || disabled} onPress={choice.reload} />
+      <TextButton
+        title={isAntigravity && choice.refreshingAntigravity ? '正在刷新…' : '重新读取'}
+        disabled={waiting || disabled}
+        onPress={refresh}
+      />
     </Sheet>
   )
 }
@@ -89,12 +116,31 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
   const [open, setOpen] = useState(false)
   const [epoch, setEpoch] = useState(0)
   const choice = useRuntimeChoice({ client, initial: runtime, defaultScope, active: !onOpen && open, epoch })
+  const isAntigravity =
+    runtime?.providerId === ANTIGRAVITY_PROVIDER_ID ||
+    choice.providerId === ANTIGRAVITY_PROVIDER_ID
   const current =
     runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
   const options = choice.canSetEffort ? (current?.efforts ?? []) : []
   const unavailable = disabled || !client || !runtime
-  const waiting = choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready')
+  const authReady =
+    choice.source?.auth === 'ready' && choice.source?.runtimeStatus !== 'unchecked'
+  const waiting =
+    choice.loading ||
+    Boolean(choice.refreshingAntigravity) ||
+    (!choice.catalogReady && !choice.error && authReady)
   const reason = effortUnavailableReason(choice)
+  const refresh = () => {
+    if (
+      isAntigravity &&
+      typeof choice.refreshAntigravity === 'function' &&
+      choice.directory !== null
+    ) {
+      void choice.refreshAntigravity()
+      return
+    }
+    choice.reload()
+  }
 
   const show = () => {
     if (onOpen) {
@@ -125,7 +171,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
       {onOpen ? null : (
         <Sheet visible={open} onClose={() => setOpen(false)} title="思考强度">
           <InlineError text={choice.error} />
-          {waiting ? <Loading /> : options.length && choice.source?.auth === 'ready' ? (
+          {waiting ? <Loading /> : options.length && authReady ? (
             <View>
               {options.map((value) => (
                 <ChoiceRow
@@ -134,7 +180,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
                   selected={value === (runtime?.effortLevel ?? current?.defaultEffort)}
                   disabled={disabled}
                   onPress={() => {
-                    if (!runtime || choice.source?.auth !== 'ready') return
+                    if (!runtime || !authReady) return
                     // 只换强度，模型 id 原样带回。
                     onApply({ ...runtime, effortLevel: value })
                     setOpen(false)
@@ -146,7 +192,11 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
             <Callout>{reason}</Callout>
           )}
           {warning ? <Callout>{warning}</Callout> : null}
-          <TextButton title="重新读取" disabled={waiting || disabled} onPress={choice.reload} />
+          <TextButton
+            title={isAntigravity && choice.refreshingAntigravity ? '正在刷新…' : '重新读取'}
+            disabled={waiting || disabled}
+            onPress={refresh}
+          />
         </Sheet>
       )}
     </>
