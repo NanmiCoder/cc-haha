@@ -170,6 +170,25 @@ export function buildConversationCliSpawnOptions(
   } as const
 }
 
+/**
+ * Enable Git long paths for Windows CLI subprocesses that materialize worktrees,
+ * preserving any caller-supplied GIT_CONFIG_* entries and explicit core.longpaths overrides.
+ */
+export function applyWindowsGitLongpathsEnv(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== 'win32') return
+  const rawCount = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10)
+  const count = Number.isInteger(rawCount) && rawCount > 0 ? rawCount : 0
+  for (let index = 0; index < count; index++) {
+    if (env[`GIT_CONFIG_KEY_${index}`]?.toLowerCase() === 'core.longpaths') return
+  }
+  env.GIT_CONFIG_COUNT = String(count + 1)
+  env[`GIT_CONFIG_KEY_${count}`] = 'core.longpaths'
+  env[`GIT_CONFIG_VALUE_${count}`] = 'true'
+}
+
 type AttachmentRef = {
   type: 'file' | 'image'
   name?: string
@@ -868,6 +887,9 @@ export class ConversationService {
       networkRuntimeMetadata,
       providerCapture,
     )
+    if (shouldCreateWorktree) {
+      applyWindowsGitLongpathsEnv(childEnv)
+    }
     if (options?.teamWorker) {
       delete childEnv.CLAUDE_CODE_SUBAGENT_MODEL
       delete childEnv.CLAUDE_CODE_EFFORT_LEVEL

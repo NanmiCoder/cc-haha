@@ -184,6 +184,15 @@ function getSessionCollaborationOwner(): CollaborationOwner {
         },
         async stop(sessionId) { stopSessionTurn(sessionId) },
       },
+      onNotify(sessionIds, targetSessionId) {
+        for (const id of sessionIds) {
+          sendToSession(id, {
+            type: 'system_notification',
+            subtype: 'session_collaboration_updated',
+            data: { sessionId: targetSessionId ?? id },
+          })
+        }
+      },
     })
     const owner: CollaborationOwner = { path, service, ready: Promise.resolve(), loaded: false, recovering: false }
     current = owner

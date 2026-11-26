@@ -483,6 +483,48 @@ test('duplicate transcript rows cannot replace a useful collaboration title with
   }
 })
 
+test('host notifies caller session immediately when a collaboration child is created and when startup fails', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId: callerSessionId } = await sessionService.createSession(directory)
+  const wsHandler = await import('../ws/handler.js')
+  const catalog = await import('./sessionModelCatalog.js')
+  const runtime = { providerId: 'fixture-provider', modelId: 'fixture-model' }
+  spyOn(catalog, 'resolveSessionRuntime').mockResolvedValue(runtime)
+  spyOn(catalog, 'validateSessionRuntime').mockResolvedValue(runtime)
+  spyOn(wsHandler, 'getCollaborationRuntime').mockResolvedValue(runtime)
+  spyOn(wsHandler, 'submitSessionTurn').mockRejectedValue(new Error('Error creating worktree: Filename too long'))
+  const sent: Array<{ sessionId: string; message: unknown }> = []
+  spyOn(wsHandler, 'sendToSession').mockImplementation((sessionId, message) => {
+    sent.push({ sessionId, message })
+    return true
+  })
+  const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    const service = await getSessionCollaborationService()
+    const created = await service.create(callerSessionId, { prompt: 'Run audit', title: 'Audit child' })
+    expect(created.state).toBe('failed')
+    const callerUpdates = sent.filter(
+      item =>
+        item.sessionId === callerSessionId &&
+        typeof item.message === 'object' &&
+        item.message !== null &&
+        (item.message as { subtype?: string }).subtype === 'session_collaboration_updated',
+    )
+    expect(callerUpdates.length).toBeGreaterThanOrEqual(2)
+    expect(callerUpdates[0]!.message).toEqual({
+      type: 'system_notification',
+      subtype: 'session_collaboration_updated',
+      data: { sessionId: created.sessionId },
+    })
+  } finally {
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
 test('content suggestions fill metadata pages without duplicate metadata hits or canonical history reads', async () => {
   const previous = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = directory
