@@ -1232,6 +1232,7 @@ export class CronScheduler {
       CLAUDE_CODE_ENABLE_TASKS: '1',
       CC_HAHA_AGENT_TEAMS_ENABLED: agentTeamsEnabled ? '1' : '0',
       CLAUDE_CODE_ENTRYPOINT: 'sdk-cli',
+      CC_HAHA_TRANSCRIPT_ENTRYPOINT: 'claude-desktop',
       CALLER_DIR: workDir,
       PWD: workDir,
       CC_HAHA_SKIP_DOTENV: '1',

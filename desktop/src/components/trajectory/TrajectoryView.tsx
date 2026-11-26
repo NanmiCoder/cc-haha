@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Info } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -339,6 +339,12 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
   }
 
   const currentStats = currentTurn !== null ? turnStats.get(currentTurn) : undefined
+  const hasSystemSnapshot = useMemo(() => state.snapshots.some((row) => row.kind === 'system'), [state.snapshots])
+  const hasVisibleSystemSnapshot = useMemo(() => ordered.some((row) => row.kind === 'system'), [ordered])
+  const hasAssistantRow = useMemo(() => ordered.some((row) => row.kind === 'assistant'), [ordered])
+  const showMissingSnapshotNotice = state.status === 'ready' && ordered.length > 0 && !hasSystemSnapshot && (!running || hasAssistantRow)
+  const showEarlierSnapshotNotice = state.status === 'ready' && ordered.length > 0 && hasSystemSnapshot && !hasVisibleSystemSnapshot && hasOlder
+  const missingSnapshotText = t(agentId ? 'trajectory.snapshot.unavailableSubagent' : 'trajectory.snapshot.unavailable')
 
   return (
     <div
@@ -389,6 +395,35 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
           {currentStats.durationMs > 0 && <span>{t('trajectory.detail.approx', { value: formatDurationMs(currentStats.durationMs) })}</span>}
         </div>
       )}
+      {showMissingSnapshotNotice && (
+        <div
+          role="status"
+          data-testid="trajectory-no-snapshots"
+          title={missingSnapshotText}
+          className="flex min-h-7 shrink-0 items-start gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-1 text-[12px] leading-[1.4] text-[var(--color-text-tertiary)]"
+        >
+          <Info size={13} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+          <span className="min-w-0 flex-1">{missingSnapshotText}</span>
+        </div>
+      )}
+      {showEarlierSnapshotNotice && (
+        <div
+          role="status"
+          data-testid="trajectory-snapshots-earlier"
+          className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-1 text-[12px] leading-[1.4] text-[var(--color-text-tertiary)]"
+        >
+          <Info size={13} strokeWidth={1.75} aria-hidden className="shrink-0" />
+          <span className="min-w-0">{t('trajectory.snapshot.inEarlierHistory')}</span>
+          <button
+            type="button"
+            disabled={state.loadingOlder}
+            onClick={() => void handleLoadOlder()}
+            className="shrink-0 rounded-[var(--radius-sm)] px-1.5 font-medium text-[var(--color-text-accent)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-60"
+          >
+            {state.loadingOlder ? t('common.loading') : t('trajectory.table.loadOlder')}
+          </button>
+        </div>
+      )}
       <div ref={splitRef} className="relative flex min-h-0 flex-1">
         <div ref={tableWrapRef} className="flex min-h-0 min-w-0 flex-1 flex-col">{body}</div>
         {selectedRow && (
@@ -399,7 +434,7 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
             width={detailWidth}
             maxWidth={maxDetailWidth}
             mode={drawer ? 'drawer' : 'side'}
-            allowRawRequest={!agentId}
+            allowRawRequest
             running={running && !agentId}
             onWidthChange={setDetailWidth}
             onClose={closeDetail}

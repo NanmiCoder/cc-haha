@@ -880,8 +880,9 @@ export class ConversationService {
     }
     if (side) {
       delete childEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
-      delete childEnv.CC_HAHA_TRACE_API_CALLS
+      childEnv.CC_HAHA_TRACE_API_CALLS = '0'
       delete childEnv.CLAUDE_CODE_DIAGNOSTICS_FILE
+      childEnv.CC_HAHA_PROMPT_SNAPSHOT = '0'
     }
     if (side?.closed) throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
     // A delete can land during any await above (transcript reset, workspace,

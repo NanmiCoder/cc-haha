@@ -56,7 +56,7 @@ type Props = {
   maxWidth: number
   /** `drawer` overlays the ledger when the column is too narrow to share. */
   mode: 'side' | 'drawer'
-  /** The raw-request tab (captures exist only for the main session's calls). */
+  /** Whether to show the raw-request tab on assistant responses. */
   allowRawRequest: boolean
   running: boolean
   onWidthChange: (width: number) => void
@@ -129,7 +129,7 @@ export function TrajectoryDetailPanel({
         {row.snapshot ? (
           <SnapshotDetail sessionId={sessionId} snapshot={row.snapshot} tab={tab as SnapshotTab} />
         ) : tab === 'request' ? (
-          <RawRequestTab sessionId={sessionId} row={row} />
+          <RawRequestTab sessionId={sessionId} agentId={agentId} row={row} />
         ) : (
           <RowDetail
             sessionId={sessionId}

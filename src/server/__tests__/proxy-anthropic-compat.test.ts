@@ -252,6 +252,8 @@ describe('proxy anthropic-compatible path', () => {
             'x-tenant-id': 'tenant-a',
             'x-app': 'cli',
             'x-claude-code-session-id': 'session-secret',
+            'x-cc-haha-trace-agent-id': 'explore42',
+            'x-cc-haha-trace-query-source': 'agent:builtin',
             'x-claude-remote-container-id': 'container-secret',
             'x-claude-remote-session-id': 'remote-secret',
             'x-client-app': 'sdk-client',
@@ -275,6 +277,8 @@ describe('proxy anthropic-compatible path', () => {
       expect(headers['x-tenant-id']).toBe('tenant-a')
       expect(headers['x-app']).toBeUndefined()
       expect(headers['x-claude-code-session-id']).toBeUndefined()
+      expect(headers['x-cc-haha-trace-agent-id']).toBeUndefined()
+      expect(headers['x-cc-haha-trace-query-source']).toBeUndefined()
       expect(headers['x-claude-remote-container-id']).toBeUndefined()
       expect(headers['x-claude-remote-session-id']).toBeUndefined()
       expect(headers['x-client-app']).toBeUndefined()
@@ -333,6 +337,8 @@ describe('proxy anthropic-compatible path', () => {
             'Content-Type': 'application/json',
             'anthropic-version': '2023-06-01',
             'x-claude-code-session-id': sessionId,
+            'x-cc-haha-trace-agent-id': 'explore42',
+            'x-cc-haha-trace-query-source': 'agent:builtin',
             'x-relay-credential': 'opaque-value-42',
             'anthropic-relay-credential': 'opaque-value-43',
           },
@@ -348,12 +354,16 @@ describe('proxy anthropic-compatible path', () => {
       expect(res.status).toBe(200)
       expect(captured[0]?.get('x-relay-credential')).toBe('opaque-value-42')
       expect(captured[0]?.get('anthropic-relay-credential')).toBe('opaque-value-43')
+      expect(captured[0]?.get('x-cc-haha-trace-agent-id')).toBeNull()
+      expect(captured[0]?.get('x-cc-haha-trace-query-source')).toBeNull()
 
       await drainTraceCaptureForTests()
       const tracePath = path.join(tmpDir, 'cc-haha', 'traces', `${sessionId}.jsonl`)
       const traceRaw = await fs.readFile(tracePath, 'utf-8')
       expect(traceRaw).toContain('x-relay-credential')
       expect(traceRaw).toContain('anthropic-relay-credential')
+      expect(traceRaw).toContain('"agentId":"explore42"')
+      expect(traceRaw).toContain('"querySource":"agent:builtin"')
       expect(traceRaw).toContain('[redacted]')
       expect(traceRaw).not.toContain('opaque-value-42')
       expect(traceRaw).not.toContain('opaque-value-43')
