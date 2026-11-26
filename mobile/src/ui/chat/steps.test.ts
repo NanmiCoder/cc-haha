@@ -314,6 +314,10 @@ describe('step labels', () => {
       description: true,
     })
     expect(label('Bash', { command: 'ls', description: '   ' })).toMatchObject({ verb: '运行', object: 'ls', mono: true })
+    expect(label('Bash', { command: 'bun test', description: '运行单元测试\n并汇总失败项' })).toMatchObject({
+      verb: '运行单元测试 并汇总失败项',
+      description: true,
+    })
     expect(label('Grep', { pattern: 'useTheme' })).toMatchObject({ verb: '搜索', object: 'useTheme', mono: true })
     expect(label('Glob', { pattern: '**/*.tsx' })).toMatchObject({ verb: '查找', object: '**/*.tsx' })
     expect(label('WebFetch', { url: 'https://example.com' })).toMatchObject({ verb: '打开', mono: true })

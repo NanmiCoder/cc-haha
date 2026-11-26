@@ -92,6 +92,10 @@ describe('captionParts 文案', () => {
       mono: false,
     })
     expect(captionParts({ step: { verb: 'Run tests', mono: false, description: true } }).lead).toBe('Run tests')
+    // 英文里的弯引号、破折号不是中文，不能拼成「正在Don’t run」。
+    expect(captionParts({ step: { verb: 'Run the user’s tests', mono: false, description: true } }).lead).toBe(
+      'Run the user’s tests'
+    )
     expect(
       captionParts({ waiting: true, step: { verb: '运行单元测试', mono: false, description: true } })
     ).toMatchObject({ tone: 'attention', lead: '等你批准 · 运行单元测试' })

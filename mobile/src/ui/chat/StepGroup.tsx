@@ -221,13 +221,25 @@ function StepDetail({ item, state }: { item: ChatItem; state: StepState }) {
     state === 'running' ? '正在运行…' : state === 'missing' ? '没有拿到结果' : '（没有输出）'
   if (name === 'Bash' || name === 'PowerShell') {
     const command = typeof input?.command === 'string' ? input.command : ''
+    // 折叠行只放得下一行说明，展开后把完整原文补在这里。
+    const description = typeof input?.description === 'string' ? input.description.trim() : ''
     return (
-      <CodeText>
-        {command ? <Mono style={{ color: colors.ink }}>{`$ ${command}`}</Mono> : null}
-        {command && output.text ? '\n' : null}
-        <Omitted count={output.omitted} />
-        {output.text || empty}
-      </CodeText>
+      <>
+        {description ? (
+          <Text
+            selectable
+            style={{ fontSize: 13, lineHeight: 19, color: colors.ink2, paddingHorizontal: 12, paddingBottom: 6 }}
+          >
+            {description}
+          </Text>
+        ) : null}
+        <CodeText>
+          {command ? <Mono style={{ color: colors.ink }}>{`$ ${command}`}</Mono> : null}
+          {command && output.text ? '\n' : null}
+          <Omitted count={output.omitted} />
+          {output.text || empty}
+        </CodeText>
+      </>
     )
   }
   if (name === 'Edit' || name === 'MultiEdit') {

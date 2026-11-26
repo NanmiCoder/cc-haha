@@ -418,7 +418,8 @@ export function describeStep(item: ChatItem, workDir?: string | null): StepLabel
       return { verb: '写入', object: file, mono: true }
     case 'Bash':
     case 'PowerShell': {
-      const description = str(input?.description)?.trim()
+      // 状态条只给一行，换行和连续空白压成单个空格，避免固定高度的容器被撑破。
+      const description = str(input?.description)?.trim().replace(/\s+/g, ' ')
       if (description) return { verb: description, mono: false, description: true }
       const command = str(input?.command)
       return { verb: '运行', object: command ? firstLine(command) : undefined, mono: true }

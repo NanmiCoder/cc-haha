@@ -102,8 +102,12 @@ export function StatusCaption({
         <Spinner size={13} thickness={2.4} />
       )}
       <Text
+        numberOfLines={1}
+        ellipsizeMode="tail"
         style={{
-          flexShrink: 0,
+          // 有 object 要显示时前导词保持完整；单独承载 description 时才允许截断。
+          flexShrink: parts.object ? 0 : 1,
+          minWidth: 0,
           fontSize: 13,
           lineHeight: 18,
           fontWeight: attention ? '600' : '400',

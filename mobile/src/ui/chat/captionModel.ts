@@ -32,12 +32,15 @@ export type CaptionParts = {
   mono: boolean
 }
 
+/** 含汉字才按中文处理；英文里的弯引号、破折号、省略号等排版符号不算。 */
+const HAS_HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
+
 /** 工具名是 ASCII（未知工具）时说“调用 X”，其余动词前加“正在”。 */
 function progressive(label: StepLabel): { lead: string; object?: string } {
   if (label.description) {
     // 命令自带的说明本身就是完整动作（“运行单元测试”“Run tests”）：中文接“正在”，
     // 英文原样作为状态文字，避免“正在调用 Run tests”这种病句。
-    return /^[\x20-\x7e]+$/.test(label.verb) ? { lead: label.verb } : { lead: `正在${label.verb}` }
+    return HAS_HAN.test(label.verb) ? { lead: `正在${label.verb}` } : { lead: label.verb }
   }
   switch (label.verb) {
     case '思考过程':

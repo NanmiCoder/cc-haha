@@ -57,6 +57,8 @@ export type StepLine = {
   verb: string
   object?: string
   mono: boolean
+  /** 命令自带的人类可读说明；有它时图标按终端算，不按动词字面量猜。 */
+  description?: boolean
   done: boolean
   error: boolean
 }
@@ -172,6 +174,7 @@ export function stepLine(step: SubagentStep, workDir?: string | null): StepLine 
     verb: label.verb,
     object: label.object,
     mono: label.mono,
+    ...(label.description ? { description: true } : {}),
     done: step.done,
     error: step.isError === true,
   }
