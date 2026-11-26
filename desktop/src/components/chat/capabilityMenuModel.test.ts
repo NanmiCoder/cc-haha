@@ -378,3 +378,18 @@ describe('the Agent mode row', () => {
     expect(standard.detail).toEqual([{ text: 'agentProfile.locked' }])
   })
 })
+
+describe('Antigravity capability menu', () => {
+  it('keeps add-files, computer-use, and slash-commands while hiding Claude-only controls', () => {
+    const sections = buildCapabilitySections(buildInput({
+      antigravity: true,
+      agentProfile: { value: 'standard', locked: false },
+    }))
+    const allKeys = sections.flatMap((section) => section.items.map((item) => item.key))
+    expect(allKeys).toEqual(['add-files', 'computer-use', 'slash-commands'])
+    expect(allKeys).not.toContain('agent-profile')
+    expect(allKeys).not.toContain('agent-team')
+    expect(allKeys).not.toContain('skills')
+    expect(allKeys).not.toContain('connectors')
+  })
+})

@@ -18,6 +18,7 @@ import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Kbd } from '@/components/ui/Kbd'
 import { ModelSelector } from '../controls/ModelSelector'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '../../constants/antigravityAcp'
 import { isSideChatSession } from '@/lib/sideChatSessions'
 import { detectPlatform } from '@/lib/workspace/shortcuts'
 import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
@@ -42,6 +43,9 @@ type Props = {
   input: unknown
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
   /**
    * While the request waits, draw one marker line instead of the card. The
    * phone answers it from the approval bar in the composer's place.
@@ -61,23 +65,64 @@ const RESOLVED_ROW =
 const INSET_BLOCK =
   'rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-code-fg)]'
 
-function renderPermissionPreview(toolName: string, input: unknown) {
+function renderPermissionPreview(toolName: string, input: unknown, antigravityToolName?: string) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
-  const filePath = typeof obj.file_path === 'string' ? obj.file_path : 'file'
+  const filePath = typeof obj.file_path === 'string'
+    ? obj.file_path
+    : typeof obj.Path === 'string'
+      ? obj.Path
+      : typeof obj.TargetFile === 'string'
+        ? obj.TargetFile
+        : typeof obj.path === 'string'
+          ? obj.path
+          : 'file'
+  const effectiveTool = antigravityToolName ?? toolName
+  const isAntigravityEdit =
+    effectiveTool === 'edit_file' ||
+    effectiveTool === 'replace_file_content' ||
+    effectiveTool === 'multi_replace_file_content'
+  const isAntigravityWrite = effectiveTool === 'write_file' || effectiveTool === 'write_to_file'
+  const isAntigravityCommand = effectiveTool === 'run_command'
 
-  if (toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
-    return <DiffViewer filePath={filePath} oldString={obj.old_string} newString={obj.new_string} />
+  const oldText = typeof obj.old_string === 'string'
+    ? obj.old_string
+    : typeof obj.Target === 'string'
+      ? obj.Target
+      : typeof obj.TargetContent === 'string'
+        ? obj.TargetContent
+        : undefined
+  const newText = typeof obj.new_string === 'string'
+    ? obj.new_string
+    : typeof obj.Replacement === 'string'
+      ? obj.Replacement
+      : typeof obj.ReplacementContent === 'string'
+        ? obj.ReplacementContent
+        : undefined
+  if ((toolName === 'Edit' || isAntigravityEdit || Boolean(antigravityToolName)) && oldText !== undefined && newText !== undefined) {
+    return <DiffViewer filePath={filePath} oldString={oldText} newString={newText} />
   }
 
-  if (toolName === 'Write' && typeof obj.content === 'string') {
-    return <DiffViewer filePath={filePath} oldString="" newString={obj.content} />
+  const writeContent = typeof obj.content === 'string'
+    ? obj.content
+    : typeof obj.Content === 'string'
+      ? obj.Content
+      : typeof obj.CodeContent === 'string'
+        ? obj.CodeContent
+        : undefined
+  if ((toolName === 'Write' || isAntigravityWrite) && writeContent !== undefined) {
+    return <DiffViewer filePath={filePath} oldString="" newString={writeContent} />
   }
 
-  if (toolName === 'Bash' && typeof obj.command === 'string') {
+  const command = typeof obj.command === 'string'
+    ? obj.command
+    : typeof obj.CommandLine === 'string'
+      ? obj.CommandLine
+      : undefined
+  if ((toolName === 'Bash' || isAntigravityCommand) && command !== undefined) {
     return (
       <div className={`scrollbar-autohide scroll-edge-fade max-h-[240px] overflow-auto ${INSET_BLOCK}`}>
         <pre className="whitespace-pre-wrap break-words font-mono">
-          <span className="select-none text-[var(--color-brand)]">$ </span>{obj.command}
+          <span className="select-none text-[var(--color-brand)]">$ </span>{command}
         </pre>
       </div>
     )
@@ -86,7 +131,18 @@ function renderPermissionPreview(toolName: string, input: unknown) {
   return null
 }
 
-export function PermissionDialog({ sessionId, requestId, toolName, input, description, displayName, markerWhenPending = false }: Props) {
+export function PermissionDialog({
+  sessionId,
+  requestId,
+  toolName,
+  input,
+  description,
+  displayName,
+  antigravityToolName,
+  subagentName,
+  supportsAllowAlways,
+  markerWhenPending = false,
+}: Props) {
   const respondToPermission = useChatStore((s) => s.respondToPermission)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
@@ -113,10 +169,19 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
     )
   }
 
+  const effectiveAntigravityToolName = antigravityToolName ?? pendingPermission?.antigravityToolName
+  const effectiveSubagentName = subagentName ?? pendingPermission?.subagentName
+  const inputSupportsAllowAlways =
+    input && typeof input === 'object' && !Array.isArray(input)
+      ? (input as { supportsAllowAlways?: unknown }).supportsAllowAlways
+      : undefined
+  const allowAlways =
+    (supportsAllowAlways ?? pendingPermission?.supportsAllowAlways) !== false &&
+    inputSupportsAllowAlways !== false
   const ToolIcon = PERMISSION_TOOL_ICONS[toolName] ?? Shield
   const details = extractToolDetails(toolName, input, t)
   const rawInput = typeof input === 'string' ? input : JSON.stringify(input, null, 2)
-  const preview = renderPermissionPreview(toolName, input)
+  const preview = renderPermissionPreview(toolName, input, effectiveAntigravityToolName)
   const title = getPermissionTitle(toolName, input, t, displayName)
   const allowRawToggle = !preview
   const permissionContext = (details.primary || description || toolName).slice(0, 160)
@@ -130,6 +195,11 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
       <div role="group" aria-label={`${title}: ${permissionContext}`} className={RESOLVED_ROW}>
         <ToolIcon aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate">{title}</span>
+        {effectiveSubagentName ? (
+          <Badge tone="info" data-testid="permission-subagent-badge" className="shrink-0">
+            {t('permission.fromSubagent', { name: effectiveSubagentName })}
+          </Badge>
+        ) : null}
         {details.primary ? (
           <span className="hidden min-w-0 max-w-[45%] truncate font-mono text-xs text-[var(--color-text-tertiary)] sm:block" title={details.primary}>
             {details.primary}
@@ -164,8 +234,15 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
           <ToolIcon aria-hidden="true" size={16} strokeWidth={1.75} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold leading-[1.4] text-[var(--color-text-primary)]">
-            {title}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-sm font-semibold leading-[1.4] text-[var(--color-text-primary)]">
+              {title}
+            </span>
+            {effectiveSubagentName ? (
+              <Badge tone="info" data-testid="permission-subagent-badge" className="shrink-0">
+                {t('permission.fromSubagent', { name: effectiveSubagentName })}
+              </Badge>
+            ) : null}
           </div>
           {description && (
             <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">{description}</p>
@@ -184,7 +261,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
       <div className="px-4">
         {preview ? (
           <div className="space-y-2">
-            {details.primary && toolName !== 'Bash' ? (
+            {details.primary && toolName !== 'Bash' && toolName !== 'run_command' && effectiveAntigravityToolName !== 'run_command' ? (
               <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
                 <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <span className="truncate">{details.primary}</span>
@@ -238,14 +315,16 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
           <span>{t('permission.allow')}</span>
           <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{submitShortcut}</Kbd>
         </Button>
-        <Button
-          variant="secondary"
-          size="base"
-          aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
-          onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
-        >
-          {t('permission.allowForSession')}
-        </Button>
+        {allowAlways ? (
+          <Button
+            variant="secondary"
+            size="base"
+            aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
+            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
+          >
+            {t('permission.allowForSession')}
+          </Button>
+        ) : null}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -301,6 +380,7 @@ function ExitPlanModePermissionDialog({
     providers,
     currentModel?.id,
   )
+  const isAntigravity = currentRuntime.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
   const preview = extractPlanPreview(input)
   const permissionUpdates = buildPromptPermissionUpdates(preview.allowedPrompts)
   const trimmedFeedback = feedback.trim()
@@ -441,7 +521,11 @@ function ExitPlanModePermissionDialog({
               compact
               ariaLabel={t('permission.planExecutionModel')}
               runtimeSelection={executionRuntime ?? currentRuntime}
-              lockedProviderId={sessionId && isSideChatSession(sessionId) ? currentRuntime.providerId : undefined}
+              lockedProviderId={isAntigravity
+                ? ANTIGRAVITY_ACP_PROVIDER_ID
+                : sessionId && isSideChatSession(sessionId)
+                  ? currentRuntime.providerId
+                  : undefined}
               disabled={submittingRuntime}
               onRuntimeSelectionChange={handleExecutionRuntimeChange}
             />
@@ -477,15 +561,17 @@ function ExitPlanModePermissionDialog({
         >
           {t('permission.planApproveAcceptEdits')}
         </Button>
-        <Button
-          variant="danger-ghost"
-          size="base"
-          disabled={submittingRuntime}
-          aria-describedby={runtimeError ? errorId : undefined}
-          onClick={() => approveWithMode('bypassPermissions')}
-        >
-          {t('permission.planApproveBypass')}
-        </Button>
+        {!isAntigravity ? (
+          <Button
+            variant="danger-ghost"
+            size="base"
+            disabled={submittingRuntime}
+            aria-describedby={runtimeError ? errorId : undefined}
+            onClick={() => approveWithMode('bypassPermissions')}
+          >
+            {t('permission.planApproveBypass')}
+          </Button>
+        ) : null}
         <div className="flex-1" />
         <Button
           variant="ghost"

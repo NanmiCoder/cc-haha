@@ -6,10 +6,12 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { ArrowUp, Cpu, Feather, Plus, ShieldCheck } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { Button } from '@/components/ui/Button'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { ApiError, rawRecordDiagnosticEvent } from '../api/client'
 import { agentsApi } from '../api/agents'
 import { providersApi } from '../api/providers'
@@ -48,6 +50,21 @@ import {
   buildDeepSeekAccountProvider,
 } from '../constants/deepseekAccountProvider'
 import { CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import {
+  ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_ACP_LOGIN_COMMAND,
+  ANTIGRAVITY_ACP_PERMISSION_MODES,
+  ANTIGRAVITY_ACP_PROVIDER_ID,
+  ANTIGRAVITY_DRAFT_SLASH_COMMANDS,
+  ANTIGRAVITY_HOST_UI_SLASH_COMMANDS,
+} from '../constants/antigravityAcp'
+import {
+  readAntigravityLastSelection,
+  readLastComposerEngine,
+  writeAntigravityLastSelection,
+  writeLastComposerEngine,
+  type ComposerEngine,
+} from '../lib/antigravityPreferences'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { getSessionBrowsablePath } from '../lib/sessionWorkspace'
 import {
@@ -96,7 +113,8 @@ import { recordRecentSkills } from '@/lib/recentSkills'
 import { formatBytes } from '@/lib/formatBytes'
 import { checkUserMessageBudget } from '@/lib/userMessageBudget'
 import type { AttachmentRef, UIAttachment } from '../types/chat'
-import type { SavedProvider } from '../types/provider'
+import type { AntigravityStatus, SavedProvider } from '../types/provider'
+import type { RuntimeSelection } from '../types/runtime'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
@@ -174,8 +192,34 @@ function resolveProviderName(providerId: string | null, providers: SavedProvider
       return t('settings.providers.grokOfficialName')
     case DEEPSEEK_ACCOUNT_PROVIDER_ID:
       return t('settings.providers.deepseekAccountName')
+    case ANTIGRAVITY_ACP_PROVIDER_ID:
+      return t('settings.providers.antigravity.name')
     default:
       return providers.find((provider) => provider.id === providerId)?.name ?? providerId
+  }
+}
+
+function resolveAntigravityDraftSelection(antigravity: AntigravityStatus | undefined): RuntimeSelection {
+  const saved = readAntigravityLastSelection()
+  const models = antigravity?.models ?? []
+  const savedModel = saved ? models.find((model) => model.id === saved.modelId) : undefined
+  const currentModel = antigravity?.currentModelId
+    ? models.find((model) => model.id === antigravity.currentModelId)
+    : undefined
+  const chosenModel = savedModel ?? currentModel ?? models[0]
+  const modelId = savedModel?.id
+    ?? (models.length === 0 && saved?.modelId ? saved.modelId : undefined)
+    ?? chosenModel?.id
+    ?? antigravity?.currentModelId
+    ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+  const effortLevel = saved?.effortLevel
+    ?? chosenModel?.defaultReasoningEffort
+    ?? antigravity?.currentEffortLevel
+    ?? 'medium'
+  return {
+    providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+    modelId,
+    effortLevel,
   }
 }
 
@@ -296,13 +340,58 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const defaultPermissionMode = useSettingsStore((state) => state.permissionMode)
   const providers = useProviderStore((state) => state.providers)
   const activeProviderId = useProviderStore((state) => state.activeId)
+  const antigravity = useProviderStore((state) => state.antigravity)
+  const antigravityEnabled = useProviderStore((state) => state.antigravityEnabled)
+  const discoverAntigravity = useProviderStore((state) => state.discoverAntigravity)
   // The draft follows the default from Settings until a mode is picked in this
   // draft. It stays mounted while Settings is open, so a copy taken at mount
   // would launch the next session in a mode the user had already turned off.
   const [pickedPermissionMode, setDraftPermissionMode] = useState<PermissionMode | null>(null)
-  const draftPermissionMode = pickedPermissionMode ?? defaultPermissionMode
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
   const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
+  const antigravityAvailable = Boolean(antigravity && antigravity.status !== 'not_installed' && antigravityEnabled)
+  const [selectedEngine, setSelectedEngine] = useState<ComposerEngine>(() =>
+    draftRuntimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
+      ? 'antigravity'
+      : readLastComposerEngine(),
+  )
+  const engine: ComposerEngine = antigravityAvailable ? selectedEngine : 'cc-haha'
+  const isAntigravity = engine === 'antigravity'
+  const effectiveDefaultPermissionMode: PermissionMode = isAntigravity && defaultPermissionMode === 'bypassPermissions'
+    ? 'default'
+    : defaultPermissionMode
+  const draftPermissionMode = pickedPermissionMode ?? effectiveDefaultPermissionMode
+  const lastStandardSelectionRef = useRef<RuntimeSelection | null>(
+    draftRuntimeSelection && draftRuntimeSelection.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID
+      ? draftRuntimeSelection
+      : null,
+  )
+  useEffect(() => {
+    if (draftRuntimeSelection && draftRuntimeSelection.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID) {
+      lastStandardSelectionRef.current = draftRuntimeSelection
+    }
+  }, [draftRuntimeSelection])
+  useEffect(() => {
+    const runtimeStore = useSessionRuntimeStore.getState()
+    const current = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
+    if (isAntigravity) {
+      if (current?.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID) {
+        runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, resolveAntigravityDraftSelection(antigravity))
+      }
+      if (useWorktree) setUseWorktree(false)
+      if (pickedPermissionMode === 'bypassPermissions') setDraftPermissionMode('default')
+      if (selectedAgentProfile === 'lean') setAgentProfile('standard')
+      if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
+        void discoverAntigravity().catch(() => {})
+      }
+    } else if (current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+      if (lastStandardSelectionRef.current) {
+        runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, lastStandardSelectionRef.current)
+      } else {
+        runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+      }
+    }
+  }, [antigravity, discoverAntigravity, isAntigravity, pickedPermissionMode, selectedAgentProfile, useWorktree])
   const referenceProviderId = mentionProviderId(draftRuntimeSelection)
   const referenceContext = `${workDir}\0${referenceProviderId ?? ''}\0${agentProfile}`
   const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
@@ -529,6 +618,14 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   ]), [slashCommands, slashCommandsCwd, workDir, referenceNames])
 
   const allSlashCommands = useMemo(() => {
+    if (isAntigravity) {
+      const localized = new Map(getLocalizedFallbackCommands(t).map((cmd) => [cmd.name, cmd.description]))
+      return ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd): SlashCommandOption => ({
+        name: cmd.name,
+        description: localized.get(cmd.name) ?? cmd.description,
+        kind: 'command',
+      }))
+    }
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommandsCwd === workDir ? slashCommands : [], getLocalizedFallbackCommands(t)), agentSlashCommands)
     const names = new Set(commands.map(command => command.name.toLowerCase()))
     for (const reference of composerReferences) {
@@ -538,7 +635,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedLeanNames)))
-  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, listedLeanNames, isLean, t])
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, listedLeanNames, isLean, isAntigravity, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
     applyWorkDir(newWorkDir)
@@ -562,8 +659,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }, [draftRevision, hasUnsentContent])
 
   const filteredCommandGroups = useMemo(() => {
-    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
-  }, [allSlashCommands, slashFilter])
+    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter, { showAllWhenEmpty: isAntigravity }))
+  }, [allSlashCommands, isAntigravity, slashFilter])
   const filteredCommands = filteredCommandGroups.ordered
   const isSlashMenuVisible = slashMenuOpen && filteredCommands.length > 0
 
@@ -608,22 +705,31 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // A model picked in this draft runs on its own provider, whatever the
       // global default is, so that provider's credentials are the ones to check.
       // Without a pick the server keeps judging the global default.
-      const authStatus = explicitDraftSelection
-        ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
-        : await providersApi.authStatus()
+      const authStatus = isAntigravity
+        ? await providersApi.authStatus(ANTIGRAVITY_ACP_PROVIDER_ID)
+        : explicitDraftSelection
+          ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
+          : await providersApi.authStatus()
       if (!authStatus.hasAuth) {
-        const providerName = resolveProviderName(
-          explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
-          providers,
-          t,
-        )
-        const modelName = explicitDraftSelection?.modelId ?? currentModel?.name ?? currentModel?.id
-        addToast({
-          type: 'warning',
-          message: modelName
-            ? t('empty.noCredentials', { model: modelName, provider: providerName })
-            : t('empty.noCredentialsProvider', { provider: providerName }),
-        })
+        if (isAntigravity && authStatus.antigravityStatus === 'login_required') {
+          addToast({
+            type: 'warning',
+            message: t('settings.providers.antigravity.status.login_required', { command: ANTIGRAVITY_ACP_LOGIN_COMMAND }),
+          })
+        } else {
+          const providerName = resolveProviderName(
+            isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
+            providers,
+            t,
+          )
+          const modelName = explicitDraftSelection?.modelId ?? currentModel?.name ?? currentModel?.id
+          addToast({
+            type: 'warning',
+            message: modelName
+              ? t('empty.noCredentials', { model: modelName, provider: providerName })
+              : t('empty.noCredentialsProvider', { provider: providerName }),
+          })
+        }
         useUIStore.getState().setPendingSettingsTab('providers')
         useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
         return null
@@ -670,23 +776,36 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
             effortLevel,
           }
         : undefined
-      const runtimeSelection = explicitDraftSelection
-        ?? defaultRuntimeSelection
-        ?? claudeOAuthRuntimeSelection
+      const runtimeSelection = isAntigravity
+        ? (explicitDraftSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
+            ? explicitDraftSelection
+            : resolveAntigravityDraftSelection(antigravity))
+        : (explicitDraftSelection
+            ?? defaultRuntimeSelection
+            ?? claudeOAuthRuntimeSelection)
       // The draft may have waited for hours. A branch chosen for the user is
       // decided again now, against the checkout as it is: the server switches
       // to any launch branch that is not the current one.
       const launchBranch = selectedBranch && repositoryLaunchRef.current
         ? await repositoryLaunchRef.current.resolveLaunchBranch()
         : selectedBranch
+      const effectivePermissionMode = isAntigravity && draftPermissionMode === 'bypassPermissions'
+        ? 'default'
+        : draftPermissionMode
       const sessionId = await createSession(
         workDir || undefined,
         {
           ...(launchBranch
-            ? { repository: { branch: launchBranch, worktree: useWorktree } }
+            ? { repository: { branch: launchBranch, worktree: isAntigravity ? false : useWorktree } }
             : {}),
-          permissionMode: draftPermissionMode,
-          ...(isLean ? { agentProfile } : {}),
+          permissionMode: effectivePermissionMode,
+          ...(isLean && !isAntigravity ? { agentProfile } : {}),
+          ...(isAntigravity ? {
+            launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            modelId: runtimeSelection?.modelId ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
+            ...(runtimeSelection?.effortLevel ? { effortLevel: runtimeSelection.effortLevel } : {}),
+          } : {}),
         },
       )
       if (runtimeSelection) {
@@ -714,11 +833,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     activeProviderName,
     addToast,
     agentProfile,
+    antigravity,
     createSession,
     currentModel?.id,
     currentModel?.name,
     draftPermissionMode,
     effortLevel,
+    isAntigravity,
     isLean,
     providers,
     selectedBranch,
@@ -760,7 +881,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       return
     }
 
-    const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
+    const rawSlashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
+    const slashCommandName = text.startsWith('/') ? text.slice(1).trim().split(/\s+/)[0]?.toLowerCase() ?? '' : ''
+    const slashUiAction = isAntigravity && !ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(slashCommandName)
+      ? null
+      : rawSlashUiAction
     if (slashUiAction?.type === 'panel') {
       promptHistory.recordSubmission({ text: input, mentions })
       setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
@@ -1265,7 +1390,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         onSelect: () => openFromComposerSheet(() => modelSelectorRef.current?.open()),
       },
       // The mode has no chip on a phone's toolbar: it covered the "+".
-      ...(leanModeEnabled ? [{
+      ...(leanModeEnabled && !isAntigravity ? [{
         key: 'agentProfile',
         icon: <Feather size={16} strokeWidth={1.75} aria-hidden="true" />,
         label: t('agentProfile.label'),
@@ -1291,6 +1416,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // opened rightwards from it ran past the card and the window edge.
       menuAlign={isMobileComposer ? 'left' : 'right'}
       lean={isLean}
+      allowedModes={isAntigravity ? ANTIGRAVITY_ACP_PERMISSION_MODES : undefined}
       value={draftPermissionMode}
       onChange={setDraftPermissionMode}
     />
@@ -1301,8 +1427,9 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     cwd: workDir,
     references: composerReferences,
     lean: isLean,
+    antigravity: isAntigravity,
     // While the conversation is being created the mode is fixed, as it will be after.
-    agentProfile: leanModeEnabled && !isMobileComposer
+    agentProfile: leanModeEnabled && !isMobileComposer && !isAntigravity
       ? { value: agentProfile, onChange: isSubmitting ? undefined : changeAgentProfile }
       : undefined,
     handlers: {
@@ -1335,6 +1462,56 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       onClose: () => setPlusMenuOpen(false),
     },
   })
+
+  const handleEngineChange = (nextEngine: ComposerEngine) => {
+    if (nextEngine === engine || isSubmitting) return
+    setSelectedEngine(nextEngine)
+    writeLastComposerEngine(nextEngine)
+    const runtimeStore = useSessionRuntimeStore.getState()
+    if (nextEngine === 'antigravity') {
+      setUseWorktree(false)
+      if (draftPermissionMode === 'bypassPermissions') setDraftPermissionMode('default')
+      if (selectedAgentProfile === 'lean') setAgentProfile('standard')
+      capabilityMenu.disarmAgentTeam()
+      runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, resolveAntigravityDraftSelection(antigravity))
+      if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
+        void discoverAntigravity().catch(() => {})
+      }
+      return
+    }
+    const current = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
+    if (current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+      writeAntigravityLastSelection({
+        modelId: current.modelId,
+        ...(current.effortLevel ? { effortLevel: current.effortLevel } : {}),
+      })
+    }
+    if (lastStandardSelectionRef.current) {
+      runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, lastStandardSelectionRef.current)
+    } else {
+      runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+    }
+  }
+
+  const engineSwitcher = antigravityAvailable ? (
+    <div data-testid="composer-engine-switcher" className="shrink-0">
+      <SegmentedControl
+        size="sm"
+        label={t('empty.engineSwitcher.label')}
+        value={engine}
+        onChange={handleEngineChange}
+        items={[
+          { value: 'cc-haha', label: 'cc-haha', disabled: isSubmitting },
+          {
+            value: 'antigravity',
+            label: t('settings.providers.antigravity.name'),
+            icon: <ModelBrandIcon providerId={ANTIGRAVITY_ACP_PROVIDER_ID} size={12} />,
+            disabled: isSubmitting,
+          },
+        ]}
+      />
+    </div>
+  ) : null
 
   const heroProject = workDir ? (resolveProjectDisplayName(workDir) ?? projectTitle(workDir)) : null
   // A draft already typed is kept: the suggestion goes on a new line.
@@ -1574,7 +1751,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                 hidden={dictationLive}
                 className="flex min-w-0 flex-1 items-center justify-end gap-1"
               >
-                {leanModeEnabled && isMobileComposer && <AgentProfileControl
+                {leanModeEnabled && isMobileComposer && !isAntigravity && <AgentProfileControl
                   ref={agentProfileRef}
                   value={agentProfile}
                   onChange={changeAgentProfile}
@@ -1584,6 +1761,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                 <ModelSelector
                   ref={modelSelectorRef}
                   runtimeKey={DRAFT_RUNTIME_SELECTION_KEY}
+                  lockedProviderId={isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : undefined}
                   disabled={isSubmitting}
                   compact={isMobileComposer}
                   permissionModeLabel={t(PERMISSION_MODE_LABEL_KEYS[draftPermissionMode])}
@@ -1622,10 +1800,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
               onLaunchReadyChange={setRepositoryLaunchReady}
+              worktreeSupported={!isAntigravity}
               disabled={isSubmitting}
               visible={visible}
               placement="toolbar"
             />
+            {engineSwitcher}
           </div>
         )}
       </div>
@@ -1640,7 +1820,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
       {isMobileComposer ? (
         <>
-          <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
+          <div data-testid="empty-session-mobile-launch" className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-4 pt-1">
             <RepositoryLaunchControls
               ref={repositoryLaunchRef}
               workDir={workDir}
@@ -1650,9 +1830,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
               onLaunchReadyChange={setRepositoryLaunchReady}
+              worktreeSupported={!isAntigravity}
               disabled={isSubmitting}
               visible={visible}
             />
+            {engineSwitcher}
           </div>
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-6 pb-[230px] pt-6 text-center">
             {heroBlock}

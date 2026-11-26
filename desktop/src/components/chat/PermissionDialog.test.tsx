@@ -1,0 +1,198 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import '@testing-library/jest-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { sendMock } = vi.hoisted(() => ({
+  sendMock: vi.fn(),
+}))
+
+vi.mock('../../api/websocket', () => ({
+  wsManager: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    onConnectionState: vi.fn(() => () => {}),
+    onMessage: vi.fn(() => () => {}),
+    clearHandlers: vi.fn(),
+    send: sendMock,
+  },
+}))
+
+import { useChatStore, type PendingPermission } from '../../stores/chatStore'
+import { useProviderStore } from '../../stores/providerStore'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { useTabStore } from '../../stores/tabStore'
+import { PermissionDialog } from './PermissionDialog'
+
+const SESSION = 'session-ag'
+
+function seedPending(permission: PendingPermission | null) {
+  useChatStore.setState({
+    sessions: {
+      [SESSION]: {
+        messages: [],
+        chatState: permission ? 'permission_pending' : 'idle',
+        connectionState: 'connected',
+        pendingPermission: permission,
+        pendingPermissions: permission ? { [permission.requestId]: permission } : {},
+      },
+    },
+  } as never)
+}
+
+describe('PermissionDialog Antigravity & Subagent extensions', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: SESSION, tabs: [{ sessionId: SESSION, title: 'AG', type: 'session', status: 'idle' }] })
+    useSessionRuntimeStore.setState({ selections: {} })
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('renders rich Diff preview for Antigravity edit_file, shows subagent badge, and hides Allow for session when unsupported', () => {
+    const permission: PendingPermission = {
+      requestId: 'req-edit',
+      toolName: 'edit_file',
+      toolUseId: 'tool-edit',
+      antigravityToolName: 'edit_file',
+      subagentName: 'verifier',
+      supportsAllowAlways: false,
+      input: {
+        Path: '/repo/src/index.ts',
+        Target: 'const oldVal = 1',
+        Replacement: 'const newVal = 2',
+      },
+    }
+    seedPending(permission)
+
+    const { container } = render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        antigravityToolName={permission.antigravityToolName}
+        subagentName={permission.subagentName}
+        supportsAllowAlways={permission.supportsAllowAlways}
+      />,
+    )
+
+    expect(screen.getByTestId('permission-subagent-badge')).toHaveTextContent('From verifier')
+    expect(container.textContent).toContain('/repo/src/index.ts')
+    expect(container.textContent).toContain('+1')
+    expect(container.textContent).toContain('−1')
+    expect(screen.queryByRole('button', { name: /^Allow for session/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Allow/ }))
+    expect(sendMock).toHaveBeenCalledWith(SESSION, {
+      type: 'permission_response',
+      requestId: 'req-edit',
+      allowed: true,
+    })
+  })
+
+  it('renders Bash command preview for run_command and sends rule: always when supportsAllowAlways is true', () => {
+    const permission: PendingPermission = {
+      requestId: 'req-cmd',
+      toolName: 'run_command',
+      toolUseId: 'tool-cmd',
+      antigravityToolName: 'run_command',
+      supportsAllowAlways: true,
+      input: {
+        CommandLine: 'bun test src/acp',
+        toolSummary: 'Run ACP tests',
+      },
+    }
+    seedPending(permission)
+
+    render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        antigravityToolName={permission.antigravityToolName}
+        supportsAllowAlways={permission.supportsAllowAlways}
+      />,
+    )
+
+    expect(screen.getByText(/bun test src\/acp/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Allow for session/ }))
+    expect(sendMock).toHaveBeenCalledWith(SESSION, {
+      type: 'permission_response',
+      requestId: 'req-cmd',
+      allowed: true,
+      rule: 'always',
+    })
+  })
+
+  it('keeps the subagent badge visible on resolved permission rows', () => {
+    seedPending(null)
+
+    render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId="req-done"
+        toolName="write_file"
+        input={{ Path: '/repo/README.md', Content: 'hello' }}
+        antigravityToolName="write_file"
+        subagentName="docs-worker"
+      />,
+    )
+
+    expect(screen.getByTestId('permission-subagent-badge')).toHaveTextContent('From docs-worker')
+    expect(screen.getByText('Responded')).toBeInTheDocument()
+  })
+
+  it('locks ExitPlanMode model switcher to Antigravity and hides bypassPermissions on Antigravity sessions', async () => {
+    useProviderStore.setState({
+      providers: [],
+      activeId: null,
+      hasLoadedProviders: true,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [
+          { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+        ],
+        currentModelId: 'gemini-3.8-pro',
+      },
+    })
+    useSessionRuntimeStore.setState({
+      selections: {
+        [SESSION]: { providerId: 'antigravity-acp', modelId: 'gemini-3.8-pro', effortLevel: 'high' },
+      },
+    })
+    seedPending({
+      requestId: 'perm-plan',
+      toolName: 'ExitPlanMode',
+      toolUseId: 'tool-plan',
+      input: { plan: '# AG Plan\n\n1. Ship it.' },
+    })
+
+    render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: '# AG Plan\n\n1. Ship it.' }}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Approve & bypass permissions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve & auto-accept edits' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('Gemini 3.8 Flash')
+    expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Claude Official')
+  })
+})

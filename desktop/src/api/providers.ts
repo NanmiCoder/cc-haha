@@ -1,7 +1,10 @@
 // desktop/src/api/providers.ts
 
 import { api } from './client'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import type {
+  AntigravityStatus,
+  AntigravityStatusState,
   SavedProvider,
   CreateProviderInput,
   UpdateProviderInput,
@@ -22,7 +25,9 @@ type ProvidersListResponse = ProvidersResponse & {
   providerOrder?: string[]
   /** Saved alias mapping of the built-in DeepSeek account provider. */
   deepSeekAccountModels?: ModelMapping
+  antigravity?: AntigravityStatus
 }
+type DiscoverAntigravityResponse = { antigravity: AntigravityStatus }
 type ProvidersReorderResponse = { providers: SavedProvider[]; providerOrder?: string[] }
 type ProviderResponse = { provider: SavedProvider }
 type TestResultResponse = { result: ProviderTestResult }
@@ -33,13 +38,18 @@ type OfficialProviderModelsResponse = {
 }
 type AuthStatusResponse = {
   hasAuth: boolean
-  source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'original-settings' | 'env' | 'none'
+  source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'antigravity-acp' | 'original-settings' | 'env' | 'none'
   activeProvider?: string
+  antigravityStatus?: AntigravityStatusState
 }
 
 export const providersApi = {
   list() {
     return api.get<ProvidersListResponse>('/api/providers')
+  },
+
+  discoverAntigravity() {
+    return api.post<DiscoverAntigravityResponse>(`/api/providers/${ANTIGRAVITY_ACP_PROVIDER_ID}/discover`)
   },
 
   /**

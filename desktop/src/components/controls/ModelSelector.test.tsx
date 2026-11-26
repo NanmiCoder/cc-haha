@@ -1950,4 +1950,118 @@ describe('controlled runtime pickers outside the composer', () => {
     })
     expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
   })
+
+  it('isolates Antigravity models and thinking levels when locked to antigravity-acp and never mixes them into cc-haha', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
+    const discoverMock = vi.fn(async () => ({
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [
+        { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as ('low' | 'medium' | 'high' | 'xhigh')[], defaultReasoningEffort: 'high' as const },
+        { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'] as ('low' | 'medium' | 'high')[], defaultReasoningEffort: 'medium' as const },
+      ],
+      currentModelId: 'gemini-3.8-pro',
+    }))
+    useProviderStore.setState({
+      providers: [],
+      activeId: null,
+      hasLoadedProviders: true,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [
+          { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+        ],
+        currentModelId: 'gemini-3.8-pro',
+      },
+      discoverAntigravity: discoverMock,
+    })
+
+    // In cc-haha mode (not locked to antigravity-acp), Antigravity models are never mixed in.
+    const { unmount } = render(<ModelSelector runtimeKey="__draft__" />)
+    await clickByRole(/Claude Official/)
+    expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Gemini 3.8 Pro')
+    unmount()
+
+    // In Antigravity locked mode, ONLY Antigravity models appear and Thinking Level remains editable.
+    useSessionRuntimeStore.getState().setSelection('ag-session', {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    const onRuntimeSelectionChange = vi.fn()
+    render(
+      <ModelSelector
+        runtimeKey="ag-session"
+        lockedProviderId="antigravity-acp"
+        onRuntimeSelectionChange={onRuntimeSelectionChange}
+      />,
+    )
+
+    await clickByRole('Gemini 3.8 Pro, Antigravity')
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('button', { name: /Gemini 3\.8 Pro/ })).toBeInTheDocument()
+    expect(dropdown.getByRole('button', { name: /Gemini 3\.8 Flash/ })).toBeInTheDocument()
+    expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Claude Official')
+
+    // Thinking level radio is enabled even though lockedProviderId is set.
+    const xhighRadio = dropdown.getByRole('radio', { name: 'X-High' })
+    expect(xhighRadio).toBeEnabled()
+    fireEvent.click(xhighRadio)
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'xhigh',
+    })
+
+    // Switching model stays inside Antigravity.
+    fireEvent.click(dropdown.getByRole('button', { name: /Gemini 3\.8 Flash/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-flash',
+      effortLevel: 'medium',
+    })
+  })
+
+  it('auto-discovers Antigravity models when opened in unchecked state and shows login instructions when login_required', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const discoverMock = vi.fn(async () => ({
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'login_required' as const,
+      models: [],
+    }))
+    useProviderStore.setState({
+      hasLoadedProviders: true,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'unchecked',
+        models: [],
+      },
+      discoverAntigravity: discoverMock,
+    })
+    useSessionRuntimeStore.getState().setSelection('ag-unchecked', {
+      providerId: 'antigravity-acp',
+      modelId: 'agent-default',
+    })
+
+    const { rerender } = render(
+      <ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />,
+    )
+    await clickByRole(/Antigravity/)
+    expect(discoverMock).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      useProviderStore.setState({
+        antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'login_required', models: [] },
+      })
+    })
+    rerender(<ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />)
+    expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('agy acp --login')
+  })
 })

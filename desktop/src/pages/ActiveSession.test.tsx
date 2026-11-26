@@ -3551,4 +3551,38 @@ describe('ActiveSession delegated sessions', () => {
     expect(await screen.findByRole('dialog', { name: 'Session assignments' })).toBeInTheDocument()
     expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(panelStaysOpen)
   })
+
+  it('hides Side Chat action for Antigravity ACP sessions', () => {
+    const agId = 'ag-active-session'
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: agId, tabs: [{ sessionId: agId, title: 'AG', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({
+      sessions: [{
+        id: agId,
+        title: 'AG',
+        messageCount: 1,
+        createdAt: '',
+        modifiedAt: '',
+        projectPath: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    useChatStore.setState({
+      sessions: {
+        [agId]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyStatus: 'ready',
+          historyHydrated: true,
+          messages: [{ id: 'm1', type: 'assistant_text', content: 'hi from ag', timestamp: 1 }],
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+    expect(screen.queryByRole('button', { name: /side chat/i })).not.toBeInTheDocument()
+  })
 })

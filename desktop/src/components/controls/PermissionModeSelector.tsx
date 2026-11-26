@@ -86,10 +86,12 @@ type Props = {
   value?: PermissionMode
   /** Controlled mode: called on change instead of updating global store */
   onChange?: (mode: PermissionMode) => void
+  /** Restrict selectable modes (e.g. Antigravity supports default/acceptEdits/auto/plan). */
+  allowedModes?: readonly PermissionMode[]
 }
 
 export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, Props>(function PermissionModeSelector(
-  { lean = false, sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange }: Props = {},
+  { lean = false, sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange, allowedModes }: Props = {},
   handleRef,
 ) {
   const t = useTranslation()
@@ -218,7 +220,10 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
 
   const permissionItems = (
     <>
-      {PERMISSION_ITEMS.filter(item => !((lean || activeSession?.agentProfile === 'lean') && item.value === 'plan')).map((item) => (
+      {PERMISSION_ITEMS.filter(item => (
+        (!allowedModes || allowedModes.includes(item.value)) &&
+        !((lean || activeSession?.agentProfile === 'lean') && item.value === 'plan')
+      )).map((item) => (
         <button
           key={item.value}
           role="menuitem"

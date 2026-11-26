@@ -172,12 +172,13 @@ vi.mock('@/components/layout/ProjectEditorModal', () => ({
 }))
 
 vi.mock('../components/controls/PermissionModeSelector', () => ({
-  PermissionModeSelector: ({ compact, value, onChange, menuAlign }: { compact?: boolean; value?: string; onChange?: (mode: string) => void; menuAlign?: string }) => (
+  PermissionModeSelector: ({ compact, value, onChange, menuAlign, allowedModes }: { compact?: boolean; value?: string; onChange?: (mode: string) => void; menuAlign?: string; allowedModes?: readonly string[] }) => (
     <button
       type="button"
       data-testid="permission-mode-selector"
       data-compact={compact ? 'true' : 'false'}
       data-menu-align={menuAlign}
+      data-allowed-modes={allowedModes ? allowedModes.join(',') : ''}
       aria-label={`Permission mode: ${value ?? 'default'}`}
       onClick={() => onChange?.('auto')}
     >
@@ -189,12 +190,18 @@ vi.mock('../components/controls/PermissionModeSelector', () => ({
 vi.mock('../components/controls/ModelSelector', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean; fluid?: boolean }>(({ compact, fluid }, ref) => {
+    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean; fluid?: boolean; lockedProviderId?: string | null }>(({ compact, fluid, lockedProviderId }, ref) => {
       const [open, setOpen] = React.useState(false)
       React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), [])
       return (
         <>
-          <button type="button" data-testid="model-selector" data-compact={compact ? 'true' : 'false'} data-fluid={fluid ? 'true' : 'false'}>
+          <button
+            type="button"
+            data-testid="model-selector"
+            data-compact={compact ? 'true' : 'false'}
+            data-fluid={fluid ? 'true' : 'false'}
+            data-locked-provider-id={lockedProviderId ?? ''}
+          >
             Model
           </button>
           {open && <div data-testid="model-selector-dropdown">Model selector opened</div>}
@@ -3066,6 +3073,113 @@ describe('EmptySession', () => {
       unmount()
 
       expect(activeRecording.cancel).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('Antigravity dual-engine switcher', () => {
+    const readyAntigravity = {
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [
+        { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as ('low' | 'medium' | 'high' | 'xhigh')[], defaultReasoningEffort: 'high' as const },
+      ],
+      currentModelId: 'gemini-3.8-pro',
+      currentEffortLevel: 'high' as const,
+      version: '1.5.17',
+    }
+
+    beforeEach(() => {
+      window.localStorage.removeItem('cc-haha-composer-engine')
+      window.localStorage.removeItem('cc-haha-antigravity-last-selection')
+      window.localStorage.removeItem('cc-haha-antigravity-enabled')
+    })
+
+    it('hides the engine switcher when Antigravity is not installed or disabled', () => {
+      useProviderStore.setState({
+        antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'not_installed', models: [] },
+        antigravityEnabled: true,
+      })
+      const { rerender } = render(<EmptySession />)
+      expect(screen.queryByRole('radiogroup', { name: 'Agent engine' })).not.toBeInTheDocument()
+
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: false,
+      })
+      rerender(<EmptySession />)
+      expect(screen.queryByRole('radiogroup', { name: 'Agent engine' })).not.toBeInTheDocument()
+    })
+
+    it('switches to Antigravity on desktop, isolates model/permission/slash controls, hides worktree, and launches with antigravity-acp', async () => {
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.createSession.mockResolvedValue({
+        id: 'ag-session-1',
+        title: 'Build with AG',
+        workDir: '/workspace/project',
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: true, source: 'antigravity-acp', antigravityStatus: 'ready' })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      expect(window.localStorage.getItem('cc-haha-composer-engine')).toBe('antigravity')
+      expect(screen.getByTestId('model-selector')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
+      expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan')
+
+      // Slash menu filters to Antigravity commands (no Claude-only /btw or /doctor)
+      setComposerText('/', 1)
+      await waitFor(() => {
+        expect(screen.getByText('/swarm')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('/btw')).not.toBeInTheDocument()
+      expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+
+      // Location menu keeps Branch while hiding Worktree radio cards
+      await openLaunchMenu()
+      const locMenu = await screen.findByRole('menu', { name: 'Location' })
+      expect(await within(locMenu).findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
+      expect(within(locMenu).queryAllByRole('menuitemradio')).toHaveLength(0)
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      // Submitting launches session with Antigravity provider & model
+      setComposerText('Audit the ACP bridge', 20)
+      const runButton = screen.getByRole('button', { name: 'Run' })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+          launchProviderId: 'antigravity-acp',
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-pro',
+          effortLevel: 'high',
+          permissionMode: 'default',
+          repository: { branch: 'main', worktree: false },
+        }))
+      })
+    })
+
+    it('renders the engine switcher in the mobile H5 launch strip when enabled', () => {
+      mocks.isMobile = true
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+
+      render(<EmptySession />)
+      const mobileLaunch = screen.getByTestId('empty-session-mobile-launch')
+      expect(within(mobileLaunch).getByRole('radiogroup', { name: 'Agent engine' })).toBeInTheDocument()
     })
   })
 

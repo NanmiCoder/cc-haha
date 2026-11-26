@@ -2029,6 +2029,32 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.providers.ccSwitch.scanFailed': 'Could not read the cc-switch configuration.',
   'settings.providers.ccSwitch.importFailed': 'Import failed.',
   'settings.providers.ccSwitch.importedSummary': 'Imported {imported}, skipped {skipped}.',
+  'settings.providers.localRuntimes.title': 'Local agent runtimes',
+  'settings.providers.localRuntimes.description': 'Run local CLI agents alongside cc-haha using their own login without an extra API key.',
+  'settings.providers.antigravity.name': 'Antigravity',
+  'settings.providers.antigravity.description': 'Local Antigravity CLI (agy) over ACP using your existing Antigravity sign-in.',
+  'settings.providers.antigravity.check': 'Refresh status',
+  'settings.providers.antigravity.defaultModel': 'Default model',
+  'settings.providers.antigravity.badge.not_installed': 'Not installed',
+  'settings.providers.antigravity.badge.unchecked': 'Not checked',
+  'settings.providers.antigravity.badge.ready': 'Ready',
+  'settings.providers.antigravity.badge.login_required': 'Sign in required',
+  'settings.providers.antigravity.badge.error': 'Unavailable',
+  'settings.providers.antigravity.status.not_installed': 'Antigravity CLI (agy) was not found in PATH. Install it and refresh.',
+  'settings.providers.antigravity.status.unchecked': 'Click Refresh status to discover local Antigravity models.',
+  'settings.providers.antigravity.status.ready': 'Connected to local Antigravity CLI.',
+  'settings.providers.antigravity.status.readyWithModels': 'Connected · {count} models available.',
+  'settings.providers.antigravity.status.login_required': 'Sign in first by running "{command}" in your terminal, then refresh.',
+  'settings.providers.antigravity.status.error': 'Could not start Antigravity ACP. Check your local agy CLI installation and try again.',
+  'settings.providers.antigravity.enableLabel': 'Show Antigravity in new sessions',
+  'settings.providers.antigravity.enableDesc': 'Adds the cc-haha / Antigravity engine switcher to the new-session composer.',
+  'settings.providers.antigravity.computerUseTitle': 'Computer Use bridge',
+  'settings.providers.antigravity.computerUseBadgeOn': 'Enabled',
+  'settings.providers.antigravity.computerUseBadgeOff': 'Off',
+  'settings.providers.antigravity.computerUseActive': 'Shared with Antigravity sessions over the local MCP bridge using your cc-haha Computer Use permission.',
+  'settings.providers.antigravity.computerUseInactive': 'Computer Use is off. Enable it in Desktop settings to share screen and desktop control with Antigravity sessions.',
+  'settings.providers.antigravity.computerUseNote': 'Antigravity sessions share the same Computer Use setting configured in Desktop settings.',
+  'settings.providers.antigravity.openComputerUseSettings': 'Computer Use settings',
 
   // Settings > Permissions
   'settings.permissions.title': 'Permission Mode',
@@ -3181,6 +3207,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
 
   // ─── Empty Session ──────────────────────────────────────
   'empty.title': 'New session',
+  'empty.engineSwitcher.label': 'Agent engine',
   'empty.subtitle': 'Start a fresh coding session. Claude is ready to help you build, debug, and architect your project.',
   'empty.heroTitle': 'What should we work on in {project} today?',
   'empty.heroTitleNoProject': 'What should we work on today?',
@@ -3608,6 +3635,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'permission.planEmpty': 'No plan content available.',
   'permission.planApproved': 'Plan approved',
   'permission.planRejected': 'Plan rejected',
+  'permission.fromSubagent': 'From {name}',
 
   // ─── Computer Use Approval ──────────────────────────────────────
 

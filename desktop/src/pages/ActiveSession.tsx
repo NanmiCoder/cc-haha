@@ -19,7 +19,9 @@ import {
   type TabType,
 } from '../stores/tabStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useChatStore } from '../stores/chatStore'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../stores/teamStore'
 import { interruptedTeamNameOf, useTeamPlanStore } from '../stores/teamPlanStore'
@@ -409,6 +411,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const stoppingBackgroundTaskIds = sessionState?.stoppingBackgroundTaskIds
 
   const session = sessions.find((s) => s.id === activeTabId)
+  const runtimeProviderId = useSessionRuntimeStore((s) => activeTabId ? s.selections[activeTabId]?.providerId : undefined)
+  const isAntigravity = runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID || session?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
   const isLean = session?.agentProfile === 'lean'
   const sessionMessageCount = Math.max(
     sessionState?.messages.length ?? 0,
@@ -882,7 +886,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               dock="side"
               cwd={getSessionTerminalCwd(session) ?? ''}
               reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
-              sideChatAvailable={!isEmpty && !isLean}
+              sideChatAvailable={!isEmpty && !isLean && !isAntigravity}
               visible={active}
             />
           </aside>
@@ -893,7 +897,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             Mobile has no session header, so its side-chat entry lives here. A
             blank session has nothing for a side chat to fork, so it gets none.
           */}
-          {isMobileLayout && !isEmpty && !isLean && (
+          {isMobileLayout && !isEmpty && !isLean && !isAntigravity && (
             <div className="flex justify-end px-4 py-2">
               <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                 pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
@@ -936,7 +940,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   metadata={headerMetadata}
                   actions={<>
                     {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
-                    {!isLean && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
+                    {!isLean && !isAntigravity && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                       pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
                   </>}
                 >

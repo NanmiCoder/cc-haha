@@ -28,6 +28,7 @@ const {
     scanCcSwitch: vi.fn(),
     importCcSwitch: vi.fn(),
     fetchModels: vi.fn(),
+    discoverAntigravity: vi.fn(),
   },
   chatStoreState: {
     sessions: {} as Record<string, { connectionState: string; chatState: string }>,
@@ -581,5 +582,76 @@ describe('providerStore fetchModels', () => {
     })
 
     expect(result).toEqual(expect.objectContaining({ ok: false, errorCode: 'auth-failed' }))
+  })
+})
+
+describe('providerStore Antigravity ACP status', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.localStorage.clear()
+    providersApiMock.list.mockResolvedValue({ providers: [], activeId: null })
+  })
+
+  it('stores antigravity status from fetchProviders and discovers models on demand', async () => {
+    const initial = {
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'unchecked' as const,
+      models: [],
+    }
+    const discovered = {
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [{ id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'high' }],
+      currentModelId: 'gemini-3.8-pro',
+      currentEffortLevel: 'high',
+      version: '1.5.17',
+    }
+    providersApiMock.list.mockResolvedValue({ providers: [], activeId: null, antigravity: initial })
+    providersApiMock.discoverAntigravity.mockResolvedValue({ antigravity: discovered })
+
+    const { useProviderStore } = await import('./providerStore')
+    await useProviderStore.getState().fetchProviders()
+    expect(useProviderStore.getState().antigravity).toEqual(initial)
+
+    const result = await useProviderStore.getState().discoverAntigravity()
+    expect(result).toEqual(discovered)
+    expect(useProviderStore.getState().antigravity).toEqual(discovered)
+  })
+
+  it('does not overwrite a fresher discoverAntigravity result with an earlier stale list() response', async () => {
+    let resolveList: (value: unknown) => void = () => {}
+    providersApiMock.list.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))
+    const discovered = {
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [{ id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro' }],
+    }
+    providersApiMock.discoverAntigravity.mockResolvedValue({ antigravity: discovered })
+
+    const { useProviderStore } = await import('./providerStore')
+    const fetchPromise = useProviderStore.getState().fetchProviders()
+    await useProviderStore.getState().discoverAntigravity()
+    resolveList({
+      providers: [],
+      activeId: null,
+      antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'unchecked', models: [] },
+    })
+    await fetchPromise
+
+    expect(useProviderStore.getState().antigravity).toEqual(discovered)
+  })
+
+  it('persists antigravityEnabled via setAntigravityEnabled', async () => {
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.getState().setAntigravityEnabled(false)
+    expect(useProviderStore.getState().antigravityEnabled).toBe(false)
+    expect(window.localStorage.getItem('cc-haha-antigravity-enabled')).toBe('0')
+
+    useProviderStore.getState().setAntigravityEnabled(true)
+    expect(useProviderStore.getState().antigravityEnabled).toBe(true)
+    expect(window.localStorage.getItem('cc-haha-antigravity-enabled')).toBe('1')
   })
 })

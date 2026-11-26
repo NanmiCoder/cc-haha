@@ -23,8 +23,14 @@ import type { TranslationKey } from '../../i18n'
  */
 export const PERMISSION_TOOL_ICONS: Record<string, LucideIcon> = {
   Bash: SquareTerminal,
+  run_command: SquareTerminal,
   Edit: FilePen,
+  edit_file: FilePen,
+  replace_file_content: FilePen,
+  multi_replace_file_content: FilePen,
   Write: FilePlus,
+  write_file: FilePlus,
+  write_to_file: FilePlus,
   Read: FileText,
   Glob: Search,
   Grep: FileSearch,
@@ -35,6 +41,14 @@ export const PERMISSION_TOOL_ICONS: Record<string, LucideIcon> = {
   Skill: Box,
 }
 
+function readInputFilePath(obj: Record<string, unknown>): string {
+  if (typeof obj.file_path === 'string') return obj.file_path
+  if (typeof obj.Path === 'string') return obj.Path
+  if (typeof obj.TargetFile === 'string') return obj.TargetFile
+  if (typeof obj.path === 'string') return obj.path
+  return ''
+}
+
 /**
  * Extract human-readable detail lines from tool input.
  */
@@ -42,21 +56,36 @@ export function extractToolDetails(toolName: string, input: unknown, t: (key: Tr
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
 
   switch (toolName) {
-    case 'Bash': {
-      const cmd = typeof obj.command === 'string' ? obj.command : ''
-      const desc = typeof obj.description === 'string' ? obj.description : undefined
+    case 'Bash':
+    case 'run_command': {
+      const cmd = typeof obj.command === 'string'
+        ? obj.command
+        : typeof obj.CommandLine === 'string'
+          ? obj.CommandLine
+          : ''
+      const desc = typeof obj.description === 'string'
+        ? obj.description
+        : typeof obj.toolSummary === 'string'
+          ? obj.toolSummary
+          : undefined
       return { primary: cmd, secondary: desc }
     }
-    case 'Edit': {
-      const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
-      return { primary: filePath, secondary: obj.old_string ? t('permission.replacingContent') : undefined }
+    case 'Edit':
+    case 'edit_file':
+    case 'replace_file_content':
+    case 'multi_replace_file_content': {
+      const filePath = readInputFilePath(obj)
+      const hasOld = Boolean(obj.old_string || obj.Target || obj.TargetContent)
+      return { primary: filePath, secondary: hasOld ? t('permission.replacingContent') : undefined }
     }
-    case 'Write': {
-      const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
+    case 'Write':
+    case 'write_file':
+    case 'write_to_file': {
+      const filePath = readInputFilePath(obj)
       return { primary: filePath }
     }
     case 'Read': {
-      const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
+      const filePath = readInputFilePath(obj)
       return { primary: filePath }
     }
     case 'Glob':
@@ -81,17 +110,27 @@ export function getPermissionTitle(
   displayName?: string,
 ) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
-  const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
+  const filePath = readInputFilePath(obj)
   const fileName = filePath ? filePath.split('/').pop() || filePath : ''
   const actor = displayName || 'Claude'
 
   switch (toolName) {
     case 'Edit':
+    case 'edit_file':
+    case 'replace_file_content':
+    case 'multi_replace_file_content':
     case 'Write':
+    case 'write_file':
+    case 'write_to_file': {
+      const actionLabel = toolName === 'Write' || toolName === 'write_file' || toolName === 'write_to_file'
+        ? 'Write'
+        : 'Edit'
       return fileName
-        ? t('permission.allowEditFile', { actor, toolName, fileName })
-        : t('permission.allowEditFileGeneric', { actor, toolName: toolName.toLowerCase() })
+        ? t('permission.allowEditFile', { actor, toolName: actionLabel, fileName })
+        : t('permission.allowEditFileGeneric', { actor, toolName: actionLabel.toLowerCase() })
+    }
     case 'Bash':
+    case 'run_command':
       return t('permission.allowBash', { actor })
     default:
       return t('permission.allowTool', { actor, toolName })

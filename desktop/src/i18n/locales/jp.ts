@@ -2030,6 +2030,32 @@ export const jp: Record<TranslationKey, string> = {
   'settings.providers.ccSwitch.scanFailed': 'cc-switch の設定を読み込めませんでした。',
   'settings.providers.ccSwitch.importFailed': 'インポートに失敗しました。',
   'settings.providers.ccSwitch.importedSummary': '{imported} 件をインポート、{skipped} 件をスキップしました。',
+  'settings.providers.localRuntimes.title': 'ローカル Agent ランタイム',
+  'settings.providers.localRuntimes.description': 'cc-haha と並行してローカル CLI Agent を実行し、追加の API キーなしで既存のログインをそのまま利用します。',
+  'settings.providers.antigravity.name': 'Antigravity',
+  'settings.providers.antigravity.description': '既存の Antigravity ログインを使い、ACP 経由でローカルの Antigravity CLI（agy）に接続します。',
+  'settings.providers.antigravity.check': '状態を更新',
+  'settings.providers.antigravity.defaultModel': 'デフォルトモデル',
+  'settings.providers.antigravity.badge.not_installed': '未インストール',
+  'settings.providers.antigravity.badge.unchecked': '未確認',
+  'settings.providers.antigravity.badge.ready': '準備完了',
+  'settings.providers.antigravity.badge.login_required': 'ログインが必要',
+  'settings.providers.antigravity.badge.error': '利用不可',
+  'settings.providers.antigravity.status.not_installed': 'PATH に Antigravity CLI（agy）が見つかりません。インストールしてから更新してください。',
+  'settings.providers.antigravity.status.unchecked': '「状態を更新」をクリックしてローカルの Antigravity モデルを検出します。',
+  'settings.providers.antigravity.status.ready': 'ローカルの Antigravity CLI に接続済みです。',
+  'settings.providers.antigravity.status.readyWithModels': '接続済み · {count} 件のモデルが利用可能です。',
+  'settings.providers.antigravity.status.login_required': 'ターミナルで「{command}」を実行してログインしてから更新してください。',
+  'settings.providers.antigravity.status.error': 'Antigravity ACP を起動できませんでした。ローカルの agy CLI を確認して再試行してください。',
+  'settings.providers.antigravity.enableLabel': '新規セッションに Antigravity を表示',
+  'settings.providers.antigravity.enableDesc': '新規セッション入力欄に cc-haha / Antigravity のエンジン切替を表示します。',
+  'settings.providers.antigravity.computerUseTitle': 'Computer Use ブリッジ',
+  'settings.providers.antigravity.computerUseBadgeOn': 'オン',
+  'settings.providers.antigravity.computerUseBadgeOff': 'オフ',
+  'settings.providers.antigravity.computerUseActive': 'ローカル MCP ブリッジ経由で cc-haha の Computer Use 権限を Antigravity セッションと共有しています。',
+  'settings.providers.antigravity.computerUseInactive': 'Computer Use はオフです。デスクトップ設定でオンにすると Antigravity セッションでも画面操作を共有できます。',
+  'settings.providers.antigravity.computerUseNote': 'Antigravity セッションはデスクトップ設定と同じ Computer Use 設定を共有します。',
+  'settings.providers.antigravity.openComputerUseSettings': 'Computer Use 設定を開く',
 
   // Settings > Permissions
   'settings.permissions.title': '権限モード',
@@ -3182,6 +3208,7 @@ export const jp: Record<TranslationKey, string> = {
 
   // ─── Empty Session ──────────────────────────────────────
   'empty.title': '新しいセッション',
+  'empty.engineSwitcher.label': 'Agent エンジン',
   'empty.subtitle': '新しいコーディングセッションを開始します。Claude は、プロジェクトの構築、デバッグ、設計をお手伝いする準備ができています。',
   'empty.heroTitle': '今日は {project} で何をしますか？',
   'empty.heroTitleNoProject': '今日は何をしますか？',
@@ -3609,6 +3636,7 @@ export const jp: Record<TranslationKey, string> = {
   'permission.planEmpty': '計画内容はありません。',
   'permission.planApproved': '計画が承認されました',
   'permission.planRejected': '計画が拒否されました',
+  'permission.fromSubagent': '{name} より',
 
   // ─── Computer Use Approval ──────────────────────────────────────
 

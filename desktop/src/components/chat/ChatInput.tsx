@@ -43,6 +43,11 @@ import type { AttachmentRef } from '../../types/chat'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { SlashCommandOption } from '../../types/slashCommand'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
+import {
+  ANTIGRAVITY_ACP_PERMISSION_MODES,
+  ANTIGRAVITY_ACP_PROVIDER_ID,
+  ANTIGRAVITY_HOST_UI_SLASH_COMMANDS,
+} from '@/constants/antigravityAcp'
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
@@ -315,6 +320,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const listedSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
   const activeSession = listedSession ?? (sideChat ? { ...sideChat, id: sideChat.sessionId, workDirExists: true, workspaceState: 'available' as const, messageCount: 1, projectRoot: sideChat.workDir } : null)
   const isLean = listedSession?.agentProfile === 'lean'
+  const isAntigravity = runtimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID ||
+    listedSession?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -451,7 +458,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
   const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
-  const sideChatAvailable = !isLean && (Boolean(sideChat) || messageCount > 0)
+  const sideChatAvailable = !isLean && !isAntigravity && (Boolean(sideChat) || messageCount > 0)
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -547,9 +554,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const hasUnderCardContext = !isMemberSession &&
     !(isMobileComposer && messageCount > 0) &&
     (showLaunchControls || Boolean(resolvedWorkDir || gitInfo?.repoName || activeSession?.projectRoot))
-  const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
+  const rawPendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
     : null
+  const pendingSlashCommandName = input.trim().startsWith('/')
+    ? input.trim().slice(1).trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+    : ''
+  const pendingSlashUiAction = isAntigravity && !ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(pendingSlashCommandName)
+    ? null
+    : rawPendingSlashUiAction
   const canSubmit = !isWorkspaceMissing &&
     !launchTransitioning &&
     !isPreparingTurn &&
@@ -893,6 +906,14 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       return mergeSlashCommands(listed, getLocalizedFallbackCommands(t))
         .filter(command => isComposerSlashCommandVisible(command) && isTeamMemberSlashCommand(command.name))
     }
+    if (isAntigravity) {
+      // Antigravity sessions use the ACP-reported `slashCommands` authoritatively,
+      // plus host UI commands (`/model`, `/config`, `/clear`) without Claude fallbacks.
+      const hostFallbacks = getLocalizedFallbackCommands(t).filter((cmd) =>
+        ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(cmd.name.toLowerCase()),
+      )
+      return mergeSlashCommands(slashCommands, hostFallbacks)
+    }
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommands, getLocalizedFallbackCommands(t)), agentSlashCommands)
     const names = new Set(commands.map(command => command.name.toLowerCase()))
     for (const reference of composerReferences) {
@@ -903,11 +924,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     // `/btw` forks the conversation so far; a blank session has none to fork.
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedSlashCommandNames)) && (sideChatAvailable || command.name !== 'btw'))
-  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isLean, isMemberSession, memberCliSessionId, memberSlashCommands, t])
+  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isLean, isAntigravity, isMemberSession, memberCliSessionId, memberSlashCommands, t])
 
   const filteredCommandGroups = useMemo(() => {
-    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
-  }, [allSlashCommands, slashFilter])
+    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter, { showAllWhenEmpty: isAntigravity }))
+  }, [allSlashCommands, isAntigravity, slashFilter])
 
   const filteredCommands = filteredCommandGroups.ordered
   // A member page lists only what its CLI can run, and nothing without one.
@@ -1051,15 +1072,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     const repositoryLaunchDraft = chatStore.sessions[oldId]?.repositoryLaunchDraft
     const permissionMode = sessionStore.sessions.find((session) => session.id === oldId)
       ?.permissionMode as PermissionMode | undefined
-    const createOptions = repository || permissionMode
+    const createOptions = repository || permissionMode || isAntigravity
       ? {
-          ...(repository ? { repository } : {}),
-          ...(permissionMode ? { permissionMode } : {}),
+          ...(repository ? { repository: isAntigravity ? { ...repository, worktree: false } : repository } : {}),
+          ...(permissionMode ? { permissionMode: isAntigravity && permissionMode === 'bypassPermissions' ? 'default' as const : permissionMode } : {}),
+          ...(isAntigravity ? { launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID, providerId: ANTIGRAVITY_ACP_PROVIDER_ID } : {}),
         }
       : undefined
     const newId = await createSession(
       workDir || undefined,
-      isLean ? { ...createOptions, agentProfile: 'lean' } : createOptions,
+      isLean && !isAntigravity ? { ...createOptions, agentProfile: 'lean' } : createOptions,
     )
     if (inputRef.current.length > 0 || attachmentsRef.current.length > 0) {
       setComposerDraft(newId, {
@@ -1076,7 +1098,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     connectToSession(newId)
     deleteSession(oldId).catch(() => {})
     return newId
-  }, [activeTabId, isLean])
+  }, [activeTabId, isAntigravity, isLean])
 
   const handleLaunchWorkDirChange = useCallback(async (newWorkDir: string) => {
     updateRepositoryLaunchDraft(() => ({
@@ -1125,7 +1147,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     // Immediate local command: never enter the main turn, launch flow or queue.
-    const sideQuestion = !isMemberSession ? parseSideQuestionCommand(text) : null
+    const sideQuestion = !isMemberSession && !isAntigravity ? parseSideQuestionCommand(text) : null
     if (sideQuestion !== null && activeTabId) {
       promptHistory.recordSubmission({ text: input, mentions })
       void openSideChat(sideChat?.parentSessionId ?? activeTabId, { question: sideQuestion || undefined, submit: true })
@@ -1694,6 +1716,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const permissionSelector = isMemberSession ? null : (
     <PermissionModeSelector
       lean={isLean}
+      allowedModes={isAntigravity ? ANTIGRAVITY_ACP_PERMISSION_MODES : undefined}
       ref={permissionSelectorRef}
       sessionId={activeTabId ?? undefined}
       workDir={resolvedWorkDir}
@@ -1737,9 +1760,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     cwd: referenceCwd,
     references: composerReferences,
     lean: isLean,
+    antigravity: isAntigravity,
     // A lean conversation's mode is fixed; its row only says so. A phone's "+"
     // sheet opens its own sheet from a settings row instead.
-    agentProfile: isLean && !isMobileComposer ? { value: 'lean' } : undefined,
+    agentProfile: isLean && !isAntigravity && !isMobileComposer ? { value: 'lean' } : undefined,
     handlers: {
       onInsertMention: (reference) => {
         promptHistory.resetHistory()
@@ -2220,7 +2244,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 <ModelSelector
                   ref={modelSelectorRef}
                   runtimeKey={activeTabId}
-                  lockedProviderId={sideChat ? runtimeSelection?.providerId ?? null : undefined}
+                  lockedProviderId={isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : sideChat ? runtimeSelection?.providerId ?? null : undefined}
                   disabled={isActive}
                   compact={useCompactControls}
                   fluid={isMobileComposer}
@@ -2319,6 +2343,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 useWorktree={launchUseWorktree}
                 onUseWorktreeChange={setLaunchUseWorktree}
                 onLaunchReadyChange={setLaunchReady}
+                worktreeSupported={!isAntigravity}
                 disabled={isActive || launchTransitioning}
                 placement={useCompactControls ? 'outside' : 'toolbar'}
               />

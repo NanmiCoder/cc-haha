@@ -18,8 +18,10 @@ import {
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
 } from '../constants/deepseekAccountProvider'
 import { BUNDLED_PROVIDER_PRESETS } from '../config/providerPresets'
+import { readAntigravityEnabled, writeAntigravityEnabled } from '../lib/antigravityPreferences'
 import { resolveProviderRuntimeModelId, resolveProviderSlotModelId } from '../lib/runtimeSelection'
 import type {
+  AntigravityStatus,
   SavedProvider,
   ModelMapping,
   CreateProviderInput,
@@ -40,12 +42,18 @@ type ProviderStore = {
   activeId: string | null
   /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
   deepSeekAccountModels: ModelMapping
+  /** Local Antigravity ACP runtime status discovered by the server. */
+  antigravity: AntigravityStatus | undefined
+  /** User toggle to show/hide Antigravity in the new-session engine switcher. */
+  antigravityEnabled: boolean
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
   isLoading: boolean
   error: string | null
 
   fetchProviders: () => Promise<void>
+  discoverAntigravity: () => Promise<AntigravityStatus | undefined>
+  setAntigravityEnabled: (enabled: boolean) => void
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
   updateProvider: (id: string, input: UpdateProviderInput) => Promise<SavedProvider>
   deleteProvider: (id: string) => Promise<void>
@@ -184,6 +192,8 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
   deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
+  antigravity: undefined,
+  antigravityEnabled: readAntigravityEnabled(),
   hasLoadedProviders: false,
   presets: BUNDLED_PROVIDER_PRESETS,
   isLoading: false,
@@ -193,12 +203,15 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const firstLoad = !get().hasLoadedProviders
-      const { providers, activeId, providerOrder, deepSeekAccountModels } = await providersApi.list()
+      const previousAntigravity = get().antigravity
+      const { providers, activeId, providerOrder, deepSeekAccountModels, antigravity } = await providersApi.list()
       set({
         providers,
         providerOrder: normalizeProviderOrder(providerOrder, providers),
         activeId,
         ...(deepSeekAccountModels && { deepSeekAccountModels }),
+        // A list request started before discovery must not erase its result.
+        ...(get().antigravity === previousAntigravity && antigravity !== undefined ? { antigravity } : {}),
         hasLoadedProviders: true,
         isLoading: false,
       })
@@ -211,6 +224,18 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  },
+
+  discoverAntigravity: async () => {
+    const response = await providersApi.discoverAntigravity()
+    const antigravity = response.antigravity
+    set({ antigravity })
+    return antigravity
+  },
+
+  setAntigravityEnabled: (enabled) => {
+    writeAntigravityEnabled(enabled)
+    set({ antigravityEnabled: enabled })
   },
 
   createProvider: async (input) => {

@@ -2032,6 +2032,32 @@ export const kr: Record<TranslationKey, string> = {
   'settings.providers.ccSwitch.scanFailed': 'cc-switch 설정을 읽지 못했습니다.',
   'settings.providers.ccSwitch.importFailed': '가져오기에 실패했습니다.',
   'settings.providers.ccSwitch.importedSummary': '{imported}개를 가져오고 {skipped}개를 건너뛰었습니다.',
+  'settings.providers.localRuntimes.title': '로컬 에이전트 런타임',
+  'settings.providers.localRuntimes.description': '별도 API 키 없이 기존 로그인을 그대로 사용하여 cc-haha와 함께 로컬 CLI 에이전트를 실행합니다.',
+  'settings.providers.antigravity.name': 'Antigravity',
+  'settings.providers.antigravity.description': '기존 Antigravity 로그인을 사용해 ACP로 로컬 Antigravity CLI(agy)에 연결합니다.',
+  'settings.providers.antigravity.check': '상태 새로고침',
+  'settings.providers.antigravity.defaultModel': '기본 모델',
+  'settings.providers.antigravity.badge.not_installed': '미설치',
+  'settings.providers.antigravity.badge.unchecked': '미확인',
+  'settings.providers.antigravity.badge.ready': '준비됨',
+  'settings.providers.antigravity.badge.login_required': '로그인 필요',
+  'settings.providers.antigravity.badge.error': '사용 불가',
+  'settings.providers.antigravity.status.not_installed': 'PATH에서 Antigravity CLI(agy)를 찾을 수 없습니다. 설치 후 새로고침하세요.',
+  'settings.providers.antigravity.status.unchecked': '상태 새로고침을 눌러 로컬 Antigravity 모델을 확인하세요.',
+  'settings.providers.antigravity.status.ready': '로컬 Antigravity CLI에 연결되었습니다.',
+  'settings.providers.antigravity.status.readyWithModels': '연결됨 · 사용 가능한 모델 {count}개.',
+  'settings.providers.antigravity.status.login_required': '터미널에서 "{command}"를 실행해 로그인한 뒤 새로고침하세요.',
+  'settings.providers.antigravity.status.error': 'Antigravity ACP를 시작할 수 없습니다. 로컬 agy CLI 설치 상태를 확인한 뒤 다시 시도하세요.',
+  'settings.providers.antigravity.enableLabel': '새 세션에 Antigravity 표시',
+  'settings.providers.antigravity.enableDesc': '새 세션 입력창에 cc-haha / Antigravity 엔진 전환기를 표시합니다.',
+  'settings.providers.antigravity.computerUseTitle': 'Computer Use 브리지',
+  'settings.providers.antigravity.computerUseBadgeOn': '켜짐',
+  'settings.providers.antigravity.computerUseBadgeOff': '꺼짐',
+  'settings.providers.antigravity.computerUseActive': '로컬 MCP 브리지를 통해 cc-haha의 Computer Use 권한을 Antigravity 세션과 공유합니다.',
+  'settings.providers.antigravity.computerUseInactive': 'Computer Use가 꺼져 있습니다. 데스크톱 설정에서 켜면 Antigravity 세션에서도 화면 제어를 공유할 수 있습니다.',
+  'settings.providers.antigravity.computerUseNote': 'Antigravity 세션은 데스크톱 설정의 동일한 Computer Use 설정을 공유합니다.',
+  'settings.providers.antigravity.openComputerUseSettings': 'Computer Use 설정',
 
   // Settings > Permissions
   'settings.permissions.title': '권한 모드',
@@ -3184,6 +3210,7 @@ export const kr: Record<TranslationKey, string> = {
 
   // ─── Empty Session ──────────────────────────────────────
   'empty.title': '새 세션',
+  'empty.engineSwitcher.label': '에이전트 엔진',
   'empty.subtitle': '새 코딩 세션을 시작합니다. Claude가 프로젝트를 구축하고 디버깅하며 설계하도록 도울 준비가 되어 있습니다.',
   'empty.heroTitle': '오늘 {project}에서 무엇을 할까요?',
   'empty.heroTitleNoProject': '오늘은 무엇을 할까요?',
@@ -3611,6 +3638,7 @@ export const kr: Record<TranslationKey, string> = {
   'permission.planEmpty': '계획 내용이 없습니다.',
   'permission.planApproved': '계획 승인됨',
   'permission.planRejected': '계획 거부됨',
+  'permission.fromSubagent': '{name} 요청',
 
   // ─── Computer Use Approval ──────────────────────────────────────
 

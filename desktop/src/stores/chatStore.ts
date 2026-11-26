@@ -152,6 +152,9 @@ export type PendingPermission = {
   input: unknown
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
   planRuntimeSubmission?: {
     previousSelection?: RuntimeSelection
     stagedSelection?: RuntimeSelection
@@ -5933,6 +5936,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             input: msg.input,
             description: msg.description,
             ...(msg.displayName ? { displayName: msg.displayName } : {}),
+            ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+            ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+            ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
           }
           const pendingPermissions = {
             ...getPendingPermissionRecord(s),
@@ -5985,6 +5991,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     input: msg.input,
                     description: msg.description,
                     ...(msg.displayName ? { displayName: msg.displayName } : {}),
+                    ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+                    ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+                    ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
                     timestamp: Date.now(),
                   }],
           }

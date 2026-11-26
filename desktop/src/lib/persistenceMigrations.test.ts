@@ -13,6 +13,11 @@ import {
 } from './workspace/persistence'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  ANTIGRAVITY_ENABLED_STORAGE_KEY,
+  ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+  ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+} from './antigravityPreferences'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
@@ -636,6 +641,44 @@ describe('desktop persistence migrations', () => {
 
     expect(report.migratedKeys).toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test('upgrades a frozen schema-7 install and normalizes Antigravity preferences idempotently', () => {
+    window.localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '7')
+    window.localStorage.setItem('unrelated-user-key', 'keep')
+
+    const report = runDesktopPersistenceMigrations()
+    expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    expect(window.localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBeNull()
+    expect(report.migratedKeys).not.toContain(ANTIGRAVITY_ENABLED_STORAGE_KEY)
+
+    // Preserves valid Antigravity preferences
+    window.localStorage.setItem(ANTIGRAVITY_ENABLED_STORAGE_KEY, '0')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, 'antigravity')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, JSON.stringify({ modelId: 'gemini-3.8-pro', effortLevel: 'high' }))
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBe('0')
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY)).toBe('antigravity')
+    expect(JSON.parse(window.localStorage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)!)).toEqual({
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+
+    // Drops malformed Antigravity preference values cleanly
+    window.localStorage.setItem(ANTIGRAVITY_ENABLED_STORAGE_KEY, 'maybe')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, 'unknown')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, '{bad')
+    const cleaned = runDesktopPersistenceMigrations()
+    expect(cleaned.migratedKeys).toEqual(expect.arrayContaining([
+      ANTIGRAVITY_ENABLED_STORAGE_KEY,
+      ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+      ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+    ]))
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)).toBeNull()
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
   })
 
 })

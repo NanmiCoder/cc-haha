@@ -2029,6 +2029,32 @@ export const zh: Record<TranslationKey, string> = {
   'settings.providers.ccSwitch.scanFailed': '讀取 cc-switch 設定失敗。',
   'settings.providers.ccSwitch.importFailed': '匯入失敗。',
   'settings.providers.ccSwitch.importedSummary': '已匯入 {imported} 個，略過 {skipped} 個。',
+  'settings.providers.localRuntimes.title': '本機 Agent 執行環境',
+  'settings.providers.localRuntimes.description': '與 cc-haha 並行執行本機 CLI Agent，直接沿用其本機登入狀態，無需額外設定 API Key。',
+  'settings.providers.antigravity.name': 'Antigravity',
+  'settings.providers.antigravity.description': '透過 ACP 連線本機 Antigravity CLI（agy），直接沿用目前的 Antigravity 登入狀態。',
+  'settings.providers.antigravity.check': '重新整理狀態',
+  'settings.providers.antigravity.defaultModel': '預設模型',
+  'settings.providers.antigravity.badge.not_installed': '未安裝',
+  'settings.providers.antigravity.badge.unchecked': '未檢查',
+  'settings.providers.antigravity.badge.ready': '已就緒',
+  'settings.providers.antigravity.badge.login_required': '需要登入',
+  'settings.providers.antigravity.badge.error': '無法使用',
+  'settings.providers.antigravity.status.not_installed': '未在 PATH 中找到 Antigravity CLI（agy），安裝後請重新整理。',
+  'settings.providers.antigravity.status.unchecked': '點擊「重新整理狀態」以探索本機 Antigravity 可用模型。',
+  'settings.providers.antigravity.status.ready': '已連線本機 Antigravity CLI。',
+  'settings.providers.antigravity.status.readyWithModels': '已連線 · 可用 {count} 個模型。',
+  'settings.providers.antigravity.status.login_required': '請先在終端機執行「{command}」完成登入，再點擊重新整理。',
+  'settings.providers.antigravity.status.error': '無法啟動 Antigravity ACP，請檢查本機 agy CLI 安裝後再試。',
+  'settings.providers.antigravity.enableLabel': '在新建會話中顯示 Antigravity',
+  'settings.providers.antigravity.enableDesc': '在新建會話輸入列顯示 cc-haha / Antigravity 雙引擎切換器。',
+  'settings.providers.antigravity.computerUseTitle': 'Computer Use 橋接',
+  'settings.providers.antigravity.computerUseBadgeOn': '已開啟',
+  'settings.providers.antigravity.computerUseBadgeOff': '未開啟',
+  'settings.providers.antigravity.computerUseActive': '已透過本機 MCP 橋接向 Antigravity 會話共用 cc-haha 的 Computer Use 能力。',
+  'settings.providers.antigravity.computerUseInactive': 'Computer Use 目前未開啟。可在桌面設定中開啟，以便在 Antigravity 會話中共用桌面操控能力。',
+  'settings.providers.antigravity.computerUseNote': 'Antigravity 會話共用桌面設定中的同一套 Computer Use 授權與開關。',
+  'settings.providers.antigravity.openComputerUseSettings': '前往 Computer Use 設定',
 
   // Settings > Permissions
   'settings.permissions.title': '許可權模式',
@@ -3181,6 +3207,7 @@ export const zh: Record<TranslationKey, string> = {
 
   // ─── Empty Session ──────────────────────────────────────
   'empty.title': '新建會話',
+  'empty.engineSwitcher.label': 'Agent 引擎',
   'empty.subtitle': '開始一個新的編碼會話。Claude 已準備好幫你構建、除錯和設計你的專案。',
   'empty.heroTitle': '今天想在 {project} 裡做點什麼？',
   'empty.heroTitleNoProject': '今天想做點什麼？',
@@ -3608,6 +3635,7 @@ export const zh: Record<TranslationKey, string> = {
   'permission.planEmpty': '暫無計劃內容。',
   'permission.planApproved': '計劃已批准',
   'permission.planRejected': '計劃已拒絕',
+  'permission.fromSubagent': '來自 {name}',
 
   // ─── Computer Use Approval ──────────────────────────────────────
 

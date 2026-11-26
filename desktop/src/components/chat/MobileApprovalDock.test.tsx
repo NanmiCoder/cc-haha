@@ -156,6 +156,28 @@ describe('MobileApprovalDock', () => {
     render(<MobileApprovalDock sessionId={SESSION} />)
     expect(screen.queryByTestId('mobile-approval-dock')).not.toBeInTheDocument()
   })
+
+  it('shows subagent attribution and hides Allow for session when supportsAllowAlways is false', () => {
+    seed([{
+      requestId: 'perm-ag',
+      toolName: 'Edit',
+      toolUseId: 'toolu-ag',
+      antigravityToolName: 'edit_file',
+      subagentName: 'researcher',
+      supportsAllowAlways: false,
+      input: { Path: '/repo/src/app.ts', Target: 'oldLine()', Replacement: 'newLine()' },
+    }])
+    render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = screen.getByTestId('mobile-approval-dock')
+    expect(within(dock).getByTestId('mobile-approval-subagent-badge')).toHaveTextContent('From researcher')
+    expect(within(dock).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(dock).getByRole('button', { name: 'View details' }))
+    const sheet = screen.getByTestId('mobile-approval-sheet')
+    expect(within(sheet).getByTestId('permission-subagent-badge')).toHaveTextContent('From researcher')
+    expect(within(sheet).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
+  })
 })
 
 describe('PermissionDialog marker mode', () => {
