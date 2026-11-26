@@ -219,6 +219,7 @@ test('Antigravity chat sessions expose team toggle and format armed prompts as /
       [${JSON.stringify(import.meta.resolve('./compose/RunSheet'))}, ['RunSheet']],
       [${JSON.stringify(import.meta.resolve('./activity/ActivityCapsule'))}, ['ActivityCapsule']],
       [${JSON.stringify(import.meta.resolve('./activity/ActivitySheet'))}, ['ActivitySheet']],
+      [${JSON.stringify(import.meta.resolve('./activity/WorkflowHistorySheet'))}, ['WorkflowHistorySheet']],
       [${JSON.stringify(import.meta.resolve('./chat/StatusCaption'))}, ['StatusCaption']],
       [${JSON.stringify(import.meta.resolve('./SessionChangesCard'))}, ['SessionChangesCard']],
       [${JSON.stringify(import.meta.resolve('./chat/StepGroup'))}, ['StepGroup', 'TurnFold']],
