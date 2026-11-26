@@ -22,7 +22,8 @@ export function WorkspaceChangesFallback({ sessionId, files, truncated = false }
   const [expanded, setExpanded] = useState(false)
   const [showAllFiles, setShowAllFiles] = useState(false)
   const visibleFiles = showAllFiles ? files : files?.slice(0, COLLAPSED_COUNT)
-  const title = files === null || truncated
+  const isPartial = files !== null && truncated
+  const title = files === null || isPartial
     ? t('chat.workspaceChangesFallbackLabel')
     : t('chat.workspaceChangesFallbackTitle', { count: files.length })
 
@@ -59,9 +60,9 @@ export function WorkspaceChangesFallback({ sessionId, files, truncated = false }
         </p>
       </div>
 
-      {truncated || files?.length === 0 ? (
+      {isPartial || files?.length === 0 ? (
         <p className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-          {t(truncated ? 'chat.workspaceChangesFallbackPartial' : 'chat.workspaceChangesFallbackEmpty')}
+          {t(isPartial ? 'chat.workspaceChangesFallbackPartial' : 'chat.workspaceChangesFallbackEmpty')}
         </p>
       ) : null}
 

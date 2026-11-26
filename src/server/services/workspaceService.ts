@@ -1911,13 +1911,20 @@ export class WorkspaceService {
         ),
       }
     }
-    const branchResult = await this.runGit(workDir, [
+    const branchArgs = [
       'rev-parse',
       '--abbrev-ref',
       '--verify',
       '--quiet',
       'HEAD',
-    ])
+    ]
+    const branchResult = await this.runGit(workDir, branchArgs)
+    if (branchResult.timedOut || branchResult.errorCode || branchResult.maxBufferExceeded) {
+      return {
+        kind: 'error',
+        message: this.formatGitError('Failed to inspect git HEAD', branchArgs, workDir, branchResult),
+      }
+    }
 
     let diffBase = 'HEAD'
     if (branchResult.code === 1) {
@@ -1925,10 +1932,11 @@ export class WorkspaceService {
       // this repository's object format without writing any object.
       const emptyTreeArgs = ['hash-object', '-t', 'tree', '/dev/null']
       const emptyTree = await this.runGit(workDir, emptyTreeArgs)
-      if (emptyTree.code !== 0) {
+      const emptyTreeSha = emptyTree.stdout.trim()
+      if (emptyTree.code !== 0 || !emptyTreeSha) {
         return { kind: 'error', message: this.formatGitError('Failed to resolve empty tree', emptyTreeArgs, workDir, emptyTree) }
       }
-      diffBase = emptyTree.stdout.trim()
+      diffBase = emptyTreeSha
     }
 
     return {

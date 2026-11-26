@@ -244,6 +244,33 @@ describe('WorkspaceService', () => {
     expect(diff.diff).toContain('+working tree')
   })
 
+  it('does not treat a timed-out HEAD lookup as an unborn repository', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir)
+    const runGit = (service as unknown as {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        errorCode: string | null
+        maxBufferExceeded: boolean
+        timedOut: boolean
+      }>
+    }).runGit.bind(service)
+    let hashObjectCalled = false
+    ;(service as unknown as { runGit: typeof runGit }).runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+        return { stdout: '', stderr: '', code: 1, errorCode: null, maxBufferExceeded: false, timedOut: true }
+      }
+      if (args[0] === 'hash-object') hashObjectCalled = true
+      return runGit(workDir, args)
+    }
+
+    const status = await service.getStatus('session')
+    expect(status.state).toBe('error')
+    expect(hashObjectCalled).toBe(false)
+  })
+
   it('returns git status for modified, added, deleted, and untracked files', async () => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? repoDir : null)
