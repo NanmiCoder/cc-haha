@@ -573,6 +573,33 @@ test('push route allowlist refuses extra segments and unsupported methods', () =
   expect(allowed('/api/sessions/mobile-push/test/extra', 'POST')).toBe(false)
 })
 
+test('mobile-update allowlist permits only read-only Android update routes with validated params', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  const sha = 'a'.repeat(64)
+  expect(allowed('/api/mobile-update/android/latest', 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/latest?refresh=1', 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/latest?refresh=2', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest?refresh=1&refresh=1', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest?url=https://evil.test', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest', 'POST')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest/', 'GET')).toBe(false)
+  expect(allowed('/api//mobile-update/android/latest', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk', 'GET')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/apk?sha256=${sha}`, 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/apk?sha256=not-hex', 'GET')).toBe(false)
+  expect(allowed(`/api/mobile-update/android/apk?sha256=${sha}&sha256=${sha}`, 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk?url=https://evil.test', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk', 'DELETE')).toBe(false)
+  expect(allowed('/api/mobile-update/android/prepare', 'POST')).toBe(true)
+  expect(allowed('/api/mobile-update/android/prepare', 'GET')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/prepare?sha256=${sha}`, 'POST')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/prepare?sha256=${sha}`, 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/prepare?sha256=bad', 'POST')).toBe(false)
+  expect(allowed('/api/mobile-update/android/prepare', 'DELETE')).toBe(false)
+  expect(allowed('/api/mobile-update/ios/latest', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk/extra', 'GET')).toBe(false)
+})
+
 test('paired phones can browse directories without gaining file/search/write routes', async () => {
   const calls: string[] = []
   const f = fixture(async (_request, url) => {

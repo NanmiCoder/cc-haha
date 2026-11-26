@@ -10,17 +10,22 @@ type WorkspaceChangesFallbackProps = {
   sessionId: string
   /** Null means the workspace evidence could not be verified. */
   files: WorkspaceChangedFile[] | null
+  truncated?: boolean
 }
 
 const COLLAPSED_COUNT = 5
 
 /** Current workspace evidence is cumulative and has no turn baseline or undo. */
-export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesFallbackProps) {
+export function WorkspaceChangesFallback({ sessionId, files, truncated = false }: WorkspaceChangesFallbackProps) {
   const t = useTranslation()
   const filesId = useId()
   const [expanded, setExpanded] = useState(false)
   const [showAllFiles, setShowAllFiles] = useState(false)
   const visibleFiles = showAllFiles ? files : files?.slice(0, COLLAPSED_COUNT)
+  const isPartial = files !== null && truncated
+  const title = files === null || isPartial
+    ? t('chat.workspaceChangesFallbackLabel')
+    : t('chat.workspaceChangesFallbackTitle', { count: files.length })
 
   return (
     <section
@@ -40,15 +45,13 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
               className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <FileDiff size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-              <span className="min-w-0 flex-1">{t('chat.workspaceChangesFallbackTitle', { count: files.length })}</span>
+              <span className="min-w-0 flex-1">{title}</span>
               <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
             </button>
           ) : (
             <span className="flex items-center gap-2">
               <FileDiff size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-              {files === null
-                ? t('chat.workspaceChangesFallbackLabel')
-                : t('chat.workspaceChangesFallbackTitle', { count: files.length })}
+              {title}
             </span>
           )}
         </h3>
@@ -57,9 +60,9 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
         </p>
       </div>
 
-      {files?.length === 0 ? (
+      {isPartial || files?.length === 0 ? (
         <p className="border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-          {t('chat.workspaceChangesFallbackEmpty')}
+          {t(isPartial ? 'chat.workspaceChangesFallbackPartial' : 'chat.workspaceChangesFallbackEmpty')}
         </p>
       ) : null}
 

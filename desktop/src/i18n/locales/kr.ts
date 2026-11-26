@@ -3552,6 +3552,7 @@ export const kr: Record<TranslationKey, string> = {
   'chat.editResendStale': '이 메시지가 방금 접수되어 더 이상 바꿀 수 없습니다. 잠시 후 다시 시도하세요.',
   'chat.workspaceChangesFallbackLabel': '워크스페이스 변경 파일',
   'chat.workspaceChangesFallbackTitle': '현재 워크스페이스 변경 ({count})',
+  'chat.workspaceChangesFallbackPartial': '워크스페이스 검사 범위가 제한되어 변경된 파일 중 일부가 목록에 표시되지 않을 수 있습니다.',
   'chat.workspaceChangesFallbackExplanation': '대화가 너무 길어 턴별 미리보기나 파일 실행 취소를 사용할 수 없습니다. 이 목록은 현재 워크스페이스의 누적 변경을 표시하며 다른 턴이나 이 대화 밖의 변경도 포함할 수 있습니다.',
   'chat.workspaceChangesFallbackUnavailable': '대화가 너무 길어 턴별 미리보기나 파일 실행 취소를 사용할 수 없습니다. 현재 워크스페이스 변경을 확인할 수 없어 파일 목록을 표시할 수 없습니다.',
   'chat.workspaceChangesFallbackEmpty': '현재 워크스페이스 변경을 찾지 못했습니다.',

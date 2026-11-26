@@ -3547,6 +3547,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.editResendStale': '这条消息刚被接收，已无法直接替换。请稍候再试。',
   'chat.workspaceChangesFallbackLabel': '工作区更改文件',
   'chat.workspaceChangesFallbackTitle': '当前工作区改动（{count}）',
+  'chat.workspaceChangesFallbackPartial': '工作区扫描范围有限，部分已更改的文件可能未列出。',
   'chat.workspaceChangesFallbackExplanation': '会话过长，无法提供逐轮预览或文件撤销。此列表显示当前工作区的累计改动，可能包含其他轮次或会话外的改动。',
   'chat.workspaceChangesFallbackUnavailable': '会话过长，无法提供逐轮预览或文件撤销。当前工作区改动无法确认，暂不提供文件列表。',
   'chat.workspaceChangesFallbackEmpty': '未发现当前工作区改动。',

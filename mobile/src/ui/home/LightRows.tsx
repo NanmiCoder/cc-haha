@@ -53,11 +53,13 @@ export function FloatButton({
   label,
   onPress,
   disabled,
+  dotColor,
   children,
 }: {
   label: string
   onPress(): void
   disabled?: boolean
+  dotColor?: string
   children: ReactNode
 }) {
   const colors = useColors()
@@ -80,6 +82,21 @@ export function FloatButton({
       })}
     >
       {children}
+      {dotColor ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 7,
+            right: 7,
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: dotColor,
+            boxShadow: `0 0 0 2px ${colors.bg}`,
+          }}
+        />
+      ) : null}
     </Pressable>
   )
 }
