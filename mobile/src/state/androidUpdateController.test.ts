@@ -395,6 +395,41 @@ describe('AndroidUpdateController', () => {
     h.controller.dispose()
   })
 
+  test('recovers the first in-progress download after Android kills the process', async () => {
+    const storage = makeMemoryStorage()
+    const first = createHarness({ storage })
+    const started = Promise.withResolvers<void>()
+    const interrupted = Promise.withResolvers<never>()
+    first.setDownloadApk(() => {
+      started.resolve()
+      return interrupted.promise
+    })
+    await first.controller.initialize({ scheduleStartupCheck: false })
+    await first.controller.checkForUpdates({ manual: true })
+    const download = first.controller.download('github')
+    await started.promise
+
+    // Recreate the controller using only the persisted state, before native completion.
+    first.controller.dispose()
+    const next = createHarness({ storage })
+    next.setGetCachedApk(async () => ({
+      ready: false, verified: false, partialBytes: 4096, totalBytes: 8192,
+      sizeBytes: null, versionName: null, versionCode: null,
+    }))
+    await next.controller.initialize({ scheduleStartupCheck: false })
+    expect(next.calls.cleanup).toEqual([SHA_17])
+    expect(next.controller.getSnapshot()).toMatchObject({
+      status: 'available', partialBytes: 4096, totalBytes: 8192,
+      release: { version: '0.1.7', sha256: SHA_17 },
+    })
+    await next.controller.download('github')
+    expect(next.calls.downloadApk[0]?.expectedSha256).toBe(SHA_17)
+    expect((await next.store.load()).partial).toBeNull()
+    next.controller.dispose()
+    interrupted.reject(Object.assign(new Error('process ended'), { code: 'CANCELLED' }))
+    await download
+  })
+
   test('preserves partial bytes on download interruption and deletes partial on explicit cancel', async () => {
     const h = createHarness()
     await h.controller.initialize({ scheduleStartupCheck: false })

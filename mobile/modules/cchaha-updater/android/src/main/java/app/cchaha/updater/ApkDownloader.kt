@@ -123,8 +123,15 @@ class ApkDownloader(
   fun getCachedApk(expectedSha256: String, expectedVersion: String?): CachedApkStatus {
     val sha = validateSha256(expectedSha256)
     ensureUpdatesDir()
+    val cutoff = nowMillis() - MAX_CACHE_AGE_MS
     val finalFile = apkFile(sha)
-    if (finalFile.isFile) {
+    val part = partFile(sha)
+    val meta = metaFile(sha)
+    val activePart = active.get()?.partFile == part
+    val hasPart = isFreshCacheFile(part, cutoff, activePart)
+    val hasMeta = isFreshCacheFile(meta, cutoff, activePart)
+    if (!hasPart && hasMeta && !activePart) meta.delete()
+    if (isFreshCacheFile(finalFile, cutoff)) {
       val verified = tryVerifyExisting(finalFile, sha, expectedVersion)
       if (verified != null) {
         return CachedApkStatus(
@@ -139,25 +146,28 @@ class ApkDownloader(
       }
       finalFile.delete()
     }
-    val part = partFile(sha)
-    val partialBytes = if (part.isFile) part.length() else 0L
-    val meta = readMeta(metaFile(sha))
     return CachedApkStatus(
       ready = false,
       verified = false,
-      partialBytes = partialBytes,
-      totalBytes = meta?.totalBytes,
+      partialBytes = if (hasPart) part.length() else 0L,
+      totalBytes = if (hasPart && hasMeta) readMeta(meta)?.totalBytes else null,
       sizeBytes = null,
       versionName = null,
       versionCode = null,
     )
   }
 
+  private fun isFreshCacheFile(file: File, cutoff: Long, activeTransfer: Boolean = false): Boolean {
+    if (!file.isFile) return false
+    if (activeTransfer || file.lastModified() >= cutoff) return true
+    file.delete()
+    return false
+  }
+
   fun cleanupCachedApks(keepSha256: String? = null): Int {
     if (!updatesDir.isDirectory) return 0
     val keep = keepSha256?.takeIf { SHA256_REGEX.matches(it) }
     val activeFiles = active.get()?.let { setOf(it.partFile.name, it.metaFile.name) } ?: emptySet()
-    val cutoff = nowMillis() - MAX_CACHE_AGE_MS
     var removed = 0
     for (file in updatesDir.listFiles().orEmpty()) {
       if (!file.isFile) continue
@@ -167,7 +177,9 @@ class ApkDownloader(
           file.name == "$keep.apk.part" ||
           file.name == "$keep.apk.meta"
         )
-      if (isKept && file.lastModified() >= cutoff) continue
+      // getCachedApk already checked the retained files against a single cutoff.
+      // A second age check here could remove an APK immediately after verification.
+      if (isKept) continue
       if (file.delete()) removed++
     }
     return removed

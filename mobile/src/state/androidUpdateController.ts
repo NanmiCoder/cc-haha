@@ -866,6 +866,10 @@ export class AndroidUpdateController {
     })
 
     try {
+      // Android can kill the process before the native promise resolves or rejects.
+      // Save the target first; recovery reads the actual byte count from disk.
+      await this.savePartial(release, source, this.snapshot.partialBytes, this.snapshot.totalBytes)
+      if (this.activeDownloadId !== downloadId) return
       const result = await this.nativeUpdater.downloadApk(
         JSON.stringify({
           downloadId,
@@ -1005,20 +1009,7 @@ export class AndroidUpdateController {
     const totalBytes = cached?.totalBytes ?? this.snapshot.totalBytes ?? release.sizeBytes
 
     if (partialBytes > 0) {
-      this.record = await this.store.update((cur) => ({
-        ...cur,
-        partial: {
-          version: release.version,
-          tag: release.tag,
-          asset: release.asset,
-          sha256: release.sha256,
-          downloadedBytes: partialBytes,
-          totalBytes,
-          downloadUrl: release.downloadUrl,
-          releaseUrl: release.releaseUrl,
-          via: source,
-        },
-      }))
+      await this.savePartial(release, source, partialBytes, totalBytes)
     } else {
       this.record = await this.store.update((cur) => ({ ...cur, partial: null }))
     }
@@ -1044,6 +1035,30 @@ export class AndroidUpdateController {
       totalBytes,
     })
     this.setError(kind, source, 'download', false)
+  }
+
+  private async savePartial(
+    release: AndroidUpdateRelease,
+    source: UpdateSource,
+    downloadedBytes: number,
+    totalBytes: number | null
+  ): Promise<void> {
+    this.record = await this.store.update((cur) => ({
+      ...cur,
+      downloaded: null,
+      pendingInstall: null,
+      partial: {
+        version: release.version,
+        tag: release.tag,
+        asset: release.asset,
+        sha256: release.sha256,
+        downloadedBytes,
+        totalBytes,
+        downloadUrl: release.downloadUrl,
+        releaseUrl: release.releaseUrl,
+        via: source,
+      },
+    }))
   }
 
   private async runCheck(input: {
