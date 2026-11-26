@@ -52,7 +52,9 @@ import { teamMembersAllStopped, useSessionActivity } from '../../core/sessionAct
 import { registerSessionSender } from '../../core/sessionSender'
 import { ActivityCapsule } from '../../ui/activity/ActivityCapsule'
 import { ActivitySheet } from '../../ui/activity/ActivitySheet'
+import { WorkflowHistorySheet } from '../../ui/activity/WorkflowHistorySheet'
 import { useNow } from '../../ui/activity/useNow'
+import { toAgentIdRef } from '../../core/workflows'
 import { StatusCaption } from '../../ui/chat/StatusCaption'
 import { ContextMenuHeader, ContextSheet, useContextInspection } from '../../ui/chat/ContextSheet'
 import { contextSummary } from '../../ui/chat/contextUsage'
@@ -114,7 +116,7 @@ import {
 import { showsReconnectBanner, useConnectionNotice } from '../../ui/chat/connectionNotice'
 import { simulatedPhoneChrome } from '../../ui/webChrome'
 
-type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'context' | null
+type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'workflows' | 'context' | null
 type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
@@ -559,16 +561,18 @@ function ChatSession({
     turnActive: state.turnActive,
     backgroundTaskIds: state.backgroundTaskIds,
     live: state.subagents,
+    workflows: state.workflows,
     pendingApprovals: state.permissions.length,
     workDir: session?.workDir ?? undefined,
     send: sendRaw,
     teamPlan: teamPlan.plan,
   })
-  // 队长这一轮结束了、已确认的成员还在跑：停止照样要给（同桌面的 background 停止）。
+  // 队长这一轮结束了、已确认的成员或工作流还在跑：停止照样要给（同桌面的 background 停止）。
   const teamWorking =
     !state.turnActive &&
     (teamPlan.plan?.state === 'launching' || teamPlan.plan?.state === 'running') &&
     !teamMembersAllStopped(activity.team)
+  const workflowWorking = !state.turnActive && (activity.workflows?.length ?? 0) > 0
 
   // 分支只用于副标题与菜单；取不到就只显示项目名。只在真正和电脑重新对齐后重读：
   // 续传、换到直连这类接回不读历史，也不该在回前台时顺带多发一个请求。
@@ -1275,6 +1279,12 @@ function ChatSession({
       count: activity.runningCount || undefined,
       onPress: () => openPanel('activity'),
     },
+    {
+      key: 'workflows',
+      label: 'Workflow 记录',
+      icon: 'layers',
+      onPress: () => openPanel('workflows'),
+    },
   ]
 
   const messageActions = (item: ChatItem): MessageAction[] => {
@@ -1557,7 +1567,7 @@ function ChatSession({
             lean={lean}
             empty={!hasItems}
             busy={busy}
-            background={teamWorking}
+            background={teamWorking || workflowWorking}
             queueing={busy}
             disabled={!ready || state.configPending || workspaceMissing || working}
             run={runCapsule({
@@ -1637,6 +1647,19 @@ function ChatSession({
             params: { host: hostId, id, taskId: task.taskId, toolUseId: task.toolUseId ?? '' },
           })
         }}
+        onOpenWorkflowAgent={(agent) => {
+          if (!agent.agentId) return
+          setPanel(null)
+          router.push({
+            pathname: '/subagent',
+            params: {
+              host: hostId,
+              id,
+              toolUseId: toAgentIdRef(agent.agentId),
+              title: agent.label,
+            },
+          })
+        }}
         onStopTurn={() => {
           // 和「停止这段会话」一样：停下来就不再自动追加，排队的内容回到输入框由用户决定要不要发。
           if (state.turnActive && dispatch({ type: 'stop_generation' })) withdrawQueued()
@@ -1646,6 +1669,13 @@ function ChatSession({
           setPanel(null)
           router.push({ pathname: '/member', params: { host: hostId, id, agent: member.id } })
         }}
+      />
+      <WorkflowHistorySheet
+        visible={panel === 'workflows'}
+        onClose={() => setPanel(null)}
+        client={client}
+        sessionId={id}
+        liveWorkflows={state.workflows}
       />
       <MessageMenu
         item={selected?.item ?? null}
@@ -1680,11 +1710,13 @@ function ChatSession({
       <ConfirmSheet
         visible={panel === 'stop'}
         onClose={closePanel}
-        title={teamWorking ? '停止团队？' : '停止这段会话？'}
+        title={teamWorking ? '停止团队？' : workflowWorking ? '停止工作流？' : '停止这段会话？'}
         message={
           teamWorking
             ? '成员会停在当前步骤，已经改好的文件会保留。之后发一条消息，团队就从这里接着做。'
-            : '当前生成和后台任务都会停下，已经改好的文件会保留。'
+            : workflowWorking
+              ? '正在运行的工作流和子代理都会停下，已经改好的文件会保留。'
+              : '当前生成和后台任务都会停下，已经改好的文件会保留。'
         }
         confirmLabel="停止"
         destructive
