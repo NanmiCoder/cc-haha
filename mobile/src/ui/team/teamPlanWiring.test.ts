@@ -8,7 +8,7 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
     import { mock } from 'bun:test'
     import assert from 'node:assert/strict'
     const React = require(${JSON.stringify(import.meta.resolve('react'))})
-    let cursor = 0, slots = [], running = false, plan = null, membersStopped = false
+    let cursor = 0, slots = [], running = false, plan = null, membersStopped = false, activeWorkflows = []
     const native = { send() { return true }, scrollToOffset() {} }
     mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
       ...React, default: React,
@@ -31,7 +31,7 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
     mock.module(${JSON.stringify(import.meta.resolve('../../state/AppContext'))}, () => ({ useApp: () => ({ drafts: new Map() }), useConnection: () => ({ client: null, host: { name: 'Fixture', auth: 'lan' } }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/DashboardContext'))}, () => ({ useDashboard: () => ({ snapshot: null }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/useComputerUse'))}, () => ({ useComputerUse: () => ({ enabled: true }) }))
-    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ teamMembersAllStopped: () => membersStopped, useSessionActivity: () => ({ runningCount: 0 }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ teamMembersAllStopped: () => membersStopped, useSessionActivity: () => ({ runningCount: activeWorkflows.length, workflows: activeWorkflows }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
       ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner', 'Toast'].map(name => [name, name])),
       goBack() {}, useColors: () => ({}),
@@ -48,6 +48,7 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
       [${JSON.stringify(import.meta.resolve('../compose/RunSheet'))}, ['RunSheet']],
       [${JSON.stringify(import.meta.resolve('../activity/ActivityCapsule'))}, ['ActivityCapsule']],
       [${JSON.stringify(import.meta.resolve('../activity/ActivitySheet'))}, ['ActivitySheet']],
+      [${JSON.stringify(import.meta.resolve('../activity/WorkflowHistorySheet'))}, ['WorkflowHistorySheet']],
       [${JSON.stringify(import.meta.resolve('../chat/StatusCaption'))}, ['StatusCaption']],
       [${JSON.stringify(import.meta.resolve('../SessionChangesCard'))}, ['SessionChangesCard']],
       [${JSON.stringify(import.meta.resolve('../chat/StepGroup'))}, ['StepGroup', 'TurnFold']],
@@ -142,6 +143,16 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
     tree = page()
     assert.equal(find(find(tree, 'ChatComposer').props.above, 'TeamPlanCard')?.props.surface, 'failed')
     assert.equal(find(tree, 'TeamPlanSheet'), undefined)
+
+    // Background workflow still running after the launch turn ended: composer keeps Stop with workflow copy.
+    plan = null
+    activeWorkflows = [{ taskId: 'wf-1', workflowName: 'ship', status: 'running', startedAt: 1, phases: [], doneAgents: 0, totalAgents: 0, runningAgents: 1 }]
+    tree = page()
+    assert.equal(find(tree, 'ChatComposer').props.background, true)
+    assert.ok(findAll(tree, 'ConfirmSheet').some((sheet) => sheet.props.title === '停止工作流？'))
+    activeWorkflows = []
+    tree = page()
+    assert.equal(find(tree, 'ChatComposer').props.background, false)
   `
   try {
     execFileSync(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })

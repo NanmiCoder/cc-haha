@@ -676,18 +676,25 @@ const fixtureConnector = {
   operation: { id: 'op-1', kind: 'authenticate', phase: 'waiting-for-browser', startedAt: '2026-01-01T00:00:00Z', authUrl: 'https://accounts.example.test/oauth?state=fixture-secret' },
 }
 
-test('remote phones read the connector and workflow lists only', () => {
+test('remote phones read connector list and read-only workflow catalog/runs only', () => {
   const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
   expect(allowed('/api/connectors', 'GET')).toBe(true)
   expect(allowed('/api//connectors/', 'GET')).toBe(true)
   expect(allowed('/api/workflows?cwd=%2Ffixture', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs?sessionId=s1&limit=20', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs/s1/wf_run123', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/session-runs/s1', 'GET')).toBe(true)
   expect(allowed('/api/agents', 'GET')).toBe(true)
   expect(allowed('/api/agents/reviewer', 'GET')).toBe(true)
   for (const [path, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors', 'POST'], ['/api/connectors', 'DELETE'],
     ['/api/connectors/feishu/authenticate', 'POST'], ['/api/connectors/feishu/prepare', 'POST'], ['/api/connectors/feishu/remove', 'POST'],
     ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
-    ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
+    ['/api/workflows/runs', 'POST'], ['/api/workflows/runs', 'DELETE'],
+    ['/api/workflows/runs/s1', 'GET'], ['/api/workflows/runs/s1/wf_run123', 'POST'], ['/api/workflows/runs/s1/wf_run123/extra', 'GET'],
+    ['/api/workflows/session-runs', 'GET'], ['/api/workflows/session-runs/s1', 'POST'], ['/api/workflows/session-runs/s1/extra', 'GET'],
+    ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
     ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
     // 路由器会忽略单项 Agent 名字后面多出来的段，放行它们等于绕过对手机的裁剪。
     ['/api/agents/reviewer/override', 'GET'], ['/api/agents/reviewer/zzz', 'GET'], ['/api/agents/reviewer', 'DELETE'],
@@ -739,14 +746,89 @@ test('paired phones get connector, workflow and agent lists without credentials,
   for (const secret of ['authUrl', 'fixture-secret', 'EACCES', '/Users/fixture', 'setupFields', 'homepage', 'packageName', 'systemPrompt', 'filePath', 'availableTools']) expect(text).not.toContain(secret)
 })
 
+test('paired phones get workflow run history and detail without desktop script paths or source', async () => {
+  const f = fixture(async (_request, url) => {
+    if (url.pathname === '/api/workflows/session-runs/s1') {
+      return Response.json({
+        runs: [{
+          runId: 'wf_abc123',
+          taskId: 'task-1',
+          workflowName: 'ship',
+          status: 'completed',
+          startedAt: 1000,
+          updatedAt: 2000,
+          endedAt: 2000,
+          agents: [{ agentId: 'a1', label: '调研', phaseIndex: 1, phaseTitle: '调研', agentIndex: 1, state: 'done' }],
+        }],
+      })
+    }
+    if (url.pathname === '/api/workflows/runs') {
+      return Response.json({
+        runs: [{
+          runId: 'wf_abc123',
+          sessionId: 's1',
+          workflowName: 'ship',
+          scriptPath: '/Users/fixture/.claude/projects/p/s1/workflows/ship.wf_abc123.js',
+          startedAt: 1000,
+          completedAgents: 1,
+          status: 'completed',
+        }],
+      })
+    }
+    if (url.pathname === '/api/workflows/runs/s1/wf_abc123') {
+      return Response.json({
+        runId: 'wf_abc123',
+        sessionId: 's1',
+        workflowName: 'ship',
+        scriptPath: '/Users/fixture/.claude/projects/p/s1/workflows/ship.wf_abc123.js',
+        script: 'const secretScript = true',
+        logs: ['/Users/fixture/private.log'],
+        desktopOnlyExtra: 'must-not-leak',
+        description: 'Ship release',
+        phases: [{ title: '调研', detail: 'read', internalPath: '/Users/fixture/x' }, { title: '实现' }],
+        startedAt: 1000,
+        completedAgents: 1,
+        status: 'completed',
+        agents: [{ key: 'k1', agentId: 'a1', result: 'ok', internalNote: 'drop-me' }],
+      })
+    }
+    return Response.json({ ok: true })
+  })
+  const { claim } = await f.pairNative()
+  const read = async (route: string) => (await f.native(route, claim.token)).json()
+  expect(await read('/api/workflows/session-runs/s1')).toMatchObject({
+    runs: [{ runId: 'wf_abc123', workflowName: 'ship', status: 'completed' }],
+  })
+  expect(await read('/api/workflows/runs')).toEqual({
+    runs: [{ runId: 'wf_abc123', sessionId: 's1', workflowName: 'ship', startedAt: 1000, completedAgents: 1, status: 'completed' }],
+  })
+  const detail = await read('/api/workflows/runs/s1/wf_abc123')
+  expect(detail).toEqual({
+    runId: 'wf_abc123',
+    sessionId: 's1',
+    workflowName: 'ship',
+    description: 'Ship release',
+    phases: [{ title: '调研', detail: 'read' }, { title: '实现' }],
+    startedAt: 1000,
+    completedAgents: 1,
+    status: 'completed',
+    agents: [{ key: 'k1', agentId: 'a1', result: 'ok' }],
+  })
+  const serialized = JSON.stringify([await read('/api/workflows/runs'), detail])
+  for (const forbidden of ['/Users/fixture', 'scriptPath', 'secretScript', 'private.log', 'must-not-leak', 'drop-me']) {
+    expect(serialized).not.toContain(forbidden)
+  }
+})
+
 test('connector actions and details never reach the desktop handler from a phone', async () => {
   const calls: string[] = []
   const f = fixture(async (request, url) => { calls.push(`${request.method} ${url.pathname}`); return Response.json({ items: [] }) })
   const { claim } = await f.pairNative()
   for (const [route, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors/feishu/authenticate', 'POST'],
-    ['/api/workflows/runs', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows', 'PUT'], ['/api/mcp', 'GET'],
-    ['/api/agents/reviewer/zzz', 'GET'],
+    ['/api/workflows/my-flow', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'], ['/api/workflows', 'PUT'],
+    ['/api/workflows/runs/s1/wf_1', 'POST'], ['/api/workflows/session-runs/s1', 'DELETE'],
+    ['/api/mcp', 'GET'], ['/api/agents/reviewer/zzz', 'GET'],
   ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
   expect((await f.remote('/api/connectors')).status).toBe(401)
   expect(calls).toEqual([])

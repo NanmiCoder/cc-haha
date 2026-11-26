@@ -52,6 +52,7 @@ function renderHostlessChat(selectedId: string | undefined) {
       [${JSON.stringify(import.meta.resolve('../compose/RunSheet'))}, ['RunSheet']],
       [${JSON.stringify(import.meta.resolve('../activity/ActivityCapsule'))}, ['ActivityCapsule']],
       [${JSON.stringify(import.meta.resolve('../activity/ActivitySheet'))}, ['ActivitySheet']],
+      [${JSON.stringify(import.meta.resolve('../activity/WorkflowHistorySheet'))}, ['WorkflowHistorySheet']],
       [${JSON.stringify(import.meta.resolve('./StatusCaption'))}, ['StatusCaption']],
       [${JSON.stringify(import.meta.resolve('../SessionChangesCard'))}, ['SessionChangesCard']],
       [${JSON.stringify(import.meta.resolve('./StepGroup'))}, ['StepGroup', 'TurnFold']],
