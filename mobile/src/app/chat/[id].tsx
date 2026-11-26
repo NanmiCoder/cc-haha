@@ -26,6 +26,7 @@ import { sessionHistory } from '../../core/historyCache'
 import { foregroundTransitions } from '../../core/appVisibility'
 import { foregroundGate } from '../../core/foregroundGate'
 import { newStreamId } from '../../core/resumableStream'
+import { randomRequestId } from '../../core/requestId'
 import type { LinkPath } from '../../core/hostLink'
 import { hostLinkFor, nativeSocketFactory, watchDeviceNetwork } from '../../state/api'
 import { takeSessionStale } from '../../core/sessionStale'
@@ -1573,6 +1574,9 @@ function ChatSession({
             onError={setError}
             above={above}
             caption={caption}
+            newRequestId={() =>
+              randomRequestId(Platform.OS === 'web' ? globalThis.crypto : { getRandomValues })
+            }
           />
         )}
       </KeyboardViewport>

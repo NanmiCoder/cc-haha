@@ -27,6 +27,12 @@ test('a running composer keeps the model disabled and muted without a separate l
     mock.module(${JSON.stringify(import.meta.resolve('./compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))
     mock.module(${JSON.stringify(import.meta.resolve('./chat/ImagePreview'))}, () => ({ ImagePreview: 'ImagePreview' }))
     mock.module(${JSON.stringify(import.meta.resolve('../core/useVoiceDictation'))}, () => ({ useVoiceDictation: () => ({ phase: 'idle', live: false, issue: null, pendingText: null }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../core/usePromptOptimize'))}, () => ({
+      usePromptOptimize: () => ({
+        phase: 'idle', optimizing: false, restoreSnapshot: null, notice: null, issue: null,
+        optimize() {}, cancel() {}, restore() {}, edited() {}, dismissRestore() {}, dismissNotice() {}, dismissIssue() {},
+      }),
+    }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const props = {
       draft: '', onDraft: () => {}, references: [], onReferences: () => {},

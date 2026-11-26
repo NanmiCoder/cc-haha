@@ -61,6 +61,12 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
         getLevel: () => 0, start() {}, stop() {}, stopAndSend() {}, cancel() {}, edited() {}, insertPending() {}, dismissPending() {}, dismissIssue() {},
       }),
     }))
+    mock.module(${JSON.stringify(import.meta.resolve('../core/usePromptOptimize'))}, () => ({
+      usePromptOptimize: () => ({
+        phase: 'idle', optimizing: false, restoreSnapshot: null, notice: null, issue: null,
+        optimize() {}, cancel() {}, restore() {}, edited() {}, dismissRestore() {}, dismissNotice() {}, dismissIssue() {},
+      }),
+    }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const sent = []
     // The chat page: a send that goes out empties the draft, one that cannot keeps it.
