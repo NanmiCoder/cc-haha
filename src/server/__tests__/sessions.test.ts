@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { SessionService, sessionService } from '../services/sessionService.js'
+import { DesktopUiPreferencesService } from '../services/desktopUiPreferencesService.js'
 import {
   createRepositoryBranch,
   getRepositoryContext,
@@ -4322,6 +4323,55 @@ describe('Sessions API', () => {
     expect(body.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     )
+  })
+
+  it('POST /api/sessions accepts Antigravity with additional directories, modelId, effortLevel, and rejects worktree', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'agy-project-')))
+    const extraDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'agy-extra-')))
+    const preferences = new DesktopUiPreferencesService()
+    await preferences.updateProjectDirectories({ workDir, additionalDirectories: [extraDir] })
+
+    const rejectedWorktree = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, providerId: 'antigravity-acp', useWorktree: true }),
+    })
+    expect(rejectedWorktree.status).toBe(400)
+    expect(await rejectedWorktree.json()).toMatchObject({ error: 'ANTIGRAVITY_UNSUPPORTED' })
+
+    const rejectedNonString = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, launchProviderId: { id: 'antigravity-acp' } }),
+    })
+    expect(rejectedNonString.status).toBe(400)
+    expect(await rejectedNonString.json()).toMatchObject({ error: 'BAD_REQUEST' })
+
+    const accepted = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workDir,
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+        permissionMode: 'acceptEdits',
+      }),
+    })
+    expect(accepted.status).toBe(201)
+    const { sessionId } = await accepted.json() as { sessionId: string }
+    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(launchInfo?.runtimeProviderId).toBe('antigravity-acp')
+    expect(launchInfo?.runtimeModelId).toBe('gemini-3.8-flash')
+    expect(launchInfo?.effortLevel).toBe('low')
+    expect(launchInfo?.permissionMode).toBe('acceptEdits')
+    expect(launchInfo?.additionalDirectories).toEqual([extraDir])
+
+    // Antigravity slash-commands endpoint returns authoritative session commands without Claude fallbacks
+    updateSessionSlashCommands(sessionId, [{ name: 'swarm', description: 'Run swarm' }], { notifyClient: false })
+    const slashRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+    expect(slashRes.status).toBe(200)
+    expect(await slashRes.json()).toEqual({ commands: [{ name: 'swarm', description: 'Run swarm' }] })
   })
 
   it('POST /api/sessions should reject an unknown permission mode', async () => {

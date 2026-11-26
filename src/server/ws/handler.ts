@@ -47,6 +47,11 @@ import {
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import {
+  ANTIGRAVITY_PROVIDER_ID,
+  AntigravityError,
+  isAntigravitySupportedPermissionMode,
+} from '../services/antigravityAcp.js'
+import {
   getPresetDefaultEnv,
   getPresetReasoningProviderKind,
 } from '../services/providerRuntimeEnv.js'
@@ -1222,6 +1227,13 @@ async function handleUserMessage(
     return
   }
 
+  const existingTurn = activeUserTurns.get(sessionId)
+  if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID &&
+    ((existingTurn?.messageSent && !existingTurn.cancelled) || conversationService.isAntigravityResponding(sessionId))) {
+    sendError(ws, 'Antigravity is still responding. Stop or wait for the current response before sending another message.', 'ANTIGRAVITY_TURN_BUSY')
+    return
+  }
+
   // Keep a stopped-turn fence until the replacement replay proves that later
   // output belongs to this turn, while allowing validated input to start its
   // own activity lifecycle.
@@ -1326,7 +1338,7 @@ async function handleUserMessage(
       if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
       const errMsg = err instanceof Error ? err.message : String(err)
       const code =
-        err instanceof ConversationStartupError ? err.code : 'CLI_START_FAILED'
+        err instanceof ConversationStartupError || err instanceof AntigravityError ? err.code : 'CLI_START_FAILED'
       console.error(`[WS] CLI start failed for ${sessionId}: ${errMsg}`)
       const diagnosticMessage = await buildSessionStartupDiagnosticMessage(sessionId, errMsg)
       if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
@@ -1979,6 +1991,20 @@ function applyDeferredPermissionModeAfterActiveTurn(
   })
 }
 
+function deferAntigravityRuntimeRestart(ws: SessionConnection, selection: RuntimeOverride): boolean {
+  const { sessionId } = ws.data
+  const completion = conversationService.getAntigravityTurnCompletion(sessionId)
+  if (!completion) return false
+  // ACP 后台回复和正在收尾的取消可能不属于当前 WebSocket 输入。
+  deferredRuntimeRestarts.set(sessionId, selection)
+  void completion.then(current => {
+    if (current && deferredRuntimeRestarts.get(sessionId) === selection) {
+      applyDeferredRuntimeRestartAfterActiveTurn(ws, sessionId)
+    }
+  })
+  return true
+}
+
 function applyDeferredRuntimeRestartAfterActiveTurn(
   ws: SessionConnection,
   sessionId: string,
@@ -2030,7 +2056,11 @@ async function performDesktopClearCommand(
   const activeTitleState = sessionTitleState.get(sessionId)
   if (activeTitleState) activeTitleState.activeTurn = undefined
   const pendingStartup = sessionStartupPromises.get(sessionId)
-  conversationService.stopSession(sessionId)
+  if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
+    await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+  } else {
+    conversationService.stopSession(sessionId)
+  }
   // Clearing the lead's context ends its reviewed team for good.
   void endTeamsForParent(sessionId).catch(error => console.error(`[WS] Failed to end the cleared session's team: ${error}`))
   pendingInterruptedTurnResults.delete(sessionId)
@@ -2187,6 +2217,12 @@ function finalizePermissionResponse(
       permissionType: 'tool',
       allowed: message.allowed,
     })
+  } else if (message.allowed && conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID &&
+    conversationService.getPendingPermissionToolName(sessionId, message.requestId) === 'AskUserQuestion') {
+    sendMessage(ws, {
+      type: 'error', code: 'PERMISSION_RESPONSE_INVALID', permissionRequestId: message.requestId,
+      message: 'Choose one of the options provided by Antigravity.',
+    })
   }
   console.log(`[WS] Permission response for ${message.requestId}: ${message.allowed}`)
 }
@@ -2211,6 +2247,10 @@ function handlePermissionResponse(
   message: Extract<ClientMessage, { type: 'permission_response' }>
 ) {
   const { sessionId } = ws.data
+  if (typeof message.allowed !== 'boolean') {
+    sendError(ws, 'Permission decision must be a boolean.', 'PERMISSION_RESPONSE_INVALID')
+    return
+  }
   if (
     message.runtimeOverride &&
     conversationService.getPendingPermissionToolName(sessionId, message.requestId) ===
@@ -2334,6 +2374,17 @@ async function handlePlanApprovalWithRuntimeOverride(
   const currentProviderId = prevOverride?.providerId ?? launchInfo?.runtimeProviderId ?? null
   const currentModelId = prevOverride?.modelId ?? launchInfo?.runtimeModelId ?? undefined
   const currentEffort = prevOverride?.effort ?? launchInfo?.effortLevel ?? undefined
+
+  if ((nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID || currentProviderId === ANTIGRAVITY_PROVIDER_ID) &&
+    currentProviderId !== nextOverride.providerId) {
+    sendMessage(ws, {
+      type: 'error',
+      code: 'ANTIGRAVITY_UNSUPPORTED',
+      message: 'Start a new chat to switch between Antigravity and Claude Code.',
+      permissionRequestId: message.requestId,
+    })
+    return
+  }
 
   if (
     currentProviderId === nextOverride.providerId &&
@@ -2474,6 +2525,18 @@ async function handleSetPermissionMode(
   // Cold sessions must participate in the same transition queue: a following
   // turn or prewarm must not start with stale metadata while this write waits.
   await enqueueRuntimeTransition(sessionId, async () => {
+    if (!isAntigravitySupportedPermissionMode(message.mode)) {
+      const runtime = runtimeOverrides.get(sessionId) ?? await sessionService.getSessionLaunchInfo(sessionId)
+      const providerId = runtime && 'providerId' in runtime ? runtime.providerId : runtime?.runtimeProviderId
+      if (providerId === ANTIGRAVITY_PROVIDER_ID) {
+        sendMessage(ws, {
+          type: 'error',
+          code: 'ANTIGRAVITY_UNSUPPORTED',
+          message: `Permission mode "${message.mode}" is not supported by Antigravity.`,
+        })
+        return
+      }
+    }
     const pendingStartup = sessionStartupPromises.get(sessionId)
     if (pendingStartup) {
       await pendingStartup.catch(() => undefined)
@@ -2566,6 +2629,20 @@ async function normalizeRuntimeOverrideInput(
   if (!modelId) return { ok: false, reason: 'model' }
   const requestedEffort =
     typeof input.effortLevel === 'string' ? input.effortLevel.trim() : undefined
+  if (input.providerId === ANTIGRAVITY_PROVIDER_ID) {
+    if (modelId.length > 512) return { ok: false, reason: 'model' }
+    if (requestedEffort !== undefined && requestedEffort.length > 0 && !['low', 'medium', 'high', 'xhigh'].includes(requestedEffort)) {
+      return { ok: false, reason: 'effort' }
+    }
+    return {
+      ok: true,
+      override: {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId,
+        ...(requestedEffort ? { effort: requestedEffort } : {}),
+      },
+    }
+  }
   if (typeof input.providerId === 'string') {
     const { providers } = await providerService.listProviders()
     if (!isKnownRuntimeProviderId(input.providerId, providers)) {
@@ -2644,6 +2721,25 @@ async function handleSetRuntimeConfig(
     }
 
     const nextOverride = normalized.override
+    const launch = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+    const currentSelection = runtimeOverrides.get(sessionId)
+    const previous = currentSelection ? currentSelection.providerId : launch?.runtimeProviderId
+    const selectingAntigravity = nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID
+    const changingAgent = selectingAntigravity !== (previous === ANTIGRAVITY_PROVIDER_ID)
+    const workspaceUnsupported = selectingAntigravity && (!launch || isSideChatId(sessionId) || launch.agentProfile === 'lean' || launch.repository?.worktree || !sessionService.shouldPersistSession())
+    const lockedToAnotherAgent = changingAgent && (
+      conversationService.hasSession(sessionId) ||
+      Boolean(launch?.nativeSessionId) ||
+      (launch?.transcriptMessageCount ?? 0) > 0
+    )
+    if (workspaceUnsupported || lockedToAnotherAgent) {
+      const detail = workspaceUnsupported
+        ? 'Antigravity requires a standard chat with history enabled in the original checkout.'
+        : 'Start a new chat to switch between Antigravity and Claude Code.'
+      rejectedRuntimeConfigs.set(sessionId, detail)
+      sendMessage(ws, { type: 'error', message: detail, code: 'ANTIGRAVITY_UNSUPPORTED' })
+      return
+    }
     const side = getSideChat(sessionId)
     if (side?.started) {
       const current = runtimeOverrides.get(sessionId)
@@ -2682,6 +2778,10 @@ async function handleSetRuntimeConfig(
       (runtimeOverrideVersions.get(sessionId) ?? 0) + 1,
     )
 
+    if (deferAntigravityRuntimeRestart(ws, nextOverride)) {
+      await persistSessionRuntimeConfig(sessionId, nextOverride)
+      return
+    }
     if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
       deferredRuntimeRestarts.set(sessionId, nextOverride)
       await persistSessionRuntimeConfig(sessionId, nextOverride)
@@ -2719,6 +2819,27 @@ async function handleSetRuntimeConfig(
     }
 
     if (conversationService.hasSession(sessionId)) {
+      if (
+        nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID &&
+        conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID
+      ) {
+        try {
+          const updated = await conversationService.setAntigravityConfig(sessionId, {
+            modelId: nextOverride.modelId,
+            effortLevel: nextOverride.effort,
+          })
+          if (updated) {
+            await persistSessionRuntimeConfig(sessionId, nextOverride)
+            broadcastAppliedRuntimeConfig(sessionId)
+            return
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          const code = err instanceof AntigravityError ? err.code : 'RUNTIME_CONFIG_INVALID'
+          sendMessage(ws, { type: 'error', message: errMsg, code })
+          return
+        }
+      }
       await persistSessionRuntimeConfig(sessionId, nextOverride)
       await restartSessionWithRuntimeConfig(ws, sessionId)
       return
@@ -2740,7 +2861,11 @@ async function restartSessionWithPermissionMode(
     runtimeExitStoppedSessions.add(sessionId)
     // Approved team members are independent processes; replacing the lead's
     // process must not end their work.
-    conversationService.stopSession(sessionId, { keepTeamWorkers: true })
+    if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
+      await conversationService.stopSessionAndWait(sessionId, undefined, { keepTeamWorkers: true, requireExit: true })
+    } else {
+      conversationService.stopSession(sessionId, { keepTeamWorkers: true })
+    }
     endReplacedCliRun(sessionId)
     await emitAuthoritativeStoppedForActiveAgents(sessionId)
     await emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
@@ -2867,11 +2992,19 @@ async function restartSessionWithRuntimeConfig(
 ): Promise<boolean> {
   try {
     const workDir = await resolveRuntimeRestartWorkDir(sessionId)
+    const requested = runtimeOverrides.get(sessionId)
+    // 工作目录解析期间，AGY 仍可能开始一段独立的后台回复。
+    if (requested && deferAntigravityRuntimeRestart(ws, requested)) return true
     markActiveAgentsStopping(sessionId)
     runtimeExitStoppedSessions.add(sessionId)
     // Approved team members are independent processes; replacing the lead's
     // process must not end their work.
-    conversationService.stopSession(sessionId, { keepTeamWorkers: true })
+    if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
+      // 同一个原生会话只能有一个 AGY 进程持有。
+      await conversationService.stopSessionAndWait(sessionId, undefined, { keepTeamWorkers: true, requireExit: true })
+    } else {
+      conversationService.stopSession(sessionId, { keepTeamWorkers: true })
+    }
     endReplacedCliRun(sessionId)
     await emitAuthoritativeStoppedForActiveAgents(sessionId)
     await emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
@@ -3007,7 +3140,8 @@ function handleStopGeneration(
 
   if (
     (stoppedTurn || stoppedForegroundRunEpoch !== null || agentTasks.length > 0 || backgroundTaskIds.length > 0) &&
-    conversationService.hasSession(sessionId)
+    conversationService.hasSession(sessionId) &&
+    conversationService.getSessionRuntimeSelection(sessionId)?.providerId !== ANTIGRAVITY_PROVIDER_ID
   ) {
     // Force-kill if still running after 3 seconds
     setTimeout(() => {
@@ -3827,6 +3961,8 @@ function triggerTitleGeneration(
 
   // Generate polished titles after assistant output completes on turn 1 and 3.
   if (count !== 1 && count !== 3) return
+  // ACP 回合保留本地派生的标题，不调用 Claude Code 的模型路由。
+  if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) return
   const key = `complete:${count}`
   if (state.startedGenerationKeys.has(key)) return
   state.startedGenerationKeys.add(key)
@@ -4265,6 +4401,16 @@ async function ensureCliSessionStarted(
     await runtimeTransitionPromises.get(sessionId)
   }
 
+  if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
+    await conversationService.waitForAntigravityCancellation(sessionId)
+    // 如果下一条先等到了取消边界，主动应用尚未排队的模型选择。
+    if (!conversationService.isAntigravityResponding(sessionId) && !runtimeTransitionPromises.has(sessionId)) {
+      applyDeferredRuntimeRestartAfterActiveTurn(ws, sessionId)
+    }
+    while (runtimeTransitionPromises.has(sessionId)) {
+      await runtimeTransitionPromises.get(sessionId)
+    }
+  }
   const pendingStartup = sessionStartupPromises.get(sessionId)
   if (pendingStartup) {
     await pendingStartup
@@ -4287,6 +4433,10 @@ async function ensureCliSessionStarted(
     await sendRepositoryStartupStatus(ws, sessionId, reason)
     console.log(`[WS] Starting CLI for ${sessionId} due to ${reason}`)
     await conversationService.startSession(sessionId, workDir, sdkUrl, startupSettings)
+    const initMessage = conversationService.getSessionInitMessage(sessionId)
+    if (initMessage?.slash_commands && Array.isArray(initMessage.slash_commands) && initMessage.slash_commands.length > 0) {
+      updateSessionSlashCommands(sessionId, initMessage.slash_commands)
+    }
     bindSessionTurnObserver(sessionId)
     runtimeExitStoppedSessions.delete(sessionId)
     runtimeExitFailedSessions.delete(sessionId)
@@ -4742,6 +4892,17 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           ...(typeof cliMsg.request.display_name === 'string' &&
           cliMsg.request.display_name.trim()
             ? { displayName: cliMsg.request.display_name.trim() }
+            : {}),
+          ...(typeof cliMsg.request.antigravity_tool_name === 'string' &&
+          cliMsg.request.antigravity_tool_name.trim()
+            ? { antigravityToolName: cliMsg.request.antigravity_tool_name.trim() }
+            : {}),
+          ...(typeof cliMsg.request.subagent_name === 'string' &&
+          cliMsg.request.subagent_name.trim()
+            ? { subagentName: cliMsg.request.subagent_name.trim() }
+            : {}),
+          ...(typeof cliMsg.request.supports_allow_always === 'boolean'
+            ? { supportsAllowAlways: cliMsg.request.supports_allow_always }
             : {}),
         }]
       }
@@ -5421,6 +5582,9 @@ function replayPendingPermissionRequests(
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.antigravityToolName ? { antigravityToolName: request.antigravityToolName } : {}),
+      ...(request.subagentName ? { subagentName: request.subagentName } : {}),
+      ...(request.supportsAllowAlways !== undefined ? { supportsAllowAlways: request.supportsAllowAlways } : {}),
       ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     })
   }
@@ -6006,6 +6170,14 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
     ? runtimeOverrides.get(sessionId) ?? persistedRuntimeOverride
     : undefined
   if (runtimeOverride) {
+    if (runtimeOverride.providerId === ANTIGRAVITY_PROVIDER_ID) {
+      return {
+        model: runtimeOverride.modelId,
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        ...(runtimeOverride.effort ? { effort: runtimeOverride.effort } : {}),
+        permissionMode: sessionPermissionMode ?? 'default',
+      }
+    }
     if (sessionId && strictCollaborationRuntimeSessions.has(sessionId)) {
       await resolveSessionRuntime({}, { providerId: runtimeOverride.providerId, modelId: runtimeOverride.modelId,
         ...(runtimeOverride.effort ? { effortLevel: runtimeOverride.effort } : {}),
@@ -6336,6 +6508,10 @@ export function updateSessionSlashCommands(
 
   return normalized
 }
+
+conversationService.onSlashCommandsUpdated((sessionId, commands) => {
+  updateSessionSlashCommands(sessionId, commands)
+})
 
 function normalizeSessionSlashCommand(command: unknown): SessionSlashCommand | null {
   if (typeof command === 'string') {

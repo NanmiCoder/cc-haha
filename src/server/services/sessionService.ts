@@ -1,4 +1,5 @@
 import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
+import { ANTIGRAVITY_PROVIDER_ID } from './antigravityAcp.js'
 import { normalizeAdditionalDirectories, validateProjectAdditionalDirectories } from './projectDirectories.js'
 import { getSideChat, isSideChatId, sideChatSummary } from './sideChatRegistry.js'
 import { splitSessionReferenceContext } from './sessionReferenceContext.js'
@@ -225,6 +226,7 @@ export type SessionLaunchInfo = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
+  nativeSessionId?: string
 }
 
 type SessionMetadataPatch = {
@@ -237,6 +239,7 @@ type SessionMetadataPatch = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
+  nativeSessionId?: string
 }
 
 type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
@@ -1263,16 +1266,7 @@ export class SessionService {
 
   private metadataMatchesLaunchInfo(
     launchInfo: SessionLaunchInfo | null,
-    metadata: {
-      workDir: string
-      repository?: PreparedSessionWorkspace['repository']
-      additionalDirectories?: string[]
-      permissionMode?: string
-      runtimeProviderId?: string | null
-      runtimeModelId?: string
-      effortLevel?: string
-      openAIFastMode?: boolean
-    },
+    metadata: SessionMetadataPatch,
   ): boolean {
     if (!launchInfo) return false
     if (metadata.additionalDirectories !== undefined && JSON.stringify(launchInfo.additionalDirectories ?? []) !== JSON.stringify(metadata.additionalDirectories)) return false
@@ -1299,6 +1293,9 @@ export class SessionService {
       return false
     }
     if (metadata.runtimeModelId && launchInfo.runtimeModelId !== metadata.runtimeModelId) {
+      return false
+    }
+    if (metadata.nativeSessionId !== undefined && launchInfo.nativeSessionId !== metadata.nativeSessionId) {
       return false
     }
     if (launchInfo.effortLevel !== resolveSessionEffortLevel(metadata, launchInfo.effortLevel)) {
@@ -1581,6 +1578,7 @@ export class SessionService {
         runtimeProviderId: undefined as string | null | undefined,
         runtimeModelId: undefined as string | undefined, effortLevel: undefined as string | undefined,
         openAIFastMode: undefined as boolean | undefined,
+        nativeSessionId: undefined as string | undefined,
         customTitle: null as string | null, nonemptyCustomTitle: null as string | null,
         goalTitle: null as string | null, aiTitle: null as string | null, firstUserTitle: null as string | null,
         createdAt: null as string | null, modifiedAt: null as string | null,
@@ -1608,6 +1606,15 @@ export class SessionService {
           if (typeof record.runtimeModelId === 'string') state.runtimeModelId = record.runtimeModelId
           state.effortLevel = resolveSessionEffortLevel(record, state.effortLevel)
           if (typeof record.openAIFastMode === 'boolean') state.openAIFastMode = record.openAIFastMode
+          // 兼容旧字段 antigravitySessionId 与当前 nativeSessionId，不重写旧记录。
+          const rawNativeId = typeof record.nativeSessionId === 'string'
+            ? record.nativeSessionId
+            : typeof record.antigravitySessionId === 'string'
+              ? record.antigravitySessionId
+              : undefined
+          if (rawNativeId && rawNativeId.length <= 512) {
+            state.nativeSessionId = rawNativeId
+          }
         }
         state.repository = this.resolveRepositoryFromEntries([entry]) ?? state.repository
         const worktree = this.resolveWorktreeSessionFromEntries([entry])
@@ -1658,6 +1665,7 @@ export class SessionService {
           customTitle: launch.customTitle,
           transcriptMessageCount: launch.launchCount,
           ...shared(launch),
+          ...(launch.nativeSessionId ? { nativeSessionId: launch.nativeSessionId } : {}),
         },
         customTitle: launch.nonemptyCustomTitle,
         transcriptMetadata: { ...transcriptMetadata, cwd: launch.cwd },
@@ -5105,8 +5113,23 @@ export class SessionService {
     repositoryOptions?: CreateSessionRepositoryOptions,
     permissionMode?: string,
     agentProfile: 'standard' | 'lean' = 'standard',
+    runtimeOptions?: {
+      launchProviderId?: string
+      providerId?: string
+      modelId?: string
+      effortLevel?: string
+    },
   ): Promise<{ sessionId: string; workDir: string; agentProfile: 'standard' | 'lean' }> {
     if (agentProfile === 'lean' && permissionMode === 'plan') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
+    const effectiveProviderId = runtimeOptions?.providerId ?? runtimeOptions?.launchProviderId
+    if (effectiveProviderId === ANTIGRAVITY_PROVIDER_ID) {
+      if (agentProfile === 'lean') {
+        throw new ApiError(400, 'Antigravity is unavailable in lean sessions.', 'ANTIGRAVITY_UNSUPPORTED')
+      }
+      if (repositoryOptions?.worktree) {
+        throw new ApiError(400, 'Antigravity does not support worktree sessions. Choose the current checkout or switch providers.', 'ANTIGRAVITY_UNSUPPORTED')
+      }
+    }
     // Default to user home directory when no workDir specified
     const persist = this.shouldPersistSession()
     const resolvedWorkDir = workDir || os.homedir()
@@ -5154,6 +5177,16 @@ export class SessionService {
       isSnapshotUpdate: false,
     }
 
+    const initialRuntimeMeta = runtimeOptions?.providerId === ANTIGRAVITY_PROVIDER_ID
+      ? {
+          runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+          ...(runtimeOptions.modelId ? { runtimeModelId: runtimeOptions.modelId } : {}),
+          ...(runtimeOptions.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(runtimeOptions.effortLevel)
+            ? { effortLevel: runtimeOptions.effortLevel }
+            : {}),
+        }
+      : {}
+
     // Store actual workDir for later retrieval
     const metaEntry = {
       type: 'session-meta',
@@ -5165,6 +5198,7 @@ export class SessionService {
       ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
         ? { permissionMode }
         : {}),
+      ...initialRuntimeMeta,
       timestamp: now,
     }
 
@@ -5175,6 +5209,7 @@ export class SessionService {
       agentProfile,
       ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
         ? { permissionMode } : {}),
+      ...initialRuntimeMeta,
     })
     if (persist && this.shouldPersistSession()) {
       await fs.writeFile(filePath, JSON.stringify(initialEntry) + '\n' + JSON.stringify(metaEntry) + '\n', 'utf-8')
@@ -5425,8 +5460,9 @@ export class SessionService {
           projectDir, workDir, transcriptMessageCount: 0, customTitle: null,
         } : null)
         if (info) {
+          const { nativeSessionId: _detachedNativeSessionId, ...restInfo } = info
           this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
-            ...info,
+            ...restInfo,
             transcriptMessageCount: 0,
             customTitle: preservedCustomTitle?.trim() || null,
             ...(preservedPermissionMode && VALID_SESSION_PERMISSION_MODES.has(preservedPermissionMode)
@@ -5458,13 +5494,16 @@ export class SessionService {
         extra: {} as Record<string, unknown>,
         permissionMode: undefined as string | undefined,
         runtime: {} as { runtimeProviderId?: string | null, runtimeModelId?: string, effortLevel?: string, openAIFastMode?: boolean } }
+      let detachesAntigravity = false
       await streamBoundedHistory(found.filePath, entry => {
         const record = entry as RawEntry
         if (record.type === 'session-meta') {
           // Unknown extension fields merge as patches. The runtime selection does
           // not: a complete selection without effortLevel means auto, so it is
           // reduced exactly like the launch metadata projection instead.
-          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, ...extension } = entry
+          // /clear 清空界面历史，也必须与原 Antigravity 对话解绑。
+          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, nativeSessionId, antigravitySessionId, ...extension } = entry
+          detachesAntigravity ||= typeof nativeSessionId === 'string' || typeof antigravitySessionId === 'string'
           Object.assign(preserved.extra, extension)
           if (runtimeProviderId === null || typeof runtimeProviderId === 'string') preserved.runtime.runtimeProviderId = runtimeProviderId
           if (typeof runtimeModelId === 'string') preserved.runtime.runtimeModelId = runtimeModelId
@@ -5529,13 +5568,22 @@ export class SessionService {
 
       if (!this.shouldPersistSession()) return
       this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
-      await fs.writeFile(
-        found.filePath,
-        [initialEntry, metaEntry, ...(customTitleEntry ? [customTitleEntry] : [])]
-          .map(entry => JSON.stringify(entry))
-          .join('\n') + '\n',
-        'utf-8',
-      )
+      const replacement = [initialEntry, metaEntry, ...(customTitleEntry ? [customTitleEntry] : [])]
+        .map(entry => JSON.stringify(entry))
+        .join('\n') + '\n'
+      if (detachesAntigravity) {
+        // 替换文件而不是原地截断，确保已缓存的历史游标不会读到旧 ACP 回合。
+        const tempFilePath = `${found.filePath}.clear-${crypto.randomUUID()}.tmp`
+        try {
+          await fs.writeFile(tempFilePath, replacement, { flag: 'wx', mode: 0o600 })
+          if (!this.shouldPersistSession()) return
+          await fs.rename(tempFilePath, found.filePath)
+        } finally {
+          await fs.rm(tempFilePath, { force: true })
+        }
+      } else {
+        await fs.writeFile(found.filePath, replacement, 'utf-8')
+      }
       if (customTitleEntry) {
         this.syncIndexedSessionTitle(sessionId, customTitleEntry.customTitle)
       }
@@ -5556,6 +5604,31 @@ export class SessionService {
     } finally {
       this.clearingTaskNotificationSessions.delete(sessionId)
     }
+  }
+
+  async appendAntigravityMessages(
+    sessionId: string,
+    nativeSessionId: string,
+    messages: Record<string, unknown>[],
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    await this.withSessionMetadataMutation(sessionId, async () => {
+      const launchInfo = await this.getSessionLaunchInfo(sessionId)
+      if (!this.shouldPersistSession() || !isCurrent() || launchInfo?.nativeSessionId !== nativeSessionId) {
+        throw new Error('Antigravity session is no longer active')
+      }
+      const handle = await fs.open(launchInfo.filePath, constants.O_WRONLY | constants.O_APPEND)
+      try {
+        if (!this.shouldPersistSession() || !isCurrent()) throw new Error('Antigravity session is no longer active')
+        const timestamp = new Date().toISOString()
+        await handle.writeFile(messages.map(message => JSON.stringify({
+          ...message, sessionId, cwd: launchInfo.workDir, timestamp,
+        }) + '\n').join(''), 'utf-8')
+      } finally {
+        await handle.close()
+      }
+      this.invalidateSessionListCache()
+    })
   }
 
   async appendSessionMetadata(
@@ -5714,6 +5787,7 @@ export class SessionService {
         ? { runtimeProviderId: metadata.runtimeProviderId }
         : {}),
       ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
+      ...(metadata.nativeSessionId ? { nativeSessionId: metadata.nativeSessionId } : {}),
       ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
         ? { effortLevel: metadata.effortLevel }
         : {}),

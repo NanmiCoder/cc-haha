@@ -43,6 +43,7 @@ import { getMobileSessionActivity } from '../services/mobileSessionActivityRunti
 import { getPowerActivitySnapshot } from '../services/powerActivityRuntime.js'
 import { handlePowerActivityLease } from '../services/powerActivityLease.js'
 import { conversationService } from '../services/conversationService.js'
+import { ANTIGRAVITY_PROVIDER_ID } from '../services/antigravityAcp.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import {
@@ -1066,15 +1067,40 @@ function isReviewPathRejection(error: unknown): error is Error {
 }
 
 async function createSession(req: Request): Promise<Response> {
-  let body: { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
+  let body: {
+    workDir?: string
+    repository?: CreateSessionRepositoryOptions
+    permissionMode?: string
+    agentProfile?: 'standard' | 'lean'
+    launchProviderId?: unknown
+    providerId?: unknown
+    modelId?: unknown
+    effortLevel?: unknown
+    useWorktree?: unknown
+  }
   try {
-    body = (await req.json()) as { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
+    body = (await req.json()) as typeof body
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
 
   if (body.workDir && typeof body.workDir !== 'string') {
     throw ApiError.badRequest('workDir must be a string')
+  }
+  if (body.launchProviderId !== undefined && typeof body.launchProviderId !== 'string') {
+    throw ApiError.badRequest('launchProviderId must be a string')
+  }
+  if (body.providerId !== undefined && typeof body.providerId !== 'string') {
+    throw ApiError.badRequest('providerId must be a string')
+  }
+  if (body.modelId !== undefined && typeof body.modelId !== 'string') {
+    throw ApiError.badRequest('modelId must be a string')
+  }
+  if (body.effortLevel !== undefined && typeof body.effortLevel !== 'string') {
+    throw ApiError.badRequest('effortLevel must be a string')
+  }
+  if (body.useWorktree !== undefined && typeof body.useWorktree !== 'boolean') {
+    throw ApiError.badRequest('useWorktree must be a boolean')
   }
 
   if (body.permissionMode !== undefined && typeof body.permissionMode !== 'string') {
@@ -1096,9 +1122,24 @@ async function createSession(req: Request): Promise<Response> {
     }
   }
 
+  const repository: CreateSessionRepositoryOptions | undefined = body.useWorktree === true
+    ? { ...(body.repository ?? {}), worktree: true }
+    : body.repository
+
   if (body.agentProfile !== undefined && body.agentProfile !== 'standard' && body.agentProfile !== 'lean') throw ApiError.badRequest('agentProfile must be standard or lean')
   if (body.agentProfile === 'lean' && body.permissionMode === 'plan') throw ApiError.badRequest('Plan mode is unavailable in lean sessions. Choose another permission mode.')
-  const result = await sessionService.createSession(body.workDir, body.repository, body.permissionMode, body.agentProfile)
+  const result = await sessionService.createSession(
+    body.workDir,
+    repository,
+    body.permissionMode,
+    body.agentProfile,
+    {
+      launchProviderId: body.launchProviderId as string | undefined,
+      providerId: body.providerId as string | undefined,
+      modelId: body.modelId as string | undefined,
+      effortLevel: body.effortLevel as string | undefined,
+    },
+  )
   recentProjectsCache = null
   return Response.json(result, { status: 201 })
 }
@@ -1394,7 +1435,13 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
-  const lean = (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean'
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+  const liveProviderId = conversationService.getSessionRuntimeSelection(sessionId)?.providerId
+  if (liveProviderId === ANTIGRAVITY_PROVIDER_ID || launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    return Response.json({ commands: cachedCommands })
+  }
+
+  const lean = launchInfo?.agentProfile === 'lean'
   const hasCliList = !lean && cachedCommands.length > 0
   const skillCommands = await listSkillSlashCommands(workDir, {
     includeCompiledIn: !lean && !hasCliList,
@@ -1843,6 +1890,9 @@ async function getGitInfo(sessionId: string): Promise<Response> {
 }
 
 async function rewindSession(req: Request, sessionId: string): Promise<Response> {
+  if ((await sessionService.getSessionLaunchInfo(sessionId))?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    throw ApiError.conflict('Antigravity does not support rewinding a conversation.')
+  }
   let body: RewindTargetSelector & { dryRun?: boolean; mode?: unknown }
   try {
     body = (await req.json()) as RewindTargetSelector & { dryRun?: boolean; mode?: unknown }
@@ -1885,6 +1935,9 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
   if (!launchInfo) {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
+  }
+  if (launchInfo.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    throw ApiError.conflict('Antigravity does not support forking a conversation.')
   }
 
   try {
