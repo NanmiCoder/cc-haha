@@ -16,6 +16,7 @@ export const ANTIGRAVITY_ACP_PERMISSION_MODES: readonly PermissionMode[] = [
   'acceptEdits',
   'auto',
   'plan',
+  'bypassPermissions',
 ]
 
 /** Host UI commands that remain handled by cc-haha inside Antigravity sessions. */

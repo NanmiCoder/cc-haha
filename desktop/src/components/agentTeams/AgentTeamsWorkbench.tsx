@@ -338,7 +338,9 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 className="min-w-0 max-w-full truncate text-[15px] font-semibold"
                 title={snapshot.team.name}
               >
-                {snapshot.team.name}
+                {snapshot.team.name.startsWith('agy-swarm-') && snapshot.team.description
+                  ? snapshot.team.description
+                  : snapshot.team.name}
               </span>
               <span className="shrink-0 rounded-full bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
                 {t('agentTeams.experimental')}

@@ -178,6 +178,37 @@ describe('MobileApprovalDock', () => {
     expect(within(sheet).getByTestId('permission-subagent-badge')).toHaveTextContent('From researcher')
     expect(within(sheet).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
   })
+
+  it('uses Antigravity actor title and displays tool summary description cleanly', () => {
+    seed([{
+      requestId: 'perm-ag-cmd',
+      toolName: 'Bash',
+      toolUseId: 'toolu-ag-cmd',
+      displayName: 'Antigravity',
+      description: 'Verify TypeScript build',
+      antigravityToolName: 'run_command',
+      input: { CommandLine: 'bun run typecheck' },
+    }])
+    const { rerender } = render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = screen.getByTestId('mobile-approval-dock')
+    expect(within(dock).getByRole('heading', { name: 'Allow Antigravity to run this command?' })).toBeInTheDocument()
+    expect(within(dock).getByText('Verify TypeScript build')).toBeInTheDocument()
+    expect(within(dock).getByText('bun run typecheck')).toBeInTheDocument()
+
+    // Fallback when displayName is omitted on an Antigravity tool
+    seed([{
+      requestId: 'perm-ag-edit-fallback',
+      toolName: 'Edit',
+      toolUseId: 'toolu-ag-edit',
+      description: 'Update permission helper',
+      antigravityToolName: 'replace_file_content',
+      input: { TargetFile: '/repo/src/helper.ts' },
+    }])
+    rerender(<MobileApprovalDock sessionId={SESSION} />)
+    expect(within(screen.getByTestId('mobile-approval-dock')).getByRole('heading', { name: 'Allow Antigravity to Edit helper.ts?' })).toBeInTheDocument()
+    expect(within(screen.getByTestId('mobile-approval-dock')).getByText('Update permission helper')).toBeInTheDocument()
+  })
 })
 
 describe('PermissionDialog marker mode', () => {

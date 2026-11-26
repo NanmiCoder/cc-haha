@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react'
 import { MonitorSmartphone, RefreshCw } from 'lucide-react'
 import { computerUseApi } from '@/api/computerUse'
 import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
+import { PermissionModeSelector } from '@/components/controls/PermissionModeSelector'
 import {
   SettingsGroup,
   SettingsRow,
@@ -12,10 +13,12 @@ import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import {
   ANTIGRAVITY_ACP_LOGIN_COMMAND,
+  ANTIGRAVITY_ACP_PERMISSION_MODES,
   ANTIGRAVITY_ACP_PROVIDER_ID,
 } from '@/constants/antigravityAcp'
 import { useTranslation } from '@/i18n'
 import { useProviderStore } from '@/stores/providerStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { AntigravityStatusState } from '@/types/provider'
 
@@ -35,6 +38,8 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
   const antigravityEnabled = useProviderStore((state) => state.antigravityEnabled)
   const discover = useProviderStore((state) => state.discoverAntigravity)
   const setAntigravityEnabled = useProviderStore((state) => state.setAntigravityEnabled)
+  const permissionMode = useSettingsStore((state) => state.permissionMode)
+  const setPermissionMode = useSettingsStore((state) => state.setPermissionMode)
   const setActiveSettingsTab = useUIStore((state) => state.setActiveSettingsTab)
   const [checking, setChecking] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -162,6 +167,22 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
           onChange={setAntigravityEnabled}
           data-testid="antigravity-enable-row"
         />
+
+        <SettingsRow
+          title={t('settings.providers.antigravity.defaultPermissionTitle')}
+          description={t('settings.providers.antigravity.defaultPermissionDesc')}
+          data-testid="antigravity-default-permission-row"
+        >
+          <PermissionModeSelector
+            antigravity
+            allowedModes={ANTIGRAVITY_ACP_PERMISSION_MODES}
+            value={permissionMode}
+            onChange={(mode) => void setPermissionMode(mode)}
+            workDir={t('settings.general.defaultPermissionScope')}
+            menuPlacement="bottom"
+            menuAlign="right"
+          />
+        </SettingsRow>
 
         <SettingsRow
           title={(

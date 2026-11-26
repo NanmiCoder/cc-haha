@@ -926,7 +926,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     : t('empty.heroTitleNoProject')}
                 </h1>
                 <p className="text-[14px] text-[var(--color-text-tertiary)]">
-                  {t('empty.heroSubtitle')}
+                  {t(isAntigravity ? 'empty.heroSubtitleAntigravity' : 'empty.heroSubtitle')}
                 </p>
               </div>
             </div>
@@ -972,7 +972,9 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                       phaseOverride={!agentTeamsSnapshot.deletedAt && interruptedTeamName === agentTeamsSnapshot.team.name ? 'interrupted' : undefined}
                       onOpen={() => useTabStore.getState().openTeamWorkbenchTab(
                         activeTabId,
-                        agentTeamsSnapshot.team.name,
+                        agentTeamsSnapshot.team.name.startsWith('agy-swarm-') && agentTeamsSnapshot.team.description
+                          ? agentTeamsSnapshot.team.description
+                          : agentTeamsSnapshot.team.name,
                       )}
                     />
                   ) : null}

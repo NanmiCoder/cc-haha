@@ -103,16 +103,27 @@ export function extractToolDetails(toolName: string, input: unknown, t: (key: Tr
   }
 }
 
+const ANTIGRAVITY_PERMISSION_TOOL_NAMES = new Set([
+  'run_command',
+  'edit_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+  'write_file',
+  'write_to_file',
+])
+
 export function getPermissionTitle(
   toolName: string,
   input: unknown,
   t: (key: TranslationKey, params?: Record<string, string | number>) => string,
   displayName?: string,
+  antigravityToolName?: string,
 ) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
   const filePath = readInputFilePath(obj)
   const fileName = filePath ? filePath.split('/').pop() || filePath : ''
-  const actor = displayName || 'Claude'
+  const actor = displayName?.trim()
+    || (antigravityToolName || ANTIGRAVITY_PERMISSION_TOOL_NAMES.has(toolName) ? 'Antigravity' : 'Claude')
 
   switch (toolName) {
     case 'Edit':

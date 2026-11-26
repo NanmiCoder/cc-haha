@@ -107,7 +107,7 @@ import { AgentProfileChip } from '@/components/chat/AgentProfileChip'
 import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
-import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
 import { executeFastSlashCommand } from '@/lib/fastModeCommand'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { formatBytes } from '@/lib/formatBytes'
@@ -212,14 +212,33 @@ function resolveAntigravityDraftSelection(antigravity: AntigravityStatus | undef
     ?? chosenModel?.id
     ?? antigravity?.currentModelId
     ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
-  const effortLevel = saved?.effortLevel
-    ?? chosenModel?.defaultReasoningEffort
-    ?? antigravity?.currentEffortLevel
-    ?? 'medium'
+  const matchesSavedModel = Boolean(saved?.modelId && saved.modelId === modelId)
+  const matchesCurrentModel = Boolean(antigravity?.currentModelId && chosenModel?.id === antigravity.currentModelId)
+  const supportedEfforts = chosenModel?.supportedReasoningEfforts
+  let effortLevel: RuntimeSelection['effortLevel']
+  if (Array.isArray(supportedEfforts)) {
+    if (supportedEfforts.length > 0) {
+      const candidates: Array<RuntimeSelection['effortLevel']> = [
+        matchesSavedModel ? saved?.effortLevel : undefined,
+        matchesCurrentModel ? antigravity?.currentEffortLevel : undefined,
+        chosenModel?.defaultReasoningEffort,
+        supportedEfforts[0],
+      ]
+      effortLevel = candidates.find((candidate): candidate is NonNullable<RuntimeSelection['effortLevel']> =>
+        candidate !== undefined && supportedEfforts.includes(candidate),
+      )
+    }
+  } else {
+    effortLevel = (matchesSavedModel ? saved?.effortLevel : undefined)
+      ?? (matchesCurrentModel ? antigravity?.currentEffortLevel : undefined)
+      ?? chosenModel?.defaultReasoningEffort
+      ?? antigravity?.currentEffortLevel
+      ?? 'medium'
+  }
   return {
     providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
     modelId,
-    effortLevel,
+    ...(effortLevel ? { effortLevel } : {}),
   }
 }
 
@@ -357,10 +376,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   )
   const engine: ComposerEngine = antigravityAvailable ? selectedEngine : 'cc-haha'
   const isAntigravity = engine === 'antigravity'
-  const effectiveDefaultPermissionMode: PermissionMode = isAntigravity && defaultPermissionMode === 'bypassPermissions'
-    ? 'default'
-    : defaultPermissionMode
-  const draftPermissionMode = pickedPermissionMode ?? effectiveDefaultPermissionMode
+  const draftPermissionMode = pickedPermissionMode ?? defaultPermissionMode
   const lastStandardSelectionRef = useRef<RuntimeSelection | null>(
     draftRuntimeSelection && draftRuntimeSelection.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID
       ? draftRuntimeSelection
@@ -375,11 +391,27 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     const runtimeStore = useSessionRuntimeStore.getState()
     const current = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
     if (isAntigravity) {
-      if (current?.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID) {
-        runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, resolveAntigravityDraftSelection(antigravity))
+      const hasDiscoveredAntigravityModel = Boolean(
+        antigravity && (
+          antigravity.models.length > 0 ||
+          (antigravity.currentModelId && antigravity.currentModelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID)
+        ),
+      )
+      const shouldUpgradePlaceholder =
+        current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID &&
+        current.modelId === ANTIGRAVITY_ACP_DEFAULT_MODEL_ID &&
+        hasDiscoveredAntigravityModel
+      if (current?.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID || shouldUpgradePlaceholder) {
+        const nextSelection = resolveAntigravityDraftSelection(antigravity)
+        if (
+          current?.providerId !== nextSelection.providerId ||
+          current?.modelId !== nextSelection.modelId ||
+          current?.effortLevel !== nextSelection.effortLevel
+        ) {
+          runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, nextSelection)
+        }
       }
       if (useWorktree) setUseWorktree(false)
-      if (pickedPermissionMode === 'bypassPermissions') setDraftPermissionMode('default')
       if (selectedAgentProfile === 'lean') setAgentProfile('standard')
       if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
         void discoverAntigravity().catch(() => {})
@@ -391,7 +423,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
       }
     }
-  }, [antigravity, discoverAntigravity, isAntigravity, pickedPermissionMode, selectedAgentProfile, useWorktree])
+  }, [antigravity, discoverAntigravity, isAntigravity, selectedAgentProfile, useWorktree])
   const referenceProviderId = mentionProviderId(draftRuntimeSelection)
   const referenceContext = `${workDir}\0${referenceProviderId ?? ''}\0${agentProfile}`
   const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
@@ -705,31 +737,63 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // A model picked in this draft runs on its own provider, whatever the
       // global default is, so that provider's credentials are the ones to check.
       // Without a pick the server keeps judging the global default.
-      const authStatus = isAntigravity
+      let authStatus = isAntigravity
         ? await providersApi.authStatus(ANTIGRAVITY_ACP_PROVIDER_ID)
         : explicitDraftSelection
           ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
           : await providersApi.authStatus()
-      if (!authStatus.hasAuth) {
-        if (isAntigravity && authStatus.antigravityStatus === 'login_required') {
-          addToast({
-            type: 'warning',
-            message: t('settings.providers.antigravity.status.login_required', { command: ANTIGRAVITY_ACP_LOGIN_COMMAND }),
-          })
-        } else {
-          const providerName = resolveProviderName(
-            isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
-            providers,
-            t,
-          )
-          const modelName = explicitDraftSelection?.modelId ?? currentModel?.name ?? currentModel?.id
-          addToast({
-            type: 'warning',
-            message: modelName
-              ? t('empty.noCredentials', { model: modelName, provider: providerName })
-              : t('empty.noCredentialsProvider', { provider: providerName }),
-          })
+      if (isAntigravity && !authStatus.hasAuth) {
+        let antigravityAuthState = authStatus.antigravityStatus ?? authStatus.localAgentStatus
+        let antigravityError: string | undefined
+        if (antigravityAuthState === 'unchecked' && typeof discoverAntigravity === 'function') {
+          try {
+            const discovered = await discoverAntigravity()
+            if (discovered) {
+              antigravityAuthState = discovered.status
+              if (discovered.status === 'ready') {
+                authStatus = { ...authStatus, hasAuth: true, antigravityStatus: 'ready', localAgentStatus: 'ready' }
+              }
+            }
+          } catch (error) {
+            antigravityAuthState = 'error'
+            antigravityError = error instanceof Error ? error.message : String(error)
+          }
         }
+        if (!authStatus.hasAuth) {
+          if (antigravityAuthState === 'login_required') {
+            addToast({
+              type: 'warning',
+              message: t('settings.providers.antigravity.status.login_required', { command: ANTIGRAVITY_ACP_LOGIN_COMMAND }),
+            })
+          } else if (antigravityAuthState === 'not_installed') {
+            addToast({
+              type: 'warning',
+              message: t('settings.providers.antigravity.status.not_installed'),
+            })
+          } else {
+            addToast({
+              type: 'warning',
+              message: antigravityError || t('settings.providers.antigravity.status.error'),
+            })
+          }
+          useUIStore.getState().setPendingSettingsTab('providers')
+          useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+          return null
+        }
+      }
+      if (!authStatus.hasAuth) {
+        const providerName = resolveProviderName(
+          explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
+          providers,
+          t,
+        )
+        const modelName = explicitDraftSelection?.modelId ?? currentModel?.name ?? currentModel?.id
+        addToast({
+          type: 'warning',
+          message: modelName
+            ? t('empty.noCredentials', { model: modelName, provider: providerName })
+            : t('empty.noCredentialsProvider', { provider: providerName }),
+        })
         useUIStore.getState().setPendingSettingsTab('providers')
         useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
         return null
@@ -777,7 +841,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
           }
         : undefined
       const runtimeSelection = isAntigravity
-        ? (explicitDraftSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
+        ? (explicitDraftSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID &&
+            (explicitDraftSelection.modelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID || !antigravity?.models.length)
             ? explicitDraftSelection
             : resolveAntigravityDraftSelection(antigravity))
         : (explicitDraftSelection
@@ -789,16 +854,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       const launchBranch = selectedBranch && repositoryLaunchRef.current
         ? await repositoryLaunchRef.current.resolveLaunchBranch()
         : selectedBranch
-      const effectivePermissionMode = isAntigravity && draftPermissionMode === 'bypassPermissions'
-        ? 'default'
-        : draftPermissionMode
       const sessionId = await createSession(
         workDir || undefined,
         {
           ...(launchBranch
             ? { repository: { branch: launchBranch, worktree: isAntigravity ? false : useWorktree } }
             : {}),
-          permissionMode: effectivePermissionMode,
+          permissionMode: draftPermissionMode,
           ...(isLean && !isAntigravity ? { agentProfile } : {}),
           ...(isAntigravity ? {
             launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID,
@@ -949,7 +1011,9 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     // Agent Team armed in the + menu: the model gets the team instruction,
     // the bubble keeps what the user typed.
     const sendAsTeam = capabilityMenu.agentTeamArmed
-    const contentForModel = sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(serializedText) : withAgentTeamRequest(serializedText))
+      : serializedText
     // The local server drops a frame over its input budget by closing the
     // socket, and the client would only reconnect: the first turn, with its
     // pasted screenshots inlined as data URLs, would vanish without a trace.
@@ -1416,6 +1480,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // opened rightwards from it ran past the card and the window edge.
       menuAlign={isMobileComposer ? 'left' : 'right'}
       lean={isLean}
+      antigravity={isAntigravity}
       allowedModes={isAntigravity ? ANTIGRAVITY_ACP_PERMISSION_MODES : undefined}
       value={draftPermissionMode}
       onChange={setDraftPermissionMode}
@@ -1470,9 +1535,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     const runtimeStore = useSessionRuntimeStore.getState()
     if (nextEngine === 'antigravity') {
       setUseWorktree(false)
-      if (draftPermissionMode === 'bypassPermissions') setDraftPermissionMode('default')
       if (selectedAgentProfile === 'lean') setAgentProfile('standard')
-      capabilityMenu.disarmAgentTeam()
       runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, resolveAntigravityDraftSelection(antigravity))
       if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
         void discoverAntigravity().catch(() => {})
@@ -1541,7 +1604,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
           : t('empty.heroTitleNoProject')}
       </h1>
       <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
-        {t('empty.heroSubtitle')}
+        {t(isAntigravity ? 'empty.heroSubtitleAntigravity' : 'empty.heroSubtitle')}
       </p>
     </div>
   )

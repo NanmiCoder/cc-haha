@@ -147,7 +147,10 @@ export function useCapabilityMenu(options: {
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
-  const agentTeamArmed = armed && agentTeamsEnabled && !lean && !antigravity
+  // Antigravity runs multi-agent swarms natively via `/swarm` without relying
+  // on Claude Code's experimental Agent Teams flag in Settings.
+  const agentTeamAvailable = antigravity || agentTeamsEnabled
+  const agentTeamArmed = armed && agentTeamAvailable && !lean
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
 
@@ -203,11 +206,11 @@ export function useCapabilityMenu(options: {
     agents: data.agents,
     connectors: data.connectors,
     workflows: data.workflows,
-    agentTeam: { enabled: agentTeamsEnabled, armed: agentTeamArmed },
+    agentTeam: { enabled: agentTeamAvailable, armed: agentTeamArmed },
     computerUse: data.computerUse,
     agentProfile: profileValue && !antigravity ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, profileValue, profileLocked, t])
+  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamAvailable, agentTeamArmed, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }
@@ -368,7 +371,7 @@ export function useCapabilityMenu(options: {
 }
 
 function isAntigravityAction(action: CapabilityAction): boolean {
-  return action.type === 'attachment' || action.type === 'slashTrigger' || action.type === 'toggleComputerUse' || action.type === 'settings'
+  return action.type === 'attachment' || action.type === 'slashTrigger' || action.type === 'toggleAgentTeam' || action.type === 'toggleComputerUse' || action.type === 'settings'
 }
 
 function isLeanAction(action: CapabilityAction): boolean {

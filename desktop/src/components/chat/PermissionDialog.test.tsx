@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -23,6 +23,7 @@ import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import { PermissionDialog } from './PermissionDialog'
+import { getPermissionTitle } from './permissionPresentation'
 
 const SESSION = 'session-ag'
 
@@ -194,5 +195,96 @@ describe('PermissionDialog Antigravity & Subagent extensions', () => {
     })
     expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('Gemini 3.8 Flash')
     expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Claude Official')
+  })
+
+  it('defaults actor to Antigravity for Antigravity tools and displays description cleanly', () => {
+    const t = (key: string, params?: Record<string, string | number>) => {
+      if (key === 'permission.allowEditFile') return `Allow ${params?.actor} to ${params?.toolName} ${params?.fileName}?`
+      if (key === 'permission.allowBash') return `Allow ${params?.actor} to run this command?`
+      return key
+    }
+
+    expect(getPermissionTitle('Edit', { file_path: '/repo/a.ts' }, t as never, undefined, 'replace_file_content'))
+      .toBe('Allow Antigravity to Edit a.ts?')
+    expect(getPermissionTitle('run_command', { CommandLine: 'ls' }, t as never))
+      .toBe('Allow Antigravity to run this command?')
+    expect(getPermissionTitle('Bash', { command: 'ls' }, t as never))
+      .toBe('Allow Claude to run this command?')
+    expect(getPermissionTitle('Bash', { command: 'ls' }, t as never, 'researcher'))
+      .toBe('Allow researcher to run this command?')
+
+    const permission: PendingPermission = {
+      requestId: 'req-ag-desc',
+      toolName: 'Bash',
+      toolUseId: 'tool-ag-desc',
+      displayName: 'Antigravity',
+      description: 'Run unit tests in workspace',
+      antigravityToolName: 'run_command',
+      input: { CommandLine: 'bun test' },
+    }
+    seedPending(permission)
+
+    const { rerender } = render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        displayName={permission.displayName}
+        description={permission.description}
+        antigravityToolName={permission.antigravityToolName}
+      />,
+    )
+
+    expect(screen.getByText('Allow Antigravity to run this command?')).toBeInTheDocument()
+    expect(screen.getByText('Run unit tests in workspace')).toBeInTheDocument()
+
+    // Even if displayName is omitted on an Antigravity tool, actor still defaults to Antigravity
+    act(() => {
+      seedPending({ ...permission, displayName: undefined })
+    })
+    rerender(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        description={permission.description}
+        antigravityToolName={permission.antigravityToolName}
+      />,
+    )
+    expect(screen.getByText('Allow Antigravity to run this command?')).toBeInTheDocument()
+    expect(screen.getByText('Run unit tests in workspace')).toBeInTheDocument()
+  })
+
+  it('does not duplicate description when Bash input description matches header description', () => {
+    const permission: PendingPermission = {
+      requestId: 'req-ag-dedupe',
+      toolName: 'Bash',
+      toolUseId: 'tool-ag-dedupe',
+      description: 'Check git status',
+      antigravityToolName: 'run_command',
+      input: {
+        CommandLine: 'git status --short',
+        command: 'git status --short',
+        description: 'Check git status',
+        toolSummary: 'Check git status',
+      },
+    }
+    seedPending(permission)
+
+    render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        description={permission.description}
+        antigravityToolName={permission.antigravityToolName}
+      />,
+    )
+
+    expect(screen.getAllByText('Check git status')).toHaveLength(1)
+    expect(screen.getByText('git status --short')).toBeInTheDocument()
   })
 })

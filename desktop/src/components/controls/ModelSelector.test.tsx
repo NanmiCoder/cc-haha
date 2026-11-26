@@ -2027,7 +2027,7 @@ describe('controlled runtime pickers outside the composer', () => {
     })
   })
 
-  it('auto-discovers Antigravity models when opened in unchecked state and shows login instructions when login_required', async () => {
+  it('auto-discovers Antigravity models when opened in unchecked state, shows loading instead of a lonely default model, and shows login instructions when login_required', async () => {
     useSettingsStore.setState({ locale: 'en' })
     const discoverMock = vi.fn(async () => ({
       id: 'antigravity-acp' as const,
@@ -2037,6 +2037,7 @@ describe('controlled runtime pickers outside the composer', () => {
     }))
     useProviderStore.setState({
       hasLoadedProviders: true,
+      antigravityDiscovering: false,
       antigravity: {
         id: 'antigravity-acp',
         kind: 'acp',
@@ -2055,13 +2056,85 @@ describe('controlled runtime pickers outside the composer', () => {
     )
     await clickByRole(/Antigravity/)
     expect(discoverMock).toHaveBeenCalledTimes(1)
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    expect(within(dropdown).getByTestId('antigravity-models-loading')).toBeInTheDocument()
+    expect(within(dropdown).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
 
     act(() => {
       useProviderStore.setState({
+        antigravityDiscovering: false,
         antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'login_required', models: [] },
       })
     })
     rerender(<ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />)
     expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('agy acp --login')
+    expect(within(screen.getByTestId('model-selector-dropdown')).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
+  })
+
+  it('adapts per-model Antigravity reasoning efforts: 3 levels for Carbon, 0 levels (hidden) for Orchestrator, and clamps xhigh on switch', async () => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({
+      hasLoadedProviders: true,
+      antigravityDiscovering: false,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [
+          { id: 'gemini-4-neon', name: 'Gemini 4 Neon', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)', supportedReasoningEfforts: [] },
+        ],
+        currentModelId: 'gemini-4-neon',
+        currentEffortLevel: 'high',
+      },
+    })
+    useSessionRuntimeStore.getState().setSelection('ag-per-model', {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-neon',
+      effortLevel: 'xhigh',
+    })
+
+    const onRuntimeSelectionChange = vi.fn()
+    render(
+      <ModelSelector
+        runtimeKey="ag-per-model"
+        lockedProviderId="antigravity-acp"
+        onRuntimeSelectionChange={onRuntimeSelectionChange}
+      />,
+    )
+
+    // On Gemini 4 Neon, X-High is available
+    await clickByRole('Gemini 4 Neon, Antigravity')
+    let dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('radio', { name: 'X-High' })).toBeInTheDocument()
+
+    // Switching from Neon (xhigh) to Carbon (3 levels) clamps effort to Carbon's default (high)
+    fireEvent.click(dropdown.getByRole('button', { name: /Gemini 4 Carbon/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-carbon',
+      effortLevel: 'high',
+    })
+
+    // Reopen on Carbon: only Low / Medium / High (NO X-High!)
+    await clickByRole('Gemini 4 Carbon, Antigravity')
+    dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('radio', { name: 'Low' })).toBeInTheDocument()
+    expect(dropdown.getByRole('radio', { name: 'Medium' })).toBeInTheDocument()
+    expect(dropdown.getByRole('radio', { name: 'High' })).toBeInTheDocument()
+    expect(dropdown.queryByRole('radio', { name: 'X-High' })).not.toBeInTheDocument()
+
+    // Switching to Orchestrator (supportedReasoningEfforts: []) clears effortLevel and hides the effort control
+    fireEvent.click(dropdown.getByRole('button', { name: /Orchestrator \(Neon\)/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-pro-orchestrator-neon',
+    })
+
+    await clickByRole('Orchestrator (Neon), Antigravity')
+    dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.queryByRole('radio', { name: 'Low' })).not.toBeInTheDocument()
+    expect(dropdown.queryByRole('radio', { name: 'High' })).not.toBeInTheDocument()
   })
 })

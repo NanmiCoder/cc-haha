@@ -1,7 +1,7 @@
 import { MODEL_SLOTS, type ModelSlot } from '@/lib/providerModelContext'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Check, ChevronDown, ChevronRight, ShieldCheck, Zap } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, ShieldCheck, Zap } from 'lucide-react'
 import {
   COMPOSER_MENU_ITEM,
   COMPOSER_MENU_ITEM_ACTIVE,
@@ -339,19 +339,25 @@ function buildAntigravityChoice(
   antigravity: AntigravityStatus | undefined,
   providerName: string,
   defaultModelLabel: string,
+  discovering = false,
 ): ModelProviderChoice {
   const defaultEffort = antigravity?.currentEffortLevel ?? 'medium'
-  const models: ModelInfo[] = (antigravity?.models ?? []).map((model) => ({
-    id: model.id,
-    name: model.name,
-    description: '',
-    context: '',
-    supportedReasoningEfforts: model.supportedReasoningEfforts?.length
+  const models: ModelInfo[] = (antigravity?.models ?? []).map((model) => {
+    const supportedEfforts = model.supportedReasoningEfforts !== undefined
       ? [...model.supportedReasoningEfforts]
-      : [...ANTIGRAVITY_ACP_DEFAULT_EFFORTS],
-    defaultReasoningEffort: model.defaultReasoningEffort ?? defaultEffort,
-  }))
-  if (models.length === 0 && antigravity?.status !== 'not_installed') {
+      : [...ANTIGRAVITY_ACP_DEFAULT_EFFORTS]
+    return {
+      id: model.id,
+      name: model.name,
+      description: '',
+      context: '',
+      supportedReasoningEfforts: supportedEfforts,
+      ...(supportedEfforts.length > 0
+        ? { defaultReasoningEffort: model.defaultReasoningEffort ?? defaultEffort }
+        : {}),
+    }
+  })
+  if (models.length === 0 && !discovering && antigravity?.status === 'ready') {
     models.push({
       id: ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
       name: defaultModelLabel,
@@ -411,6 +417,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     activeId,
     deepSeekAccountModels,
     antigravity,
+    antigravityDiscovering,
     hasLoadedProviders,
     isLoading: providersLoading,
     fetchProviders,
@@ -436,7 +443,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const dropdownRef = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
   const requestedOAuthStatusRef = useRef(false)
-  const requestedAntigravityDiscoverRef = useRef(false)
 
   const EFFORT_OPTIONS: { value: ReasoningEffortLevel; label: string }[] = [
     { value: 'low', label: t('settings.general.effort.low') },
@@ -584,8 +590,9 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       antigravity,
       t('settings.providers.antigravity.name'),
       t('settings.providers.antigravity.defaultModel'),
+      antigravityDiscovering,
     ),
-    [antigravity, t],
+    [antigravity, antigravityDiscovering, t],
   )
 
   const providerChoices = useMemo(
@@ -796,11 +803,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     setEffortOpen(false)
     if (isAntigravityLocked) {
       const currentAntigravity = useProviderStore.getState().antigravity
-      if (currentAntigravity?.status === 'unchecked' && !requestedAntigravityDiscoverRef.current) {
-        requestedAntigravityDiscoverRef.current = true
-        void discoverAntigravity().catch(() => {
-          requestedAntigravityDiscoverRef.current = false
-        })
+      const needsDiscovery =
+        !currentAntigravity ||
+        currentAntigravity.status === 'unchecked' ||
+        currentAntigravity.status === 'error' ||
+        (currentAntigravity.status === 'ready' && currentAntigravity.models.length === 0)
+      if (needsDiscovery) {
+        void discoverAntigravity().catch(() => {})
       }
       setOpen(true)
       return
@@ -954,9 +963,15 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const showDockedPermissions = Boolean(onOpenPermissions) && !isMobileBrowser
   const showDockedFooter = showDockedEffort || showDockedPermissions
 
-  const antigravityNotice = isAntigravityLocked && antigravity && antigravity.status !== 'ready' && antigravity.status !== 'unchecked'
+  const antigravityLoadingModels = isAntigravityLocked &&
+    antigravityChoice.models.length === 0 &&
+    (antigravityDiscovering || antigravity?.status === 'unchecked')
+  const antigravityNotice = isAntigravityLocked && !antigravityLoadingModels && antigravity && antigravity.status !== 'ready' && antigravity.status !== 'unchecked'
     ? t(`settings.providers.antigravity.status.${antigravity.status}`, { command: ANTIGRAVITY_ACP_LOGIN_COMMAND })
     : null
+  const hasVisibleModels = isRuntimeScoped
+    ? filteredProviderChoices.some((choice) => choice.models.length > 0)
+    : filteredAvailableModels.length > 0
 
   const dropdownContent = (
     <>
@@ -974,6 +989,16 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         </div>
       )}
       <div className={`scrollbar-autohide overflow-y-auto ${isMobileBrowser ? 'p-1' : 'min-h-0 flex-1 p-1'}`}>
+        {antigravityLoadingModels && (
+          <div
+            role="status"
+            data-testid="antigravity-models-loading"
+            className="flex min-h-24 items-center justify-center gap-2 px-4 text-center text-[13px] text-[var(--color-text-tertiary)]"
+          >
+            <Loader2 aria-hidden="true" size={14} className="animate-spin" />
+            <span>{t('settings.providers.antigravity.loadingModels')}</span>
+          </div>
+        )}
         {antigravityNotice && (
           <div
             role="status"
@@ -982,7 +1007,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             {antigravityNotice}
           </div>
         )}
-        {!hasMatchingModels && !antigravityNotice && (
+        {!hasMatchingModels && !antigravityNotice && !antigravityLoadingModels && (
           <div
             role="status"
             className={`flex items-center justify-center px-4 text-center text-[13px] text-[var(--color-text-tertiary)] ${isMobileBrowser ? 'min-h-28' : 'min-h-24'}`}
@@ -992,8 +1017,9 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         )}
 
         {isRuntimeScoped ? (
+          hasVisibleModels ? (
           <div className="space-y-1">
-            {filteredProviderChoices.map((choice) => {
+            {filteredProviderChoices.filter((choice) => choice.models.length > 0).map((choice) => {
               const choiceProvider = choice.providerId
                 ? providers.find((provider) => provider.id === choice.providerId)
                 : undefined
@@ -1128,6 +1154,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               )
             })}
           </div>
+          ) : null
         ) : (
           <div className="space-y-px">
             {filteredAvailableModels.map((model) => {

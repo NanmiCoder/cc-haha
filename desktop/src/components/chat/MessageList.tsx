@@ -3737,7 +3737,7 @@ export function MessageList({
     completedMessageIds: completedTurnMessageIds,
     blockedReason: editBlockedReason,
     pendingReason: editPendingReason,
-    disabled: isDirectAgentSession || isSideChatSession || Boolean(confirmTurnCard),
+    disabled: isAntigravity || isDirectAgentSession || isSideChatSession || Boolean(confirmTurnCard),
     rewindingTurnId,
     setRewindingTurnId,
     t,

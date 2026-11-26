@@ -4633,7 +4633,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput sessionId={sessionId} />)
 
     expect(screen.getByTestId('model-selector-shell')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
-    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan')
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan,bypassPermissions')
 
     setComposerText('/', 1)
     await waitFor(() => {
@@ -4642,6 +4642,134 @@ describe('ChatInput file mentions', () => {
     })
     expect(screen.queryByText('/btw')).not.toBeInTheDocument()
     expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+  })
+
+  it('passes modelId and effortLevel from sessionRuntimeStore to createSession when replacing an empty Antigravity session', async () => {
+    installElectronFileHost()
+    mocks.dialogOpen.mockResolvedValueOnce('/other')
+    mocks.create.mockResolvedValueOnce({ sessionId: 'session-ag-project-switch', workDir: '/other' })
+    mocks.getRepositoryContext.mockImplementation(async (workDir: string) => ({
+      ...okRepositoryContext(),
+      workDir,
+      repoRoot: workDir,
+      repoName: workDir.split('/').filter(Boolean).pop() ?? 'repo',
+    }))
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Project',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        permissionMode: 'bypassPermissions',
+      }],
+      activeSessionId: sessionId,
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+        },
+      },
+    })
+
+    render(<ChatInput variant="hero" />)
+
+    await openLocationMenu()
+    fireEvent.click(screen.getAllByTitle('/repo')[0]!)
+    fireEvent.click(await screen.findByRole('button', { name: /Choose a different folder/ }))
+
+    await waitFor(() => {
+      expect(mocks.create).toHaveBeenCalledWith({
+        workDir: '/other',
+        permissionMode: 'bypassPermissions',
+        launchProviderId: 'antigravity-acp',
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-pro',
+        effortLevel: 'high',
+      })
+    })
+    await waitFor(() => {
+      expect(useTabStore.getState().activeTabId).toBe('session-ag-project-switch')
+    })
+    expect(useSessionRuntimeStore.getState().selections['session-ag-project-switch']).toEqual({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+  })
+
+  it('arms Agent Teams from the + menu in an Antigravity session and sends /swarm idempotently', async () => {
+    dismissAgentTeamsNotice()
+    useSettingsStore.setState({ agentTeamsEnabled: false })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Antigravity Swarm Session',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+      activeSessionId: sessionId,
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+
+    render(<ChatInput sessionId={sessionId} compact />)
+    setComposerText('Audit security and performance', 30)
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    expect(await screen.findByTestId('agent-team-chip')).toBeInTheDocument()
+
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: '/swarm Audit security and performance',
+      attachments: [],
+    })
+    const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+    expect(messages[messages.length - 1]).toMatchObject({
+      type: 'user_text',
+      content: 'Audit security and performance',
+      modelContent: '/swarm Audit security and performance',
+    })
+    expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+
+    // Arming Agent Teams AND typing /swarm explicitly must not double-prefix.
+    act(() => {
+      useChatStore.setState(state => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'idle' } } }))
+    })
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    setComposerText('/swarm Already prefixed', 23)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenLastCalledWith(sessionId, {
+      type: 'user_message',
+      content: '/swarm Already prefixed',
+      attachments: [],
+    })
   })
 
 })

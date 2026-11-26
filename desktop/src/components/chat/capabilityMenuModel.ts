@@ -492,7 +492,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
         id: 'run',
         title: t('chat.capabilities.sectionRun'),
         showTitle: true,
-        items: [computerUseItem],
+        items: [agentTeamItem, computerUseItem],
       },
       {
         id: 'more',

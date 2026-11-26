@@ -65,7 +65,9 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
   const allowAlways = current.supportsAllowAlways !== false && inputSupportsAllowAlways !== false
   const position = pending.length > 1 ? t('mobile.approval.position', { index: 1, total: pending.length }) : null
 
-  let Icon = PERMISSION_TOOL_ICONS[current.toolName] ?? Shield
+  let Icon = PERMISSION_TOOL_ICONS[current.toolName]
+    ?? (current.antigravityToolName ? PERMISSION_TOOL_ICONS[current.antigravityToolName] : undefined)
+    ?? Shield
   let title: string
   let detail = ''
   if (kind === 'question') {
@@ -77,9 +79,12 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
     title = t('permission.planReadyTitle')
     detail = current.description ?? ''
   } else {
-    title = getPermissionTitle(current.toolName, current.input, t, current.displayName)
+    title = getPermissionTitle(current.toolName, current.input, t, current.displayName, current.antigravityToolName)
     detail = extractToolDetails(current.toolName, current.input, t).primary || current.description || current.toolName
   }
+  const toolDescription = kind === 'tool' && current.description && current.description !== detail
+    ? current.description
+    : null
 
   const submitReason = (event: FormEvent) => {
     event.preventDefault()
@@ -112,10 +117,15 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
               <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-on-warning-container)]">{position}</span>
             ) : null}
           </div>
+          {toolDescription ? (
+            <p className="mt-0.5 truncate text-[12px] leading-[1.4] text-[var(--color-text-tertiary)]">
+              {toolDescription}
+            </p>
+          ) : null}
           {detail ? (
             <p
               className={`mt-0.5 line-clamp-2 break-words text-[12px] leading-[1.5] text-[var(--color-text-secondary)] ${
-                kind === 'tool' ? 'font-mono' : ''
+                kind === 'tool' && detail !== current.description ? 'font-mono' : ''
               }`}
             >
               {detail}

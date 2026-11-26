@@ -41,6 +41,7 @@ type AuthStatusResponse = {
   source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'antigravity-acp' | 'original-settings' | 'env' | 'none'
   activeProvider?: string
   antigravityStatus?: AntigravityStatusState
+  localAgentStatus?: AntigravityStatusState
 }
 
 export const providersApi = {

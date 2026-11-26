@@ -86,12 +86,14 @@ type Props = {
   value?: PermissionMode
   /** Controlled mode: called on change instead of updating global store */
   onChange?: (mode: PermissionMode) => void
-  /** Restrict selectable modes (e.g. Antigravity supports default/acceptEdits/auto/plan). */
+  /** Restrict selectable modes (e.g. Antigravity supports default/acceptEdits/auto/plan/bypassPermissions). */
   allowedModes?: readonly PermissionMode[]
+  /** Use Antigravity ACP mode labels/descriptions and skip Claude-only Auto opt-in dialog. */
+  antigravity?: boolean
 }
 
 export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, Props>(function PermissionModeSelector(
-  { lean = false, sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange, allowedModes }: Props = {},
+  { lean = false, sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange, allowedModes, antigravity = false }: Props = {},
   handleRef,
 ) {
   const t = useTranslation()
@@ -121,43 +123,73 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
     color?: string
     /** Display-only flag on the row; carries no behaviour. */
     badge?: { tone: 'warning' | 'danger'; label: string }
-  }> = [
-    {
-      value: 'default',
-      label: t('permMode.askPermissions'),
-      description: t('permMode.askPermDesc'),
-    },
-    {
-      value: 'acceptEdits',
-      label: t('permMode.autoAccept'),
-      description: t('permMode.autoAcceptDesc'),
-    },
-    {
-      value: 'auto',
-      label: t('permMode.autoMode'),
-      description: t('permMode.autoModeDesc'),
-      badge: { tone: 'warning', label: t('permMode.badge.optIn') },
-    },
-    {
-      value: 'plan',
-      label: t('permMode.planMode'),
-      description: t('permMode.planModeDesc'),
-    },
-    {
-      value: 'bypassPermissions',
-      label: t('permMode.bypass'),
-      description: t('permMode.bypassDesc'),
-      color: 'text-[var(--color-error)]',
-      badge: { tone: 'danger', label: t('permMode.badge.risky') },
-    },
-  ]
+  }> = antigravity
+    ? [
+        {
+          value: 'default',
+          label: t('permMode.antigravity.default'),
+          description: t('permMode.antigravity.defaultDesc'),
+        },
+        {
+          value: 'acceptEdits',
+          label: t('permMode.antigravity.acceptEdits'),
+          description: t('permMode.antigravity.acceptEditsDesc'),
+        },
+        {
+          value: 'auto',
+          label: t('permMode.antigravity.auto'),
+          description: t('permMode.antigravity.autoDesc'),
+        },
+        {
+          value: 'plan',
+          label: t('permMode.antigravity.plan'),
+          description: t('permMode.antigravity.planDesc'),
+        },
+        {
+          value: 'bypassPermissions',
+          label: t('permMode.antigravity.bypass'),
+          description: t('permMode.antigravity.bypassDesc'),
+          color: 'text-[var(--color-error)]',
+          badge: { tone: 'danger', label: t('permMode.badge.risky') },
+        },
+      ]
+    : [
+        {
+          value: 'default',
+          label: t('permMode.askPermissions'),
+          description: t('permMode.askPermDesc'),
+        },
+        {
+          value: 'acceptEdits',
+          label: t('permMode.autoAccept'),
+          description: t('permMode.autoAcceptDesc'),
+        },
+        {
+          value: 'auto',
+          label: t('permMode.autoMode'),
+          description: t('permMode.autoModeDesc'),
+          badge: { tone: 'warning', label: t('permMode.badge.optIn') },
+        },
+        {
+          value: 'plan',
+          label: t('permMode.planMode'),
+          description: t('permMode.planModeDesc'),
+        },
+        {
+          value: 'bypassPermissions',
+          label: t('permMode.bypass'),
+          description: t('permMode.bypassDesc'),
+          color: 'text-[var(--color-error)]',
+          badge: { tone: 'danger', label: t('permMode.badge.risky') },
+        },
+      ]
 
   const MODE_LABELS: Record<PermissionMode, string> = {
     default: t('permMode.label.default'),
     acceptEdits: t('permMode.label.acceptEdits'),
     auto: t('permMode.label.auto'),
     plan: t('permMode.label.plan'),
-    bypassPermissions: t('permMode.label.bypassPermissions'),
+    bypassPermissions: antigravity ? t('permMode.antigravity.label.bypassPermissions') : t('permMode.label.bypassPermissions'),
     dontAsk: t('permMode.label.dontAsk'),
   }
 
@@ -236,7 +268,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
               interactionTabIdRef.current = null
               return
             }
-            if (item.value === 'auto' && item.value !== currentMode) {
+            if (!antigravity && item.value === 'auto' && item.value !== currentMode) {
               setOpen(false)
               setAutoDialog(true)
               return
@@ -366,7 +398,11 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             </p>
             <p
               className="text-xs leading-relaxed text-[var(--color-text-secondary)]"
-              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t('permMode.enableBypassBody')) }}
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(
+                  t(antigravity ? 'permMode.antigravity.enableBypassBody' : 'permMode.enableBypassBody'),
+                ),
+              }}
             />
             <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2" title={workDir}>
               <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />

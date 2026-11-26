@@ -44,6 +44,7 @@ import type { RuntimeSelection } from '../../types/runtime'
 import type { SlashCommandOption } from '../../types/slashCommand'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
 import {
+  ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
   ANTIGRAVITY_ACP_PERMISSION_MODES,
   ANTIGRAVITY_ACP_PROVIDER_ID,
   ANTIGRAVITY_HOST_UI_SLASH_COMMANDS,
@@ -63,7 +64,7 @@ import { AgentProfileChip } from './AgentProfileChip'
 import { AgentTeamChip } from './AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
-import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import { useCapabilityCatalogStore } from '@/stores/capabilityCatalogStore'
@@ -1070,13 +1071,28 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       setRepositoryLaunchDraft,
     } = chatStore
     const repositoryLaunchDraft = chatStore.sessions[oldId]?.repositoryLaunchDraft
-    const permissionMode = sessionStore.sessions.find((session) => session.id === oldId)
-      ?.permissionMode as PermissionMode | undefined
+    const oldSelection = useSessionRuntimeStore.getState().selections[oldId]
+    const oldSession = sessionStore.sessions.find((session) => session.id === oldId)
+    const permissionMode = oldSession?.permissionMode as PermissionMode | undefined
+    const antigravityModelId = isAntigravity
+      ? (oldSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID ? oldSelection.modelId : undefined)
+        ?? oldSession?.runtimeModelId
+        ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+      : undefined
+    const antigravityEffortLevel = isAntigravity
+      ? (oldSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID ? oldSelection.effortLevel : undefined)
+        ?? oldSession?.effortLevel
+      : undefined
     const createOptions = repository || permissionMode || isAntigravity
       ? {
           ...(repository ? { repository: isAntigravity ? { ...repository, worktree: false } : repository } : {}),
-          ...(permissionMode ? { permissionMode: isAntigravity && permissionMode === 'bypassPermissions' ? 'default' as const : permissionMode } : {}),
-          ...(isAntigravity ? { launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID, providerId: ANTIGRAVITY_ACP_PROVIDER_ID } : {}),
+          ...(permissionMode ? { permissionMode } : {}),
+          ...(isAntigravity ? {
+            launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            modelId: antigravityModelId,
+            ...(antigravityEffortLevel ? { effortLevel: antigravityEffortLevel } : {}),
+          } : {}),
         }
       : undefined
     const newId = await createSession(
@@ -1218,7 +1234,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // Agent Team armed in the + menu: the model gets the team instruction, the
     // bubble keeps what the user typed.
     const sendAsTeam = capabilityMenu.agentTeamArmed && !isMemberSession
-    const contentForModel = sendAsTeam ? withAgentTeamRequest(joinedContent) : joinedContent
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(joinedContent) : withAgentTeamRequest(joinedContent))
+      : joinedContent
     const displayContent = text || (
       workspaceReferences.length > 0
         ? t('chat.contextReferencesOnly', { count: workspaceReferences.length })
@@ -1716,6 +1734,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const permissionSelector = isMemberSession ? null : (
     <PermissionModeSelector
       lean={isLean}
+      antigravity={isAntigravity}
       allowedModes={isAntigravity ? ANTIGRAVITY_ACP_PERMISSION_MODES : undefined}
       ref={permissionSelectorRef}
       sessionId={activeTabId ?? undefined}
@@ -1804,12 +1823,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           ? t('chat.placeholderWorktreeRemoved')
           : t('chat.placeholderMissing')
         : questionPending
-          ? t('chat.placeholderQuestionPending')
+          ? t(isAntigravity ? 'chat.placeholderQuestionPendingAntigravity' : 'chat.placeholderQuestionPending')
           : isMemberSession
             ? memberContextFull
               ? t('teams.memberContextLimitPlaceholder')
               : t('teams.memberPlaceholder')
-            : t('chat.placeholder')
+            : t(isAntigravity ? 'chat.placeholderAntigravity' : 'chat.placeholder')
 
   // On a phone a waiting request takes the composer's place (MessageList shows
   // a marker where the card was). Not for a member's page or a side chat:

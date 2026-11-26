@@ -169,6 +169,8 @@ export function PermissionDialog({
     )
   }
 
+  const effectiveDisplayName = displayName ?? pendingPermission?.displayName
+  const effectiveDescription = description ?? pendingPermission?.description
   const effectiveAntigravityToolName = antigravityToolName ?? pendingPermission?.antigravityToolName
   const effectiveSubagentName = subagentName ?? pendingPermission?.subagentName
   const inputSupportsAllowAlways =
@@ -178,13 +180,15 @@ export function PermissionDialog({
   const allowAlways =
     (supportsAllowAlways ?? pendingPermission?.supportsAllowAlways) !== false &&
     inputSupportsAllowAlways !== false
-  const ToolIcon = PERMISSION_TOOL_ICONS[toolName] ?? Shield
+  const ToolIcon = PERMISSION_TOOL_ICONS[toolName]
+    ?? (effectiveAntigravityToolName ? PERMISSION_TOOL_ICONS[effectiveAntigravityToolName] : undefined)
+    ?? Shield
   const details = extractToolDetails(toolName, input, t)
   const rawInput = typeof input === 'string' ? input : JSON.stringify(input, null, 2)
   const preview = renderPermissionPreview(toolName, input, effectiveAntigravityToolName)
-  const title = getPermissionTitle(toolName, input, t, displayName)
+  const title = getPermissionTitle(toolName, input, t, effectiveDisplayName, effectiveAntigravityToolName)
   const allowRawToggle = !preview
-  const permissionContext = (details.primary || description || toolName).slice(0, 160)
+  const permissionContext = (details.primary || effectiveDescription || toolName).slice(0, 160)
 
   if (isPending && markerWhenPending) {
     return <PendingDecisionMarker title={title} />
@@ -244,8 +248,8 @@ export function PermissionDialog({
               </Badge>
             ) : null}
           </div>
-          {description && (
-            <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">{description}</p>
+          {effectiveDescription && (
+            <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">{effectiveDescription}</p>
           )}
         </div>
         <Badge
@@ -279,7 +283,7 @@ export function PermissionDialog({
         ) : null}
 
         {/* Secondary detail */}
-        {details.secondary && (
+        {details.secondary && details.secondary.trim() !== effectiveDescription?.trim() && (
           <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">{details.secondary}</p>
         )}
 

@@ -592,7 +592,7 @@ describe('providerStore Antigravity ACP status', () => {
     providersApiMock.list.mockResolvedValue({ providers: [], activeId: null })
   })
 
-  it('stores antigravity status from fetchProviders and discovers models on demand', async () => {
+  it('pre-warms Antigravity discovery on fetchProviders and caches discovered models for instant cold-start hydration', async () => {
     const initial = {
       id: 'antigravity-acp' as const,
       kind: 'acp' as const,
@@ -603,21 +603,48 @@ describe('providerStore Antigravity ACP status', () => {
       id: 'antigravity-acp' as const,
       kind: 'acp' as const,
       status: 'ready' as const,
-      models: [{ id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'high' }],
+      models: [
+        { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'high' },
+        { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+      ],
       currentModelId: 'gemini-3.8-pro',
-      currentEffortLevel: 'high',
-      version: '1.5.17',
+      currentEffortLevel: 'high' as const,
+      version: '1.5.18',
     }
+    let resolveDiscover: (value: { antigravity: typeof discovered }) => void = () => {}
     providersApiMock.list.mockResolvedValue({ providers: [], activeId: null, antigravity: initial })
-    providersApiMock.discoverAntigravity.mockResolvedValue({ antigravity: discovered })
+    providersApiMock.discoverAntigravity.mockReturnValue(
+      new Promise((resolve) => { resolveDiscover = resolve }),
+    )
 
     const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ antigravity: undefined, antigravityEnabled: true, antigravityDiscovering: false })
     await useProviderStore.getState().fetchProviders()
-    expect(useProviderStore.getState().antigravity).toEqual(initial)
+    expect(providersApiMock.discoverAntigravity).toHaveBeenCalledTimes(1)
+    expect(useProviderStore.getState().antigravityDiscovering).toBe(true)
 
-    const result = await useProviderStore.getState().discoverAntigravity()
+    // Calling discoverAntigravity again while in flight reuses the single pending request.
+    const joined = useProviderStore.getState().discoverAntigravity()
+    expect(providersApiMock.discoverAntigravity).toHaveBeenCalledTimes(1)
+
+    resolveDiscover({ antigravity: discovered })
+    const result = await joined
     expect(result).toEqual(discovered)
     expect(useProviderStore.getState().antigravity).toEqual(discovered)
+    expect(useProviderStore.getState().antigravityDiscovering).toBe(false)
+
+    // On a subsequent cold start when /api/providers returns unchecked with empty models,
+    // the cached catalog is hydrated immediately so ModelSelector shows all models right away.
+    let resolveColdRefresh: (value: { antigravity: typeof discovered }) => void = () => {}
+    providersApiMock.discoverAntigravity.mockReturnValue(
+      new Promise((resolve) => { resolveColdRefresh = resolve }),
+    )
+    useProviderStore.setState({ antigravity: undefined, hasLoadedProviders: false })
+    await useProviderStore.getState().fetchProviders()
+    expect(useProviderStore.getState().antigravity?.models).toEqual(discovered.models)
+    expect(useProviderStore.getState().antigravity?.currentModelId).toBe('gemini-3.8-pro')
+    resolveColdRefresh({ antigravity: discovered })
+    await Promise.resolve()
   })
 
   it('does not overwrite a fresher discoverAntigravity result with an earlier stale list() response', async () => {

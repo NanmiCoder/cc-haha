@@ -216,7 +216,7 @@ import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPr
 import { ApiError } from '../api/client'
 import { useChatStore } from '../stores/chatStore'
 import { useProviderStore } from '../stores/providerStore'
-import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
+import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
@@ -3134,7 +3134,7 @@ describe('EmptySession', () => {
 
       expect(window.localStorage.getItem('cc-haha-composer-engine')).toBe('antigravity')
       expect(screen.getByTestId('model-selector')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
-      expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan')
+      expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan,bypassPermissions')
 
       // Slash menu filters to Antigravity commands (no Claude-only /btw or /doctor)
       setComposerText('/', 1)
@@ -3180,6 +3180,193 @@ describe('EmptySession', () => {
       render(<EmptySession />)
       const mobileLaunch = screen.getByTestId('empty-session-mobile-launch')
       expect(within(mobileLaunch).getByRole('radiogroup', { name: 'Agent engine' })).toBeInTheDocument()
+    })
+
+    it('upgrades placeholder agent-default draft selection when Antigravity transitions unchecked -> ready without overwriting explicit model choices', async () => {
+      useProviderStore.setState({
+        antigravity: {
+          id: 'antigravity-acp',
+          kind: 'acp',
+          status: 'unchecked',
+          models: [],
+        },
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+        discoverAntigravity: vi.fn().mockResolvedValue(undefined),
+      })
+
+      render(<EmptySession />)
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      await waitFor(() => {
+        expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+          providerId: 'antigravity-acp',
+          modelId: 'agent-default',
+          effortLevel: 'medium',
+        })
+      })
+
+      act(() => {
+        useProviderStore.setState({
+          antigravity: {
+            id: 'antigravity-acp',
+            kind: 'acp',
+            status: 'ready',
+            models: [
+              { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+              { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+            ],
+            currentModelId: 'gemini-3.8-pro',
+            currentEffortLevel: 'low',
+            version: '1.5.17',
+          },
+        })
+      })
+
+      await waitFor(() => {
+        expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-pro',
+          effortLevel: 'low',
+        })
+      })
+
+      // Once user has a concrete model selected, further Antigravity store refreshes must not overwrite it.
+      act(() => {
+        useSessionRuntimeStore.getState().setSelection(DRAFT_RUNTIME_SELECTION_KEY, {
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-flash',
+          effortLevel: 'high',
+        })
+        useProviderStore.setState({
+          antigravity: {
+            ...readyAntigravity,
+            currentModelId: 'gemini-3.8-pro',
+            currentEffortLevel: 'high',
+          },
+        })
+      })
+
+      expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'high',
+      })
+    })
+
+    it('arms Agent Teams from the + menu in Antigravity mode and sends /swarm without double-prefixing', async () => {
+      window.localStorage.setItem(AGENT_TEAMS_NOTICE_STORAGE_KEY, JSON.stringify({ version: 1, dismissed: true }))
+      useSettingsStore.setState({ agentTeamsEnabled: false })
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.createSession.mockResolvedValue({
+        sessionId: 'ag-swarm-session-1',
+        workDir: '/workspace/project',
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: true, source: 'antigravity-acp', antigravityStatus: 'ready' })
+
+      try {
+        render(<EmptySession />)
+        await pickProject()
+
+        const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+        fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+        fireEvent.click(screen.getByLabelText('Open composer tools'))
+        fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+        expect(await screen.findByTestId('agent-team-chip')).toBeInTheDocument()
+
+        setComposerText('Parallel code audit', 19)
+        const runButton = screen.getByRole('button', { name: 'Run' })
+        await waitFor(() => expect(runButton).not.toBeDisabled())
+        fireEvent.click(runButton)
+
+        await waitFor(() => {
+          expect(mocks.wsSend).toHaveBeenCalledWith('ag-swarm-session-1', {
+            type: 'user_message',
+            content: '/swarm Parallel code audit',
+            attachments: [],
+          })
+        })
+        const messages = useChatStore.getState().sessions['ag-swarm-session-1']?.messages ?? []
+        expect(messages[messages.length - 1]).toMatchObject({
+          type: 'user_text',
+          content: 'Parallel code audit',
+          modelContent: '/swarm Parallel code audit',
+        })
+      } finally {
+        window.localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
+      }
+    })
+
+    it('discovers Antigravity on demand when auth-status is unchecked and omits effortLevel for 0-effort models', async () => {
+      const zeroEffortAntigravity = {
+        id: 'antigravity-acp' as const,
+        kind: 'acp' as const,
+        status: 'ready' as const,
+        currentModelId: 'orchestrator-neon',
+        currentEffortLevel: 'high' as const,
+        models: [
+          {
+            id: 'orchestrator-neon',
+            name: 'Orchestrator (Neon)',
+            supportedReasoningEfforts: [],
+          },
+        ],
+      }
+      const discoverAntigravity = vi.fn().mockResolvedValue(zeroEffortAntigravity)
+      useProviderStore.setState({
+        antigravity: {
+          ...zeroEffortAntigravity,
+          status: 'unchecked',
+        },
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+        discoverAntigravity,
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({
+        hasAuth: false,
+        source: 'none',
+        antigravityStatus: 'unchecked',
+        localAgentStatus: 'unchecked',
+      })
+      mocks.createSession.mockResolvedValue({
+        sessionId: 'ag-unchecked-session-1',
+        workDir: '/workspace/project',
+      })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      // 0-effort model must not receive a bogus fallback effortLevel.
+      expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+        providerId: 'antigravity-acp',
+        modelId: 'orchestrator-neon',
+      })
+
+      setComposerText('Run orchestrator', 16)
+      const runButton = screen.getByRole('button', { name: 'Run' })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+
+      await waitFor(() => {
+        expect(discoverAntigravity).toHaveBeenCalled()
+        expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+          providerId: 'antigravity-acp',
+          modelId: 'orchestrator-neon',
+        }))
+      })
+      expect(useTabStore.getState().tabs.some((tab) => tab.type === 'settings')).toBe(false)
+      const createdOptions = mocks.createSession.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(createdOptions.effortLevel).toBeUndefined()
     })
   })
 

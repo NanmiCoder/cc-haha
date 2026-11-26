@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computerUseApi } from '@/api/computerUse'
@@ -8,6 +8,7 @@ import { useProviderStore } from '@/stores/providerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { AntigravityStatus } from '@/types/provider'
+import type { PermissionMode } from '@/types/settings'
 import { AntigravityProviderCard } from './AntigravityProviderCard'
 
 function makeStatus(overrides: Partial<AntigravityStatus> = {}): AntigravityStatus {
@@ -30,7 +31,14 @@ function makeStatus(overrides: Partial<AntigravityStatus> = {}): AntigravityStat
 describe('AntigravityProviderCard', () => {
   beforeEach(() => {
     window.localStorage.clear()
-    useSettingsStore.setState({ locale: 'en' })
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true)
+    useSettingsStore.setState({
+      locale: 'en',
+      permissionMode: 'default',
+      setPermissionMode: vi.fn().mockImplementation(async (permissionMode: PermissionMode) => {
+        useSettingsStore.setState({ permissionMode })
+      }),
+    })
     useProviderStore.setState(useProviderStore.getInitialState(), true)
     useUIStore.setState(useUIStore.getInitialState(), true)
     vi.spyOn(computerUseApi, 'getAuthorizedApps').mockResolvedValue({
@@ -42,6 +50,7 @@ describe('AntigravityProviderCard', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true)
     window.localStorage.clear()
   })
 
@@ -110,5 +119,39 @@ describe('AntigravityProviderCard', () => {
     const enableSwitch = screen.getByRole('switch', { name: 'Show Antigravity in new sessions' })
     expect(enableSwitch).toBeDisabled()
     expect(enableSwitch).not.toBeChecked()
+  })
+
+  it('displays the universal default permission and syncs Auto and Turbo (bypassPermissions) updates to settingsStore', async () => {
+    useProviderStore.setState({
+      antigravity: makeStatus(),
+      antigravityEnabled: true,
+    })
+    useSettingsStore.setState({ permissionMode: 'acceptEdits' })
+
+    render(<AntigravityProviderCard />)
+
+    const row = screen.getByTestId('antigravity-default-permission-row')
+    expect(within(row).getByText('Default permission for new sessions')).toBeInTheDocument()
+    const trigger = within(row).getByRole('button', { name: 'Auto accept' })
+
+    // Selecting Auto skips the Claude-only Auto opt-in dialog and updates the universal default directly.
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Auto\b/ }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(useSettingsStore.getState().setPermissionMode).toHaveBeenCalledWith('auto')
+    expect(useSettingsStore.getState().permissionMode).toBe('auto')
+
+    // Selecting Turbo (bypassPermissions) requires confirmation and syncs back to settingsStore.
+    fireEvent.click(within(row).getByRole('button', { name: 'Auto mode' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Turbo/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Enable bypass permissions?' })
+    expect(within(dialog).getByText('Each new session workspace')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Enable bypass' }))
+    await waitFor(() => {
+      expect(useSettingsStore.getState().setPermissionMode).toHaveBeenCalledWith('bypassPermissions')
+      expect(useSettingsStore.getState().permissionMode).toBe('bypassPermissions')
+    })
+    expect(within(row).getByRole('button', { name: 'Turbo' })).toBeInTheDocument()
   })
 })
