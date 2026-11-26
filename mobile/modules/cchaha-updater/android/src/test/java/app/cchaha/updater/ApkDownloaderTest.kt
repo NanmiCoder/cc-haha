@@ -56,6 +56,44 @@ class ApkDownloaderTest {
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
   @Test
+  fun cacheStatusExcludesFilesThatStartupCleanupExpires() {
+    val bytes = "fixture APK".toByteArray()
+    val digest = sha256(bytes)
+    // Align to whole seconds so setLastModified assertions are deterministic on 1s-resolution filesystems.
+    var now = (System.currentTimeMillis() / 1000L) * 1000L
+    val cutoff = now - ApkDownloader.MAX_CACHE_AGE_MS
+    val downloader = ApkDownloader(
+      client = client,
+      updatesDir = tempDir,
+      apkValidator = { _, _ -> VerifiedApkInfo("app.cchaha.mobile", "0.1.7", 12L) },
+      nowMillis = { now },
+    )
+    val apk = File(tempDir, "$digest.apk")
+    apk.writeBytes(bytes)
+    assertTrue(apk.setLastModified(cutoff))
+    assertTrue(downloader.getCachedApk(digest, "0.1.7").ready)
+    now += 1000L
+    val orphan = File(tempDir, "other.apk").apply { writeBytes(bytes) }
+    downloader.cleanupCachedApks(digest)
+    assertTrue(apk.isFile)
+    assertFalse(orphan.exists())
+
+    assertTrue(apk.setLastModified(cutoff - 1000L))
+    val part = File(tempDir, "$digest.apk.part")
+    part.writeBytes(bytes)
+    assertTrue(part.setLastModified(cutoff - 1000L))
+    val meta = File(tempDir, "$digest.apk.meta").apply { writeText("totalBytes=64") }
+
+    val result = downloader.getCachedApk(digest, "0.1.7")
+    assertFalse(result.ready)
+    assertEquals(0L, result.partialBytes)
+    assertEquals(null, result.totalBytes)
+    assertFalse(apk.exists())
+    assertFalse(part.exists())
+    assertFalse(meta.exists())
+  }
+
+  @Test
   fun downloadsResumesAndVerifiesApk() {
     val payload = ByteArray(128 * 1024) { index -> (index % 251).toByte() }
     val digest = sha256(payload)

@@ -866,6 +866,14 @@ export class AndroidUpdateController {
     })
 
     try {
+      // Android can kill the process before the native promise resolves or rejects.
+      // Save the target first (best-effort); recovery reads the actual byte count from disk.
+      try {
+        await this.savePartial(release, source, this.snapshot.partialBytes, this.snapshot.totalBytes)
+      } catch {
+        // Storage failures must not block starting the native download.
+      }
+      if (this.activeDownloadId !== downloadId) return
       const result = await this.nativeUpdater.downloadApk(
         JSON.stringify({
           downloadId,
@@ -1004,23 +1012,14 @@ export class AndroidUpdateController {
     const partialBytes = cached?.partialBytes ?? 0
     const totalBytes = cached?.totalBytes ?? this.snapshot.totalBytes ?? release.sizeBytes
 
-    if (partialBytes > 0) {
-      this.record = await this.store.update((cur) => ({
-        ...cur,
-        partial: {
-          version: release.version,
-          tag: release.tag,
-          asset: release.asset,
-          sha256: release.sha256,
-          downloadedBytes: partialBytes,
-          totalBytes,
-          downloadUrl: release.downloadUrl,
-          releaseUrl: release.releaseUrl,
-          via: source,
-        },
-      }))
-    } else {
-      this.record = await this.store.update((cur) => ({ ...cur, partial: null }))
+    try {
+      if (partialBytes > 0) {
+        await this.savePartial(release, source, partialBytes, totalBytes)
+      } else {
+        this.record = await this.store.update((cur) => ({ ...cur, partial: null }))
+      }
+    } catch {
+      // Never strand the UI in downloading state if local storage writes fail.
     }
 
     const netAfter = await this.safeNetworkState()
@@ -1044,6 +1043,30 @@ export class AndroidUpdateController {
       totalBytes,
     })
     this.setError(kind, source, 'download', false)
+  }
+
+  private async savePartial(
+    release: AndroidUpdateRelease,
+    source: UpdateSource,
+    downloadedBytes: number,
+    totalBytes: number | null
+  ): Promise<void> {
+    this.record = await this.store.update((cur) => ({
+      ...cur,
+      downloaded: null,
+      pendingInstall: null,
+      partial: {
+        version: release.version,
+        tag: release.tag,
+        asset: release.asset,
+        sha256: release.sha256,
+        downloadedBytes,
+        totalBytes,
+        downloadUrl: release.downloadUrl,
+        releaseUrl: release.releaseUrl,
+        via: source,
+      },
+    }))
   }
 
   private async runCheck(input: {
