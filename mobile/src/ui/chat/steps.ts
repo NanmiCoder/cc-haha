@@ -393,6 +393,8 @@ export type StepLabel = {
   object?: string
   /** 路径、命令、模式等用等宽；自然语言（子 Agent 说明、搜索词）用正文字体。 */
   mono: boolean
+  /** 命令自带的人类可读说明：整行直接展示这段文字，不再拼动词（与桌面端一致）。 */
+  description?: boolean
   added?: number
   removed?: number
 }
@@ -416,6 +418,8 @@ export function describeStep(item: ChatItem, workDir?: string | null): StepLabel
       return { verb: '写入', object: file, mono: true }
     case 'Bash':
     case 'PowerShell': {
+      const description = str(input?.description)?.trim()
+      if (description) return { verb: description, mono: false, description: true }
       const command = str(input?.command)
       return { verb: '运行', object: command ? firstLine(command) : undefined, mono: true }
     }

@@ -112,6 +112,13 @@ function Trailing({ item, state, label }: { item: ChatItem; state: StepState; la
 
 function StepText({ label }: { label: ReturnType<typeof describeStep> }) {
   const colors = useColors()
+  if (label.description) {
+    return (
+      <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 14, color: colors.ink2 }}>
+        {label.verb}
+      </Text>
+    )
+  }
   return (
     <>
       <Text style={{ fontSize: 14, color: colors.ink2, flexShrink: 0 }}>{label.verb}</Text>

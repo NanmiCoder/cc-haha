@@ -34,6 +34,11 @@ export type CaptionParts = {
 
 /** 工具名是 ASCII（未知工具）时说“调用 X”，其余动词前加“正在”。 */
 function progressive(label: StepLabel): { lead: string; object?: string } {
+  if (label.description) {
+    // 命令自带的说明本身就是完整动作（“运行单元测试”“Run tests”）：中文接“正在”，
+    // 英文原样作为状态文字，避免“正在调用 Run tests”这种病句。
+    return /^[\x20-\x7e]+$/.test(label.verb) ? { lead: label.verb } : { lead: `正在${label.verb}` }
+  }
   switch (label.verb) {
     case '思考过程':
       return { lead: '正在思考' }
