@@ -96,6 +96,11 @@ describe('captionParts 文案', () => {
     expect(captionParts({ step: { verb: 'Run the user’s tests', mono: false, description: true } }).lead).toBe(
       'Run the user’s tests'
     )
+    // 假名、谚文也是「中文类」语序，加“正在”；纯假名说明不能退化成裸动词。
+    expect(captionParts({ step: { verb: 'テストを実行', mono: false, description: true } }).lead).toBe(
+      '正在テストを実行'
+    )
+    expect(captionParts({ step: { verb: '테스트 실행', mono: false, description: true } }).lead).toBe('正在테스트 실행')
     expect(
       captionParts({ waiting: true, step: { verb: '运行单元测试', mono: false, description: true } })
     ).toMatchObject({ tone: 'attention', lead: '等你批准 · 运行单元测试' })

@@ -105,8 +105,8 @@ export function StatusCaption({
         numberOfLines={1}
         ellipsizeMode="tail"
         style={{
-          // 有 object 要显示时前导词保持完整；单独承载 description 时才允许截断。
-          flexShrink: parts.object ? 0 : 1,
+          // 前导词与后面的 object 都可收缩：无论哪一侧很长（含未知工具名），整行都留在 24 高的一行里。
+          flexShrink: 1,
           minWidth: 0,
           fontSize: 13,
           lineHeight: 18,

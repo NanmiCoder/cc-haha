@@ -418,8 +418,9 @@ export function describeStep(item: ChatItem, workDir?: string | null): StepLabel
       return { verb: '写入', object: file, mono: true }
     case 'Bash':
     case 'PowerShell': {
-      // 状态条只给一行，换行和连续空白压成单个空格，避免固定高度的容器被撑破。
-      const description = str(input?.description)?.trim().replace(/\s+/g, ' ')
+      // 状态条只给一行，换行和连续空白压成单个半角空格，避免固定高度的容器被撑破。
+      // 全角空格（U+3000）、不换行空格（U+00A0）保留原样，详情里仍是同一段文字。
+      const description = str(input?.description)?.trim().replace(/[\r\n\t\f\v ]+/g, ' ')
       if (description) return { verb: description, mono: false, description: true }
       const command = str(input?.command)
       return { verb: '运行', object: command ? firstLine(command) : undefined, mono: true }

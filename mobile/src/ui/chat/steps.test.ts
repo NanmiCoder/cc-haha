@@ -318,6 +318,11 @@ describe('step labels', () => {
       verb: '运行单元测试 并汇总失败项',
       description: true,
     })
+    // 全角空格是正文的一部分，压空白时保留。
+    expect(label('Bash', { command: 'ls', description: '构建\t产物\u3000预览' })).toMatchObject({
+      verb: '构建 产物\u3000预览',
+      description: true,
+    })
     expect(label('Grep', { pattern: 'useTheme' })).toMatchObject({ verb: '搜索', object: 'useTheme', mono: true })
     expect(label('Glob', { pattern: '**/*.tsx' })).toMatchObject({ verb: '查找', object: '**/*.tsx' })
     expect(label('WebFetch', { url: 'https://example.com' })).toMatchObject({ verb: '打开', mono: true })
