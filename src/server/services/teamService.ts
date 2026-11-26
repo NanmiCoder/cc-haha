@@ -42,6 +42,30 @@ import { cleanupTeamDirectories } from '../../utils/swarm/teamHelpers.js'
 import { parseMemberCommand, unsupportedMemberCommandReason } from '../../utils/swarm/memberCommand.js'
 import type { TaskInfo } from './taskService.js'
 import { powerActivityClock } from './powerActivityClock.js'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  isSafeAntigravityId,
+} from './antigravityTranscriptAdapter.js'
+import {
+  isAntigravitySwarmTeamName,
+  nativeSessionIdFromSwarmTeamName,
+  readAntigravitySwarmMemberTranscriptPage,
+  readAntigravitySwarmSnapshot,
+  readAntigravitySwarmTimeline,
+  sendAntigravitySwarmMemberMessage,
+  type AntigravitySwarmSteerHandler,
+  type SendAntigravitySwarmMessageResponse,
+} from './antigravitySwarmAdapter.js'
+export {
+  ANTIGRAVITY_SWARM_TEAM_PREFIX,
+  antigravitySwarmTeamName,
+  isAntigravitySwarmTeamName,
+  registerAntigravitySwarmSteerHandler,
+  type AntigravitySwarmSteerHandler,
+  type AntigravitySwarmSteerPayload,
+  type AntigravitySwarmSteerResult,
+  type SendAntigravitySwarmMessageResponse,
+} from './antigravitySwarmAdapter.js'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -1451,6 +1475,9 @@ type TeamFileRaw = {
 export class TeamService {
   private readonly sessionLocator: Pick<typeof sessionService, 'findSessionFile'>
   private readonly sessionReader: Pick<typeof sessionService, 'getSessionMessages'> | undefined
+  private readonly sessionLaunchInfoReader: Pick<typeof sessionService, 'getSessionLaunchInfo'>
+  private readonly antigravityAppDataDir: string | undefined
+  private readonly antigravitySteerHandler: AntigravitySwarmSteerHandler | null | undefined
   private readonly localIndexGateway: LocalIndexGateway
   private readonly targetedEntryReader: typeof readSessionEntriesByLocator
   private readonly archiveWriteLocks = new Map<string, Promise<unknown>>()
@@ -1459,13 +1486,41 @@ export class TeamService {
   constructor(options: {
     sessionLocator?: Pick<typeof sessionService, 'findSessionFile'>
     sessionReader?: Pick<typeof sessionService, 'getSessionMessages'>
+    sessionLaunchInfoReader?: Pick<typeof sessionService, 'getSessionLaunchInfo'>
+    antigravityAppDataDir?: string
+    antigravitySteerHandler?: AntigravitySwarmSteerHandler | null
     localIndexGateway?: LocalIndexGateway
     targetedEntryReader?: typeof readSessionEntriesByLocator
   } = {}) {
     this.sessionLocator = options.sessionLocator ?? sessionService
     this.sessionReader = options.sessionReader
+    this.sessionLaunchInfoReader = options.sessionLaunchInfoReader ?? sessionService
+    this.antigravityAppDataDir = options.antigravityAppDataDir
+    this.antigravitySteerHandler = options.antigravitySteerHandler
     this.localIndexGateway = options.localIndexGateway ?? localIndexCoordinator
     this.targetedEntryReader = options.targetedEntryReader ?? readSessionEntriesByLocator
+  }
+
+  private async resolveAntigravitySession(
+    sessionId: string,
+  ): Promise<{ nativeSessionId: string; workDir?: string } | null> {
+    if (typeof this.sessionLaunchInfoReader.getSessionLaunchInfo !== 'function') return null
+    const launchInfo = await this.sessionLaunchInfoReader.getSessionLaunchInfo(sessionId).catch(() => null)
+    if (!launchInfo || launchInfo.runtimeProviderId !== ANTIGRAVITY_PROVIDER_ID) return null
+    const extended = launchInfo as typeof launchInfo & {
+      nativeSessionId?: unknown
+      antigravitySessionId?: unknown
+    }
+    const rawNativeId = typeof extended.nativeSessionId === 'string' && extended.nativeSessionId.trim()
+      ? extended.nativeSessionId.trim()
+      : typeof extended.antigravitySessionId === 'string' && extended.antigravitySessionId.trim()
+        ? extended.antigravitySessionId.trim()
+        : undefined
+    if (!rawNativeId || !isSafeAntigravityId(rawNativeId)) return null
+    return {
+      nativeSessionId: rawNativeId,
+      ...(launchInfo.workDir ? { workDir: launchInfo.workDir } : {}),
+    }
   }
 
   private async readTeamHistory(sessionId: string): Promise<SessionMessageEntry[]> {
@@ -1541,6 +1596,14 @@ export class TeamService {
   // ── Get team detail ─────────────────────────────────────────────────────
 
   async getTeam(name: string): Promise<TeamDetail> {
+    const antigravityNativeId = nativeSessionIdFromSwarmTeamName(name)
+    if (antigravityNativeId) {
+      const snapshot = await readAntigravitySwarmSnapshot(antigravityNativeId, {
+        appDataDir: this.antigravityAppDataDir,
+      })
+      if (!snapshot) throw ApiError.notFound(`Team not found: ${name}`)
+      return snapshot.team
+    }
     const config = await this.loadTeamConfig(name)
     const now = Date.now()
     const lastWrites = config.leadSessionId
@@ -1629,6 +1692,29 @@ export class TeamService {
     agentId: string,
     options: TeamTranscriptPageOptions = {},
   ): Promise<TeamTranscriptPage> {
+    if (isAntigravitySwarmTeamName(teamName)) {
+      return readAntigravitySwarmMemberTranscriptPage(teamName, agentId, {
+        ...options,
+        appDataDir: this.antigravityAppDataDir,
+      })
+    }
+    if (options.leadSessionId) {
+      const antigravitySession = await this.resolveAntigravitySession(options.leadSessionId)
+      if (antigravitySession) {
+        const snapshot = await readAntigravitySwarmSnapshot(antigravitySession.nativeSessionId, {
+          appDataDir: this.antigravityAppDataDir,
+          leadSessionId: options.leadSessionId,
+          workDir: antigravitySession.workDir,
+        })
+        if (snapshot && snapshot.team.name === teamName) {
+          return readAntigravitySwarmMemberTranscriptPage(snapshot.team.name, agentId, {
+            ...options,
+            appDataDir: this.antigravityAppDataDir,
+          })
+        }
+      }
+    }
+
     let config: TeamFileRaw | null = null
     let configError: unknown
     let memberName: string | null = null
@@ -1805,7 +1891,25 @@ export class TeamService {
     teamName: string,
     agentId: string,
     content: string,
-  ): Promise<void> {
+    options?: { leadSessionId?: string },
+  ): Promise<SendAntigravitySwarmMessageResponse | void> {
+    if (isAntigravitySwarmTeamName(teamName)) {
+      this.pendingMemberMessages += 1
+      powerActivityClock.changed()
+      try {
+        return await sendAntigravitySwarmMemberMessage(teamName, agentId, content, {
+          appDataDir: this.antigravityAppDataDir,
+          leadSessionId: options?.leadSessionId,
+          ...(this.antigravitySteerHandler !== undefined
+            ? { steerHandler: this.antigravitySteerHandler }
+            : {}),
+        })
+      } finally {
+        this.pendingMemberMessages -= 1
+        powerActivityClock.changed()
+      }
+    }
+
     const text = content.trim()
     if (!text) {
       throw ApiError.badRequest('content (string) is required in request body')
@@ -1870,6 +1974,14 @@ export class TeamService {
    * inbox entry as read or otherwise mutates CLI state.
    */
   async getWorkbench(name: string): Promise<TeamWorkbenchSnapshot> {
+    const antigravityNativeId = nativeSessionIdFromSwarmTeamName(name)
+    if (antigravityNativeId) {
+      const snapshot = await readAntigravitySwarmSnapshot(antigravityNativeId, {
+        appDataDir: this.antigravityAppDataDir,
+      })
+      if (!snapshot) throw ApiError.notFound(`Team not found: ${name}`)
+      return snapshot
+    }
     return withTaskListLifecycleLock(getCanonicalTeamTaskListId(name), async () => {
       const config = await this.loadTeamConfig(name)
       const taskListId = getCanonicalTeamTaskListId(config.name)
@@ -1922,6 +2034,22 @@ export class TeamService {
     sessionId: string,
     lookup: TeamWorkbenchSessionLookup = {},
   ): Promise<TeamWorkbenchSessionTimeline | null> {
+    const antigravitySession = await this.resolveAntigravitySession(sessionId)
+    if (antigravitySession) {
+      const timeline = await readAntigravitySwarmTimeline(
+        sessionId,
+        antigravitySession.nativeSessionId,
+        {
+          appDataDir: this.antigravityAppDataDir,
+          workDir: antigravitySession.workDir,
+        },
+      )
+      if (!timeline) return null
+      if (lookup.teamName && timeline.teamName !== lookup.teamName) return null
+      if (lookup.incarnationId && timeline.incarnationId !== lookup.incarnationId) return null
+      return timeline
+    }
+
     const liveTeams = await this.listTeams()
     const liveIncarnations = new Set<string>()
     for (const summary of liveTeams) {

@@ -5108,4 +5108,171 @@ describe('Teams API', () => {
     const res = await fetch(`${baseUrl}/api/teams`, { method: 'POST' })
     expect(res.status).toBe(405)
   })
+
+  it('routes Antigravity ACP session workbench, worker transcript, and member steering via /api/teams', async () => {
+    const {
+      antigravitySwarmTeamName,
+      registerAntigravitySwarmSteerHandler,
+    } = await import('../services/antigravitySwarmAdapter.js')
+    const agyAppData = path.join(tmpDir, 'agy-swarm-api-data')
+    const ccSessionId = 'cc-agy-session-001'
+    const nativeSessionId = '0679f85e-556a-45da-82fa-d22c2c16206a'
+    const workerConvId = '4556868f-98b1-4991-a306-a461603b967b'
+    const teamName = antigravitySwarmTeamName(nativeSessionId)
+
+    const swarmDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'swarm')
+    await fs.mkdir(swarmDir, { recursive: true })
+    await fs.writeFile(
+      path.join(swarmDir, 'swarm.json'),
+      JSON.stringify({
+        version: 1,
+        backend: 'local',
+        swarm_id: nativeSessionId,
+        created_at: '2026-11-26T09:33:47Z',
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'members.json'),
+      JSON.stringify({
+        title: 'API Swarm Check',
+        members: {
+          coordinator: {
+            conversation_id: nativeSessionId,
+            role: 'coordinator',
+            phase: 'RUNNING',
+            wake_mode: 'mentions',
+            killed: false,
+            model: 'gemini-3.8-flash-low',
+          },
+          reader: {
+            conversation_id: workerConvId,
+            role: 'worker',
+            phase: 'RUNNING',
+            wake_mode: 'working',
+            killed: false,
+            model: 'gemini-3.8-flash-low',
+          },
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'board.jsonl'),
+      `${JSON.stringify({
+        seq: 1,
+        agent: 'coordinator',
+        text: '@reader Check note.txt',
+        time: '2026-11-26 01:33:47',
+        kind: 'brief',
+        request_id: 'req-1',
+      })}\n`,
+      'utf8',
+    )
+
+    const workerLogDir = path.join(agyAppData, 'brain', workerConvId, '.system_generated', 'logs')
+    await fs.mkdir(workerLogDir, { recursive: true })
+    await fs.writeFile(
+      path.join(workerLogDir, 'transcript.jsonl'),
+      `${JSON.stringify({
+        step_index: 0,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-26T09:33:48Z',
+        model: 'gemini-3.8-flash-low',
+        content: 'Inspecting note.txt',
+      })}\n`,
+      'utf8',
+    )
+
+    const prevAppData = process.env.ANTIGRAVITY_APP_DATA_DIR
+    process.env.ANTIGRAVITY_APP_DATA_DIR = agyAppData
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async (id) => {
+      if (id !== ccSessionId) return null
+      return {
+        filePath: path.join(tmpDir, 'projects', 'p', `${ccSessionId}.jsonl`),
+        projectDir: 'p',
+        workDir: '/tmp/agy-work',
+        transcriptMessageCount: 1,
+        customTitle: null,
+        runtimeProviderId: 'antigravity-acp',
+        nativeSessionId,
+      } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>
+    })
+    const steered: Array<{ memberName: string; formattedPrompt: string; sessionId?: string }> = []
+    const disposeSteer = registerAntigravitySwarmSteerHandler(async (payload) => {
+      steered.push({
+        memberName: payload.memberName,
+        formattedPrompt: payload.formattedPrompt,
+        sessionId: payload.sessionId,
+      })
+      return { routed: true, delivery: 'steering' }
+    })
+
+    try {
+      // 1. GET /api/teams/session/:id/workbench
+      const wbRes = await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(ccSessionId)}/workbench`)
+      expect(wbRes.status).toBe(200)
+      const timeline = (await wbRes.json()) as {
+        sessionId: string
+        teamName: string
+        source: string
+        snapshots: TeamWorkbenchSnapshot[]
+      }
+      expect(timeline.sessionId).toBe(ccSessionId)
+      expect(timeline.teamName).toBe(teamName)
+      expect(timeline.source).toBe('live')
+      expect(timeline.snapshots[0]!.team.description).toBe('API Swarm Check')
+      expect(timeline.snapshots[0]!.team.members.map((m) => m.name)).toEqual(['coordinator', 'reader'])
+
+      // 2. GET /api/teams/:name/members/:id/transcript?incremental=true
+      const trRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(`reader@${teamName}`)}/transcript?incremental=true`,
+      )
+      expect(trRes.status).toBe(200)
+      const trPage = (await trRes.json()) as {
+        messages: Array<{ id: string; type: string }>
+        ownerAgentIds: string[]
+        afterOrdinal: number
+      }
+      expect(trPage.ownerAgentIds).toEqual([workerConvId])
+      expect(trPage.messages).toHaveLength(1)
+      expect(trPage.afterOrdinal).toBe(0)
+
+      // 3. POST /api/teams/:name/members/:id/messages
+      const msgRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(`reader@${teamName}`)}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: 'also check README.md' }),
+        },
+      )
+      expect(msgRes.status).toBe(200)
+      const msgBody = (await msgRes.json()) as {
+        ok: boolean
+        routed: boolean
+        target: string
+        formattedPrompt: string
+      }
+      expect(msgBody).toEqual({
+        ok: true,
+        routed: true,
+        delivery: 'steering',
+        target: 'reader',
+        formattedPrompt: '@reader also check README.md',
+      })
+      expect(steered).toEqual([{
+        memberName: 'reader',
+        formattedPrompt: '@reader also check README.md',
+        sessionId: ccSessionId,
+      }])
+    } finally {
+      disposeSteer()
+      launchSpy.mockRestore()
+      if (prevAppData === undefined) delete process.env.ANTIGRAVITY_APP_DATA_DIR
+      else process.env.ANTIGRAVITY_APP_DATA_DIR = prevAppData
+    }
+  })
 })

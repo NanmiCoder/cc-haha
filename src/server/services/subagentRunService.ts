@@ -2,8 +2,17 @@ import {
   sessionService,
   type MessageEntry,
   type MessageUsage,
+  type SessionLaunchInfo,
   type SessionTaskNotification,
 } from './sessionService.js'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  isSafeAntigravityId,
+  readAntigravityParentSubagentSpawns,
+  readAntigravitySubagentRegistry,
+  readAntigravityTranscript,
+  type AntigravitySubagentRecord,
+} from './antigravityTranscriptAdapter.js'
 import { workflowService } from './workflowService.js'
 
 export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'unknown'
@@ -73,6 +82,10 @@ export type SubagentRunResolution = {
   hasResult: boolean
   isAsyncLaunch: boolean
   isError: boolean
+  role?: string
+  typeName?: string
+  isAntigravitySubagent?: boolean
+  antigravitySpawnOrdinal?: number
 }
 
 type ContentBlock = {
@@ -285,7 +298,47 @@ function textFromContent(content: unknown): string {
 }
 
 function extractAgentId(text: string): string | null {
-  return text.match(/(?:^|\n)\s*(?:agentId|agent_id):\s*([A-Za-z0-9_@.-]+)/)?.[1] ?? null
+  return text.match(/(?:^|\n)\s*(?:agentId|agent_id|conversationId|conversation_id):\s*([A-Za-z0-9_@.-]+)/)?.[1]
+    ?? text.match(/"(?:conversationId|conversation_id)"\s*:\s*"([A-Za-z0-9_-]+)"/)?.[1]
+    ?? null
+}
+
+function isAntigravitySubagentToolName(name: unknown): boolean {
+  return name === 'invoke_subagent' || name === 'Antigravity: Run invoke_subagent'
+}
+
+function extractChildIdFromAntigravityToolRef(toolRef: string): string | null {
+  const colonIdx = toolRef.indexOf(':call_')
+  if (colonIdx <= 0) return null
+  const prefix = toolRef.slice(0, colonIdx)
+  return isSafeAntigravityId(prefix) ? prefix : null
+}
+
+type AntigravitySessionHint = {
+  isAntigravity: boolean
+  nativeSessionId?: string
+}
+
+async function readAntigravitySessionHint(sessionId: string): Promise<AntigravitySessionHint> {
+  if (typeof sessionService.getSessionLaunchInfo !== 'function') {
+    return { isAntigravity: false }
+  }
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+  if (!launchInfo) return { isAntigravity: false }
+  const isAntigravity = launchInfo.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID
+  const extended = launchInfo as SessionLaunchInfo & {
+    nativeSessionId?: unknown
+    antigravitySessionId?: unknown
+  }
+  const rawNativeId = typeof extended.nativeSessionId === 'string' && extended.nativeSessionId.trim()
+    ? extended.nativeSessionId.trim()
+    : typeof extended.antigravitySessionId === 'string' && extended.antigravitySessionId.trim()
+      ? extended.antigravitySessionId.trim()
+      : undefined
+  return {
+    isAntigravity,
+    ...(rawNativeId && isSafeAntigravityId(rawNativeId) ? { nativeSessionId: rawNativeId } : {}),
+  }
 }
 
 function normalizeAgentIdHint(value: string | undefined): string | undefined {
@@ -493,19 +546,47 @@ export function resolveSubagentRunFromMessages(
   let hasResult = false
   let isAsyncLaunch = false
   let isError = false
+  let role: string | undefined
+  let typeName: string | undefined
+  let isAntigravitySubagent = false
+  let antigravitySpawnOrdinal: number | undefined
+  const seenSpawnsByKey = new Map<string, number>()
 
   for (const entry of messages) {
     for (const block of contentBlocks(contentFromMessage(entry))) {
-      if (
-        block.type === 'tool_use' &&
-        block.name === 'Agent' &&
-        block.id === toolUseId
-      ) {
-        foundAgentToolUse = true
-        updatedAt = latestTimestamp(updatedAt, entry.timestamp)
+      const isAgyTool = block.type === 'tool_use' && isAntigravitySubagentToolName(block.name)
+      const isStandardAgentTool = block.type === 'tool_use' && block.name === 'Agent'
+      if (isAgyTool || isStandardAgentTool) {
         const input = isRecord(block.input) ? block.input : {}
-        description = stringField(input.description) ?? description
-        prompt = stringField(input.prompt) ?? prompt
+        const inputRole = stringField(input.Role) ?? stringField(input.role)
+        const inputTypeName = stringField(input.TypeName) ?? stringField(input.typeName)
+        const spawnKey = `${inputTypeName ?? ''}\u0000${inputRole ?? ''}`
+        if (block.id !== toolUseId) {
+          if (isAgyTool || inputTypeName) {
+            seenSpawnsByKey.set(spawnKey, (seenSpawnsByKey.get(spawnKey) ?? 0) + 1)
+          }
+        } else {
+          foundAgentToolUse = true
+          updatedAt = latestTimestamp(updatedAt, entry.timestamp)
+          const inputConvId = stringField(input.conversationId)
+            ?? stringField(input.conversation_id)
+            ?? stringField(input.agentId)
+            ?? stringField(input.agent_id)
+          if (inputRole) role = inputRole
+          if (inputTypeName) typeName = inputTypeName
+          if (inputConvId && !agentId) agentId = inputConvId
+          if (isAgyTool || inputConvId || inputTypeName) {
+            isAntigravitySubagent = true
+            antigravitySpawnOrdinal = seenSpawnsByKey.get(spawnKey) ?? 0
+          }
+          description = stringField(input.description)
+            ?? inputRole
+            ?? inputTypeName
+            ?? description
+          prompt = stringField(input.prompt)
+            ?? stringField(input.Prompt)
+            ?? prompt
+        }
       }
 
       if (block.type === 'tool_result' && block.tool_use_id === toolUseId) {
@@ -513,7 +594,13 @@ export function resolveSubagentRunFromMessages(
         isError = block.is_error === true || isError
         updatedAt = latestTimestamp(updatedAt, entry.timestamp)
         const text = textFromContent(block.content)
-        agentId = extractAgentId(text) ?? agentId
+        const extracted = extractAgentId(text)
+        if (extracted) {
+          agentId = extracted
+          if (/"(?:conversationId|conversation_id)"/.test(text) || /conversationId\s*:/.test(text)) {
+            isAntigravitySubagent = true
+          }
+        }
         isAsyncLaunch = isAsyncAgentLaunchResult(text) || isAsyncLaunch
         result = cleanedAgentResultText(text) ?? result
         usage = mergeUsage(extractUsage(text), usage)
@@ -533,6 +620,10 @@ export function resolveSubagentRunFromMessages(
     hasResult,
     isAsyncLaunch,
     isError,
+    ...(role ? { role } : {}),
+    ...(typeName ? { typeName } : {}),
+    ...(isAntigravitySubagent ? { isAntigravitySubagent: true } : {}),
+    ...(antigravitySpawnOrdinal !== undefined ? { antigravitySpawnOrdinal } : {}),
   }
 }
 
@@ -693,6 +784,190 @@ function notificationForToolRef(
   return undefined
 }
 
+function deriveAntigravitySubagentStatus(
+  resolution: SubagentRunResolution | null,
+  notification: SessionTaskNotification | undefined,
+  transcriptStatus: 'running' | 'completed' | 'failed' | 'unknown',
+  hasFinalResult: boolean,
+  registryState: string | undefined,
+): SubagentRunStatus {
+  if (resolution?.isError) return 'failed'
+  if (notification?.status) return notification.status
+  if (transcriptStatus === 'failed') return 'failed'
+  if (transcriptStatus === 'running') return 'running'
+  if (resolution?.hasResult && !resolution.isAsyncLaunch) return 'completed'
+  if (transcriptStatus === 'completed' && hasFinalResult) return 'completed'
+  if (registryState === 'SUBAGENT_STATE_KILLED') return 'stopped'
+  if (transcriptStatus === 'completed') return 'completed'
+  if (registryState === 'SUBAGENT_STATE_ALIVE') return 'running'
+  return 'unknown'
+}
+
+async function resolveAntigravityChildFromParent(
+  nativeSessionId: string,
+  resolution: SubagentRunResolution,
+  options: { appDataDir?: string; signal?: AbortSignal },
+): Promise<{ conversationId: string | null; registryRecord?: AntigravitySubagentRecord }> {
+  const registry = await readAntigravitySubagentRegistry(nativeSessionId, options)
+  const nonSwarmRecords = registry.filter(
+    (record) => !(record.typeName === 'worker' && record.role?.startsWith('Swarm Worker')),
+  )
+  const candidates = nonSwarmRecords.length > 0 ? nonSwarmRecords : registry
+
+  // 1. Check parent Antigravity transcript.jsonl for exact prompt / role / typeName match
+  const spawns = await readAntigravityParentSubagentSpawns(nativeSessionId, options)
+  if (spawns.length > 0) {
+    const exactPrompt = resolution.prompt
+      ? spawns.find((spawn) => spawn.prompt === resolution.prompt)
+      : undefined
+    if (exactPrompt) {
+      return {
+        conversationId: exactPrompt.conversationId,
+        registryRecord: registry.find((r) => r.conversationId === exactPrompt.conversationId),
+      }
+    }
+    const matchingSpawns = spawns.filter((spawn) => (
+      (!resolution.role || spawn.role === resolution.role)
+      && (!resolution.typeName || spawn.typeName === resolution.typeName)
+    ))
+    const ordinal = resolution.antigravitySpawnOrdinal ?? 0
+    const pickedSpawn = matchingSpawns[ordinal] ?? matchingSpawns[0]
+    if (pickedSpawn) {
+      return {
+        conversationId: pickedSpawn.conversationId,
+        registryRecord: registry.find((r) => r.conversationId === pickedSpawn.conversationId),
+      }
+    }
+  }
+
+  // 2. Match against authoritative .system_generated/subagents/*.json registry
+  if (candidates.length > 0) {
+    const byRoleAndType = candidates.filter((record) => (
+      (!resolution.role || record.role === resolution.role)
+      && (!resolution.typeName || record.typeName === resolution.typeName)
+    ))
+    const ordinal = resolution.antigravitySpawnOrdinal ?? 0
+    if (byRoleAndType.length > 0) {
+      const picked = byRoleAndType[ordinal] ?? byRoleAndType[0]!
+      return { conversationId: picked.conversationId, registryRecord: picked }
+    }
+    if (resolution.typeName) {
+      const byType = candidates.filter((record) => record.typeName === resolution.typeName)
+      if (byType.length > 0) {
+        const picked = byType[ordinal] ?? byType[0]!
+        return { conversationId: picked.conversationId, registryRecord: picked }
+      }
+    }
+    if (candidates.length === 1) {
+      return { conversationId: candidates[0]!.conversationId, registryRecord: candidates[0] }
+    }
+  }
+
+  return { conversationId: null }
+}
+
+async function buildAntigravitySubagentResponse(params: {
+  sessionId: string
+  toolUseId: string
+  conversationId: string | null
+  resolution: SubagentRunResolution | null
+  notification?: SessionTaskNotification
+  safeLiveTaskId?: string
+  registryRecord?: AntigravitySubagentRecord
+  rootHistoryComplete: boolean
+  appDataDir?: string
+  signal?: AbortSignal
+}): Promise<SubagentRunResponse | null> {
+  const {
+    sessionId,
+    toolUseId,
+    conversationId,
+    resolution,
+    notification,
+    safeLiveTaskId,
+    registryRecord,
+    rootHistoryComplete,
+    appDataDir,
+    signal,
+  } = params
+
+  const transcript = conversationId
+    ? await readAntigravityTranscript(conversationId, { appDataDir, signal })
+    : null
+
+  if (!resolution && !transcript?.exists && !registryRecord) {
+    return null
+  }
+
+  const transcriptMessages = transcript?.messages ?? []
+  const activity = conversationId && transcriptMessages.length > 0
+    ? projectSubagentActivityFragment({
+        agentId: conversationId,
+        messages: transcriptMessages,
+        taskNotifications: [],
+      })
+    : { messages: transcriptMessages, taskNotifications: [] }
+  const truncated = truncateSubagentMessages(activity.messages)
+  const historyComplete = rootHistoryComplete && (transcript?.historyComplete !== false)
+  const transcriptUsage = transcript?.usage
+    ? normalizeUsage({
+        inputTokens: transcript.usage.inputTokens,
+        outputTokens: transcript.usage.outputTokens,
+        totalTokens: transcript.usage.totalTokens,
+      })
+    : undefined
+  const usage = mergeUsage(resolution?.usage, transcriptUsage)
+  const status = deriveAntigravitySubagentStatus(
+    resolution,
+    notification,
+    transcript?.status ?? 'unknown',
+    Boolean(transcript?.finalResult),
+    registryRecord?.state,
+  )
+  const updatedAt = latestTimestamp(
+    resolution?.updatedAt,
+    notification?.timestamp,
+    transcript?.updatedAt,
+  )
+  const model = transcript?.model ?? latestServedModel(transcriptMessages)
+  const description = resolution?.description
+    ?? registryRecord?.role
+    ?? registryRecord?.typeName
+  const result = notification?.result ?? resolution?.result ?? transcript?.finalResult
+
+  return {
+    sessionId,
+    toolUseId,
+    agentId: conversationId,
+    ...(notification?.taskId || safeLiveTaskId
+      ? { taskId: notification?.taskId || safeLiveTaskId }
+      : {}),
+    status,
+    ...(description ? { description } : {}),
+    ...(resolution?.prompt ? { prompt: resolution.prompt } : {}),
+    ...(notification?.summary ? { summary: notification.summary } : {}),
+    ...(result ? { result } : {}),
+    ...(notification?.outputFile ? { outputFile: notification.outputFile } : {}),
+    ...(usage ? { usage } : {}),
+    messages: truncated.messages,
+    ...(truncated.truncated ? { activityMessages: activity.messages } : {}),
+    taskNotifications: [],
+    activityTaskNotifications: activity.taskNotifications,
+    truncated: truncated.truncated || !historyComplete || (transcript?.truncated === true),
+    historyComplete,
+    activityComplete: historyComplete,
+    ...(updatedAt ? { updatedAt } : {}),
+    source: transcript?.exists && transcriptMessages.length > 0
+      ? 'subagent-jsonl'
+      : safeLiveTaskId
+        ? 'live-task'
+        : 'session-history',
+    ...(model ? { model } : {}),
+    ...(transcript?.effort ? { effort: transcript.effort } : {}),
+    canSendMessage: false,
+  }
+}
+
 /**
  * Read a subagent run straight from its transcript.
  *
@@ -706,12 +981,33 @@ function notificationForToolRef(
 export async function getSubagentRunByAgentId(
   sessionId: string,
   agentId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; appDataDir?: string } = {},
 ): Promise<SubagentRunResponse | null> {
   const signal = options.signal
   signal?.throwIfAborted()
   const normalized = normalizeAgentIdHint(agentId)
   if (!normalized) return null
+
+  const antigravityHint = await readAntigravitySessionHint(sessionId)
+  if (antigravityHint.isAntigravity) {
+    const registry = antigravityHint.nativeSessionId
+      ? await readAntigravitySubagentRegistry(antigravityHint.nativeSessionId, {
+          appDataDir: options.appDataDir,
+          signal,
+        })
+      : []
+    const registryRecord = registry.find((record) => record.conversationId === normalized)
+    return buildAntigravitySubagentResponse({
+      sessionId,
+      toolUseId: normalized,
+      conversationId: normalized,
+      resolution: null,
+      registryRecord,
+      rootHistoryComplete: true,
+      appDataDir: options.appDataDir,
+      signal,
+    })
+  }
 
   const transcript = await resolveTranscript(sessionId, [normalized], signal)
   if (!transcript.agentId) return null
@@ -773,7 +1069,7 @@ export async function getSubagentRunByTool(
   sessionId: string,
   toolUseId: string,
   liveTaskId?: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; appDataDir?: string } = {},
 ): Promise<SubagentRunResponse | null> {
   const signal = options.signal
   signal?.throwIfAborted()
@@ -783,7 +1079,30 @@ export async function getSubagentRunByTool(
   const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId, undefined, signal)
   const { messages: parentMessages, taskNotifications } = parentLookup
   const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false, signal)
-  if (!resolvedToolRef) return null
+  const antigravityHint = await readAntigravitySessionHint(sessionId)
+  const childIdFromToolRef = extractChildIdFromAntigravityToolRef(toolUseId)
+  if (!resolvedToolRef) {
+    if (antigravityHint.isAntigravity && childIdFromToolRef) {
+      const registry = antigravityHint.nativeSessionId
+        ? await readAntigravitySubagentRegistry(antigravityHint.nativeSessionId, {
+            appDataDir: options.appDataDir,
+            signal,
+          })
+        : []
+      return buildAntigravitySubagentResponse({
+        sessionId,
+        toolUseId,
+        conversationId: childIdFromToolRef,
+        resolution: null,
+        safeLiveTaskId: normalizeAgentIdHint(liveTaskId),
+        registryRecord: registry.find((record) => record.conversationId === childIdFromToolRef),
+        rootHistoryComplete: parentLookup.historyComplete !== false,
+        appDataDir: options.appDataDir,
+        signal,
+      })
+    }
+    return null
+  }
   const { resolution, lookupToolUseId, expectedOwnerAgentId } = resolvedToolRef
 
   const notification = notificationForToolRef(
@@ -792,6 +1111,50 @@ export async function getSubagentRunByTool(
     expectedOwnerAgentId,
   )
   const safeLiveTaskId = normalizeAgentIdHint(liveTaskId)
+
+  if (antigravityHint.isAntigravity || resolution.isAntigravitySubagent) {
+    const directCandidates = [
+      resolution.agentId,
+      childIdFromToolRef,
+      safeLiveTaskId,
+      notification?.taskId,
+    ]
+    let childConversationId: string | null = directCandidates.find(
+      (candidate): candidate is string => isSafeAntigravityId(candidate),
+    ) ?? null
+    let registryRecord: AntigravitySubagentRecord | undefined
+
+    if (antigravityHint.nativeSessionId) {
+      if (childConversationId) {
+        const registry = await readAntigravitySubagentRegistry(antigravityHint.nativeSessionId, {
+          appDataDir: options.appDataDir,
+          signal,
+        })
+        registryRecord = registry.find((record) => record.conversationId === childConversationId)
+      } else {
+        const discovered = await resolveAntigravityChildFromParent(
+          antigravityHint.nativeSessionId,
+          resolution,
+          { appDataDir: options.appDataDir, signal },
+        )
+        childConversationId = discovered.conversationId
+        registryRecord = discovered.registryRecord
+      }
+    }
+
+    return buildAntigravitySubagentResponse({
+      sessionId,
+      toolUseId,
+      conversationId: childConversationId,
+      resolution,
+      notification,
+      safeLiveTaskId,
+      registryRecord,
+      rootHistoryComplete: resolvedToolRef.historyComplete,
+      appDataDir: options.appDataDir,
+      signal,
+    })
+  }
   const teammateName = resolution.agentId?.includes('@')
     ? resolution.agentId.split('@')[0]
     : undefined

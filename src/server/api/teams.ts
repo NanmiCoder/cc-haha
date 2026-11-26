@@ -154,15 +154,23 @@ export async function handleTeamsApi(
       segments[5] === 'messages'
     ) {
       const agentId = decodeURIComponent(segments[4])
-      let body: { content?: string }
+      let body: { content?: string; leadSessionId?: string }
       try {
-        body = (await req.json()) as { content?: string }
+        body = (await req.json()) as { content?: string; leadSessionId?: string }
       } catch {
         throw ApiError.badRequest('Invalid JSON body')
       }
 
-      await teamService.sendMemberMessage(teamName, agentId, body.content ?? '')
-      return Response.json({ ok: true })
+      const leadSessionId = typeof body.leadSessionId === 'string' && body.leadSessionId.trim()
+        ? body.leadSessionId.trim()
+        : requestUrl.searchParams.get('leadSessionId') || undefined
+      const result = await teamService.sendMemberMessage(
+        teamName,
+        agentId,
+        body.content ?? '',
+        leadSessionId ? { leadSessionId } : undefined,
+      )
+      return Response.json(result ?? { ok: true })
     }
 
     // ── PATCH /api/teams/:name/members/:id/runtime ────────────────────────
