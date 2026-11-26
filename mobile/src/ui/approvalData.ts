@@ -105,16 +105,38 @@ export function remainingQuestionTime(
   }
 }
 
-/** 每道题的提交值：自己写的内容优先覆盖已选项，多选用 “, ” 连接。 */
+/** Antigravity fixed-option questions set `allowFreeText: false` to disable free-form text answers. */
+export function questionAllowsFreeText(input: Record<string, unknown>): boolean {
+  return input.allowFreeText !== false
+}
+
+/** Optional subagent or swarm worker attribution carried on a permission request or its input. */
+export function permissionSubagentName(
+  request?: { subagentName?: unknown } | null,
+  input?: Record<string, unknown>
+): string | undefined {
+  const raw =
+    typeof request?.subagentName === 'string'
+      ? request.subagentName
+      : typeof input?.subagentName === 'string'
+        ? input.subagentName
+        : undefined
+  const trimmed = raw?.trim()
+  return trimmed || undefined
+}
+
+/** 每道题的提交值：自己写的内容优先覆盖已选项，多选用 “, ” 连接；allowFreeText=false 时忽略自填。 */
 export function questionAnswerValues(
   questions: Question[],
   answers: Record<string, string[]>,
-  custom: Record<string, string>
+  custom: Record<string, string>,
+  options?: { allowFreeText?: boolean }
 ) {
+  const allowFreeText = options?.allowFreeText !== false
   return Object.fromEntries(
     questions.map((question) => [
       question.question,
-      custom[question.question]?.trim() ||
+      (allowFreeText ? custom[question.question]?.trim() : '') ||
         answers[question.question]?.join(', ') ||
         '',
     ])

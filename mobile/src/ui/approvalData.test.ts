@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import {
   decisionResponse,
+  permissionSubagentName,
   planPermissionUpdates,
+  questionAllowsFreeText,
   questionAnswerInput,
   questionAnswerValues,
   questionClock,
@@ -191,4 +193,25 @@ test('permission responses: allow keeps question, plan, remember and accept-edit
   expect(
     decisionResponse({ requestId: 'b', toolName: 'Bash', input: {}, allowed: true })
   ).toEqual({ type: 'permission_response', requestId: 'b', allowed: true })
+})
+
+test('Antigravity fixed-option questions disable free text and permission attribution reads subagentName', () => {
+  expect(questionAllowsFreeText({})).toBe(true)
+  expect(questionAllowsFreeText({ allowFreeText: true })).toBe(true)
+  expect(questionAllowsFreeText({ allowFreeText: false })).toBe(false)
+  const questions = readQuestions({
+    questions: [{ question: '批准？', options: [{ label: '继续' }, { label: '取消' }] }],
+  })
+  expect(
+    questionAnswerValues(
+      questions,
+      { '批准？': ['继续'] },
+      { '批准？': '自定义文本' },
+      { allowFreeText: false }
+    )
+  ).toEqual({ '批准？': '继续' })
+  expect(permissionSubagentName({ subagentName: ' @verifier ' })).toBe('@verifier')
+  expect(permissionSubagentName({}, { subagentName: 'research' })).toBe('research')
+  expect(permissionSubagentName({ subagentName: '   ' }, { subagentName: 'fallback' })).toBeUndefined()
+  expect(permissionSubagentName({}, {})).toBeUndefined()
 })

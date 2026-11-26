@@ -37,6 +37,12 @@ describe('navigation subtitle', () => {
     expect(sessionSubtitle(worktree, null)).toBe('cc-haha')
     expect(sessionSubtitle(session({ projectRoot: null, workDir: 'C:\\code\\app\\' }), '  ')).toBe('app')
     expect(sessionSubtitle(null, 'main')).toBe('main')
+    expect(
+      sessionSubtitle(
+        session({ runtimeProviderId: 'antigravity-acp' }),
+        'main'
+      )
+    ).toBe('cc-haha · main · Antigravity')
   })
 
   test('abbreviates only a real home directory prefix', () => {

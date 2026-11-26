@@ -51,6 +51,9 @@ export type CreateSessionInput = {
   workDir?: string
   permissionMode?: PermissionMode
   agentProfile?: 'standard' | 'lean'
+  providerId?: string | null
+  modelId?: string
+  effortLevel?: string
   repository?: { branch?: string | null; worktree?: boolean }
 }
 export type HistoryEntry = {
@@ -94,7 +97,10 @@ export type PairClaim =
 export type PermissionRequest = Extract<
   ServerMessage,
   { type: 'permission_request' }
->
+> & {
+  /** Optional subagent / swarm worker attribution when forwarded from a child run. */
+  subagentName?: string
+}
 export type ComputerUsePermissionRequest = Extract<
   ServerMessage,
   { type: 'computer_use_permission_request' }

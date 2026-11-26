@@ -105,3 +105,21 @@ test('quick notes fill an empty input or append once to the end', () => {
     '换个更稳妥的做法'
   )
 })
+
+test('Antigravity native tool names map to command, edit, and write previews', () => {
+  expect(toolKind('run_command')).toBe('command')
+  expect(approvalTitle('run_command')).toBe('想运行命令')
+  expect(approvalSubject('run_command', { command: 'bun test' })).toEqual({
+    text: 'bun test',
+    prompt: '$ ',
+  })
+  expect(approvalSubject('run_command', { CommandLine: 'git status' })).toEqual({
+    text: 'git status',
+    prompt: '$ ',
+  })
+  expect(isFileChange('replace_file_content')).toBe(true)
+  expect(isFileChange('multi_replace_file_content')).toBe(true)
+  expect(isFileChange('write_to_file')).toBe(true)
+  expect(approvalTitle('replace_file_content')).toBe('想修改文件')
+  expect(approvalTitle('write_to_file')).toBe('想写入文件')
+})

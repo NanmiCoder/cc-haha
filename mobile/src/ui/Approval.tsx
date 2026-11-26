@@ -8,7 +8,7 @@ import type {
 } from '../core/types'
 import { Card, Mono, useColors } from './kit'
 import { Text } from './Text'
-import { decisionResponse } from './approvalData'
+import { decisionResponse, permissionSubagentName } from './approvalData'
 import { PlanDecision } from './decision/PlanDecision'
 import { PlanDocument } from './decision/PlanDocument'
 import { MISSING_PLAN_TEXT, planFilePath, planSource } from './decision/planText'
@@ -124,6 +124,7 @@ export function Approval({
         client={client}
         runtime={runtime}
         position={position}
+        subagentName={permissionSubagentName(request, input)}
         approve={(plan) => respond({ allowed: true, plan })}
         revise={(note) => respond({ allowed: false, note })}
       />

@@ -1,13 +1,19 @@
 import type { ChatState, ClientMessage, RuntimeConfig } from './types'
+import { ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_PROVIDER_ID } from './runtimeCatalog'
 
 export function runtimeMatches(
   actual: RuntimeConfig | undefined,
   desired: RuntimeConfig
 ) {
+  const modelMatches =
+    actual?.modelId === desired.modelId ||
+    (desired.providerId === ANTIGRAVITY_PROVIDER_ID &&
+      desired.modelId === ANTIGRAVITY_DEFAULT_MODEL &&
+      Boolean(actual?.modelId))
   return (
     !!actual &&
     actual.providerId === desired.providerId &&
-    actual.modelId === desired.modelId &&
+    modelMatches &&
     (desired.effortLevel === undefined ||
       actual.effortLevel === desired.effortLevel) &&
     (desired.openAIFastMode === undefined ||

@@ -3,7 +3,13 @@ import { ScrollView, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { useConnection } from '../state/AppContext'
 import type { ApiClient } from '../core/client'
-import { effortUnavailableReason } from '../core/runtimeCatalog'
+import {
+  ANTIGRAVITY_LOGIN_GUIDANCE,
+  ANTIGRAVITY_PROVIDER_ID,
+  antigravityModels,
+  antigravityStatusLabel,
+  effortUnavailableReason,
+} from '../core/runtimeCatalog'
 import { useRuntimeChoice } from '../ui/RuntimePicker'
 import { effortSegments } from '../ui/compose/runLogic'
 import { ChoiceRow } from '../ui/newtask/ChoiceRow'
@@ -149,6 +155,8 @@ function Banner({
   )
 }
 
+const EXCLUDE_LOCAL_RUNTIMES = [ANTIGRAVITY_PROVIDER_ID] as const
+
 function DefaultPicker({
   client,
   initial,
@@ -163,9 +171,29 @@ function DefaultPicker({
   banner: ReactNode
 }) {
   const colors = useColors()
-  const choice = useRuntimeChoice({ client, initial, defaultScope: true })
+  const choice = useRuntimeChoice({
+    client,
+    initial,
+    defaultScope: true,
+    excludeProviderIds: EXCLUDE_LOCAL_RUNTIMES,
+  })
   const [providerOpen, setProviderOpen] = useState(false)
-  const sources = choice.directory?.sources ?? []
+  const sources = choice.sources
+  const antigravity = choice.antigravity
+  const antigravityInstalled = Boolean(
+    antigravity && antigravity.status !== 'not_installed'
+  )
+  const antigravityMeta = antigravity
+    ? [
+        antigravity.tier?.name,
+        antigravity.version ? `v${antigravity.version}` : '',
+        antigravity.status === 'ready'
+          ? `${antigravityModels(antigravity).length} 个模型`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
   const provider = providerSummary(sources, choice.providerId)
   const authReady = choice.source?.auth === 'ready'
   const supported = choice.model?.supportedReasoningEfforts ?? []
@@ -268,6 +296,42 @@ function DefaultPicker({
         )}
 
         <Footnote style={{ paddingTop: 14 }}>只影响之后新建的任务，已经在跑的不变。</Footnote>
+
+        {antigravityInstalled && antigravity ? (
+          <>
+            <SectionHeader title="本地 Agent 引擎" style={{ paddingTop: 22 }} />
+            <Group>
+              <SettingRow
+                title="Antigravity"
+                subtitle={antigravityMeta || undefined}
+                value={
+                  choice.refreshingAntigravity
+                    ? '刷新中…'
+                    : antigravityStatusLabel(antigravity)
+                }
+                valueSize={14}
+                titleGrow
+                disabled={busy || choice.refreshingAntigravity}
+                onPress={() => {
+                  void choice.refreshAntigravity()
+                }}
+                label={`Antigravity，${antigravityStatusLabel(antigravity)}，点按刷新`}
+              />
+            </Group>
+            {antigravity.status === 'login_required' ? (
+              <Callout style={{ marginTop: 10 }}>
+                {ANTIGRAVITY_LOGIN_GUIDANCE}
+              </Callout>
+            ) : antigravity.status === 'error' ? (
+              <Callout tone="error" style={{ marginTop: 10 }}>
+                {antigravity.error || '无法读取 Antigravity 状态，请点按上方行刷新重试。'}
+              </Callout>
+            ) : null}
+            <Footnote style={{ paddingTop: 8 }}>
+              可在「新任务」页切换为 Antigravity 引擎；点按上方可刷新电脑端状态与可用模型。
+            </Footnote>
+          </>
+        ) : null}
       </ScrollView>
       <BottomBar>
         <Button

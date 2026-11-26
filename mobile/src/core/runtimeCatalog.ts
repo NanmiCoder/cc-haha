@@ -6,7 +6,47 @@ import {
   type ModelReasoningProviderKind,
 } from '../../../src/shared/modelReasoning'
 import type { ApiClient } from './client'
-import type { RuntimeConfig } from './types'
+import type { PermissionMode, RuntimeConfig } from './types'
+
+export const ANTIGRAVITY_PROVIDER_ID = 'antigravity-acp' as const
+export const ANTIGRAVITY_DEFAULT_MODEL = 'agent-default' as const
+export const ANTIGRAVITY_LOGIN_GUIDANCE =
+  '请先在电脑终端运行 agy acp --login 完成登录，然后回到这里刷新。'
+export const ANTIGRAVITY_PERMISSION_MODES: readonly PermissionMode[] = [
+  'default',
+  'acceptEdits',
+  'auto',
+  'plan',
+]
+
+export type AntigravityConnectionStatus =
+  | 'not_installed'
+  | 'unchecked'
+  | 'ready'
+  | 'login_required'
+  | 'error'
+
+export type AntigravityModel = {
+  id: string
+  name: string
+  supportedReasoningEfforts?: string[]
+  defaultReasoningEffort?: string
+}
+
+export type AntigravityStatus = {
+  id: typeof ANTIGRAVITY_PROVIDER_ID
+  kind: 'acp'
+  status: AntigravityConnectionStatus
+  models: AntigravityModel[]
+  currentModelId?: string
+  currentEffortLevel?: string
+  version?: string
+  tier?: { id?: string; name?: string }
+  error?: string
+}
+
+export const isAntigravityProvider = (id: string | null | undefined): boolean =>
+  id === ANTIGRAVITY_PROVIDER_ID
 
 export type Provider = {
   id: string
@@ -36,6 +76,8 @@ export type RuntimeSource = {
   name: string
   auth: 'ready' | 'missing' | 'error'
   builtin: boolean
+  kind?: 'acp'
+  runtimeStatus?: AntigravityConnectionStatus
 }
 export type RuntimeDirectory = {
   providers: Provider[]
@@ -43,6 +85,7 @@ export type RuntimeDirectory = {
   activeId: string | null
   defaults: { models: Model[]; provider: { id: string; name: string } | null }
   sources: RuntimeSource[]
+  antigravity: AntigravityStatus | null
 }
 
 // These are protocol identities, not saved provider rows. null explicitly means Claude.
@@ -52,10 +95,231 @@ export const OFFICIAL_RUNTIME_SOURCES = [
   { id: 'grok-official', authId: 'grok-official', name: 'Grok 官方' },
   { id: 'deepseek-account', authId: 'deepseek-account', name: 'DeepSeek 账号' },
 ] as const
+
+const ANTIGRAVITY_STATUSES = new Set<AntigravityConnectionStatus>([
+  'not_installed',
+  'unchecked',
+  'ready',
+  'login_required',
+  'error',
+])
+
+export function parseAntigravityStatus(raw: unknown): AntigravityStatus | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  if (
+    typeof value.status !== 'string' ||
+    !ANTIGRAVITY_STATUSES.has(value.status as AntigravityConnectionStatus)
+  )
+    return null
+  const models: AntigravityModel[] = Array.isArray(value.models)
+    ? value.models.flatMap((entry): AntigravityModel[] => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+          return []
+        const item = entry as Record<string, unknown>
+        const id = typeof item.id === 'string' ? item.id.trim() : ''
+        if (!id) return []
+        const name =
+          typeof item.name === 'string' && item.name.trim()
+            ? item.name.trim()
+            : id
+        const efforts = Array.isArray(item.supportedReasoningEfforts)
+          ? item.supportedReasoningEfforts.filter(
+              (effort): effort is string =>
+                typeof effort === 'string' && effort.trim().length > 0
+            )
+          : undefined
+        const defaultEffort =
+          typeof item.defaultReasoningEffort === 'string' &&
+          item.defaultReasoningEffort.trim()
+            ? item.defaultReasoningEffort.trim()
+            : undefined
+        return [
+          {
+            id,
+            name,
+            ...(efforts ? { supportedReasoningEfforts: efforts } : {}),
+            ...(defaultEffort ? { defaultReasoningEffort: defaultEffort } : {}),
+          },
+        ]
+      })
+    : []
+  const rawTier =
+    value.tier && typeof value.tier === 'object' && !Array.isArray(value.tier)
+      ? (value.tier as Record<string, unknown>)
+      : null
+  const tier =
+    rawTier &&
+    (typeof rawTier.id === 'string' || typeof rawTier.name === 'string')
+      ? {
+          ...(typeof rawTier.id === 'string' && rawTier.id.trim()
+            ? { id: rawTier.id.trim() }
+            : {}),
+          ...(typeof rawTier.name === 'string' && rawTier.name.trim()
+            ? { name: rawTier.name.trim() }
+            : {}),
+        }
+      : undefined
+  return {
+    id: ANTIGRAVITY_PROVIDER_ID,
+    kind: 'acp',
+    status: value.status as AntigravityConnectionStatus,
+    models,
+    ...(typeof value.currentModelId === 'string' && value.currentModelId.trim()
+      ? { currentModelId: value.currentModelId.trim() }
+      : {}),
+    ...(typeof value.currentEffortLevel === 'string' &&
+    value.currentEffortLevel.trim()
+      ? { currentEffortLevel: value.currentEffortLevel.trim() }
+      : {}),
+    ...(typeof value.version === 'string' && value.version.trim()
+      ? { version: value.version.trim() }
+      : {}),
+    ...(tier && (tier.id || tier.name) ? { tier } : {}),
+    ...(typeof value.error === 'string' && value.error.trim()
+      ? { error: value.error.trim() }
+      : {}),
+  }
+}
+
+function antigravityRuntimeSource(
+  antigravity: AntigravityStatus | null
+): RuntimeSource | null {
+  if (!antigravity || antigravity.status === 'not_installed') return null
+  const auth: RuntimeSource['auth'] =
+    antigravity.status === 'login_required'
+      ? 'missing'
+      : antigravity.status === 'error'
+        ? 'error'
+        : 'ready'
+  return {
+    id: ANTIGRAVITY_PROVIDER_ID,
+    name: 'Antigravity',
+    auth,
+    builtin: true,
+    kind: 'acp',
+    runtimeStatus: antigravity.status,
+  }
+}
+
+export function antigravityModels(
+  antigravity: AntigravityStatus | null | undefined
+): Model[] {
+  if (
+    !antigravity ||
+    antigravity.status === 'not_installed' ||
+    antigravity.status === 'login_required' ||
+    antigravity.status === 'error'
+  )
+    return []
+  const models = antigravity.models.map(
+    (model): Model => ({
+      id: model.id,
+      name: model.name,
+      ...(model.supportedReasoningEfforts
+        ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
+        : {}),
+      ...(model.defaultReasoningEffort
+        ? { defaultReasoningEffort: model.defaultReasoningEffort }
+        : {}),
+    })
+  )
+  if (models.length > 0) return models
+  if (antigravity.status === 'ready')
+    return [{ id: ANTIGRAVITY_DEFAULT_MODEL, name: 'Antigravity 默认模型' }]
+  return []
+}
+
+export function antigravityStatusLabel(
+  antigravity: AntigravityStatus | null | undefined
+): string {
+  switch (antigravity?.status) {
+    case 'ready':
+      return '已就绪'
+    case 'login_required':
+      return '需要电脑登录'
+    case 'unchecked':
+      return '待检测'
+    case 'error':
+      return '状态异常'
+    default:
+      return '未安装'
+  }
+}
+
+export function antigravitySourceDetail(
+  antigravity: AntigravityStatus | null | undefined
+): string | undefined {
+  if (!antigravity || antigravity.status === 'not_installed') return undefined
+  if (antigravity.status === 'login_required') return '需在电脑终端登录'
+  if (antigravity.status === 'error') return '状态待确认'
+  if (antigravity.status === 'unchecked') return '待检测模型'
+  return (
+    [antigravity.tier?.name, antigravity.version ? `v${antigravity.version}` : '']
+      .filter(Boolean)
+      .join(' · ') || '本地 Agent 引擎'
+  )
+}
+
+/** Pick the initial Antigravity model and compatible effort for a new task. */
+export function defaultAntigravitySelection(
+  antigravity: AntigravityStatus | null | undefined
+): { config: RuntimeConfig; name: string } {
+  const models = antigravityModels(antigravity)
+  const chosen =
+    (antigravity?.currentModelId
+      ? models.find((model) => model.id === antigravity.currentModelId)
+      : undefined) ??
+    models[0] ?? {
+      id: antigravity?.currentModelId || ANTIGRAVITY_DEFAULT_MODEL,
+      name: antigravity?.currentModelId || 'Antigravity 默认模型',
+    }
+  const supported = chosen.supportedReasoningEfforts ?? []
+  const effort =
+    antigravity?.currentEffortLevel &&
+    supported.includes(antigravity.currentEffortLevel)
+      ? antigravity.currentEffortLevel
+      : chosen.defaultReasoningEffort
+  return {
+    config: runtimeSelection(ANTIGRAVITY_PROVIDER_ID, chosen, effort, false),
+    name: chosen.name,
+  }
+}
+
+export function withAntigravityStatus(
+  directory: RuntimeDirectory,
+  antigravity: AntigravityStatus | null
+): RuntimeDirectory {
+  const withoutAntigravity = directory.sources.filter(
+    (source) => source.id !== ANTIGRAVITY_PROVIDER_ID
+  )
+  const nextSource = antigravityRuntimeSource(antigravity)
+  return {
+    ...directory,
+    antigravity,
+    sources: nextSource
+      ? [...withoutAntigravity, nextSource]
+      : withoutAntigravity,
+  }
+}
+
+export async function discoverAntigravity(
+  client: ApiClient,
+  signal?: AbortSignal
+): Promise<AntigravityStatus | null> {
+  const response = await client.post<{ antigravity?: unknown }>(
+    `/api/providers/${ANTIGRAVITY_PROVIDER_ID}/discover`,
+    {},
+    signal ? { signal } : undefined
+  )
+  return parseAntigravityStatus(response?.antigravity)
+}
+
 export function runtimeSourceName(
   id: string | null,
   providers: { id: string; name: string }[]
 ) {
+  if (id === ANTIGRAVITY_PROVIDER_ID) return 'Antigravity'
   return (
     providers.find((provider) => provider.id === id)?.name ??
     OFFICIAL_RUNTIME_SOURCES.find((source) => source.id === id)?.name ??
@@ -70,10 +334,11 @@ export async function loadRuntimeDirectory(
   signal: AbortSignal
 ): Promise<RuntimeDirectory> {
   const [saved, defaults, presets, official] = await Promise.all([
-    client.get<{ providers: Provider[]; activeId: string | null }>(
-      '/api/providers',
-      { signal }
-    ),
+    client.get<{
+      providers: Provider[]
+      activeId: string | null
+      antigravity?: unknown
+    }>('/api/providers', { signal }),
     client.get<RuntimeDirectory['defaults']>('/api/models', { signal }),
     client.get<{ presets: ProviderPreset[] }>('/api/providers/presets', {
       signal,
@@ -94,16 +359,20 @@ export async function loadRuntimeDirectory(
       })
     ),
   ])
+  const antigravity = parseAntigravityStatus(saved.antigravity)
+  const antigravitySource = antigravityRuntimeSource(antigravity)
   return {
     providers: saved.providers,
     presets: presets.presets,
     activeId: runtimeProviderIdentity(saved.activeId),
     defaults,
+    antigravity,
     sources: [
       ...official,
       ...saved.providers
         .filter(
           (provider) =>
+            provider.id !== ANTIGRAVITY_PROVIDER_ID &&
             !official.some(
               (source) => source.id === runtimeProviderIdentity(provider.id)
             )
@@ -114,6 +383,7 @@ export async function loadRuntimeDirectory(
           auth: 'ready' as const,
           builtin: false,
         })),
+      ...(antigravitySource ? [antigravitySource] : []),
     ],
   }
 }
@@ -175,6 +445,14 @@ export async function loadRuntimeModels(
   providerId: string | null,
   signal: AbortSignal
 ): Promise<Model[]> {
+  if (providerId === ANTIGRAVITY_PROVIDER_ID) {
+    const status = directory.antigravity
+    if (!status || status.status === 'not_installed' || status.status === 'login_required' || status.status === 'error')
+      return []
+    if (status.status === 'ready') return antigravityModels(status)
+    const discovered = await discoverAntigravity(client, signal)
+    return antigravityModels(discovered)
+  }
   const source = directory.sources.find((value) => value.id === providerId)
   if (!source || source.auth !== 'ready') return []
   if (
@@ -288,9 +566,21 @@ export function currentModelEfforts(
 
 /** 思考强度调不了时的原因；模型不在列表里不算（见 currentModelEfforts）。 */
 export function effortUnavailableReason(choice: {
-  source?: { auth: RuntimeSource['auth'] }
+  source?: {
+    id?: string | null
+    auth: RuntimeSource['auth']
+    runtimeStatus?: AntigravityConnectionStatus
+  }
   canSetEffort: boolean
 }): string {
+  if (choice.source?.id === ANTIGRAVITY_PROVIDER_ID) {
+    if (choice.source.runtimeStatus === 'login_required' || choice.source.auth === 'missing')
+      return ANTIGRAVITY_LOGIN_GUIDANCE
+    if (choice.source.runtimeStatus === 'error' || choice.source.auth === 'error')
+      return '尚未确认 Antigravity 状态，请点击刷新重试。'
+    if (choice.source.runtimeStatus === 'unchecked')
+      return '正在检测 Antigravity 可用模型，请稍候或点击刷新。'
+  }
   return choice.source?.auth === 'missing'
     ? '请先在电脑上登录或配置此供应商，再重新读取。'
     : choice.source?.auth === 'error'

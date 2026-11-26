@@ -1,4 +1,5 @@
 import type { ChatItem, Session, TokenUsage } from '../../core/types'
+import { isAntigravityProvider } from '../../core/runtimeCatalog'
 import type { ConnectionState } from '../../core/sessionTransport'
 import type { Checkpoint } from '../../core/operations'
 import { formatDuration } from '../../core/dashboard'
@@ -34,10 +35,11 @@ export function projectName(session: Session | null | undefined) {
   )
 }
 
-/** “项目名 · 分支”，分支取不到就只显示项目名。 */
+/** “项目名 · 分支”，分支取不到就只显示项目名；Antigravity 会话附带引擎标识。 */
 export function sessionSubtitle(session: Session | null | undefined, branch?: string | null) {
   const name = projectName(session)
-  return [name, branch?.trim()].filter(Boolean).join(' · ')
+  const engine = isAntigravityProvider(session?.runtimeProviderId) ? 'Antigravity' : ''
+  return [name, branch?.trim(), engine].filter(Boolean).join(' · ')
 }
 
 /** 菜单头部的工作目录：macOS / Linux 的用户目录缩写成 ~。 */
