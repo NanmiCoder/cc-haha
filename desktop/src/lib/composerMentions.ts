@@ -10,6 +10,8 @@
  * text) instead of corrupting the rest of the serialization.
  */
 
+import { MAX_OPTIMIZE_PROMPT_LENGTH, referenceMarkerPrefix, renderOptimizeDraft } from '../../../src/shared/promptOptimizeReferences'
+
 export type ComposerMention = {
   /** Missing kind is a legacy file reference. Drafts remain backwards compatible. */
   kind?: 'skill' | 'plugin' | 'session'
@@ -170,40 +172,55 @@ export function getSessionReferences(text: string, mentions: ComposerMention[]):
 }
 
 /**
- * Re-match previous mention pills against rewritten text (e.g. after prompt
- * optimization) so surviving `@label` tokens stay live pills even if the
- * rewrite reordered sentences or dropped one mention.
+ * Attach a temporary ID to every live token for the optimizer. After a
+ * rewrite, a bare @label can be newly written text, even when it was unique
+ * in the original. Only an intact label with its own ID restores a pill.
  */
-export function reconcileMentionsAfterRewrite(
-  text: string,
-  previousMentions: ComposerMention[],
-): ComposerMention[] {
-  if (previousMentions.length === 0 || text.length === 0) return []
-  const occurrenceCache = new Map<string, number[]>()
-  const usedRanges: Array<{ start: number; end: number }> = []
-  const matched: Array<{ start: number; mention: ComposerMention }> = []
-
-  const overlaps = (start: number, end: number) =>
-    usedRanges.some(range => start < range.end && end > range.start)
-
-  for (const mention of previousMentions) {
+export function prepareMentionsForRewrite(text: string, mentions: ComposerMention[]) {
+  const prefix = referenceMarkerPrefix(text)
+  const ranges = findMentionRanges(text, mentions)
+  const tokens = ranges.map(({ mention }, index) => {
     const token = mentionToken(mention)
-    let positions = occurrenceCache.get(token)
-    if (!positions) {
-      positions = tokenOccurrences(text, token)
-      occurrenceCache.set(token, positions)
-    }
-    const chosen = positions.find(pos => !overlaps(pos, pos + token.length))
-    if (chosen === undefined) continue
-    usedRanges.push({ start: chosen, end: chosen + token.length })
-    matched.push({ start: chosen, mention })
-  }
-
-  matched.sort((a, b) => a.start - b.start)
-  return matched.map(({ start, mention }) => {
-    const token = mentionToken(mention)
-    const positions = occurrenceCache.get(token) ?? []
-    const tokenOrdinal = positions.filter(pos => pos < start).length
-    return { ...mention, tokenOrdinal }
+    const marker = `${prefix}${index}]]`
+    return { token, marker, mention }
   })
+  const draft = { text, referenceEnds: ranges.map(range => range.end) }
+  const prompt = renderOptimizeDraft(draft)
+  // Keep the ordinary string API when it fits. For a draft at the limit,
+  // transport the marker positions separately so they don't consume user space.
+  const requestPrompt = ranges.length > 0 && prompt.trim().length > MAX_OPTIMIZE_PROMPT_LENGTH ? draft : prompt
+
+  function restore(rewritten: string): { text: string; mentions: ComposerMention[] } {
+    const replacements = tokens.flatMap(({ token, marker, mention }) => {
+      const offsets = tokenOccurrences(rewritten, marker)
+      return offsets.map(offset => {
+        const intact = rewritten.endsWith(token, offset)
+        return {
+          start: intact ? offset - token.length : offset,
+          end: offset + marker.length,
+          token: intact ? token : '',
+          // Copied tokens and edited labels no longer identify one original pill.
+          mention: intact && offsets.length === 1 ? mention : undefined,
+        }
+      })
+    }).sort((a, b) => a.start - b.start || b.end - a.end)
+
+    let restored = ''
+    let from = 0
+    const restoredMentions: ComposerMention[] = []
+    for (const replacement of replacements) {
+      if (replacement.start < from) continue
+      restored += rewritten.slice(from, replacement.start)
+      if (replacement.mention) {
+        restoredMentions.push({
+          ...replacement.mention,
+          tokenOrdinal: tokenOccurrences(restored, replacement.token).length,
+        })
+      }
+      restored += replacement.token
+      from = replacement.end
+    }
+    return { text: restored + rewritten.slice(from), mentions: restoredMentions }
+  }
+  return { prompt, requestPrompt, restore }
 }

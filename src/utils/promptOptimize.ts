@@ -10,6 +10,7 @@
  */
 
 import { formatAPIError } from '../services/api/errorUtils.js'
+import { renderOptimizeDraft, type OptimizeDraft } from '../shared/promptOptimizeReferences.js'
 import type { NonNullableUsage } from '../services/api/logging.js'
 import type { Message, SystemAPIErrorMessage } from '../types/message.js'
 import { type CacheSafeParams, runForkedAgent } from './forkedAgent.js'
@@ -46,6 +47,7 @@ CRITICAL RULES:
 - Match the draft's language exactly (e.g. Chinese stays Chinese, English stays English).
 - Keep length proportional to the task: concise and direct for simple requests; cleanly structured (goal, key constraints/context, expected outcome or verification) for multi-part requests.
 - Preserve every @mention token (for example @ChatInput.tsx or @skill-name), file path, symbol name, error message, and code snippet verbatim.
+- Keep any attached reference marker (for example [[ref:0]]) immediately after its @mention when rewriting or moving it.
 - Reply with ONLY the optimized prompt text — no preamble, no commentary, no surrounding quotes, and no outer markdown code fence.</system-reminder>
 
 <${tag}>
@@ -131,12 +133,12 @@ export async function runPromptOptimize({
   cacheSafeParams,
   signal,
 }: {
-  prompt: string
+  prompt: OptimizeDraft
   cacheSafeParams: CacheSafeParams
   signal?: AbortSignal
 }): Promise<PromptOptimizeResult> {
   signal?.throwIfAborted()
-  const trimmed = prompt.trim()
+  const trimmed = renderOptimizeDraft(prompt).trim()
   if (!trimmed) {
     throw new Error('Prompt must not be empty')
   }

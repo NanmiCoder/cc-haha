@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { rmSync } from 'node:fs'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -72,6 +73,15 @@ test('prompt optimize HTTP controls work on empty, running, and idle sessions wi
       requestId: emptyReqId,
       optimizedPrompt: 'Optimized: optimize on empty session (main idle)',
     })
+
+    const text = 'x'.repeat(31_992) + ' @Report'
+    const fullLength = await fetch(base + endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId: crypto.randomUUID(), prompt: { text, referenceEnds: [text.length] } }),
+    })
+    expect(fullLength.status).toBe(200)
+    expect((await fullLength.json()).optimizedPrompt).toBe(`Optimized: ${text}[[ref:0]] (main idle)`)
 
     const events: any[] = []
     socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws/${root.sessionId}`)
@@ -178,6 +188,13 @@ test('prompt optimize HTTP controls work on empty, running, and idle sessions wi
     server?.stop(true)
     for (const key of Object.keys(process.env)) delete process.env[key]
     Object.assign(process.env, original)
-    await rm(home, { recursive: true, force: true })
+    try {
+      await rm(home, { recursive: true, force: true })
+    } catch (error) {
+      // On Windows the transcript reader holds its SQLite cache until its
+      // process exit handler runs. Remove the remaining fixture after it closes.
+      if ((error as NodeJS.ErrnoException).code !== 'EBUSY' || process.platform !== 'win32') throw error
+      process.once('exit', () => rmSync(home, { recursive: true, force: true }))
+    }
   }
 }, 30_000)

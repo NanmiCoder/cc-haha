@@ -106,3 +106,20 @@ test('validates HTTP input and SDK control schemas', () => {
     expect(SDKControlRequestInnerSchema().safeParse(request).success).toBe(true)
   }
 })
+
+test('both protocol boundaries validate the visible draft and preserve reference offsets', () => {
+  const text = '@Report'.padEnd(32_000, 'x')
+  for (const [candidate, valid] of [
+    [{ text, referenceEnds: [7] }, true],
+    [{ text: text + 'x', referenceEnds: [7] }, false],
+    [{ text, referenceEnds: [text.length + 1] }, false],
+    [{ text, referenceEnds: [7, 7] }, false],
+    [{ text, referenceEnds: [7, 8] }, false],
+  ] as const) {
+    const http = promptOptimizeInputSchema.safeParse({ ...body, prompt: candidate })
+    const sdk = SDKControlRequestInnerSchema().safeParse({ subtype: 'optimize_prompt', prompt: candidate })
+    expect(http.success).toBe(valid)
+    expect(sdk.success).toBe(valid)
+    if (http.success) expect(http.data.prompt).toEqual(candidate)
+  }
+})

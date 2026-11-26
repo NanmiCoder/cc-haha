@@ -176,7 +176,7 @@ if (!process.env.PROMPT_OPTIMIZE_LOOPBACK_FIXTURE) {
 
     try {
       const result = await runPromptOptimize({
-        prompt: '把那个刷新加上',
+        prompt: { text: '把那个刷新加上 @login.ts', referenceEnds: ['把那个刷新加上 @login.ts'.length] },
         cacheSafeParams: cache,
       })
       expect(result.optimizedPrompt).toBe('请基于刚才讨论的登录模块补齐 token 刷新与单测。')
@@ -184,7 +184,7 @@ if (!process.env.PROMPT_OPTIMIZE_LOOPBACK_FIXTURE) {
       expect(JSON.stringify(requests[0].tools)).toContain('FixtureWrite')
       expect(JSON.stringify(requests[0].messages)).toContain('正在看 auth/login.ts 的登录逻辑')
       expect(JSON.stringify(requests[0].messages)).toContain('tool_result')
-      expect(JSON.stringify(requests[0].messages)).toContain('把那个刷新加上')
+      expect(JSON.stringify(requests[0].messages)).toContain('把那个刷新加上 @login.ts[[ref:0]]')
       expect(JSON.stringify(parentMessages)).toBe(before)
 
       useTool = true
