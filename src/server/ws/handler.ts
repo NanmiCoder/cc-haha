@@ -47,10 +47,13 @@ import {
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import {
+  ANTIGRAVITY_BYPASS_EXIT_REQUIRES_RESTART,
+  ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PROVIDER_ID,
   AntigravityError,
   isAntigravitySupportedPermissionMode,
 } from '../services/antigravityAcp.js'
+import { forgetAntigravitySwarmSessionMappingsForSession } from '../services/antigravitySwarmAdapter.js'
 import {
   getPresetDefaultEnv,
   getPresetReasoningProviderKind,
@@ -1057,14 +1060,26 @@ export const handleWebSocket = {
             ) {
               failSessionChatActivity(sessionId)
               releaseUserTurnWithoutResult(sessionId, activeTurn)
-              emitSessionTurnEvent({ type: 'output', sessionId, message: { type: 'result', is_error: true, result: 'The request could not be started.' } })
+              const isAntigravityError = err instanceof AntigravityError
+              const errorCode = err instanceof ApiError
+                ? err.code
+                : isAntigravityError
+                  ? err.code
+                  : 'USER_TURN_FAILED'
+              const errorMessage = err instanceof ApiError || isAntigravityError
+                ? err.message
+                : 'The request could not be started. Please retry.'
+              const retryable = isAntigravityError && err.code === 'ANTIGRAVITY_UNSUPPORTED'
+                ? false
+                : true
+              emitSessionTurnEvent({ type: 'output', sessionId, message: { type: 'result', is_error: true, result: isAntigravityError ? err.message : 'The request could not be started.' } })
               const titleState = sessionTitleState.get(sessionId)
               if (titleState) titleState.activeTurn = undefined
               sendMessage(ws, {
                 type: 'error',
-                message: err instanceof ApiError ? err.message : 'The request could not be started. Please retry.',
-                code: err instanceof ApiError ? err.code : 'USER_TURN_FAILED',
-                retryable: true,
+                message: errorMessage,
+                code: errorCode,
+                retryable,
               })
               sendMessage(ws, { type: 'status', state: 'idle' })
             }
@@ -1275,6 +1290,25 @@ async function handleUserMessage(
       return
     }
   }
+  let titleTurnNumber: number | null = null
+  let removeTitleOutputCallback: (() => void) | null = null
+  let removeActiveTurnOutputCallback: (() => void) | null = null
+  const detachActiveTurnOutput = () => {
+    const fn = removeActiveTurnOutputCallback
+    removeActiveTurnOutputCallback = null
+    fn?.()
+  }
+  const detachTitleOutput = () => {
+    const fn = removeTitleOutputCallback
+    removeTitleOutputCallback = null
+    fn?.()
+  }
+  const clearPendingTitleTurn = () => {
+    if (titleTurnNumber !== null) {
+      discardActiveTitleTurn(sessionId, titleTurnNumber)
+      titleTurnNumber = null
+    }
+  }
   try {
     if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
     activeTurn.admissionPending = false
@@ -1311,7 +1345,7 @@ async function handleUserMessage(
       sessionTitleState.set(sessionId, titleState)
     }
     const titleInput = delivery?.scheduledTask ? '' : getTitleInputForUserMessage(message.content, desktopSlashCommand)
-    let titleTurnNumber: number | null = null
+    titleTurnNumber = null
     if (titleInput) {
       titleState.persistTitleSource &&= persistTitleSource
       titleState.userMessageCount++
@@ -1383,7 +1417,7 @@ async function handleUserMessage(
     let userMessageSent = false
     const shouldForwardCurrentTurnLocalCommand =
       createCurrentTurnLocalCommandForwarder(desktopSlashCommand)
-    const removeTitleOutputCallback = titleTurnNumber === null
+    removeTitleOutputCallback = titleTurnNumber === null
       ? null
       : bindTitleSessionOutput(ws, sessionId, activeTurn, () => userMessageSent)
 
@@ -1399,7 +1433,7 @@ async function handleUserMessage(
         return shouldForwardCurrentTurnLocalCommand(cliMsg)
       },
     })
-    const removeActiveTurnOutputCallback = bindActiveUserTurnCompletion(ws, sessionId, activeTurn)
+    removeActiveTurnOutputCallback = bindActiveUserTurnCompletion(ws, sessionId, activeTurn)
 
     // The renderer may have left while the CLI was still starting, before this
     // turn could flip messageSent=true. The disconnect handler cannot attach an
@@ -1423,7 +1457,7 @@ async function handleUserMessage(
           activeTurn.messageSent = true
           if (result.status === 'consumed') {
             clearActiveUserTurn(sessionId, activeTurn)
-            removeActiveTurnOutputCallback()
+            detachActiveTurnOutput()
           }
           return true
         })()
@@ -1446,19 +1480,19 @@ async function handleUserMessage(
       // terminal result. Keep the completion callback long enough to consume
       // that boundary; only an admission revoked before the socket write is safe
       // to detach immediately.
-      if (!activeTurn.messageSent) removeActiveTurnOutputCallback()
-      removeTitleOutputCallback?.()
-      discardActiveTitleTurn(sessionId, titleTurnNumber)
+      if (!activeTurn.messageSent) detachActiveTurnOutput()
+      detachTitleOutput()
+      clearPendingTitleTurn()
       if (!activeTurn.messageSent) {
         stopRuntimeStartedByCancelledAdmission(sessionId, activeTurn)
       }
       return
     }
     if (!sent) {
-      removeActiveTurnOutputCallback()
+      detachActiveTurnOutput()
       releaseUserTurnWithoutResult(sessionId, activeTurn)
-      removeTitleOutputCallback?.()
-      discardActiveTitleTurn(sessionId, titleTurnNumber)
+      detachTitleOutput()
+      clearPendingTitleTurn()
       sendMessage(ws, {
         type: 'error',
         message: 'CLI process is not running. The session may have ended or the process crashed.',
@@ -1480,7 +1514,12 @@ async function handleUserMessage(
       )
     }
   } finally {
-    if (!activeTurn.messageSent) await admission?.release()
+    if (!activeTurn.messageSent) {
+      detachActiveTurnOutput()
+      detachTitleOutput()
+      clearPendingTitleTurn()
+      await admission?.release()
+    }
   }
 }
 
@@ -1991,6 +2030,20 @@ function applyDeferredPermissionModeAfterActiveTurn(
   })
 }
 
+function deferAntigravityPermissionModeRestart(ws: SessionConnection, mode: PermissionMode): boolean {
+  const { sessionId } = ws.data
+  const completion = conversationService.getAntigravityTurnCompletion(sessionId)
+  if (!completion) return false
+  // Defer permission-mode restarts (entering or leaving bypass) until any active/detached ACP turn settles.
+  deferredPermissionModes.set(sessionId, mode)
+  void completion.then(current => {
+    if (current && deferredPermissionModes.get(sessionId) === mode) {
+      applyDeferredPermissionModeAfterActiveTurn(ws, sessionId)
+    }
+  })
+  return true
+}
+
 function deferAntigravityRuntimeRestart(ws: SessionConnection, selection: RuntimeOverride): boolean {
   const { sessionId } = ws.data
   const completion = conversationService.getAntigravityTurnCompletion(sessionId)
@@ -2082,6 +2135,7 @@ async function performDesktopClearCommand(
 
   try {
     await sessionService.clearSessionTranscript(sessionId, workDir || undefined, permissionMode)
+    forgetAntigravitySwarmSessionMappingsForSession(sessionId)
   } catch (err) {
     sessionClearInProgress.delete(sessionId)
     resumeAgentFinalizationAfterFailedClear(sessionId, agentTasks)
@@ -2566,9 +2620,11 @@ export function shouldFallbackToPermissionRestart(
   mode: PermissionMode,
   error: unknown,
 ): boolean {
-  if (mode !== 'bypassPermissions') return false
   const message = error instanceof Error ? error.message : String(error)
-  return message.includes(BYPASS_CAPABILITY_UNAVAILABLE)
+  if (mode === 'bypassPermissions') {
+    return message.includes(BYPASS_CAPABILITY_UNAVAILABLE)
+  }
+  return message.includes(ANTIGRAVITY_BYPASS_EXIT_REQUIRES_RESTART)
 }
 
 async function applyPermissionModeToActiveSession(
@@ -2595,7 +2651,10 @@ async function applyPermissionModeToActiveSession(
     await commitConfirmedPermissionMode(sessionId, mode)
   } catch (err) {
     if (!isSideChatId(sessionId) && shouldFallbackToPermissionRestart(mode, err)) {
-      // Only the legacy restart would end the running turn; let it finish first.
+      // Only the legacy/bypass restart would end the running turn; let it finish first.
+      if (deferAntigravityPermissionModeRestart(ws, mode)) {
+        return
+      }
       if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
         deferredPermissionModes.set(sessionId, mode)
         return
@@ -2772,10 +2831,11 @@ async function handleSetRuntimeConfig(
       return
     }
 
+    const prevOverrideVersion = runtimeOverrideVersions.get(sessionId)
     runtimeOverrides.set(sessionId, nextOverride)
     runtimeOverrideVersions.set(
       sessionId,
-      (runtimeOverrideVersions.get(sessionId) ?? 0) + 1,
+      (prevOverrideVersion ?? 0) + 1,
     )
 
     if (deferAntigravityRuntimeRestart(ws, nextOverride)) {
@@ -2823,6 +2883,7 @@ async function handleSetRuntimeConfig(
         nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID &&
         conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID
       ) {
+        const beforeLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
         try {
           const updated = await conversationService.setAntigravityConfig(sessionId, {
             modelId: nextOverride.modelId,
@@ -2834,6 +2895,31 @@ async function handleSetRuntimeConfig(
             return
           }
         } catch (err) {
+          const afterLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
+          const modelPartiallyApplied =
+            afterLiveSelection?.providerId === ANTIGRAVITY_PROVIDER_ID &&
+            afterLiveSelection.modelId !== beforeLiveSelection?.modelId
+          if (modelPartiallyApplied) {
+            const partialOverride: RuntimeOverride = {
+              providerId: ANTIGRAVITY_PROVIDER_ID,
+              modelId: afterLiveSelection.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+              ...(afterLiveSelection.effortLevel ? { effort: afterLiveSelection.effortLevel } : {}),
+            }
+            runtimeOverrides.set(sessionId, partialOverride)
+            await persistSessionRuntimeConfig(sessionId, partialOverride).catch(() => undefined)
+            broadcastAppliedRuntimeConfig(sessionId)
+          } else {
+            if (prevOverride) {
+              runtimeOverrides.set(sessionId, prevOverride)
+            } else {
+              runtimeOverrides.delete(sessionId)
+            }
+            if (prevOverrideVersion === undefined) {
+              runtimeOverrideVersions.delete(sessionId)
+            } else {
+              runtimeOverrideVersions.set(sessionId, prevOverrideVersion)
+            }
+          }
           const errMsg = err instanceof Error ? err.message : String(err)
           const code = err instanceof AntigravityError ? err.code : 'RUNTIME_CONFIG_INVALID'
           sendMessage(ws, { type: 'error', message: errMsg, code })
@@ -4403,9 +4489,10 @@ async function ensureCliSessionStarted(
 
   if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
     await conversationService.waitForAntigravityCancellation(sessionId)
-    // 如果下一条先等到了取消边界，主动应用尚未排队的模型选择。
+    // 如果下一条先等到了取消边界，主动应用尚未排队的模型选择与权限重启。
     if (!conversationService.isAntigravityResponding(sessionId) && !runtimeTransitionPromises.has(sessionId)) {
       applyDeferredRuntimeRestartAfterActiveTurn(ws, sessionId)
+      applyDeferredPermissionModeAfterActiveTurn(ws, sessionId)
     }
     while (runtimeTransitionPromises.has(sessionId)) {
       await runtimeTransitionPromises.get(sessionId)

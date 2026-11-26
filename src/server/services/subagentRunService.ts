@@ -5,6 +5,7 @@ import {
   type SessionLaunchInfo,
   type SessionTaskNotification,
 } from './sessionService.js'
+import { conversationService } from './conversationService.js'
 import {
   ANTIGRAVITY_PROVIDER_ID,
   isSafeAntigravityId,
@@ -560,9 +561,10 @@ export function resolveSubagentRunFromMessages(
         const input = isRecord(block.input) ? block.input : {}
         const inputRole = stringField(input.Role) ?? stringField(input.role)
         const inputTypeName = stringField(input.TypeName) ?? stringField(input.typeName)
+        const isAgyMarked = isAgyTool || input.antigravityToolName === 'invoke_subagent' || Boolean(inputTypeName)
         const spawnKey = `${inputTypeName ?? ''}\u0000${inputRole ?? ''}`
         if (block.id !== toolUseId) {
-          if (isAgyTool || inputTypeName) {
+          if (isAgyMarked) {
             seenSpawnsByKey.set(spawnKey, (seenSpawnsByKey.get(spawnKey) ?? 0) + 1)
           }
         } else {
@@ -575,7 +577,7 @@ export function resolveSubagentRunFromMessages(
           if (inputRole) role = inputRole
           if (inputTypeName) typeName = inputTypeName
           if (inputConvId && !agentId) agentId = inputConvId
-          if (isAgyTool || inputConvId || inputTypeName) {
+          if (isAgyMarked || inputConvId) {
             isAntigravitySubagent = true
             antigravitySpawnOrdinal = seenSpawnsByKey.get(spawnKey) ?? 0
           }
@@ -817,8 +819,12 @@ async function resolveAntigravityChildFromParent(
   // 1. Check parent Antigravity transcript.jsonl for exact prompt / role / typeName match
   const spawns = await readAntigravityParentSubagentSpawns(nativeSessionId, options)
   if (spawns.length > 0) {
-    const exactPrompt = resolution.prompt
-      ? spawns.find((spawn) => spawn.prompt === resolution.prompt)
+    const ordinal = resolution.antigravitySpawnOrdinal ?? 0
+    const matchingPromptSpawns = resolution.prompt
+      ? spawns.filter((spawn) => spawn.prompt === resolution.prompt)
+      : []
+    const exactPrompt = matchingPromptSpawns.length > 0
+      ? (matchingPromptSpawns[ordinal] ?? matchingPromptSpawns[0])
       : undefined
     if (exactPrompt) {
       return {
@@ -830,7 +836,6 @@ async function resolveAntigravityChildFromParent(
       (!resolution.role || spawn.role === resolution.role)
       && (!resolution.typeName || spawn.typeName === resolution.typeName)
     ))
-    const ordinal = resolution.antigravitySpawnOrdinal ?? 0
     const pickedSpawn = matchingSpawns[ordinal] ?? matchingSpawns[0]
     if (pickedSpawn) {
       return {
@@ -1065,6 +1070,35 @@ export async function getSubagentRunByAgentId(
   }
 }
 
+function countPriorAntigravitySiblingSpawns(
+  liveMessages: MessageEntryLike[],
+  toolUseId: string,
+  spawnKey: string,
+  diskPriorIds?: string[],
+): number {
+  const priorIds = new Set<string>()
+  for (const id of diskPriorIds ?? []) {
+    if (id !== toolUseId) priorIds.add(id)
+  }
+  for (const entry of liveMessages) {
+    for (const block of contentBlocks(contentFromMessage(entry))) {
+      if (block.type !== 'tool_use' || typeof block.id !== 'string') continue
+      if (block.id === toolUseId) return priorIds.size
+      const isAgyTool = isAntigravitySubagentToolName(block.name)
+      const isStandardAgentTool = block.name === 'Agent'
+      if (!isAgyTool && !isStandardAgentTool) continue
+      const input = isRecord(block.input) ? block.input : {}
+      const inputTypeName = stringField(input.TypeName) ?? stringField(input.typeName)
+      const inputRole = stringField(input.Role) ?? stringField(input.role)
+      const isAgyMarked = isAgyTool || input.antigravityToolName === 'invoke_subagent' || Boolean(inputTypeName)
+      if (!isAgyMarked) continue
+      const key = `${inputTypeName ?? ''}\u0000${inputRole ?? ''}`
+      if (key === spawnKey) priorIds.add(block.id)
+    }
+  }
+  return priorIds.size
+}
+
 export async function getSubagentRunByTool(
   sessionId: string,
   toolUseId: string,
@@ -1078,9 +1112,43 @@ export async function getSubagentRunByTool(
   // re-materialize every linked subagent on each card open.
   const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId, undefined, signal)
   const { messages: parentMessages, taskNotifications } = parentLookup
-  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false, signal)
+  let resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false, signal)
   const antigravityHint = await readAntigravitySessionHint(sessionId)
   const childIdFromToolRef = extractChildIdFromAntigravityToolRef(toolUseId)
+  if (resolvedToolRef && parentLookup.antigravitySpawnOrdinal !== undefined) {
+    resolvedToolRef = {
+      ...resolvedToolRef,
+      resolution: {
+        ...resolvedToolRef.resolution,
+        antigravitySpawnOrdinal: parentLookup.antigravitySpawnOrdinal,
+      },
+    }
+  }
+  if (!resolvedToolRef && antigravityHint.isAntigravity && typeof conversationService.getRecentSdkMessages === 'function') {
+    const liveMessages = conversationService.getRecentSdkMessages(sessionId) as MessageEntryLike[]
+    if (liveMessages.length > 0) {
+      const liveResolution = resolveSubagentRunFromMessages(liveMessages, toolUseId)
+      if (liveResolution) {
+        const spawnKey = `${liveResolution.typeName ?? ''}\u0000${liveResolution.role ?? ''}`
+        const ordinal = countPriorAntigravitySiblingSpawns(
+          liveMessages,
+          toolUseId,
+          spawnKey,
+          parentLookup.antigravitySpawnsByKey?.[spawnKey],
+        )
+        resolvedToolRef = {
+          historyComplete: parentLookup.historyComplete !== false,
+          resolution: {
+            ...liveResolution,
+            isAntigravitySubagent: true,
+            antigravitySpawnOrdinal: ordinal,
+          },
+          lookupToolUseId: toolUseId,
+          expectedOwnerAgentId: null,
+        }
+      }
+    }
+  }
   if (!resolvedToolRef) {
     if (antigravityHint.isAntigravity && childIdFromToolRef) {
       const registry = antigravityHint.nativeSessionId

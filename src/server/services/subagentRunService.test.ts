@@ -12,6 +12,7 @@ import {
   truncateSubagentMessages,
 } from './subagentRunService.js'
 import { SessionService, sessionService, type MessageEntry } from './sessionService.js'
+import { conversationService } from './conversationService.js'
 import { cleanupOldSessionFiles } from '../../utils/cleanup.js'
 
 let tmpDir: string | null = null
@@ -2221,6 +2222,166 @@ describe('getSubagentRunByAgentId', () => {
       expect(byChildPrefixedRef?.agentId).toBe(childShellId)
       expect(byChildPrefixedRef?.status).toBe('running')
     } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it('resolves in-progress Antigravity subagent via live SDK fallback and counts sibling (TypeName, Role) ordinals accurately', async () => {
+    await setupTmpConfigDir()
+    const agyAppData = path.join(tmpDir!, 'agy-app-data-siblings')
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-000000000009'
+    const nativeSessionId = 'b9491f01-eecb-44a6-9f76-b1f3e1d1cd84'
+    const child1 = 'child-sib-11111111'
+    const child2 = 'child-sib-22222222'
+    const child3 = 'child-sib-33333333'
+    const projectDir = '-tmp-agy-siblings-test'
+
+    // Persist 2 sibling spawns with identical (TypeName, Role) on disk; 3rd is still live in memory (not yet on disk)
+    await writeSessionFile(projectDir, sessionId, [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_1',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module A',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module A',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+        uuid: 'sib-u1',
+        timestamp: '2026-11-26T10:00:01Z',
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_2',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module B',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module B',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+        uuid: 'sib-u2',
+        timestamp: '2026-11-26T10:00:02Z',
+      },
+    ])
+
+    const subagentsDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    for (const [childId, spawnStepIndex] of [[child1, 2], [child2, 5], [child3, 9]] as const) {
+      await fs.writeFile(
+        path.join(subagentsDir, `${childId}.json`),
+        JSON.stringify({
+          conversationId: childId,
+          subagentDescriptor: { typeName: 'research', role: 'Code Explorer' },
+          state: 'SUBAGENT_STATE_ALIVE',
+          spawnStepIndex,
+          workspaceUris: ['file:///tmp/agy-siblings'],
+        }),
+        'utf8',
+      )
+      const logDir = path.join(agyAppData, 'brain', childId, '.system_generated', 'logs')
+      await fs.mkdir(logDir, { recursive: true })
+      await fs.writeFile(
+        path.join(logDir, 'transcript.jsonl'),
+        `${JSON.stringify({
+          step_index: 0,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          status: 'RUNNING',
+          created_at: '2026-11-26T10:00:03Z',
+          model: 'gemini-3.8-flash-low',
+          content: `Running ${childId}`,
+        })}\n`,
+        'utf8',
+      )
+    }
+
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`),
+      projectDir,
+      workDir: '/tmp/agy-siblings',
+      transcriptMessageCount: 2,
+      customTitle: null,
+      runtimeProviderId: 'antigravity-acp',
+      nativeSessionId,
+    } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>)
+
+    const liveSdkSpy = spyOn(conversationService, 'getRecentSdkMessages').mockReturnValue([
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_2',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module B',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_3_live',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module C',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module C',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+      },
+    ])
+
+    try {
+      // 1st sibling on disk -> child1 (ordinal 0)
+      const run1 = await getSubagentRunByTool(sessionId, 'call_sib_1', undefined, { appDataDir: agyAppData })
+      expect(run1?.agentId).toBe(child1)
+
+      // 2nd sibling on disk -> child2 (ordinal 1, NOT child1!)
+      const run2 = await getSubagentRunByTool(sessionId, 'call_sib_2', undefined, { appDataDir: agyAppData })
+      expect(run2?.agentId).toBe(child2)
+
+      // 3rd sibling live in-progress (not yet flushed to disk) -> resolves immediately to child3 (ordinal 2, deduping call_sib_2!)
+      const run3 = await getSubagentRunByTool(sessionId, 'call_sib_3_live', undefined, { appDataDir: agyAppData })
+      expect(run3).not.toBeNull()
+      expect(run3?.agentId).toBe(child3)
+      expect(run3?.status).toBe('running')
+      expect(run3?.prompt).toBe('Analyze module C')
+    } finally {
+      liveSdkSpy.mockRestore()
       launchSpy.mockRestore()
     }
   })

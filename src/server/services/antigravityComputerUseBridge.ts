@@ -67,21 +67,25 @@ export type AntigravityComputerUseBridge = {
   close(): Promise<void>
 }
 
-function normalizeServerPrefix(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
-}
+const ALLOWED_ANTIGRAVITY_CU_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...buildPlatformComputerUseTools({ platform: 'darwin', screenshotFiltering: 'native' }, 'pixels'),
+  ...buildPlatformComputerUseTools({ platform: 'linux', screenshotFiltering: 'none' }, 'pixels'),
+  ...buildPlatformComputerUseTools({ platform: 'win32', screenshotFiltering: 'none', teachMode: true }, 'pixels'),
+].map(tool => tool.name.toLowerCase()))
 
-const NORMALIZED_CU_SERVER_PREFIX = normalizeServerPrefix(ANTIGRAVITY_COMPUTER_USE_SERVER_NAME)
+const CU_MCP_TOOL_PREFIX_RE = /^mcp_{1,2}cc[-_]haha[-_]computer[-_]use_{1,2}([a-z0-9_]+)$/i
 
 /**
  * Match ACP tool names emitted by `agy acp` for our injected Computer Use MCP server.
  * Verified on `agy 1.5.17`: MCP tools arrive as `mcp_<serverName>_<toolName>` (and
- * we also tolerate normalized underscores or double-underscore prefixes).
+ * we also tolerate normalized underscores or double-underscore prefixes), restricted
+ * strictly to the exact tool names advertised by `buildPlatformComputerUseTools`.
  */
 export function isAntigravityComputerUseToolName(toolName: string | undefined): boolean {
   if (!toolName) return false
-  const normalized = normalizeServerPrefix(toolName)
-  return normalized.startsWith(`mcp_${NORMALIZED_CU_SERVER_PREFIX}_`)
+  const match = CU_MCP_TOOL_PREFIX_RE.exec(toolName.trim())
+  if (!match?.[1]) return false
+  return ALLOWED_ANTIGRAVITY_CU_TOOL_NAMES.has(match[1].toLowerCase())
 }
 
 export function buildAntigravityComputerUsePrompt(
@@ -94,6 +98,32 @@ export function buildAntigravityComputerUsePrompt(
     'Computer Use is already globally authorized in cc-haha Settings for this session. Do not bypass it with osascript, AppleScript, System Events, or shell GUI scripting.',
   ].join('\n')
   return `${header}\n\n${basePrompt}`
+}
+
+const cachedPlatformCuSchemaChars = new Map<'darwin' | 'win32' | 'linux', number>()
+
+/**
+ * Read-only token estimate for the injected Computer Use MCP prompt + tool schemas.
+ * Used by Antigravity context breakdown to attribute baseline tokens honestly.
+ */
+export function estimateAntigravityComputerUseTokens(
+  bridge?: Pick<AntigravityComputerUseBridge, 'systemPromptAppend'> | null,
+  platform: 'darwin' | 'win32' | 'linux' = process.platform === 'win32' || process.platform === 'linux' ? process.platform : 'darwin',
+): number {
+  let schemaChars = cachedPlatformCuSchemaChars.get(platform)
+  if (schemaChars === undefined) {
+    const caps = platform === 'darwin'
+      ? { platform: 'darwin' as const, screenshotFiltering: 'native' as const }
+      : platform === 'win32'
+        ? { platform: 'win32' as const, screenshotFiltering: 'none' as const, teachMode: true }
+        : { platform: 'linux' as const, screenshotFiltering: 'none' as const }
+    schemaChars = JSON.stringify(buildPlatformComputerUseTools(caps, 'pixels')).length
+    cachedPlatformCuSchemaChars.set(platform, schemaChars)
+  }
+  const promptChars = typeof bridge?.systemPromptAppend === 'string' && bridge.systemPromptAppend.length > 0
+    ? bridge.systemPromptAppend.length
+    : buildAntigravityComputerUsePrompt(platform).length
+  return Math.ceil((promptChars + schemaChars) / 3.5)
 }
 
 function tokensEqual(expected: string, actual: string): boolean {
@@ -195,14 +225,32 @@ export async function createAntigravityComputerUseBridge(
       if (activeBridgeLock && activeBridgeLock.turn !== lockTurn) {
         throw new Error(formatLockHeldMessage(activeBridgeLock.sessionId))
       }
-      const acquired = await lockOps.tryAcquire(lockTurn)
+      const alreadyOwnedBySelf = activeBridgeLock?.turn === lockTurn
+      if (!alreadyOwnedBySelf) {
+        activeBridgeLock = { sessionId, turn: lockTurn }
+      }
+      let acquired: AcquireResult
+      try {
+        acquired = await lockOps.tryAcquire(lockTurn)
+      } catch (error) {
+        if (!alreadyOwnedBySelf && activeBridgeLock?.turn === lockTurn) {
+          activeBridgeLock = null
+        }
+        throw error
+      }
       if (closed || turnAbort.signal.aborted) {
+        if (!alreadyOwnedBySelf && activeBridgeLock?.turn === lockTurn) {
+          activeBridgeLock = null
+        }
         if (acquired.kind === 'acquired' && acquired.fresh) {
-          await lockOps.release(lockTurn)
+          await lockOps.release(lockTurn).catch(() => false)
         }
         throw new Error('Computer Use cancelled during lock acquisition')
       }
       if (acquired.kind === 'blocked') {
+        if (!alreadyOwnedBySelf && activeBridgeLock?.turn === lockTurn) {
+          activeBridgeLock = null
+        }
         throw new Error(formatLockHeldMessage(acquired.by))
       }
       activeBridgeLock = { sessionId, turn: lockTurn }
@@ -282,25 +330,41 @@ export async function createAntigravityComputerUseBridge(
         }
       }
 
-      const mcpSessionId = req.headers.get('mcp-session-id') ?? undefined
-      let entry = mcpSessionId ? sessions.get(mcpSessionId) : undefined
-      if (!entry) {
-        const server = createBoundServer()
-        const transport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          enableJsonResponse: true,
-          onsessioninitialized: (id) => {
-            sessions.set(id, { server, transport })
-          },
-          onsessionclosed: (id) => {
-            sessions.delete(id)
-          },
-        })
-        await server.connect(transport)
-        entry = { server, transport }
+      const mcpSessionId = req.headers.get('mcp-session-id')?.trim() || undefined
+      if (mcpSessionId) {
+        const entry = sessions.get(mcpSessionId)
+        if (!entry) {
+          return Response.json(
+            { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } },
+            { status: 404 },
+          )
+        }
+        return entry.transport.handleRequest(req, parsedBody !== undefined ? { parsedBody } : undefined)
       }
 
-      return entry.transport.handleRequest(req, parsedBody !== undefined ? { parsedBody } : undefined)
+      const server = createBoundServer()
+      let initializedSessionId: string | undefined
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        enableJsonResponse: true,
+        onsessioninitialized: (id) => {
+          initializedSessionId = id
+          sessions.set(id, { server, transport })
+        },
+        onsessionclosed: (id) => {
+          sessions.delete(id)
+          void server.close().catch(() => {})
+        },
+      })
+      await server.connect(transport)
+      try {
+        return await transport.handleRequest(req, parsedBody !== undefined ? { parsedBody } : undefined)
+      } finally {
+        if (!initializedSessionId) {
+          await transport.close().catch(() => {})
+          await server.close().catch(() => {})
+        }
+      }
     },
   })
 

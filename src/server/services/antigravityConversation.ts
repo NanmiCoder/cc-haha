@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -11,15 +11,18 @@ import {
   type AntigravitySlashCommand,
 } from './antigravityAcp.js'
 import {
+  estimateAntigravityComputerUseTokens,
   isAntigravityComputerUseToolName,
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
 
 const CANCEL_TIMEOUT_MS = 3_000
+const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
+const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,256}$/
 
 type Frame = Record<string, unknown>
 type Option = { optionId: string; name: string; kind?: unknown }
-type PendingPermission = { options: Option[] } & (
+type PendingPermission = { options: Option[]; toolUseId?: string } & (
   | { id: number | string; question?: string }
   | { promptToolUseId: string; question: string }
 )
@@ -39,6 +42,16 @@ type Turn = {
   chunk?: { kind: 'text' | 'thinking'; text: string; index: number }
   nextIndex: number
   started: number
+  apiDurationMs: number
+  decodeDurationMs: number
+  ttftMs?: number
+  modelPhaseStart?: number
+  decodeStart?: number
+  lastChunkAt?: number
+  isCompact: boolean
+  preCompactTokens: number
+  compactCommandXml?: string
+  userUuid?: string
   detached: boolean
   nativeEnd?: { result: Frame; error?: AntigravityError }
   replyOpen: boolean
@@ -75,6 +88,104 @@ type CumulativeUsageState = {
   outputTokens: number
   cacheReadTokens: number
   cacheCreationTokens: number
+  totalAPIDuration: number
+  totalDecodeDuration: number
+  totalTtftDuration: number
+  totalDuration: number
+}
+
+type ContextCategory = {
+  name: string
+  tokens: number
+  color: string
+}
+
+function parseManualCompactPrompt(userContent: Frame[]): { args: string } | null {
+  if (userContent.length === 0) return null
+  const textParts: string[] = []
+  for (const block of userContent) {
+    if (block.type !== 'text' || typeof block.text !== 'string') return null
+    textParts.push(block.text)
+  }
+  const trimmed = textParts.join('\n').trim()
+  if (!/^\/compact(?:\s|$)/i.test(trimmed)) return null
+  return { args: trimmed.slice('/compact'.length).trim() }
+}
+
+function formatCompactLocalCommandXml(args: string): string {
+  return args
+    ? `<command-name>/compact</command-name><command-args>${args}</command-args>`
+    : '<command-name>/compact</command-name>'
+}
+
+function countUserContentChars(userContent: Frame[]): number {
+  let chars = 0
+  for (const block of userContent) {
+    if (block.type === 'text' && typeof block.text === 'string') {
+      chars += block.text.length
+    }
+  }
+  return chars
+}
+
+function buildContextGridRows(
+  categories: ContextCategory[],
+  used: number,
+  maxTokens: number,
+  filledSquares: number,
+): Array<Array<{
+  color: string
+  isFilled: boolean
+  categoryName: string
+  tokens: number
+  percentage: number
+  squareFullness: number
+}>> {
+  const filledCategories = categories.filter(cat => cat.name !== 'Free space' && cat.tokens > 0)
+  const counts = new Array<number>(filledCategories.length).fill(0)
+  if (filledSquares > 0 && used > 0 && filledCategories.length > 0) {
+    const exact = filledCategories.map(cat => (cat.tokens / used) * filledSquares)
+    let assigned = 0
+    for (let i = 0; i < exact.length; i++) {
+      counts[i] = Math.floor(exact[i]!)
+      assigned += counts[i]!
+    }
+    let remainder = filledSquares - assigned
+    const order = exact
+      .map((val, idx) => ({ idx, frac: val - Math.floor(val) }))
+      .sort((a, b) => b.frac - a.frac || a.idx - b.idx)
+    for (let i = 0; i < order.length && remainder > 0; i++) {
+      counts[order[i]!.idx]! += 1
+      remainder -= 1
+    }
+  }
+
+  const cells: Array<{ color: string; isFilled: boolean; categoryName: string }> = []
+  for (let i = 0; i < filledCategories.length; i++) {
+    const cat = filledCategories[i]!
+    const count = counts[i]!
+    for (let j = 0; j < count; j++) {
+      cells.push({ color: cat.color, isFilled: true, categoryName: cat.name })
+    }
+  }
+  while (cells.length < 100) {
+    cells.push({ color: '#a1a1aa', isFilled: false, categoryName: 'Free space' })
+  }
+
+  const tokensPerSquare = Math.round(maxTokens / 100)
+  return Array.from({ length: 10 }, (_, row) =>
+    Array.from({ length: 10 }, (_, col) => {
+      const cell = cells[row * 10 + col]!
+      return {
+        color: cell.color,
+        isFilled: cell.isFilled,
+        categoryName: cell.categoryName,
+        tokens: tokensPerSquare,
+        percentage: 1,
+        squareFullness: cell.isFilled ? 1 : 0,
+      }
+    }),
+  )
 }
 
 function textContent(value: unknown): string {
@@ -180,6 +291,10 @@ function questionInput(question: string, options: Option[]): Frame {
 }
 
 function resolveDefaultAppDataDir(): string {
+  // Never inherit host Antigravity App/IDE's `ANTIGRAVITY_APP_DATA_DIR`:
+  // `agy acp` runs with stripped env and always persists to `~/.gemini/antigravity-cli`.
+  const configured = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR?.trim()
+  if (configured) return configured
   return join(homedir(), '.gemini', 'antigravity-cli')
 }
 
@@ -187,16 +302,25 @@ function resolveDefaultAppDataDir(): string {
 export class AntigravityConversation {
   private turn?: Turn
   private turnDone?: Promise<void>
+  private appendChain: Promise<void> = Promise.resolve()
   private listening = false
   // 原生工具的寿命可以超过一次 prompt；null 记住已转发的终态，防止重复输出结果。
   private tools = new Map<string, Frame | null>()
+  private toolStartedAt = new Map<string, number>()
   private availableCommands: AntigravitySlashCommand[] = []
   private contextUsage?: ContextUsageState
+  private firstTurnBaselineTokens?: number
+  private firstTurnUserChars?: number
+  private baselineDiskChecked = false
   private cumulativeUsage: CumulativeUsageState = {
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    totalAPIDuration: 0,
+    totalDecodeDuration: 0,
+    totalTtftDuration: 0,
+    totalDuration: 0,
   }
   private readonly subagentNameCache = new Map<string, string>()
   private readonly claimedSubagentIds = new Set<string>()
@@ -232,37 +356,132 @@ export class AntigravityConversation {
     return this.availableCommands
   }
 
+  private readBaselineFromAntigravityTranscript(): number | undefined {
+    const nativeSessionId = this.acp.sessionId
+    if (!nativeSessionId || !SAFE_SESSION_ID_RE.test(nativeSessionId)) return undefined
+    const transcriptPath = join(
+      this.antigravityAppDataDir,
+      'brain',
+      nativeSessionId,
+      '.system_generated',
+      'logs',
+      'transcript.jsonl',
+    )
+    let fd: number | undefined
+    try {
+      fd = openSync(transcriptPath, 'r')
+      const buffer = Buffer.alloc(TRANSCRIPT_BASELINE_SCAN_BYTES)
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, 0)
+      if (bytesRead <= 0) return undefined
+      let chunk = buffer.subarray(0, bytesRead).toString('utf8')
+      if (bytesRead === buffer.length) {
+        const lastNewline = chunk.lastIndexOf('\n')
+        if (lastNewline >= 0) chunk = chunk.slice(0, lastNewline)
+      }
+      let firstUserChars: number | undefined
+      for (const rawLine of chunk.split(/\r?\n/)) {
+        const line = rawLine.trim()
+        if (!line) continue
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(line)
+        } catch {
+          continue
+        }
+        const step = acpObject(parsed)
+        if (!step) continue
+        const stepType = typeof step.type === 'string' ? step.type.toUpperCase() : ''
+        const stepSource = typeof step.source === 'string' ? step.source.toUpperCase() : ''
+        if (firstUserChars === undefined && (stepType === 'USER_INPUT' || stepSource === 'USER_EXPLICIT')) {
+          firstUserChars = typeof step.content === 'string' ? step.content.length : 0
+          continue
+        }
+        if (stepType === 'PLANNER_RESPONSE') {
+          const stepIn = typeof step.input_tokens === 'number' && Number.isFinite(step.input_tokens) ? step.input_tokens : 0
+          const stepCache = typeof step.cache_read_tokens === 'number' && Number.isFinite(step.cache_read_tokens) ? step.cache_read_tokens : 0
+          const observedPromptTokens = stepIn + stepCache
+          if (observedPromptTokens > 0) {
+            const estimatedUserTokens = Math.ceil((firstUserChars ?? 0) / 3.5)
+            return Math.max(0, observedPromptTokens - estimatedUserTokens)
+          }
+        }
+      }
+      return undefined
+    } catch {
+      return undefined
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd)
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  private ensureFirstTurnBaselineFromDisk(): void {
+    if (this.firstTurnBaselineTokens !== undefined || this.baselineDiskChecked) return
+    this.baselineDiskChecked = true
+    const fromDisk = this.readBaselineFromAntigravityTranscript()
+    if (fromDisk !== undefined) {
+      this.firstTurnBaselineTokens = fromDisk
+    }
+  }
+
+  private captureFirstTurnBaseline(observedPromptTokens: number): void {
+    if (this.firstTurnBaselineTokens !== undefined || observedPromptTokens <= 0) return
+    this.ensureFirstTurnBaselineFromDisk()
+    if (this.firstTurnBaselineTokens !== undefined) return
+    const estimatedUserTokens = Math.ceil((this.firstTurnUserChars ?? 0) / 3.5)
+    this.firstTurnBaselineTokens = Math.max(0, observedPromptTokens - estimatedUserTokens)
+  }
+
   getContextUsageSnapshot(): Record<string, unknown> {
+    this.ensureFirstTurnBaselineFromDisk()
     const used = this.contextUsage?.used ?? 0
     const maxTokens = this.contextUsage?.size && this.contextUsage.size > 0 ? this.contextUsage.size : 200_000
     const percentage = maxTokens > 0 ? Math.min(100, Math.round((used / maxTokens) * 100)) : 0
     const freeTokens = Math.max(0, maxTokens - used)
     const filledSquares = Math.min(100, Math.max(0, percentage))
-    return {
-      categories: [
+
+    let categories: ContextCategory[]
+    let estimateOnly = false
+    if (used > 0 && this.firstTurnBaselineTokens !== undefined && this.firstTurnBaselineTokens > 0) {
+      const baseline = Math.min(used, this.firstTurnBaselineTokens)
+      const messageTokens = Math.max(0, used - baseline)
+      categories = []
+      if (this.computerUseBridge?.isEnabled()) {
+        const cuTokens = Math.min(baseline, estimateAntigravityComputerUseTokens(this.computerUseBridge))
+        const systemAndToolsTokens = baseline - cuTokens
+        if (systemAndToolsTokens > 0) {
+          categories.push({ name: 'System & tools', tokens: systemAndToolsTokens, color: '#6366f1' })
+        }
+        if (cuTokens > 0) {
+          categories.push({ name: 'MCP tools (Computer Use)', tokens: cuTokens, color: '#0ea5e9' })
+        }
+      } else {
+        categories.push({ name: 'System & tools', tokens: baseline, color: '#6366f1' })
+      }
+      if (messageTokens > 0) {
+        categories.push({ name: 'Messages', tokens: messageTokens, color: '#7c3aed' })
+      }
+      categories.push({ name: 'Free space', tokens: freeTokens, color: '#a1a1aa' })
+      estimateOnly = true
+    } else {
+      categories = [
         { name: 'Messages', tokens: used, color: '#7c3aed' },
         { name: 'Free space', tokens: freeTokens, color: '#a1a1aa' },
-      ],
+      ]
+    }
+
+    return {
+      categories,
       totalTokens: used,
       maxTokens,
       rawMaxTokens: maxTokens,
       percentage,
-      gridRows: Array.from({ length: 10 }, (_, row) =>
-        Array.from({ length: 10 }, (_, col) => {
-          const index = row * 10 + col
-          const isFilled = index < filledSquares
-          return {
-            color: isFilled ? '#7c3aed' : '#a1a1aa',
-            isFilled,
-            categoryName: isFilled ? 'Messages' : 'Free space',
-            tokens: Math.round(maxTokens / 100),
-            percentage: 1,
-            squareFullness: isFilled ? 1 : 0,
-          }
-        }),
-      ),
+      gridRows: buildContextGridRows(categories, used, maxTokens, filledSquares),
       model: this.acp.modelId ?? 'Antigravity',
-      estimateOnly: false,
+      estimateOnly,
       memoryFiles: [],
       mcpTools: [],
       agents: [],
@@ -281,10 +500,10 @@ export class AntigravityConversation {
       totalCostUSD: 0,
       costDisplay: '$0.00',
       hasUnknownModelCost: true,
-      totalAPIDuration: 0,
-      totalDecodeDuration: 0,
-      totalTtftDuration: 0,
-      totalDuration: 0,
+      totalAPIDuration: this.cumulativeUsage.totalAPIDuration,
+      totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration,
+      totalTtftDuration: this.cumulativeUsage.totalTtftDuration,
+      totalDuration: this.cumulativeUsage.totalDuration,
       totalLinesAdded: 0,
       totalLinesRemoved: 0,
       totalInputTokens: this.cumulativeUsage.inputTokens,
@@ -316,6 +535,7 @@ export class AntigravityConversation {
     await this.acp.drained
     this.listening = false
     this.tools.clear()
+    this.toolStartedAt.clear()
     void this.computerUseBridge?.releaseLock()
     const turn = this.turn
     if (turn) {
@@ -349,9 +569,31 @@ export class AntigravityConversation {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'The selected Antigravity CLI cannot receive these attachments.')
     }
     this.computerUseBridge?.resetTurnAbort()
-    for (const [id, tool] of this.tools) if (!tool) this.tools.delete(id)
+    for (const [id, tool] of this.tools) {
+      if (!tool) {
+        this.tools.delete(id)
+        this.toolStartedAt.delete(id)
+      }
+    }
+    const compactCommand = parseManualCompactPrompt(userContent)
+    const preCompactTokens = compactCommand ? (this.contextUsage?.used ?? 0) : 0
+    if (!compactCommand && this.firstTurnBaselineTokens === undefined && this.firstTurnUserChars === undefined) {
+      this.firstTurnUserChars = countUserContentChars(userContent)
+    }
     const turn = this.beginTurn(false)
-    void this.run(turn, prompt, { type: 'user', uuid, message: { role: 'user', content: userContent } })
+    if (compactCommand) {
+      turn.isCompact = true
+      turn.preCompactTokens = preCompactTokens
+      turn.compactCommandXml = formatCompactLocalCommandXml(compactCommand.args)
+      turn.userUuid = uuid
+    }
+    void this.run(
+      turn,
+      prompt,
+      compactCommand
+        ? undefined
+        : { type: 'user', uuid, timestamp: new Date().toISOString(), message: { role: 'user', content: userContent } },
+    )
     return true
   }
 
@@ -360,9 +602,11 @@ export class AntigravityConversation {
     if (turn?.cancelled) return true
     this.listening = false
     this.tools.clear()
+    this.toolStartedAt.clear()
     this.computerUseBridge?.abortCurrentTurn()
     const sent = this.acp.cancel()
     if (!turn) return sent
+    this.pauseModelPhase(turn)
     turn.cancelled = true
     if (!turn.nativeEnd) {
       // 截止时间属于 ACP 回合，不受 WebSocket 重连或下一条输入影响。
@@ -407,7 +651,11 @@ export class AntigravityConversation {
       return true
     }
     if (!this.replyPermission(pending.id, choice)) return false
+    if (allowed && pending.toolUseId) {
+      this.toolStartedAt.set(pending.toolUseId, Date.now())
+    }
     turn.permissions.delete(requestId)
+    this.maybeResumeModelPhase(turn)
     this.maybeFinish(turn)
     return true
   }
@@ -444,6 +692,15 @@ export class AntigravityConversation {
     return childConversationId.slice(0, 8)
   }
 
+  private extractConversationIdFromText(text: string): string | undefined {
+    if (!text) return undefined
+    const jsonMatch = text.match(/"(?:conversationId|conversation_id|agentId|agent_id)"\s*:\s*"([A-Za-z0-9_-]{8,128})"/)
+    if (jsonMatch?.[1]) return jsonMatch[1]
+    const lineMatch = text.match(/(?:^|\n)\s*(?:conversationId|conversation_id|agentId|agent_id)\s*[:=]\s*([A-Za-z0-9_-]{8,128})\b/)
+    if (lineMatch?.[1]) return lineMatch[1]
+    return undefined
+  }
+
   private resolveChildConversationIdForInvoke(tool: Frame): string | undefined {
     const rawOutput = acpObject(tool.rawOutput)
     const direct = firstString(rawOutput?.conversationId, rawOutput?.conversation_id, rawOutput?.agentId, rawOutput?.agent_id)
@@ -451,36 +708,60 @@ export class AntigravityConversation {
       this.claimedSubagentIds.add(direct)
       return direct
     }
+    const contentText = toolContent(tool)
+    const fromContent = this.extractConversationIdFromText(contentText)
+    if (fromContent) {
+      this.claimedSubagentIds.add(fromContent)
+      return fromContent
+    }
+    if (Array.isArray(tool.content)) {
+      for (const item of tool.content) {
+        const record = acpObject(item)
+        const nested = acpObject(record?.content)
+        const candidateId = firstString(
+          record?.conversationId,
+          record?.conversation_id,
+          record?.agentId,
+          record?.agent_id,
+          nested?.conversationId,
+          nested?.conversation_id,
+        ) ?? (typeof nested?.text === 'string' ? this.extractConversationIdFromText(nested.text) : undefined)
+        if (candidateId) {
+          this.claimedSubagentIds.add(candidateId)
+          return candidateId
+        }
+      }
+    }
     const rawInput = acpObject(tool.rawInput) ?? acpObject(tool.args) ?? {}
-    const expectedType = typeof rawInput.TypeName === 'string' ? rawInput.TypeName : undefined
-    const expectedRole = typeof rawInput.Role === 'string' ? rawInput.Role : undefined
+    const expectedType = typeof rawInput.TypeName === 'string' && rawInput.TypeName.trim()
+      ? rawInput.TypeName.trim()
+      : undefined
+    const expectedRole = typeof rawInput.Role === 'string' && rawInput.Role.trim()
+      ? rawInput.Role.trim()
+      : undefined
     const subagentsDir = join(this.antigravityAppDataDir, 'brain', this.acp.sessionId, '.system_generated', 'subagents')
     try {
       const files = readdirSync(subagentsDir).filter(name => name.endsWith('.json'))
-      const candidates: Array<{ id: string; spawnStepIndex: number; matchesType: boolean; matchesRole: boolean }> = []
+      const candidates: Array<{ id: string; spawnStepIndex: number }> = []
       for (const file of files) {
         try {
           const parsed = JSON.parse(readFileSync(join(subagentsDir, file), 'utf8')) as Record<string, unknown>
           const id = typeof parsed.conversationId === 'string' ? parsed.conversationId : file.slice(0, -5)
           if (!id || this.claimedSubagentIds.has(id)) continue
           const desc = acpObject(parsed.subagentDescriptor)
-          const matchesType = !expectedType || desc?.typeName === expectedType
-          const matchesRole = !expectedRole || desc?.role === expectedRole
-          if (!matchesType && !matchesRole) continue
+          const descType = typeof desc?.typeName === 'string' ? desc.typeName : undefined
+          const descRole = typeof desc?.role === 'string' ? desc.role : undefined
+          // Exclude Swarm workers from invoke_subagent resolution.
+          if (descType === 'worker' && descRole?.startsWith('Swarm Worker')) continue
+          if (expectedType && descType !== expectedType) continue
+          if (expectedRole && descRole !== expectedRole) continue
           candidates.push({
             id,
             spawnStepIndex: typeof parsed.spawnStepIndex === 'number' ? parsed.spawnStepIndex : Number.MAX_SAFE_INTEGER,
-            matchesType,
-            matchesRole,
           })
         } catch { /* ignore individual malformed file */ }
       }
-      candidates.sort((a, b) => {
-        const scoreA = (a.matchesType ? 2 : 0) + (a.matchesRole ? 1 : 0)
-        const scoreB = (b.matchesType ? 2 : 0) + (b.matchesRole ? 1 : 0)
-        if (scoreB !== scoreA) return scoreB - scoreA
-        return a.spawnStepIndex - b.spawnStepIndex
-      })
+      candidates.sort((a, b) => a.spawnStepIndex - b.spawnStepIndex || a.id.localeCompare(b.id))
       const winner = candidates[0]
       if (winner) {
         this.claimedSubagentIds.add(winner.id)
@@ -601,6 +882,55 @@ export class AntigravityConversation {
       }
     }
 
+    if (rawName === 'read_file' || rawName === 'view_file') {
+      const filePath = firstString(rawInput.Path, rawInput.AbsolutePath, rawInput.file_path, locationPath) ?? ''
+      return {
+        name: 'Read',
+        input: {
+          ...rawInput,
+          ...(filePath ? { file_path: filePath } : {}),
+        },
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
+    if (rawName === 'list_dir' || rawName === 'find_by_name') {
+      const targetPath = firstString(rawInput.DirectoryPath, rawInput.SearchDirectory, rawInput.path, locationPath) ?? ''
+      const pattern = firstString(rawInput.Pattern, rawInput.pattern) ?? '*'
+      return {
+        name: 'Glob',
+        input: {
+          ...rawInput,
+          pattern,
+          ...(targetPath ? { path: targetPath } : {}),
+        },
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
+    if (rawName === 'grep_search') {
+      const targetPath = firstString(rawInput.SearchPath, rawInput.path, locationPath) ?? ''
+      const pattern = firstString(rawInput.Query, rawInput.pattern) ?? ''
+      return {
+        name: 'Grep',
+        input: {
+          ...rawInput,
+          ...(pattern ? { pattern } : {}),
+          ...(targetPath ? { path: targetPath } : {}),
+        },
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
     return {
       name: fallbackToolName(tool),
       input: rawInput,
@@ -614,7 +944,9 @@ export class AntigravityConversation {
   private beginTurn(detached: boolean): Turn {
     const { promise, resolve } = Promise.withResolvers<void>()
     const turn: Turn = {
-      entries: [], permissions: new Map(), nextIndex: 0, started: Date.now(), detached,
+      entries: [], permissions: new Map(), nextIndex: 0, started: Date.now(),
+      apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
+      detached,
       nativeEnd: detached ? { result: {} } : undefined,
       replyOpen: false, finishing: false, cancelled: false, resolve,
     }
@@ -625,6 +957,54 @@ export class AntigravityConversation {
       this.stream({ type: 'message_start' })
     }
     return turn
+  }
+
+  private hasActiveNonDaemonWork(turn: Turn): boolean {
+    if (turn.permissions.size > 0) return true
+    for (const tool of this.tools.values()) {
+      if (tool && !toolHasFinished(tool) && acpObject(tool.rawInput)?.IsDaemon !== true) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private startModelPhase(turn: Turn, now = Date.now()): void {
+    if (turn.modelPhaseStart !== undefined) return
+    turn.modelPhaseStart = now
+    turn.decodeStart = undefined
+    turn.lastChunkAt = undefined
+  }
+
+  private pauseModelPhase(turn: Turn, now = Date.now()): void {
+    if (turn.modelPhaseStart === undefined) return
+    turn.apiDurationMs += Math.max(0, now - turn.modelPhaseStart)
+    if (turn.decodeStart !== undefined && turn.lastChunkAt !== undefined) {
+      turn.decodeDurationMs += Math.max(0, turn.lastChunkAt - turn.decodeStart)
+    }
+    turn.modelPhaseStart = undefined
+    turn.decodeStart = undefined
+    turn.lastChunkAt = undefined
+  }
+
+  private recordModelChunk(turn: Turn, now = Date.now()): void {
+    if (turn.modelPhaseStart === undefined) {
+      this.startModelPhase(turn, now)
+    }
+    if (turn.decodeStart === undefined) {
+      turn.decodeStart = now
+      if (turn.ttftMs === undefined) {
+        turn.ttftMs = Math.max(0, now - turn.modelPhaseStart!)
+      }
+    }
+    turn.lastChunkAt = now
+  }
+
+  private maybeResumeModelPhase(turn: Turn, now = Date.now()): void {
+    if (turn.cancelled || turn.finishing || turn.nativeEnd) return
+    if (!this.hasActiveNonDaemonWork(turn)) {
+      this.startModelPhase(turn, now)
+    }
   }
 
   private replyPermission(id: number | string, choice?: Option): boolean {
@@ -641,14 +1021,35 @@ export class AntigravityConversation {
     turn.permissions.clear()
   }
 
+  private enqueueAppend(entries: Frame[]): Promise<void> {
+    if (entries.length === 0) return this.appendChain
+    const batch = entries.slice()
+    const next = this.appendChain.catch(() => undefined).then(() => this.append(batch))
+    this.appendChain = next
+    void next.catch(() => undefined)
+    return next
+  }
+
   private async run(turn: Turn, prompt: Frame[], user?: Frame): Promise<void> {
     let error: AntigravityError | undefined
     let result: Frame = {}
     try {
-      if (user) await this.append([user])
+      if (user) await this.enqueueAppend([user])
+      else if (turn.isCompact) await this.appendChain.catch(() => undefined)
       if (!turn.cancelled) {
-        if (user) this.emit({ ...user, isReplay: true })
+        if (turn.isCompact) {
+          this.emit({
+            type: 'system',
+            subtype: 'local_command',
+            uuid: turn.userUuid ?? crypto.randomUUID(),
+            content: turn.compactCommandXml ?? '<command-name>/compact</command-name>',
+          })
+          this.emit({ type: 'system', subtype: 'status', status: 'compacting' })
+        } else if (user) {
+          this.emit({ ...user, isReplay: true })
+        }
         this.listening = true
+        this.startModelPhase(turn)
         result = await this.acp.prompt(prompt)
         if (result.stopReason === 'refusal') {
           error = new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Antigravity declined the request.')
@@ -656,6 +1057,8 @@ export class AntigravityConversation {
       }
     } catch (cause) {
       error = cause instanceof AntigravityError ? cause : new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Could not save the Antigravity conversation.')
+    } finally {
+      this.pauseModelPhase(turn)
     }
     clearTimeout(turn.cancelTimer)
     this.finishPromptQuestion(turn, result.stopReason === 'end_turn' && !turn.cancelled && !error)
@@ -695,17 +1098,46 @@ export class AntigravityConversation {
   }
 
   private async finish(turn: Turn, end: NonNullable<Turn['nativeEnd']>): Promise<void> {
+    this.pauseModelPhase(turn)
     let error = end.error
+    let compactBoundaryEvent: Frame | undefined
     try {
       do {
         this.flushChunk(turn)
-        if (turn.entries.length) await this.append(turn.entries.splice(0))
+        if (turn.entries.length) await this.enqueueAppend(turn.entries.splice(0))
+        else await this.appendChain
         // 通过同一双工管道，后台事件可能在上一次历史写入期间继续到达。
         if (this.awaitsBackgroundWork(turn)) {
           turn.finishing = false
           return
         }
       } while (turn.entries.length || turn.chunk)
+      if (turn.isCompact && !turn.cancelled && !error) {
+        const compactUuid = crypto.randomUUID()
+        const compactTimestamp = new Date().toISOString()
+        const preTokens = turn.preCompactTokens
+        const liveBoundary: Frame = {
+          type: 'system',
+          subtype: 'compact_boundary',
+          uuid: compactUuid,
+          timestamp: compactTimestamp,
+          compact_metadata: {
+            trigger: 'manual',
+            ...(preTokens > 0 ? { pre_tokens: preTokens } : {}),
+          },
+        }
+        const persistedBoundary: Frame = {
+          ...liveBoundary,
+          content: 'Conversation compacted',
+          message: { role: 'system', content: 'Conversation compacted' },
+          compactMetadata: {
+            trigger: 'manual',
+            ...(preTokens > 0 ? { preTokens } : {}),
+          },
+        }
+        await this.enqueueAppend([persistedBoundary])
+        compactBoundaryEvent = liveBoundary
+      }
     } catch {
       error = new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Could not save the Antigravity response.')
     }
@@ -713,28 +1145,49 @@ export class AntigravityConversation {
     this.cancelPermissions(turn)
     this.turn = undefined
     const failed = !turn.cancelled && error
+    if (turn.isCompact) {
+      if (compactBoundaryEvent && !turn.cancelled && !error) {
+        this.emit(compactBoundaryEvent)
+      } else {
+        this.emit({ type: 'system', subtype: 'status', status: null })
+      }
+    }
     if (failed) this.emit({ type: 'assistant', error: failed.code, isApiErrorMessage: true, message: { content: [{ type: 'text', text: failed.message }] } })
     const usage = acpObject(end.result.usage)
-    const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : 0
-    const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : 0
-    const cacheReadTokens = typeof usage?.cachedReadTokens === 'number'
+    const inputTokens = typeof usage?.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0
+    const rawOutputTokens = typeof usage?.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0
+    const thoughtTokens = typeof usage?.thoughtTokens === 'number' && Number.isFinite(usage.thoughtTokens) ? usage.thoughtTokens : 0
+    const outputTokens = rawOutputTokens + thoughtTokens
+    const cacheReadTokens = typeof usage?.cachedReadTokens === 'number' && Number.isFinite(usage.cachedReadTokens)
       ? usage.cachedReadTokens
-      : typeof usage?.cacheReadTokens === 'number'
+      : typeof usage?.cacheReadTokens === 'number' && Number.isFinite(usage.cacheReadTokens)
         ? usage.cacheReadTokens
         : 0
-    const cacheCreationTokens = typeof usage?.cachedWriteTokens === 'number'
+    const cacheCreationTokens = typeof usage?.cachedWriteTokens === 'number' && Number.isFinite(usage.cachedWriteTokens)
       ? usage.cachedWriteTokens
-      : typeof usage?.cacheCreationTokens === 'number'
+      : typeof usage?.cacheCreationTokens === 'number' && Number.isFinite(usage.cacheCreationTokens)
         ? usage.cacheCreationTokens
         : 0
+    const observedPromptTokens = inputTokens + cacheReadTokens + cacheCreationTokens
+    if (!turn.isCompact && observedPromptTokens > 0) {
+      this.captureFirstTurnBaseline(observedPromptTokens)
+    }
+    const totalDurationMs = Math.max(0, Date.now() - turn.started)
     this.cumulativeUsage.inputTokens += inputTokens
     this.cumulativeUsage.outputTokens += outputTokens
     this.cumulativeUsage.cacheReadTokens += cacheReadTokens
     this.cumulativeUsage.cacheCreationTokens += cacheCreationTokens
+    this.cumulativeUsage.totalAPIDuration += turn.apiDurationMs
+    this.cumulativeUsage.totalDecodeDuration += turn.decodeDurationMs
+    this.cumulativeUsage.totalTtftDuration += turn.ttftMs ?? 0
+    this.cumulativeUsage.totalDuration += totalDurationMs
     this.emit({
       type: 'result', subtype: failed ? 'error' : 'success', is_error: Boolean(failed),
       ...(failed ? { result: failed.message } : {}),
-      duration_ms: Date.now() - turn.started,
+      duration_ms: totalDurationMs,
+      duration_api_ms: turn.apiDurationMs,
+      ...(turn.decodeDurationMs > 0 ? { decode_ms: turn.decodeDurationMs } : {}),
+      ...(turn.ttftMs !== undefined ? { ttft_ms: turn.ttftMs } : {}),
       usage: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
@@ -749,6 +1202,7 @@ export class AntigravityConversation {
   private assistant(turn: Turn, content: Frame): void {
     const message = {
       type: 'assistant', uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
       message: { role: 'assistant', model: this.acp.modelId ?? 'Antigravity', content: [content] },
     }
     turn.entries.push(message)
@@ -783,6 +1237,7 @@ export class AntigravityConversation {
     const projected = this.projectTool(tool)
     const id = tool.toolCallId
     if (typeof id !== 'string' || this.tools.has(id)) return projected
+    this.toolStartedAt.set(id, Date.now())
     this.flushChunk(turn)
     this.assistant(turn, {
       type: 'tool_use',
@@ -790,6 +1245,11 @@ export class AntigravityConversation {
       name: overrideName ?? projected.name,
       input: overrideInput ?? projected.input,
     })
+    if (projected.isSubagentInvoke && turn.entries.length > 0) {
+      // Flush invoke_subagent tool_use immediately so clicking an in-progress subagent card
+      // resolves from session history before the parent turn completes.
+      void this.enqueueAppend(turn.entries.splice(0))
+    }
     this.projectToolState(turn, id, tool)
     return projected
   }
@@ -797,9 +1257,15 @@ export class AntigravityConversation {
   private projectToolState(turn: Turn, id: string, tool: Frame): void {
     if (!toolHasFinished(tool)) {
       this.tools.set(id, tool)
+      if (acpObject(tool.rawInput)?.IsDaemon !== true) {
+        this.pauseModelPhase(turn)
+      }
       return
     }
     this.tools.set(id, null)
+    const startedAt = this.toolStartedAt.get(id)
+    this.toolStartedAt.delete(id)
+    const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
     this.flushChunk(turn)
     const answer = turn.promptAnswer?.toolUseId === id ? turn.promptAnswer : undefined
     if (answer) turn.promptAnswer = undefined
@@ -817,10 +1283,13 @@ export class AntigravityConversation {
     }
     const message = {
       type: 'user', uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...(durationMs !== undefined ? { durationMs } : {}),
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: tool.status === 'failed' }] },
     }
     turn.entries.push(message)
     this.emit(message)
+    this.maybeResumeModelPhase(turn)
   }
 
   private receive(method: string, params: Frame, rpcId?: number | string): void {
@@ -879,6 +1348,7 @@ export class AntigravityConversation {
         const text = textContent(update.content)
         if (!text) return
         turn ??= this.beginTurn(true)
+        this.recordModelChunk(turn)
         const question = turn.promptQuestion
         if (update.sessionUpdate === 'agent_message_chunk' && question?.tool.status === 'pending' && question.buffered !== question.echo) {
           const buffered = question.buffered + text
@@ -932,6 +1402,9 @@ export class AntigravityConversation {
             size: size ?? this.contextUsage?.size ?? 200_000,
           }
         }
+        if (used !== undefined && used > 0 && !turn?.isCompact) {
+          this.captureFirstTurnBaseline(used)
+        }
         // AGY 的脱离 prompt 回复以 usage_update 收尾。
         if (turn) turn.replyOpen = false
         break
@@ -944,9 +1417,20 @@ export class AntigravityConversation {
     const options = Array.isArray(rawOptions) ? rawOptions.map(acpObject).flatMap((option): Option[] =>
       typeof option?.optionId === 'string' && typeof option.name === 'string' ? [{ optionId: option.optionId, name: option.name, kind: option.kind }] : []) : []
     const toolUseId = String(tool.toolCallId)
-    const input = acpObject(tool.rawInput) ?? acpObject(tool.args) ?? {}
+    const previousTool = this.tools.get(toolUseId)
+    const definedToolFields = Object.fromEntries(
+      Object.entries(tool).filter(([, value]) => value !== undefined),
+    )
+    const mergedTool: Frame = previousTool
+      ? { ...previousTool, ...definedToolFields }
+      : tool
+    if (previousTool && !toolHasFinished(mergedTool)) {
+      this.tools.set(toolUseId, mergedTool)
+    }
+
+    const input = acpObject(mergedTool.rawInput) ?? acpObject(mergedTool.args) ?? {}
     const question = toolUseId.startsWith('interaction_')
-      ? (typeof input.question === 'string' ? input.question : typeof tool.title === 'string' ? tool.title : undefined)
+      ? (typeof input.question === 'string' ? input.question : typeof mergedTool.title === 'string' ? mergedTool.title : undefined)
       : undefined
     if (toolUseId.startsWith('interaction_') && (!question || options.length === 0 || new Set(options.map(option => option.name)).size !== options.length)) {
       this.replyPermission(rpcId)
@@ -954,12 +1438,12 @@ export class AntigravityConversation {
     }
 
     // Auto-approve our own injected Computer Use MCP server when Computer Use is globally enabled in Settings.
-    const rawToolName = typeof tool.name === 'string' ? tool.name : undefined
+    const rawToolName = typeof mergedTool.name === 'string' ? mergedTool.name : undefined
     if (!question && this.computerUseBridge?.isEnabled() && isAntigravityComputerUseToolName(rawToolName)) {
       const allowOption = options.find(option => option.kind === 'allow_once')
         ?? options.find(option => option.kind === 'allow_always')
       if (allowOption) {
-        this.toolCall(turn, tool)
+        this.toolCall(turn, mergedTool)
         this.replyPermission(rpcId, allowOption)
         return
       }
@@ -974,7 +1458,7 @@ export class AntigravityConversation {
       turn.promptQuestion = undefined
     }
     if (turn.nativeEnd) turn.replyOpen = true
-    this.publishPermission(turn, tool, { id: rpcId, options, question })
+    this.publishPermission(turn, mergedTool, { id: rpcId, options, question, toolUseId })
   }
 
   private publishPermission(turn: Turn, tool: Frame, pending: PendingPermission): void {
@@ -982,9 +1466,11 @@ export class AntigravityConversation {
     const name = pending.question ? 'AskUserQuestion' : projected.name
     const input = pending.question ? questionInput(pending.question, pending.options) : projected.input
     const supportsAllowAlways = !pending.question && pending.options.some(option => option.kind === 'allow_always')
+    const permissionDescription = projected.description ?? projected.displayName
     const requestId = crypto.randomUUID()
     this.toolCall(turn, tool, name, input)
     turn.permissions.set(requestId, pending)
+    this.pauseModelPhase(turn)
     this.emit({
       type: 'control_request',
       request_id: requestId,
@@ -993,8 +1479,8 @@ export class AntigravityConversation {
         tool_name: name,
         tool_use_id: tool.toolCallId,
         input,
-        ...(!pending.question && projected.description ? { description: projected.description } : {}),
-        ...(!pending.question && projected.displayName ? { display_name: projected.displayName } : {}),
+        ...(!pending.question && permissionDescription ? { description: permissionDescription } : {}),
+        ...(!pending.question ? { display_name: 'Antigravity' } : {}),
         ...(!pending.question && projected.antigravityToolName ? { antigravity_tool_name: projected.antigravityToolName } : {}),
         ...(projected.subagentName ? { subagent_name: projected.subagentName } : {}),
         ...(projected.subagentId ? { agent_id: projected.subagentId } : {}),

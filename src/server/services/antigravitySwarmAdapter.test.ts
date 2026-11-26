@@ -6,16 +6,21 @@ import {
   antigravitySwarmTeamName,
   deriveSwarmMemberState,
   extractBoardMentions,
+  forgetAntigravitySwarmSessionMapping,
+  forgetAntigravitySwarmSessionMappingsForSession,
   formatAntigravitySwarmSteerPrompt,
   isAntigravitySwarmTeamName,
+  listRememberedAntigravitySwarmSessions,
   nativeSessionIdFromSwarmTeamName,
   readAntigravitySwarmMemberTranscriptPage,
   readAntigravitySwarmSnapshot,
   readAntigravitySwarmTimeline,
   registerAntigravitySwarmSteerHandler,
+  rememberAntigravitySwarmSessionMapping,
   sendAntigravitySwarmMemberMessage,
   type AntigravitySwarmSteerPayload,
 } from './antigravitySwarmAdapter.js'
+import { TeamWatcher } from './teamWatcher.js'
 
 const tempDirs: string[] = []
 let disposeHandler: (() => void) | null = null
@@ -493,5 +498,183 @@ describe('antigravitySwarmAdapter', () => {
     const appDataDir = await makeTempAppDataDir()
     const snapshot = await readAntigravitySwarmSnapshot('no-such-swarm', { appDataDir })
     expect(snapshot).toBeNull()
+  })
+
+  it('keeps swarmIncarnationId deterministic independent of volatile leadSessionId and returns 409 when steering is busy', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const { nativeSessionId, teamName } = await seedPhase0SwarmFixture(appDataDir, {
+      nativeSessionId: 'incarnation-det-1111-2222-333333333333',
+      readerKilled: false,
+    })
+
+    // Read snapshot BEFORE leadSessionId is known/remembered
+    const beforeLead = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir })
+    expect(beforeLead).not.toBeNull()
+    expect(beforeLead!.team.leadSessionId).toBeUndefined()
+
+    // Read snapshot AFTER leadSessionId is provided
+    const afterLead = await readAntigravitySwarmSnapshot(nativeSessionId, {
+      appDataDir,
+      leadSessionId: 'cc-session-after-restart',
+    })
+    expect(afterLead).not.toBeNull()
+    expect(afterLead!.team.leadSessionId).toBe('cc-session-after-restart')
+    expect(afterLead!.team.incarnationId).toBe(beforeLead!.team.incarnationId)
+
+    // Busy steering handler returns HTTP 409 conflict
+    disposeHandler = registerAntigravitySwarmSteerHandler(async () => ({
+      routed: false,
+      reason: 'busy',
+    }))
+    await expect(
+      sendAntigravitySwarmMemberMessage(teamName, `reader@${teamName}`, 'status?', { appDataDir }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ANTIGRAVITY_SWARM_SESSION_BUSY',
+    })
+  })
+
+  it('projects native swarm_pane plan.json object-map tasks, DAG dependencies, live [done] status, and brief fallback', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const nativeSessionId = 'pane-plan-1111-2222-333333333333'
+    const swarmDir = path.join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+    await fs.mkdir(swarmDir, { recursive: true })
+    await fs.writeFile(
+      path.join(swarmDir, 'swarm.json'),
+      JSON.stringify({ version: 1, backend: 'local', swarm_id: nativeSessionId, created_at: '2026-11-26T13:35:52Z' }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'members.json'),
+      JSON.stringify({
+        title: 'Analyze v0.7.8..v0.8.0 changes',
+        members: {
+          coordinator: { conversation_id: nativeSessionId, role: 'coordinator', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-hydrogen-low' },
+          security: { conversation_id: 'sec-1111', role: 'worker', phase: 'RUNNING', wake_mode: 'mentions', killed: false, model: 'gemini-4-hydrogen-low' },
+          quality: { conversation_id: 'qual-2222', role: 'worker', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-hydrogen-low' },
+          monitor: { conversation_id: 'mon-3333', role: 'worker', phase: 'RUNNING', wake_mode: 'mentions', killed: false, model: 'gemini-4-hydrogen-low' },
+        },
+      }),
+      'utf8',
+    )
+    // 1. Before plan.json is written: derive tasks from board.jsonl briefs (excluding monitor)
+    await fs.writeFile(
+      path.join(swarmDir, 'board.jsonl'),
+      [
+        JSON.stringify({ seq: 1, agent: 'coordinator', kind: 'brief', time: '2026-11-26 05:35:53', text: '@security Audit security boundaries' }),
+        JSON.stringify({ seq: 2, agent: 'coordinator', kind: 'brief', time: '2026-11-26 05:35:54', text: '@quality Review code quality' }),
+        JSON.stringify({ seq: 3, agent: 'coordinator', kind: 'brief', time: '2026-11-26 05:35:55', text: '@monitor Stall monitor' }),
+        JSON.stringify({ seq: 4, agent: 'security', time: '2026-11-26 05:36:10', text: '@coordinator [done] No critical vulnerabilities found.' }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    const beforePlan = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'lead-1' })
+    expect(beforePlan).not.toBeNull()
+    expect(beforePlan!.tasks.map(t => ({ owner: t.owner, status: t.status, blockedBy: t.blockedBy }))).toEqual([
+      { owner: 'security', status: 'completed', blockedBy: [] },
+      { owner: 'quality', status: 'in_progress', blockedBy: [] },
+      { owner: 'coordinator', status: 'pending', blockedBy: ['1', '2'] },
+    ])
+
+    // 2. Write real swarm_pane plan.json object-map + coordinator [done]
+    await fs.writeFile(
+      path.join(swarmDir, 'plan.json'),
+      JSON.stringify({
+        goal: { title: 'Release Change Analysis', line: 'Review security and code quality.' },
+        tasks: {
+          security: 'Audit security risks and boundaries',
+          quality: 'Review code quality and tests',
+        },
+        threads: [{ id: 't-analysis', title: 'Analysis', goal: 'Produce findings', tasks: ['security', 'quality'] }],
+      }),
+      'utf8',
+    )
+    await fs.appendFile(
+      path.join(swarmDir, 'board.jsonl'),
+      [
+        JSON.stringify({ seq: 5, agent: 'quality', time: '2026-11-26 05:36:20', text: '@coordinator [done] Quality looks good.' }),
+        JSON.stringify({ seq: 6, agent: 'coordinator', time: '2026-11-26 05:36:25', text: '[done] Completed full release analysis.' }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    const afterPlan = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'lead-1' })
+    expect(afterPlan).not.toBeNull()
+    expect(afterPlan!.team.description).toBe('Release Change Analysis')
+    expect(afterPlan!.tasks.map(t => ({ id: t.id, owner: t.owner, status: t.status, subject: t.subject, blocks: t.blocks, blockedBy: t.blockedBy }))).toEqual([
+      { id: '1', owner: 'security', status: 'completed', subject: 'Audit security risks and boundaries', blocks: ['3'], blockedBy: [] },
+      { id: '2', owner: 'quality', status: 'completed', subject: 'Review code quality and tests', blocks: ['3'], blockedBy: [] },
+      { id: '3', owner: 'coordinator', status: 'completed', subject: 'Release Change Analysis', blocks: [], blockedBy: ['1', '2'] },
+    ])
+    expect(afterPlan!.team.members.find(m => m.name === 'security')?.status).toBe('completed')
+    expect(afterPlan!.team.members.find(m => m.name === 'coordinator')?.status).toBe('completed')
+  })
+
+  it('TeamWatcher broadcasts team_created and team_workbench_updated for remembered Antigravity Swarms', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const nativeSessionId = 'watcher-swarm-1111-2222-333333333333'
+    const prevEnv = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = appDataDir
+    rememberAntigravitySwarmSessionMapping(nativeSessionId, 'cc-watcher-session')
+
+    const events: Array<{ type: string; teamName?: string; leadSessionId?: string }> = []
+    const watcher = new TeamWatcher((msg, leadSessionId) => {
+      events.push({
+        type: msg.type,
+        teamName: 'teamName' in msg ? msg.teamName : undefined,
+        leadSessionId,
+      })
+    })
+
+    try {
+      // Before swarm files exist -> emits nothing
+      await watcher.checkNow()
+      expect(events).toEqual([])
+
+      // Create swarm on disk -> emits team_created to the lead session
+      await seedPhase0SwarmFixture(appDataDir, { nativeSessionId })
+      await watcher.checkNow()
+      expect(events).toEqual([{
+        type: 'team_created',
+        teamName: antigravitySwarmTeamName(nativeSessionId),
+        leadSessionId: 'cc-watcher-session',
+      }])
+
+      // Unchanged -> no duplicate event
+      await watcher.checkNow()
+      expect(events).toHaveLength(1)
+
+      // Write plan.json -> emits team_workbench_updated
+      const swarmDir = path.join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+      await fs.writeFile(
+        path.join(swarmDir, 'plan.json'),
+        JSON.stringify({ goal: { title: 'Updated Goal' }, tasks: { reader: 'Read note.txt' } }),
+        'utf8',
+      )
+      await watcher.checkNow()
+      expect(events).toHaveLength(2)
+      expect(events[1]).toEqual({
+        type: 'team_workbench_updated',
+        teamName: antigravitySwarmTeamName(nativeSessionId),
+        leadSessionId: 'cc-watcher-session',
+      })
+
+      // Forgetting by cc-haha sessionId removes the mapping and stops further watcher broadcasts.
+      forgetAntigravitySwarmSessionMappingsForSession('cc-watcher-session')
+      expect(listRememberedAntigravitySwarmSessions().some(entry => entry.nativeSessionId === nativeSessionId)).toBe(false)
+      await fs.writeFile(
+        path.join(swarmDir, 'plan.json'),
+        JSON.stringify({ goal: { title: 'After Clear' }, tasks: { reader: 'Read note.txt' } }),
+        'utf8',
+      )
+      await watcher.checkNow()
+      expect(events).toHaveLength(2)
+    } finally {
+      watcher.reset()
+      forgetAntigravitySwarmSessionMapping(nativeSessionId)
+      if (prevEnv === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevEnv
+    }
   })
 })

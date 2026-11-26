@@ -43,7 +43,8 @@ import { getMobileSessionActivity } from '../services/mobileSessionActivityRunti
 import { getPowerActivitySnapshot } from '../services/powerActivityRuntime.js'
 import { handlePowerActivityLease } from '../services/powerActivityLease.js'
 import { conversationService } from '../services/conversationService.js'
-import { ANTIGRAVITY_PROVIDER_ID } from '../services/antigravityAcp.js'
+import { ANTIGRAVITY_PROVIDER_ID, AntigravityError } from '../services/antigravityAcp.js'
+import { forgetAntigravitySwarmSessionMappingsForSession } from '../services/antigravitySwarmAdapter.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import {
@@ -541,6 +542,12 @@ export async function handleSessionsApi(
         if (!result.agentId) {
           throw ApiError.conflict(`SubAgent run has no resumable agent id: ${toolUseId}`)
         }
+        if (!result.canSendMessage) {
+          const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+          if (launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+            throw ApiError.conflict('Antigravity subagent runs are read-only and do not accept follow-up messages.')
+          }
+        }
         await ensureCliSessionStartedForControl(sessionId, url)
         const response = await conversationService.requestControl(sessionId, {
           subtype: 'send_agent_message',
@@ -580,6 +587,9 @@ export async function handleSessionsApi(
         )
     }
   } catch (error) {
+    if (error instanceof AntigravityError && error.code === 'ANTIGRAVITY_UNSUPPORTED') {
+      return errorResponse(new ApiError(409, error.message, error.code))
+    }
     const code = (error as { code?: string } | null)?.code
     const status = code === 'TRACE_PAGE_STALE' || code === 'HISTORY_PAGE_STALE' ? 409
       : code === 'TRACE_RECORD_TOO_LARGE' ? 413
@@ -1327,6 +1337,7 @@ async function deleteSession(sessionId: string): Promise<Response> {
     throw error
   }
   closeSessionConnection(sessionId, 'session deleted')
+  forgetAntigravitySwarmSessionMappingsForSession(sessionId)
   emitSessionTurnEvent({ type: 'deleted', sessionId })
   cleanupAdapterSessionMappings(sessionId)
   recentProjectsCache = null
@@ -1353,6 +1364,7 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
+    forgetAntigravitySwarmSessionMappingsForSession(sessionId)
     emitSessionTurnEvent({ type: 'deleted', sessionId })
     cleanupAdapterSessionMappings(sessionId)
     void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))

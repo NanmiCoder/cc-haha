@@ -14,7 +14,8 @@ import {
 } from './antigravityTranscriptAdapter.js'
 
 const tempDirs: string[] = []
-const originalEnvAppDataDir = process.env.ANTIGRAVITY_APP_DATA_DIR
+const originalEnvAppDataDir = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+const originalHostEnvAppDataDir = process.env.ANTIGRAVITY_APP_DATA_DIR
 
 async function makeTempAppDataDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-transcript-adapter-test-'))
@@ -36,9 +37,14 @@ async function writeBrainFile(
 
 afterEach(async () => {
   if (originalEnvAppDataDir === undefined) {
+    delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+  } else {
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = originalEnvAppDataDir
+  }
+  if (originalHostEnvAppDataDir === undefined) {
     delete process.env.ANTIGRAVITY_APP_DATA_DIR
   } else {
-    process.env.ANTIGRAVITY_APP_DATA_DIR = originalEnvAppDataDir
+    process.env.ANTIGRAVITY_APP_DATA_DIR = originalHostEnvAppDataDir
   }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!
@@ -118,10 +124,13 @@ const RESEARCH_CHILD_LINES = [
 ]
 
 describe('antigravityTranscriptAdapter', () => {
-  it('resolves app data dir from override or env without mutating disk', async () => {
+  it('resolves app data dir from override or CC_HAHA env while ignoring host ANTIGRAVITY_APP_DATA_DIR', async () => {
     const dir = await makeTempAppDataDir()
     expect(resolveAntigravityAppDataDir(dir)).toBe(path.resolve(dir))
-    process.env.ANTIGRAVITY_APP_DATA_DIR = dir
+    delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.ANTIGRAVITY_APP_DATA_DIR = '/tmp/host-ide-antigravity-should-be-ignored'
+    expect(resolveAntigravityAppDataDir()).toBe(path.join(os.homedir(), '.gemini', 'antigravity-cli'))
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = dir
     expect(resolveAntigravityAppDataDir()).toBe(path.resolve(dir))
     expect(isSafeAntigravityId('cbce3c87-0047-4ac1-83a6-683ca132ffcc')).toBe(true)
     expect(isSafeAntigravityId('../etc/passwd')).toBe(false)

@@ -8,10 +8,14 @@ export const ANTIGRAVITY_DEFAULT_MODEL = 'agent-default'
 export const ANTIGRAVITY_CLIENT_INFO = { name: 'cc-haha', version: '0.8.0' } as const
 
 const REQUEST_TIMEOUT = 15_000
+const DISCOVERY_EXIT_TIMEOUT_MS = 2_000
+const DISCOVERY_KILL_GRACE_MS = 1_000
 const MAX_FRAME_CHARS = 16 * 1024 * 1024
 const LOGIN_MESSAGE = 'Antigravity CLI is not signed in. Run `agy acp --login` in a terminal on the server machine, then retry.'
 const BYPASS_CAPABILITY_UNAVAILABLE =
   'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions'
+export const ANTIGRAVITY_BYPASS_EXIT_REQUIRES_RESTART =
+  'Cannot leave bypassPermissions in-process because the Antigravity session was launched with --dangerously-skip-permissions'
 
 type RpcObject = Record<string, unknown>
 type RpcId = string | number
@@ -437,21 +441,40 @@ export class AntigravityAcp {
   close(signal?: NodeJS.Signals) { this.rpc.close(signal) }
 
   private syncConfigOptionsFromResponse(response: RpcObject): void {
+    const hasConfigOptions = Array.isArray(response.configOptions)
     const model = configOption(response, 'model')
     if (typeof model?.id === 'string') this.modelConfigId = model.id
     if (typeof model?.currentValue === 'string') this.modelId = model.currentValue
     const effort = configOption(response, 'thought_level')
-    if (typeof effort?.id === 'string') this.effortConfigId = effort.id
-    if (typeof effort?.currentValue === 'string') this.effortLevel = effort.currentValue
-    const effortChoices = selectOptionEntries(effort?.options).map(o => o.id)
-    if (effortChoices.length > 0) this.availableEfforts = effortChoices
+    if (effort) {
+      this.effortConfigId = typeof effort.id === 'string' ? effort.id : undefined
+      this.effortLevel = typeof effort.currentValue === 'string' ? effort.currentValue : undefined
+      this.availableEfforts = selectOptionEntries(effort.options).map(o => o.id)
+    } else if (hasConfigOptions) {
+      this.effortConfigId = undefined
+      this.effortLevel = undefined
+      this.availableEfforts = []
+    }
+    const prevById = new Map(this.availableModels.map(entry => [entry.id, entry]))
     const modelChoices = selectOptionEntries(model?.options)
     if (modelChoices.length > 0) {
-      this.availableModels = modelChoices.map(entry => ({
-        ...entry,
-        ...(this.availableEfforts.length > 0 ? { supportedReasoningEfforts: this.availableEfforts } : {}),
-        ...(this.effortLevel ? { defaultReasoningEffort: this.effortLevel } : {}),
-      }))
+      this.availableModels = modelChoices.map(entry => {
+        if (entry.id === this.modelId) {
+          return {
+            ...entry,
+            supportedReasoningEfforts: [...this.availableEfforts],
+            ...(this.effortLevel ? { defaultReasoningEffort: this.effortLevel } : {}),
+          }
+        }
+        const prev = prevById.get(entry.id)
+        return {
+          ...entry,
+          ...(prev?.supportedReasoningEfforts !== undefined
+            ? { supportedReasoningEfforts: [...prev.supportedReasoningEfforts] }
+            : {}),
+          ...(prev?.defaultReasoningEffort ? { defaultReasoningEffort: prev.defaultReasoningEffort } : {}),
+        }
+      })
     }
     const mode = configOption(response, 'mode')
     if (typeof mode?.id === 'string') this.modeConfigId = mode.id
@@ -461,6 +484,49 @@ export class AntigravityAcp {
       const mapped = acpModeToCcHahaPermissionMode(mode.currentValue)
       if (mapped) this.permissionMode = mapped
     }
+  }
+
+  /**
+   * Probes each advertised model's `thought_level` options via local in-memory
+   * `session/set_config_option` calls (only used during short-lived discovery).
+   */
+  async probeAllModelEfforts(): Promise<AntigravityModelInfo[]> {
+    if (!this.modelConfigId || this.availableModels.length <= 1) {
+      return this.availableModels
+    }
+    const probed: AntigravityModelInfo[] = []
+    const initialModelId = this.modelId
+    for (const entry of this.availableModels) {
+      if (entry.id === initialModelId) {
+        probed.push({
+          id: entry.id,
+          name: entry.name,
+          supportedReasoningEfforts: [...this.availableEfforts],
+          ...(this.effortLevel ? { defaultReasoningEffort: this.effortLevel } : {}),
+        })
+        continue
+      }
+      try {
+        const selection = await this.rpc.request('session/set_config_option', {
+          sessionId: this.sessionId,
+          configId: this.modelConfigId,
+          value: entry.id,
+        })
+        const effortOpt = configOption(selection, 'thought_level')
+        const efforts = selectOptionEntries(effortOpt?.options).map(o => o.id)
+        const defaultEffort = typeof effortOpt?.currentValue === 'string' ? effortOpt.currentValue : undefined
+        probed.push({
+          id: entry.id,
+          name: entry.name,
+          supportedReasoningEfforts: efforts,
+          ...(defaultEffort ? { defaultReasoningEffort: defaultEffort } : {}),
+        })
+      } catch {
+        probed.push(entry)
+      }
+    }
+    this.availableModels = probed
+    return probed
   }
 
   async setModel(modelId: string): Promise<void> {
@@ -510,6 +576,9 @@ export class AntigravityAcp {
     const acpMode = ccHahaPermissionModeToAcpMode(mode)
     if (!acpMode) {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', `Permission mode "${mode}" is not supported by Antigravity.`)
+    }
+    if (this.launchedWithBypassPermissions) {
+      throw new Error(ANTIGRAVITY_BYPASS_EXIT_REQUIRES_RESTART)
     }
     if (!this.modeConfigId) {
       if (acpMode === 'default') {
@@ -649,14 +718,28 @@ export async function openAntigravityAcp(
     const currentEffortLevel = typeof effortOpt?.currentValue === 'string' ? effortOpt.currentValue : undefined
     const tier = parseTier(result)
 
-    const enrichedModels: AntigravityModelInfo[] = rawModels.map(entry => ({
-      id: entry.id,
-      name: entry.name,
-      ...(availableEfforts.length > 0 ? { supportedReasoningEfforts: availableEfforts } : {}),
-      ...(currentEffortLevel ? { defaultReasoningEffort: currentEffortLevel } : {}),
-    }))
-
     const previous = lastStatus?.binary === binary && lastStatus.report.status === 'ready' ? lastStatus.report : undefined
+    const previousById = new Map((previous?.models ?? []).map(entry => [entry.id, entry]))
+    const enrichedModels: AntigravityModelInfo[] = rawModels.map(entry => {
+      if (entry.id === currentModelId) {
+        return {
+          id: entry.id,
+          name: entry.name,
+          supportedReasoningEfforts: [...availableEfforts],
+          ...(currentEffortLevel ? { defaultReasoningEffort: currentEffortLevel } : {}),
+        }
+      }
+      const prev = previousById.get(entry.id)
+      return {
+        id: entry.id,
+        name: entry.name,
+        ...(prev?.supportedReasoningEfforts !== undefined
+          ? { supportedReasoningEfforts: [...prev.supportedReasoningEfforts] }
+          : {}),
+        ...(prev?.defaultReasoningEffort ? { defaultReasoningEffort: prev.defaultReasoningEffort } : {}),
+      }
+    })
+
     lastStatus = {
       binary,
       report: report('ready', {
@@ -695,16 +778,25 @@ export async function openAntigravityAcp(
       await acp.setModel(modelId)
     }
     if (effortLevel && effortLevel !== acp.effortLevel) {
-      if (acp.effortLevel !== undefined || availableEfforts.length > 0) {
+      if (acp.availableEfforts.length > 0 && acp.availableEfforts.includes(effortLevel)) {
         await acp.setEffortLevel(effortLevel)
       }
     }
     if (!launchedWithBypassPermissions) {
       const targetAcpMode = ccHahaPermissionModeToAcpMode(permissionMode) ?? 'default'
-      if (typeof modeOpt?.id === 'string' && currentAcpMode !== targetAcpMode) {
-        await acp.setPermissionMode(permissionMode)
+      if (typeof modeOpt?.id === 'string') {
+        if (currentAcpMode !== targetAcpMode) {
+          await acp.setPermissionMode(permissionMode)
+        } else {
+          acp.permissionMode = permissionMode as AntigravityCcHahaPermissionMode
+        }
+      } else if (targetAcpMode !== 'default') {
+        throw new AntigravityError(
+          'ANTIGRAVITY_UNSUPPORTED',
+          'This Antigravity CLI does not support changing permission modes.',
+        )
       } else {
-        acp.permissionMode = permissionMode as AntigravityCcHahaPermissionMode
+        acp.permissionMode = 'default'
       }
     }
 
@@ -718,7 +810,38 @@ export async function openAntigravityAcp(
   }
 }
 
-export function discoverAntigravity(): Promise<AntigravityStatus> {
+async function waitForSubprocessExit(
+  proc: Bun.Subprocess<'pipe', 'pipe', 'ignore'>,
+  termTimeoutMs = DISCOVERY_EXIT_TIMEOUT_MS,
+  killGraceMs = DISCOVERY_KILL_GRACE_MS,
+): Promise<void> {
+  if (proc.exitCode !== null) return
+  let termTimer: ReturnType<typeof setTimeout> | undefined
+  let killTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const exitedBeforeTerm = await Promise.race([
+      proc.exited.then(() => true),
+      new Promise<false>(resolve => {
+        termTimer = setTimeout(() => resolve(false), termTimeoutMs)
+      }),
+    ])
+    if (exitedBeforeTerm) return
+    if (proc.exitCode === null) {
+      try { proc.kill('SIGKILL') } catch { /* process already exited */ }
+    }
+    await Promise.race([
+      proc.exited.then(() => undefined),
+      new Promise<void>(resolve => {
+        killTimer = setTimeout(resolve, killGraceMs)
+      }),
+    ])
+  } finally {
+    if (termTimer) clearTimeout(termTimer)
+    if (killTimer) clearTimeout(killTimer)
+  }
+}
+
+export function discoverAntigravity(options?: { exitTimeoutMs?: number }): Promise<AntigravityStatus> {
   if (pendingDiscovery) return pendingDiscovery
   pendingDiscovery = (async () => {
     const binary = executable()
@@ -726,8 +849,22 @@ export function discoverAntigravity(): Promise<AntigravityStatus> {
     const cwd = await mkdtemp(join(tmpdir(), 'cchaha-agy-'))
     try {
       const acp = await openAntigravityAcp(cwd)
+      const initialModelId = acp.modelId
+      const initialEffortLevel = acp.effortLevel
+      const probedModels = await acp.probeAllModelEfforts()
+      if (probedModels.length > 0 && lastStatus?.binary === binary && lastStatus.report.status === 'ready') {
+        lastStatus = {
+          binary,
+          report: {
+            ...lastStatus.report,
+            models: probedModels,
+            ...(initialModelId ? { currentModelId: initialModelId } : {}),
+            ...(initialEffortLevel ? { currentEffortLevel: initialEffortLevel } : {}),
+          },
+        }
+      }
       acp.close()
-      await acp.proc.exited
+      await waitForSubprocessExit(acp.proc, options?.exitTimeoutMs ?? DISCOVERY_EXIT_TIMEOUT_MS)
       return getAntigravityStatus()
     } catch (error) {
       const status = error instanceof AntigravityError && error.code === 'ANTIGRAVITY_LOGIN_REQUIRED' ? 'login_required' : 'error'

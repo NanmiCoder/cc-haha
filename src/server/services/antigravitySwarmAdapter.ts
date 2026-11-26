@@ -58,6 +58,7 @@ export type AntigravitySwarmSteerPayload = {
 
 export type AntigravitySwarmSteerResult = {
   routed: boolean
+  reason?: 'busy' | 'unavailable'
   delivery?: 'steering' | 'queued'
   formattedPrompt?: string
 }
@@ -84,10 +85,11 @@ let registeredSteerHandler: AntigravitySwarmSteerHandler | null = null
 export function registerAntigravitySwarmSteerHandler(
   handler: AntigravitySwarmSteerHandler | null,
 ): () => void {
+  const previous = registeredSteerHandler
   registeredSteerHandler = handler
   return () => {
     if (registeredSteerHandler === handler) {
-      registeredSteerHandler = null
+      registeredSteerHandler = previous
     }
   }
 }
@@ -113,6 +115,28 @@ export function getRememberedSessionIdForAntigravitySwarm(
   nativeSessionId: string,
 ): string | undefined {
   return nativeToSessionId.get(nativeSessionId)
+}
+
+export function listRememberedAntigravitySwarmSessions(): Array<{
+  nativeSessionId: string
+  sessionId: string
+}> {
+  return [...nativeToSessionId.entries()].map(([nativeSessionId, sessionId]) => ({
+    nativeSessionId,
+    sessionId,
+  }))
+}
+
+export function forgetAntigravitySwarmSessionMapping(nativeSessionId: string): void {
+  nativeToSessionId.delete(nativeSessionId)
+}
+
+export function forgetAntigravitySwarmSessionMappingsForSession(sessionId: string): void {
+  for (const [nativeId, mappedSessionId] of nativeToSessionId.entries()) {
+    if (mappedSessionId === sessionId) {
+      nativeToSessionId.delete(nativeId)
+    }
+  }
 }
 
 // ─── Naming Helpers ────────────────────────────────────────────────────────
@@ -198,13 +222,13 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 function swarmIncarnationId(
-  name: string,
+  nativeSessionId: string,
   createdAt: number,
-  leadSessionId?: string,
+  swarmId?: string,
 ): string {
   return hash(JSON.stringify([
-    name,
-    leadSessionId ?? '',
+    antigravitySwarmTeamName(nativeSessionId),
+    swarmId ?? nativeSessionId,
     Number.isFinite(createdAt) ? createdAt : 0,
   ]))
 }
@@ -349,11 +373,20 @@ function summarizeBoardText(text: string): string | undefined {
   return cleaned.length <= 120 ? cleaned : `${cleaned.slice(0, 117)}...`
 }
 
+type BoardEntryDetail = {
+  seq: number
+  from: string
+  kind?: string
+  text: string
+  recipients: string[]
+}
+
 async function readSwarmBoardMessages(
   boardPath: string,
   knownMemberNames: ReadonlySet<string>,
 ): Promise<{
   messages: TeamWorkbenchMessage[]
+  entries: BoardEntryDetail[]
   firstMentionTimeByMember: Map<string, number>
   latestTimestamp?: string
 }> {
@@ -361,10 +394,11 @@ async function readSwarmBoardMessages(
   try {
     rawText = await fs.readFile(boardPath, 'utf8')
   } catch {
-    return { messages: [], firstMentionTimeByMember: new Map() }
+    return { messages: [], entries: [], firstMentionTimeByMember: new Map() }
   }
 
   const messages: TeamWorkbenchMessage[] = []
+  const entries: BoardEntryDetail[] = []
   const firstMentionTimeByMember = new Map<string, number>()
   let latestTimestamp: string | undefined
 
@@ -384,6 +418,7 @@ async function readSwarmBoardMessages(
       : messages.length + 1
     const from = nonEmptyString(entry.agent) ?? 'coordinator'
     const text = typeof entry.text === 'string' ? entry.text : ''
+    const rawKind = nonEmptyString(entry.kind)
     const timestamp = normalizeAntigravityTimestamp(entry.time)
       ?? latestTimestamp
       ?? new Date(0).toISOString()
@@ -406,8 +441,9 @@ async function readSwarmBoardMessages(
 
     const requestId = nonEmptyString(entry.request_id)
     const id = requestId ? `swarm:${seq}:${requestId}` : `swarm:${seq}`
-    const summary = entry.kind === 'brief' ? summarizeBoardText(text) : undefined
+    const summary = rawKind === 'brief' ? summarizeBoardText(text) : undefined
 
+    entries.push({ seq, from, ...(rawKind ? { kind: rawKind } : {}), text, recipients })
     messages.push({
       id,
       from,
@@ -420,14 +456,142 @@ async function readSwarmBoardMessages(
     })
   }
 
-  return { messages, firstMentionTimeByMember, latestTimestamp }
+  return { messages, entries, firstMentionTimeByMember, latestTimestamp }
 }
 
-async function readSwarmPlanTasks(
+const DONE_TAG_RE = /(?:^|\s)\[done\]/i
+
+type BoardSignals = {
+  briefsByMember: Map<string, { seq: number; text: string }>
+  doneByMember: Map<string, { seq: number; text: string }>
+  progressByMember: Map<string, { seq: number; text: string }>
+  coordinatorDoneSeq: number
+  coordinatorDoneText?: string
+  maxWorkerBriefSeq: number
+}
+
+function collectBoardSignals(entries: BoardEntryDetail[]): BoardSignals {
+  const briefsByMember = new Map<string, { seq: number; text: string }>()
+  const doneByMember = new Map<string, { seq: number; text: string }>()
+  const progressByMember = new Map<string, { seq: number; text: string }>()
+  let coordinatorDoneSeq = 0
+  let coordinatorDoneText: string | undefined
+  let maxWorkerBriefSeq = 0
+
+  for (const entry of entries) {
+    const isDone = DONE_TAG_RE.test(entry.text)
+    if (entry.from === 'coordinator') {
+      if (isDone && entry.seq >= coordinatorDoneSeq) {
+        coordinatorDoneSeq = entry.seq
+        coordinatorDoneText = entry.text
+      }
+      if (entry.kind === 'brief' || entry.recipients.length > 0) {
+        for (const target of entry.recipients) {
+          if (target === 'coordinator' || target === 'all') continue
+          const prev = briefsByMember.get(target)
+          if (!prev || entry.seq >= prev.seq) {
+            briefsByMember.set(target, { seq: entry.seq, text: entry.text })
+          }
+          if (target !== 'monitor' && entry.seq > maxWorkerBriefSeq) {
+            maxWorkerBriefSeq = entry.seq
+          }
+        }
+      }
+      continue
+    }
+
+    if (isDone) {
+      const prev = doneByMember.get(entry.from)
+      if (!prev || entry.seq >= prev.seq) {
+        doneByMember.set(entry.from, { seq: entry.seq, text: entry.text })
+      }
+    } else {
+      const prev = progressByMember.get(entry.from)
+      if (!prev || entry.seq >= prev.seq) {
+        progressByMember.set(entry.from, { seq: entry.seq, text: entry.text })
+      }
+    }
+  }
+
+  return {
+    briefsByMember,
+    doneByMember,
+    progressByMember,
+    coordinatorDoneSeq,
+    coordinatorDoneText,
+    maxWorkerBriefSeq,
+  }
+}
+
+function extractBriefSubject(workerName: string, text: string): string {
+  const stripped = text
+    .replace(new RegExp(`^@${workerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), '')
+    .trim()
+  const firstLine = stripped.split(/\r?\n/).find(line => line.trim().length > 0)?.trim() ?? stripped
+  if (!firstLine) return `Task for ${workerName}`
+  return firstLine.length <= 96 ? firstLine : `${firstLine.slice(0, 93)}...`
+}
+
+function deriveWorkerTaskStatus(
+  workerName: string,
+  signals: BoardSignals,
+  rawMembersMap: Record<string, unknown>,
+): TaskStatus {
+  const rawMember = isRecord(rawMembersMap[workerName])
+    ? rawMembersMap[workerName] as RawSwarmMember
+    : undefined
+  const memberState = rawMember ? deriveSwarmMemberState(rawMember) : undefined
+  const briefSeq = signals.briefsByMember.get(workerName)?.seq ?? 0
+  const doneSeq = signals.doneByMember.get(workerName)?.seq ?? 0
+  const progressSeq = signals.progressByMember.get(workerName)?.seq ?? 0
+
+  if (
+    (doneSeq > 0 && doneSeq >= briefSeq)
+    || rawMember?.killed === true
+    || (signals.coordinatorDoneSeq > 0 && signals.coordinatorDoneSeq >= briefSeq && memberState?.status !== 'running')
+  ) {
+    return 'completed'
+  }
+  if (
+    memberState?.status === 'running'
+    || (progressSeq > 0 && progressSeq >= briefSeq)
+    || (briefSeq > 0 && rawMember !== undefined && memberState?.activity !== 'stopped')
+  ) {
+    return 'in_progress'
+  }
+  return 'pending'
+}
+
+function buildWorkerTaskDescription(
+  workerName: string,
+  signals: BoardSignals,
+  threadContext?: { title?: string; goal?: string },
+): string {
+  const parts: string[] = []
+  if (threadContext?.title || threadContext?.goal) {
+    const header = [threadContext.title, threadContext.goal].filter(Boolean).join(' — ')
+    if (header) parts.push(header)
+  }
+  const brief = signals.briefsByMember.get(workerName)?.text?.trim()
+  if (brief) {
+    parts.push(brief.length <= 500 ? brief : `${brief.slice(0, 497)}...`)
+  }
+  const done = signals.doneByMember.get(workerName)?.text?.trim()
+  if (done) {
+    const excerpt = done.length <= 300 ? done : `${done.slice(0, 297)}...`
+    parts.push(`Result: ${excerpt}`)
+  }
+  return parts.join('\n\n')
+}
+
+async function readSwarmPlanAndTasks(
   brainDir: string,
   swarmDir: string,
   taskListId: string,
-): Promise<TaskInfo[]> {
+  signals: BoardSignals,
+  rawMembersMap: Record<string, unknown>,
+  fallbackTitle?: string,
+): Promise<{ goalTitle?: string; goalLine?: string; tasks: TaskInfo[] }> {
   const candidates = [
     path.join(swarmDir, 'plan.json'),
     path.join(brainDir, 'plan.json'),
@@ -435,7 +599,9 @@ async function readSwarmPlanTasks(
   for (const candidate of candidates) {
     const raw = await readJsonFile(candidate)
     if (!raw) continue
-    const rawTasks = Array.isArray(raw)
+
+    // 1. Structured TaskInfo[] array format (legacy / explicit DAG plan.json)
+    const rawTaskArray = Array.isArray(raw)
       ? raw
       : isRecord(raw)
         ? (Array.isArray(raw.tasks)
@@ -446,43 +612,210 @@ async function readSwarmPlanTasks(
                 ? raw.items
                 : null)
         : null
-    if (!rawTasks) continue
-
-    const tasks: TaskInfo[] = []
-    rawTasks.forEach((item, index) => {
-      if (!isRecord(item)) return
-      const id = nonEmptyString(item.id)
-        ?? (typeof item.id === 'number' && Number.isFinite(item.id) ? String(item.id) : String(index + 1))
-      const subject = nonEmptyString(item.subject)
-        ?? nonEmptyString(item.title)
-        ?? nonEmptyString(item.name)
-        ?? `Task #${id}`
-      const description = typeof item.description === 'string'
-        ? item.description
-        : typeof item.detail === 'string'
-          ? item.detail
-          : ''
-      const owner = nonEmptyString(item.owner) ?? nonEmptyString(item.assignee) ?? nonEmptyString(item.agent)
-      const activeForm = nonEmptyString(item.activeForm)
-      const blocks = stringArray(item.blocks)
-      const blockedBy = stringArray(item.blockedBy ?? item.blocked_by ?? item.dependsOn ?? item.depends_on)
-      const metadata = isRecord(item.metadata) ? item.metadata : undefined
-      tasks.push({
-        id,
-        subject,
-        description,
-        status: normalizeTaskStatus(item.status),
-        blocks,
-        blockedBy,
-        taskListId,
-        ...(owner ? { owner } : {}),
-        ...(activeForm ? { activeForm } : {}),
-        ...(metadata ? { metadata } : {}),
+    if (rawTaskArray) {
+      const tasks: TaskInfo[] = []
+      rawTaskArray.forEach((item, index) => {
+        if (!isRecord(item)) return
+        const id = nonEmptyString(item.id)
+          ?? (typeof item.id === 'number' && Number.isFinite(item.id) ? String(item.id) : String(index + 1))
+        const subject = nonEmptyString(item.subject)
+          ?? nonEmptyString(item.title)
+          ?? nonEmptyString(item.name)
+          ?? `Task #${id}`
+        const description = typeof item.description === 'string'
+          ? item.description
+          : typeof item.detail === 'string'
+            ? item.detail
+            : ''
+        const owner = nonEmptyString(item.owner) ?? nonEmptyString(item.assignee) ?? nonEmptyString(item.agent)
+        const activeForm = nonEmptyString(item.activeForm)
+        const blocks = stringArray(item.blocks)
+        const blockedBy = stringArray(item.blockedBy ?? item.blocked_by ?? item.dependsOn ?? item.depends_on)
+        const metadata = isRecord(item.metadata) ? item.metadata : undefined
+        tasks.push({
+          id,
+          subject,
+          description,
+          status: normalizeTaskStatus(item.status),
+          blocks,
+          blockedBy,
+          taskListId,
+          ...(owner ? { owner } : {}),
+          ...(activeForm ? { activeForm } : {}),
+          ...(metadata ? { metadata } : {}),
+        })
       })
-    })
-    return tasks
+      return { tasks }
+    }
+
+    // 2. Native Antigravity `swarm_pane` plan.json format:
+    //    { goal: { title, line }, tasks: { [worker]: "summary" }, threads: [{ id, title, goal, tasks: [...] }] }
+    if (isRecord(raw) && isRecord(raw.tasks)) {
+      const goalObj = isRecord(raw.goal) ? raw.goal : undefined
+      const goalTitle = nonEmptyString(goalObj?.title)
+      const goalLine = nonEmptyString(goalObj?.line)
+      const tasksMap = raw.tasks
+
+      type ParsedThread = {
+        id: string
+        title?: string
+        goal?: string
+        taskKeys: string[]
+        dependsOn: string[]
+      }
+      const threads: ParsedThread[] = Array.isArray(raw.threads)
+        ? raw.threads.flatMap((entry, idx): ParsedThread[] => {
+            if (!isRecord(entry)) return []
+            return [{
+              id: nonEmptyString(entry.id) ?? `thread-${idx + 1}`,
+              title: nonEmptyString(entry.title),
+              goal: nonEmptyString(entry.goal),
+              taskKeys: stringArray(entry.tasks),
+              dependsOn: stringArray(entry.dependsOn ?? entry.depends_on ?? entry.blockedBy ?? entry.blocked_by ?? entry.after),
+            }]
+          })
+        : []
+
+      const orderedKeys: string[] = []
+      const threadByTaskKey = new Map<string, ParsedThread>()
+      for (const thread of threads) {
+        for (const key of thread.taskKeys) {
+          if (key in tasksMap && !orderedKeys.includes(key)) {
+            orderedKeys.push(key)
+            threadByTaskKey.set(key, thread)
+          }
+        }
+      }
+      for (const key of Object.keys(tasksMap)) {
+        if (!orderedKeys.includes(key)) orderedKeys.push(key)
+      }
+
+      const taskIdByKey = new Map<string, string>()
+      const tasks: TaskInfo[] = []
+      orderedKeys.forEach((workerKey, idx) => {
+        const value = tasksMap[workerKey]
+        const subject = typeof value === 'string' && value.trim()
+          ? value.trim()
+          : isRecord(value)
+            ? (nonEmptyString(value.subject) ?? nonEmptyString(value.title) ?? workerKey)
+            : workerKey
+        const id = String(idx + 1)
+        taskIdByKey.set(workerKey, id)
+        const thread = threadByTaskKey.get(workerKey)
+        const status = isRecord(value) && typeof value.status === 'string'
+          ? normalizeTaskStatus(value.status)
+          : deriveWorkerTaskStatus(workerKey, signals, rawMembersMap)
+        const explicitDesc = isRecord(value) && typeof value.description === 'string' ? value.description : ''
+        const description = explicitDesc || buildWorkerTaskDescription(workerKey, signals, thread)
+        tasks.push({
+          id,
+          subject,
+          description,
+          status,
+          blocks: [],
+          blockedBy: [],
+          taskListId,
+          owner: workerKey,
+        })
+      })
+
+      // Wire explicit thread-to-thread dependencies if declared
+      const threadById = new Map(threads.map(thread => [thread.id, thread]))
+      for (const thread of threads) {
+        if (thread.dependsOn.length === 0) continue
+        const depTaskIds = thread.dependsOn.flatMap(depId =>
+          (threadById.get(depId)?.taskKeys ?? []).map(k => taskIdByKey.get(k)).filter((id): id is string => Boolean(id)),
+        )
+        if (depTaskIds.length === 0) continue
+        for (const key of thread.taskKeys) {
+          const taskId = taskIdByKey.get(key)
+          const task = tasks.find(item => item.id === taskId)
+          if (!task) continue
+          for (const depId of depTaskIds) {
+            if (depId === task.id || task.blockedBy.includes(depId)) continue
+            task.blockedBy.push(depId)
+            const depTask = tasks.find(item => item.id === depId)
+            if (depTask && !depTask.blocks.includes(task.id)) depTask.blocks.push(task.id)
+          }
+        }
+      }
+
+      appendCoordinatorSynthesisTask(tasks, taskListId, signals, rawMembersMap, goalTitle ?? fallbackTitle, goalLine)
+      return { goalTitle, goalLine, tasks }
+    }
   }
-  return []
+
+  // 3. Fallback when plan.json has not been written yet: project tasks directly from board.jsonl briefs.
+  const briefedWorkers = [...signals.briefsByMember.entries()]
+    .filter(([name]) => name !== 'monitor')
+    .sort((a, b) => a[1].seq - b[1].seq)
+  if (briefedWorkers.length === 0) {
+    return { tasks: [] }
+  }
+  const tasks: TaskInfo[] = briefedWorkers.map(([workerName, brief], idx) => ({
+    id: String(idx + 1),
+    subject: extractBriefSubject(workerName, brief.text),
+    description: buildWorkerTaskDescription(workerName, signals),
+    status: deriveWorkerTaskStatus(workerName, signals, rawMembersMap),
+    blocks: [],
+    blockedBy: [],
+    taskListId,
+    owner: workerName,
+  }))
+  appendCoordinatorSynthesisTask(tasks, taskListId, signals, rawMembersMap, fallbackTitle)
+  return { tasks }
+}
+
+function appendCoordinatorSynthesisTask(
+  tasks: TaskInfo[],
+  taskListId: string,
+  signals: BoardSignals,
+  rawMembersMap: Record<string, unknown>,
+  title?: string,
+  goalLine?: string,
+): void {
+  if (tasks.length === 0) return
+  if (tasks.some(task => task.owner === 'coordinator')) return
+  const synthesisSubject = title?.trim()
+  if (!synthesisSubject && signals.coordinatorDoneSeq === 0) return
+
+  const leafWorkerTasks = tasks.filter(task => task.blocks.length === 0)
+  const blockedBy = (leafWorkerTasks.length > 0 ? leafWorkerTasks : tasks).map(task => task.id)
+  const synthesisId = String(tasks.length + 1)
+  for (const task of tasks) {
+    if (blockedBy.includes(task.id) && !task.blocks.includes(synthesisId)) {
+      task.blocks.push(synthesisId)
+    }
+  }
+
+  const allWorkersCompleted = tasks.every(task => task.status === 'completed')
+  const rawCoordinator = isRecord(rawMembersMap.coordinator)
+    ? rawMembersMap.coordinator as RawSwarmMember
+    : undefined
+  const coordState = rawCoordinator ? deriveSwarmMemberState(rawCoordinator) : undefined
+  const status: TaskStatus =
+    (signals.coordinatorDoneSeq > 0 && signals.coordinatorDoneSeq >= signals.maxWorkerBriefSeq)
+    || (allWorkersCompleted && coordState?.activity === 'exited')
+      ? 'completed'
+      : allWorkersCompleted && coordState?.status === 'running'
+        ? 'in_progress'
+        : 'pending'
+
+  const descriptionParts = [
+    goalLine?.trim(),
+    signals.coordinatorDoneText?.trim(),
+  ].filter((part): part is string => Boolean(part))
+
+  tasks.push({
+    id: synthesisId,
+    subject: synthesisSubject || 'Synthesize swarm results',
+    description: descriptionParts.join('\n\n'),
+    status,
+    blocks: [],
+    blockedBy,
+    taskListId,
+    owner: 'coordinator',
+  })
 }
 
 // ─── Public Swarm Projections ──────────────────────────────────────────────
@@ -534,11 +867,21 @@ export async function readAntigravitySwarmSnapshot(
   const knownMemberNames = new Set(rosterNames)
   knownMemberNames.add('coordinator')
 
-  const [board, subagentRecords, tasks] = await Promise.all([
+  const [board, subagentRecords] = await Promise.all([
     readSwarmBoardMessages(path.join(swarmDir, 'board.jsonl'), knownMemberNames),
     readAntigravitySubagentRegistry(nativeSessionId, options),
-    readSwarmPlanTasks(brainDir, swarmDir, teamName),
   ])
+  const signals = collectBoardSignals(board.entries)
+  const membersFileTitle = nonEmptyString(membersFile.title)
+  const planResult = await readSwarmPlanAndTasks(
+    brainDir,
+    swarmDir,
+    teamName,
+    signals,
+    rawMembersMap,
+    membersFileTitle,
+  )
+  const tasks = planResult.tasks
 
   const workspaceByConvId = new Map<string, string>()
   for (const record of subagentRecords) {
@@ -557,7 +900,18 @@ export async function readAntigravitySwarmSnapshot(
       ?? nonEmptyString(raw.model)
       ?? nonEmptyString(raw.desired_model)
     const effortLevel = parseAntigravityModelEffort(model)
-    const { status, activity } = deriveSwarmMemberState(raw)
+    const derivedState = deriveSwarmMemberState(raw)
+    const ownedTasks = tasks.filter(task => task.owner === rosterName)
+    const allOwnedTasksCompleted = ownedTasks.length > 0 && ownedTasks.every(task => task.status === 'completed')
+    const coordinatorFinishedSwarm = rosterName === 'coordinator'
+      && signals.coordinatorDoneSeq > 0
+      && signals.coordinatorDoneSeq >= signals.maxWorkerBriefSeq
+      && allOwnedTasksCompleted
+    const status: TeamMember['status'] =
+      (derivedState.status === 'idle' && allOwnedTasksCompleted) || coordinatorFinishedSwarm
+        ? 'completed'
+        : derivedState.status
+    const activity = derivedState.activity
     const role = nonEmptyString(raw.role)
     const lastError = nonEmptyString(raw.last_error) ?? nonEmptyString(raw.error)
     const cwd = (conversationId ? workspaceByConvId.get(conversationId) : undefined)
@@ -590,7 +944,7 @@ export async function readAntigravitySwarmSnapshot(
   const leadMember = members.find(member => member.agentType === 'coordinator' || member.name === 'coordinator')
     ?? members[0]
   const leadAgentId = leadMember?.agentId ?? `coordinator@${teamName}`
-  const description = nonEmptyString(membersFile.title)
+  const description = planResult.goalTitle ?? membersFileTitle
 
   const activeMemberCount = members.filter(member => member.status === 'running').length
   const allExited = members.length > 0 && members.every(member => member.activity === 'exited')
@@ -599,7 +953,7 @@ export async function readAntigravitySwarmSnapshot(
     name: teamName,
     ...(description ? { description } : {}),
     createdAt,
-    incarnationId: swarmIncarnationId(teamName, createdAt, leadSessionId),
+    incarnationId: swarmIncarnationId(nativeSessionId, createdAt, nonEmptyString(swarmMeta.swarm_id)),
     memberCount: members.length,
     activeMemberCount,
     leadAgentId,
@@ -608,7 +962,7 @@ export async function readAntigravitySwarmSnapshot(
   }
 
   let latestMtimeMs = createdAt
-  for (const filename of ['members.json', 'board.jsonl', 'swarm.json']) {
+  for (const filename of ['members.json', 'board.jsonl', 'swarm.json', 'plan.json']) {
     try {
       const stat = await fs.stat(path.join(swarmDir, filename))
       if (stat.mtimeMs > latestMtimeMs) latestMtimeMs = stat.mtimeMs
@@ -938,6 +1292,13 @@ export async function sendAntigravitySwarmMemberMessage(
   })
 
   if (result && result.routed === false) {
+    if (result.reason === 'busy') {
+      throw new ApiError(
+        409,
+        `Antigravity is busy processing another turn. Wait for it to finish before messaging ${member.name}.`,
+        'ANTIGRAVITY_SWARM_SESSION_BUSY',
+      )
+    }
     throw new ApiError(
       503,
       `Could not deliver message to swarm member ${member.name}. Try again.`,

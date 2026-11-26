@@ -148,6 +148,10 @@ export type SubagentTranscript = {
   historyComplete?: boolean
   messages: MessageEntry[]
   taskNotifications: SessionTaskNotification[]
+  /** 0-based count of prior sibling Antigravity subagent spawns with the same (typeName, role). */
+  antigravitySpawnOrdinal?: number
+  /** Seen Antigravity subagent tool_use IDs grouped by `${typeName}\0${role}` across the scanned file. */
+  antigravitySpawnsByKey?: Record<string, string[]>
 }
 
 export type SessionWorkspaceState = 'available' | 'worktree_removed' | 'missing'
@@ -4831,11 +4835,46 @@ export class SessionService {
     return withHistoryReadBudget(signal, async () => {
       const entries: RawEntry[] = []
       const taskNotifications = new Map<string, SessionTaskNotification>()
+      const antigravitySpawnsByKey = new Map<string, string[]>()
+      let antigravitySpawnOrdinal: number | undefined
       let bytes = 0
       let incomplete = false
       const scan = await streamBoundedHistory(filePath, raw => {
         const entry = raw as RawEntry
         const message = raw.message as { role?: string; content?: unknown } | undefined
+        if (Array.isArray(message?.content)) {
+          for (const block of message.content as any[]) {
+            if (block?.type !== 'tool_use' || typeof block.id !== 'string') continue
+            const isAgyTool = block.name === 'invoke_subagent' || block.name === 'Antigravity: Run invoke_subagent'
+            const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+              ? block.input as Record<string, unknown>
+              : null
+            const inputTypeName = typeof input?.TypeName === 'string' && input.TypeName.length > 0
+              ? input.TypeName
+              : typeof input?.typeName === 'string' && input.typeName.length > 0
+                ? input.typeName
+                : ''
+            const inputRole = typeof input?.Role === 'string' && input.Role.length > 0
+              ? input.Role
+              : typeof input?.role === 'string' && input.role.length > 0
+                ? input.role
+                : ''
+            const isAgyAgent = block.name === 'Agent' && (input?.antigravityToolName === 'invoke_subagent' || Boolean(inputTypeName))
+            if (!isAgyTool && !isAgyAgent) continue
+            const spawnKey = `${inputTypeName}\u0000${inputRole}`
+            let seenIds = antigravitySpawnsByKey.get(spawnKey)
+            if (!seenIds) {
+              seenIds = []
+              antigravitySpawnsByKey.set(spawnKey, seenIds)
+            }
+            if (ids.has(block.id) && antigravitySpawnOrdinal === undefined) {
+              antigravitySpawnOrdinal = seenIds.includes(block.id) ? seenIds.indexOf(block.id) : seenIds.length
+            }
+            if (!seenIds.includes(block.id)) {
+              seenIds.push(block.id)
+            }
+          }
+        }
         const content = Array.isArray(message?.content) ? message.content.filter((block: any) =>
           block?.type === 'tool_use' ? ids.has(block.id) : block?.type === 'tool_result' && ids.has(block.tool_use_id)) : []
         const notices = this.taskNotificationsFromEntries([entry]).filter(notice => ids.has(notice.toolUseId))
@@ -4859,7 +4898,16 @@ export class SessionService {
       }, signal, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES })
       // A skipped record may be unrelated to this Agent. Preserve the evidence
       // we did read without claiming that absence proves a missing run.
-      const transcript = { messages: this.entriesToMessages(entries), taskNotifications: [...taskNotifications.values()], historyComplete: !incomplete && scan.omittedRecords === 0 }
+      const serializedSpawns = antigravitySpawnsByKey.size > 0
+        ? Object.fromEntries(antigravitySpawnsByKey.entries())
+        : undefined
+      const transcript: SubagentTranscript = {
+        messages: this.entriesToMessages(entries),
+        taskNotifications: [...taskNotifications.values()],
+        historyComplete: !incomplete && scan.omittedRecords === 0,
+        ...(antigravitySpawnOrdinal !== undefined ? { antigravitySpawnOrdinal } : {}),
+        ...(serializedSpawns ? { antigravitySpawnsByKey: serializedSpawns } : {}),
+      }
       this.subagentLookupCache.delete(key)
       this.subagentLookupCache.set(key, { version, transcript })
       while (this.subagentLookupCache.size > 4) this.subagentLookupCache.delete(this.subagentLookupCache.keys().next().value!)
@@ -5620,9 +5668,9 @@ export class SessionService {
       const handle = await fs.open(launchInfo.filePath, constants.O_WRONLY | constants.O_APPEND)
       try {
         if (!this.shouldPersistSession() || !isCurrent()) throw new Error('Antigravity session is no longer active')
-        const timestamp = new Date().toISOString()
+        const fallbackTimestamp = new Date().toISOString()
         await handle.writeFile(messages.map(message => JSON.stringify({
-          ...message, sessionId, cwd: launchInfo.workDir, timestamp,
+          timestamp: fallbackTimestamp, ...message, sessionId, cwd: launchInfo.workDir,
         }) + '\n').join(''), 'utf-8')
       } finally {
         await handle.close()

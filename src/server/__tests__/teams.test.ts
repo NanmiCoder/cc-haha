@@ -5186,8 +5186,8 @@ describe('Teams API', () => {
       'utf8',
     )
 
-    const prevAppData = process.env.ANTIGRAVITY_APP_DATA_DIR
-    process.env.ANTIGRAVITY_APP_DATA_DIR = agyAppData
+    const prevAppData = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = agyAppData
     const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async (id) => {
       if (id !== ccSessionId) return null
       return {
@@ -5225,6 +5225,13 @@ describe('Teams API', () => {
       expect(timeline.source).toBe('live')
       expect(timeline.snapshots[0]!.team.description).toBe('API Swarm Check')
       expect(timeline.snapshots[0]!.team.members.map((m) => m.name)).toEqual(['coordinator', 'reader'])
+
+      // 1b. GET /api/teams/:name/runtime-control returns { control: null } for Antigravity Swarm (no Team identity error)
+      const rcRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(ccSessionId)}&incarnationId=${encodeURIComponent(timeline.snapshots[0]!.team.incarnationId)}`,
+      )
+      expect(rcRes.status).toBe(200)
+      expect(await rcRes.json()).toEqual({ control: null })
 
       // 2. GET /api/teams/:name/members/:id/transcript?incremental=true
       const trRes = await fetch(
@@ -5271,8 +5278,8 @@ describe('Teams API', () => {
     } finally {
       disposeSteer()
       launchSpy.mockRestore()
-      if (prevAppData === undefined) delete process.env.ANTIGRAVITY_APP_DATA_DIR
-      else process.env.ANTIGRAVITY_APP_DATA_DIR = prevAppData
+      if (prevAppData === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
     }
   })
 })

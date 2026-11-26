@@ -150,9 +150,10 @@ export async function handleProvidersApi(
       if (providerId === ANTIGRAVITY_PROVIDER_ID) {
         const { status } = getAntigravityStatus()
         return Response.json({
-          hasAuth: status !== 'not_installed' && status !== 'login_required',
+          hasAuth: status === 'ready',
           source: 'none',
           activeProvider: 'Antigravity',
+          antigravityStatus: status,
           localAgentStatus: status,
         })
       }

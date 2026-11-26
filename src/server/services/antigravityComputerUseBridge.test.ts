@@ -341,12 +341,198 @@ describe('antigravityComputerUseBridge', () => {
   test('matches only our injected Computer Use MCP server tool names and builds platform prompts', () => {
     expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_js')).toBe(true)
     expect(isAntigravityComputerUseToolName('mcp_cc_haha_computer_use_js')).toBe(true)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_js_reset')).toBe(true)
     expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_desktop')).toBe(true)
+    expect(isAntigravityComputerUseToolName('mcp__cc-haha-computer-use__screenshot')).toBe(true)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_left_click')).toBe(true)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_teach_step')).toBe(true)
+    // Reject arbitrary server suffixes and unknown tool names
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use-helper_exec')).toBe(false)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use-helper_js')).toBe(false)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_exec')).toBe(false)
+    expect(isAntigravityComputerUseToolName('mcp_cc-haha-computer-use_helper_js')).toBe(false)
     expect(isAntigravityComputerUseToolName('mcp_other_server_js')).toBe(false)
     expect(isAntigravityComputerUseToolName('run_command')).toBe(false)
     expect(isAntigravityComputerUseToolName(undefined)).toBe(false)
 
     expect(buildAntigravityComputerUsePrompt('darwin')).toContain('cua.getApp')
     expect(buildAntigravityComputerUsePrompt('linux')).toContain('desktop({command')
+  })
+
+  test('prevents same-process concurrent lock reentrancy race and rolls back on blocked/error/cancel', async () => {
+    const callsA: Array<{ command: string; args: string[] }> = []
+    const callsB: Array<{ command: string; args: string[] }> = []
+    // Simulate real tryAcquireComputerUseLock PID-based ownedByThisProcess reentrancy:
+    // after an async tick, a second caller in the same process gets { kind: 'acquired', fresh: false }!
+    let processHeld = false
+    let mode: 'normal' | 'blocked' | 'throw' | 'cancel' = 'normal'
+    let onTryAcquireStart: (() => void) | undefined
+    const reentrantLockOps: ComputerUseLockOps = {
+      async check() {
+        return processHeld ? { kind: 'held_by_self' } : { kind: 'free' }
+      },
+      async tryAcquire() {
+        onTryAcquireStart?.()
+        await new Promise(resolve => setTimeout(resolve, 25))
+        if (mode === 'blocked') return { kind: 'blocked', by: 'external-proc' }
+        if (mode === 'throw') throw new Error('lock-io-failure')
+        const fresh = !processHeld
+        processHeld = true
+        return { kind: 'acquired', fresh }
+      },
+      async release() {
+        processHeld = false
+        return true
+      },
+    }
+
+    const bridgeA = await createAntigravityComputerUseBridge('session-race-a', {
+      isEnabled: () => true,
+      adapter: makeFakeAgentDesktopAdapter(callsA),
+      coordinateMode: 'pixels',
+      platform: 'linux',
+      lockOps: reentrantLockOps,
+    })
+    const bridgeB = await createAntigravityComputerUseBridge('session-race-b', {
+      isEnabled: () => true,
+      adapter: makeFakeAgentDesktopAdapter(callsB),
+      coordinateMode: 'pixels',
+      platform: 'linux',
+      lockOps: reentrantLockOps,
+    })
+    bridges.push(bridgeA!, bridgeB!)
+
+    const initA = await mcpPost(bridgeA!.url, bridgeA!.token, {
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } },
+    })
+    const initB = await mcpPost(bridgeB!.url, bridgeB!.token, {
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } },
+    })
+
+    // Fire two concurrent tools/call requests in the same process: only one may succeed
+    const [resA, resB] = await Promise.all([
+      mcpPost(bridgeA!.url, bridgeA!.token, {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'desktop', arguments: { command: 'click', args: ['@s:a'] } },
+      }, initA.sessionId!),
+      mcpPost(bridgeB!.url, bridgeB!.token, {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'desktop', arguments: { command: 'click', args: ['@s:b'] } },
+      }, initB.sessionId!),
+    ])
+    const okA = (resA.json.result as { isError?: boolean })?.isError !== true
+    const okB = (resB.json.result as { isError?: boolean })?.isError !== true
+    expect(Number(okA) + Number(okB)).toBe(1)
+    expect(callsA.length + callsB.length).toBe(1)
+
+    await bridgeA!.releaseLock()
+    await bridgeB!.releaseLock()
+
+    // Rollback on blocked -> subsequent session can acquire
+    mode = 'blocked'
+    const blockedRes = await mcpPost(bridgeA!.url, bridgeA!.token, {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:c'] } },
+    }, initA.sessionId!)
+    expect((blockedRes.json.result as { isError?: boolean })?.isError).toBe(true)
+
+    mode = 'normal'
+    const afterBlockedB = await mcpPost(bridgeB!.url, bridgeB!.token, {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:d'] } },
+    }, initB.sessionId!)
+    expect((afterBlockedB.json.result as { isError?: boolean })?.isError).not.toBe(true)
+    await bridgeB!.releaseLock()
+
+    // Rollback on tryAcquire throw -> subsequent session can acquire
+    mode = 'throw'
+    const throwRes = await mcpPost(bridgeA!.url, bridgeA!.token, {
+      jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:e'] } },
+    }, initA.sessionId!)
+    expect((throwRes.json.result as { isError?: boolean })?.isError).toBe(true)
+
+    mode = 'normal'
+    const afterThrowB = await mcpPost(bridgeB!.url, bridgeB!.token, {
+      jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:f'] } },
+    }, initB.sessionId!)
+    expect((afterThrowB.json.result as { isError?: boolean })?.isError).not.toBe(true)
+    await bridgeB!.releaseLock()
+
+    // Rollback on cancel during tryAcquire -> subsequent session can acquire
+    onTryAcquireStart = () => {
+      bridgeA!.abortCurrentTurn()
+    }
+    const cancelRes = await mcpPost(bridgeA!.url, bridgeA!.token, {
+      jsonrpc: '2.0', id: 5, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:g'] } },
+    }, initA.sessionId!)
+    onTryAcquireStart = undefined
+    expect((cancelRes.json.result as { isError?: boolean })?.isError).toBe(true)
+
+    const afterCancelB = await mcpPost(bridgeB!.url, bridgeB!.token, {
+      jsonrpc: '2.0', id: 5, method: 'tools/call',
+      params: { name: 'desktop', arguments: { command: 'click', args: ['@s:h'] } },
+    }, initB.sessionId!)
+    expect((afterCancelB.json.result as { isError?: boolean })?.isError).not.toBe(true)
+  })
+
+  test('rejects unknown mcp-session-id with 404 before server allocation and cleans up uninitialized ephemeral transports', async () => {
+    let adapterDisabledChecks = 0
+    const baseAdapter = makeFakeMacAdapter([])
+    const trackedAdapter: ComputerUseHostAdapter = {
+      ...baseAdapter,
+      isDisabled: () => {
+        adapterDisabledChecks++
+        return false
+      },
+    }
+    const bridge = await createAntigravityComputerUseBridge('session-http-guard', {
+      isEnabled: () => true,
+      adapter: trackedAdapter,
+      coordinateMode: 'pixels',
+      platform: 'darwin',
+      lockOps: makeInMemoryLock().ops,
+    })
+    bridges.push(bridge!)
+
+    // Unknown mcp-session-id is rejected with 404 before allocating any Server/Transport
+    const checksBefore = adapterDisabledChecks
+    const unknownRes = await mcpPost(bridge!.url, bridge!.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    }, 'non-existent-session-id')
+    expect(unknownRes.status).toBe(404)
+    expect((unknownRes.json.error as { code?: number })?.code).toBe(-32001)
+    expect(adapterDisabledChecks).toBe(checksBefore)
+
+    // Non-initialize request without mcp-session-id completes cleanly without leaking an initialized session
+    const badPost = await mcpPost(bridge!.url, bridge!.token, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    })
+    expect(badPost.status).toBe(400)
+    expect(badPost.sessionId).toBeNull()
+
+    // Subsequent valid initialize still succeeds cleanly
+    const init = await mcpPost(bridge!.url, bridge!.token, {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0' },
+      },
+    })
+    expect(init.status).toBe(200)
+    expect(init.sessionId).toBeTruthy()
   })
 })

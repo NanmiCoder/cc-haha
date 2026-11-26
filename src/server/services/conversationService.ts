@@ -56,6 +56,12 @@ import {
   createAntigravityComputerUseBridge,
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
+import {
+  registerAntigravitySwarmSteerHandler,
+  rememberAntigravitySwarmSessionMapping,
+  type AntigravitySwarmSteerPayload,
+  type AntigravitySwarmSteerResult,
+} from './antigravitySwarmAdapter.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -1271,6 +1277,7 @@ export class ConversationService {
       },
     )
     this.sessions.set(sessionId, session)
+    rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
     void acp.proc.exited.then(async () => {
       await session.antigravity!.waitForExit()
       await session.antigravityBridge?.close()
@@ -1345,20 +1352,97 @@ export class ConversationService {
     const acp = session.antigravity.acp
     if (config.modelId) {
       await acp.setModel(config.modelId)
+      if (this.sessions.get(sessionId) !== session) return false
+      const supportedEfforts = acp.availableEfforts
+      const previousEffort = session.runtimeSelection?.effortLevel
+      const preservedEffort = supportedEfforts.length === 0
+        ? undefined
+        : acp.effortLevel
+          ?? (previousEffort && supportedEfforts.includes(previousEffort) ? previousEffort : undefined)
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: config.modelId,
+        ...(preservedEffort ? { effortLevel: preservedEffort } : {}),
+      }
+      if (session.initMessage) {
+        session.initMessage = { ...session.initMessage, model: acp.modelId ?? config.modelId }
+      }
     }
     if (config.effortLevel) {
       await acp.setEffortLevel(config.effortLevel)
+      if (this.sessions.get(sessionId) !== session) return false
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+        effortLevel: config.effortLevel,
+      }
     }
     if (this.sessions.get(sessionId) !== session) return false
-    session.runtimeSelection = {
-      providerId: ANTIGRAVITY_PROVIDER_ID,
-      modelId: config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
-      ...(config.effortLevel ? { effortLevel: config.effortLevel } : {}),
+    if (!config.modelId && !config.effortLevel) {
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+        ...(session.runtimeSelection?.effortLevel ? { effortLevel: session.runtimeSelection.effortLevel } : {}),
+      }
     }
     if (session.initMessage) {
-      session.initMessage = { ...session.initMessage, model: acp.modelId ?? session.runtimeSelection.modelId }
+      session.initMessage = { ...session.initMessage, model: acp.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL }
     }
     return true
+  }
+
+  async steerAntigravitySwarmMember(
+    payload: AntigravitySwarmSteerPayload,
+  ): Promise<AntigravitySwarmSteerResult> {
+    let targetSessionId = payload.sessionId
+    let session = targetSessionId ? this.sessions.get(targetSessionId) : undefined
+    if (!session || session.antigravity?.acp.sessionId !== payload.nativeSessionId) {
+      session = undefined
+      for (const [id, candidate] of this.sessions.entries()) {
+        if (candidate.antigravity?.acp.sessionId === payload.nativeSessionId) {
+          targetSessionId = id
+          session = candidate
+          break
+        }
+      }
+    }
+    if (!targetSessionId || !session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) {
+      return { routed: false, reason: 'unavailable' }
+    }
+    if (session.antigravity.isResponding) {
+      return { routed: false, reason: 'busy' }
+    }
+    const sent = await this.sendMessage(targetSessionId, payload.formattedPrompt)
+    if (!sent) {
+      return {
+        routed: false,
+        reason: session.antigravity.isResponding ? 'busy' : 'unavailable',
+      }
+    }
+    const currentTargetId = targetSessionId
+    const currentSession = session
+    if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+      this.handleSdkPayload(
+        currentTargetId,
+        JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'running' }),
+      )
+      const completion = currentSession.antigravity.pendingTurnCompletion
+      if (completion) {
+        void completion.finally(() => {
+          if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+            this.handleSdkPayload(
+              currentTargetId,
+              JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }),
+            )
+          }
+        })
+      }
+    }
+    return {
+      routed: true,
+      delivery: 'steering',
+      formattedPrompt: payload.formattedPrompt,
+    }
   }
 
   async sendMessage(
@@ -3864,3 +3948,4 @@ function normalizeSessionPermissionUpdates(
 }
 
 export const conversationService = new ConversationService()
+registerAntigravitySwarmSteerHandler((payload) => conversationService.steerAntigravitySwarmMember(payload))

@@ -94,8 +94,9 @@ type RawTranscriptStep = {
 }
 
 export function resolveAntigravityAppDataDir(override?: string): string {
+  // Never inherit host Antigravity App/IDE's `ANTIGRAVITY_APP_DATA_DIR` (`~/.gemini/antigravity`):
+  // `agy acp` is spawned with a stripped env and always persists to `~/.gemini/antigravity-cli`.
   const configured = override?.trim()
-    || process.env.ANTIGRAVITY_APP_DATA_DIR?.trim()
     || process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR?.trim()
   if (configured) return path.resolve(configured)
   return path.join(os.homedir(), '.gemini', 'antigravity-cli')
