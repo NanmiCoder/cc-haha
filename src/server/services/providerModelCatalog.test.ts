@@ -803,4 +803,36 @@ describe('fetchProviderModels', () => {
     expect(await fetchProviderModels({ baseUrl, apiKey: 'test-api-key', apiFormat: 'google_vertex', isFullUrl: true }))
       .toEqual({ ok: true, endpoint: catalog, models: [{ id: 'claude-sonnet-4-6' }] })
   })
+
+  test('derives clean catalog candidates from full Gemini and Vertex action URLs and preserves error contracts', () => {
+    expect(
+      buildModelsUrlCandidates(
+        'https://gateway.example/v1beta/models/old:streamGenerateContent?route=a&alt=SSE#frag',
+        { apiFormat: 'gemini' },
+      ),
+    ).toEqual([
+      'https://gateway.example/v1beta/models?route=a',
+    ])
+
+    expect(
+      buildModelsUrlCandidates(
+        'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/old:rawPredict',
+        { apiFormat: 'google_vertex' },
+      ),
+    ).toEqual([
+      'https://us-east5-aiplatform.googleapis.com/v1beta1/publishers/anthropic/models',
+      'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models',
+    ])
+
+    expect(
+      buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'google_vertex', isFullUrl: true }),
+    ).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
+    ])
+
+    expect(() => buildModelsUrlCandidates('completions', { apiFormat: 'gemini', isFullUrl: true }))
+      .toThrow(/Cannot derive models endpoint from full URL/)
+    expect(() => buildModelsUrlCandidates('not-a-url', { apiFormat: 'google_vertex' }))
+      .toThrow(/Not a valid URL/)
+  })
 })
