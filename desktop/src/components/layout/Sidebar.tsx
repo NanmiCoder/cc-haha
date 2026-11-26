@@ -156,6 +156,7 @@ export function Sidebar({
   const setSessionsArchived = useSessionStore((s) => s.setSessionsArchived)
   const addToast = useUIStore((s) => s.addToast)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const activeModal = useUIStore((s) => s.activeModal)
   const openModal = useUIStore((s) => s.openModal)
@@ -206,8 +207,12 @@ export function Sidebar({
   const [projectEditor, setProjectEditor] = useState<ProjectEditorState | null>(null)
   const [projectEditorError, setProjectEditorError] = useState<string | null>(null)
   const [projectEditorLoading, setProjectEditorLoading] = useState(false)
+  const [highlightedProject, setHighlightedProject] = useState<{ key: string; nonce: number } | null>(null)
   const projectDisplayNameRevision = useProjectDisplayNameRevision()
   const suppressProjectClickRef = useRef<string | null>(null)
+  const pendingLocateProjectKeyRef = useRef<string | null>(null)
+  const highlightProjectNonceRef = useRef(0)
+  const highlightProjectTimerRef = useRef<number | null>(null)
   const sessionContextMenuRef = useRef<HTMLDivElement>(null)
   const projectContextMenuRef = useRef<HTMLDivElement>(null)
   const projectHeaderMenuRef = useRef<HTMLDivElement>(null)
@@ -1022,6 +1027,104 @@ export function Sidebar({
     })
   }, [])
 
+  const handleLocateProject = useCallback((projectKey: string) => {
+    if (!useUIStore.getState().sidebarOpen) setSidebarOpen(true)
+    setArchiveView(null)
+
+    const nextOrganization = isTaskView ? lastGroupedOrganizationRef.current : projectOrganization
+    const nextOrder = isTaskView && nextOrganization === 'project' ? [] : projectOrder
+    const normalizedTarget = normalizePathForCompare(projectKey)
+    const nextHidden = new Set(
+      [...hiddenProjectKeys].filter(
+        (key) => normalizePathForCompare(key) !== normalizedTarget,
+      ),
+    )
+    const organizationChanged = nextOrganization !== projectOrganization
+    const hiddenChanged = nextHidden.size !== hiddenProjectKeys.size
+
+    if (organizationChanged) {
+      setProjectHeaderMenu(null)
+      setProjectHeaderSubmenu(null)
+      setProjectOrganizationState(nextOrganization)
+      if (nextOrder !== projectOrder) setProjectOrder(nextOrder)
+    }
+    if (hiddenChanged) {
+      setHiddenProjectKeys(nextHidden)
+    }
+    if (organizationChanged || hiddenChanged) {
+      persistSidebarProjectPreferences(buildSidebarProjectPreferences(
+        nextOrder,
+        pinnedProjectKeys,
+        nextHidden,
+        nextOrganization,
+        projectSortBy,
+      ))
+    }
+
+    if (collapsedProjectKeys.has(projectKey)) {
+      const nextCollapsed = new Set(collapsedProjectKeys)
+      nextCollapsed.delete(projectKey)
+      setCollapsedProjectKeys(nextCollapsed)
+      writeStoredProjectCollapsed(nextCollapsed)
+    }
+
+    pendingLocateProjectKeyRef.current = projectKey
+    const nextNonce = ++highlightProjectNonceRef.current
+    if (highlightProjectTimerRef.current !== null) {
+      window.clearTimeout(highlightProjectTimerRef.current)
+    }
+    setHighlightedProject({ key: projectKey, nonce: nextNonce })
+    highlightProjectTimerRef.current = window.setTimeout(() => {
+      setHighlightedProject((latest) => (latest?.nonce === nextNonce ? null : latest))
+      highlightProjectTimerRef.current = null
+    }, 1800)
+  }, [
+    collapsedProjectKeys,
+    hiddenProjectKeys,
+    isTaskView,
+    persistSidebarProjectPreferences,
+    pinnedProjectKeys,
+    projectOrder,
+    projectOrganization,
+    projectSortBy,
+    setSidebarOpen,
+  ])
+
+  useEffect(() => () => {
+    if (highlightProjectTimerRef.current !== null) {
+      window.clearTimeout(highlightProjectTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    const targetKey = pendingLocateProjectKeyRef.current
+    if (!targetKey || !sidebarOpen || isTaskView || archiveView) return
+    if (!visibleProjectGroups.some((project) => project.key === targetKey)) {
+      pendingLocateProjectKeyRef.current = null
+      return
+    }
+    const scrollArea = sessionScrollAreaRef.current
+    if (!scrollArea) return
+    const sections = scrollArea.querySelectorAll<HTMLElement>('[data-sidebar-project-key]')
+    let targetSection: HTMLElement | null = null
+    for (const section of sections) {
+      if (section.dataset.sidebarProjectKey === targetKey) {
+        targetSection = section
+        break
+      }
+    }
+    if (!targetSection) {
+      pendingLocateProjectKeyRef.current = null
+      return
+    }
+    pendingLocateProjectKeyRef.current = null
+    const headerButton = targetSection.querySelector<HTMLButtonElement>('[data-sidebar-project-header]')
+    // Scroll the header button rather than the whole section so tall expanded
+    // project groups do not push their title and highlight ring above the viewport.
+    ;(headerButton ?? targetSection).scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    headerButton?.focus({ preventScroll: true })
+  }, [archiveView, highlightedProject, isTaskView, sidebarOpen, visibleProjectGroups])
+
   const toggleProjectSessionExpansion = useCallback((projectKey: string) => {
     setExpandedProjectKeys((current) => {
       const next = new Set(current)
@@ -1375,6 +1478,7 @@ export function Sidebar({
                   <section
                     key={project.key}
                     data-testid={`sidebar-project-group-${domSafeProjectKey(project.key)}`}
+                    data-sidebar-project-key={project.key}
                     onDragOver={(event) => handleProjectDragOver(event, project.key)}
                     onDrop={(event) => handleProjectDrop(event, project.key)}
                     onDragLeave={(event) => {
@@ -1390,12 +1494,17 @@ export function Sidebar({
                     <div className="flex items-center gap-0.5">
                       <button
                         type="button"
+                        data-sidebar-project-header
                         draggable={!isBatchMode}
                         onDragStart={(event) => handleProjectDragStart(event, project.key)}
                         onDragEnd={clearProjectDragState}
                         onClick={() => toggleProjectCollapsed(project.key)}
                         data-state={projectCollapsed ? 'closed' : 'open'}
-                        className="flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                        className={`flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                          highlightedProject?.key === project.key
+                            ? 'bg-[var(--color-sidebar-item-active)] ring-1 ring-[var(--color-brand)]'
+                            : ''
+                        }`}
                         aria-expanded={!projectCollapsed}
                         aria-label={t(projectCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { project: project.title })}
                         title={project.subtitle || project.title}
@@ -1862,7 +1971,11 @@ export function Sidebar({
         loading={isBatchDeleting}
       />
 
-      <GlobalSearchModal open={activeModal === 'globalSearch'} onClose={closeModal} />
+      <GlobalSearchModal
+        open={activeModal === 'globalSearch'}
+        onClose={closeModal}
+        onSelectProject={handleLocateProject}
+      />
       <FindInPageModal open={activeModal === 'findInPage'} onClose={closeModal} />
     </aside>
   )
