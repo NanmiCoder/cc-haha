@@ -643,6 +643,22 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
 
         // Non-streaming Converse
         if (url.pathname === '/model/us.anthropic.claude-sonnet-4-6-v1%3A0/converse') {
+          const firstText = String(bodyMessages[0]?.content?.[0]?.text ?? '')
+          if (firstText === 'Trigger malformed_tool_use') {
+            return Response.json(
+              {
+                output: {
+                  message: {
+                    role: 'assistant',
+                    content: [{ text: 'partial' }],
+                  },
+                },
+                stopReason: 'malformed_tool_use',
+                usage: { inputTokens: 15, outputTokens: 3, totalTokens: 18 },
+              },
+              { headers: { 'x-amzn-requestid': 'amzn-converse-malformed' } },
+            )
+          }
           return Response.json(
             {
               output: {
@@ -946,6 +962,34 @@ describe('Official-spec mock cloud servers E2E (Vertex AI, AWS Bedrock, Azure Op
       const nonStreamBedrockJson = await nonStreamBedrockRes.json() as { id: string; type: string; content: Array<{ text: string }> }
       expect(nonStreamBedrockJson.id).toBe('msg_amzn-converse-1')
       expect(nonStreamBedrockJson.content[0]?.text).toBe('ok')
+
+      // Non-streaming Bedrock malformed_tool_use returns 502 and finalizes a single trace call (no pending leak)
+      const malformedSessionId = 'bedrock-converse-malformed-trace-session'
+      const malformedRes = await handleProxyRequest(
+        new Request(proxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': malformedSessionId },
+          body: JSON.stringify({
+            model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+            max_tokens: 256,
+            stream: false,
+            messages: [{ role: 'user', content: 'Trigger malformed_tool_use' }],
+          }),
+        }),
+        new URL(proxyUrl),
+      )
+      expect(malformedRes.status).toBe(502)
+      const malformedJson = await malformedRes.json() as { type: string; error: { type: string; message: string } }
+      expect(malformedJson).toMatchObject({
+        type: 'error',
+        error: { type: 'api_error', message: expect.stringContaining('malformed_tool_use') },
+      })
+      await drainTraceCaptureForTests()
+      const malformedTrace = await traceCaptureService.getSessionTrace(malformedSessionId)
+      expect(malformedTrace.calls).toHaveLength(1)
+      expect(malformedTrace.calls[0]?.status).toBe('error')
+      expect(malformedTrace.calls[0]?.response?.status).toBe(502)
+      expect(malformedTrace.calls[0]?.request.url).toContain('/converse')
 
       const badKeyBedrockProvider = await providerService.addProvider({
         presetId: 'custom',

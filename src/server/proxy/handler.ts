@@ -58,7 +58,7 @@ import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStr
 import { anthropicToGemini, type GeminiRequest } from './transform/anthropicToGemini.js'
 import { GeminiUpstreamError, geminiErrorMessage, geminiResponseToAnthropic, geminiStreamToAnthropic } from './streaming/geminiStreamToAnthropic.js'
 import { anthropicToBedrockConverse } from './transform/anthropicToBedrockConverse.js'
-import { bedrockConverseResponseToAnthropic, bedrockConverseStreamToAnthropic } from './streaming/bedrockConverseToAnthropic.js'
+import { BedrockUpstreamError, bedrockConverseResponseToAnthropic, bedrockConverseStreamToAnthropic } from './streaming/bedrockConverseToAnthropic.js'
 import type { AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
@@ -2218,14 +2218,22 @@ async function handleBedrockConverse(
   } finally {
     upstreamLease.dispose()
   }
-  const anthropicResponse = bedrockConverseResponseToAnthropic(responseBody, body.model, requestId)
+  let anthropicResponse: unknown
+  let status = 200
+  try {
+    anthropicResponse = bedrockConverseResponseToAnthropic(responseBody, body.model, requestId)
+  } catch (err) {
+    if (!(err instanceof BedrockUpstreamError)) throw err
+    status = 502
+    anthropicResponse = { type: 'error', error: { type: 'api_error', message: err.message } }
+  }
   trace({
-    responseStatus: 200,
+    responseStatus: status,
     upstreamResponseBody: responseBody,
     anthropicResponseBody: anthropicResponse,
     responseHeaders: upstream.headers,
   })
-  return Response.json(anthropicResponse, { status: 200 })
+  return Response.json(anthropicResponse, { status })
 }
 
 function buildProxyTraceContext(

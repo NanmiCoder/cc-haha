@@ -46,6 +46,11 @@ function mapStopReason(stopReason: string | undefined, hasToolCalls: boolean): s
     case 'max_tokens':
     case 'length':
       return 'max_tokens'
+    case 'model_context_window_exceeded':
+      return stopReason
+    case 'malformed_tool_use':
+    case 'malformed_model_output':
+      throw new BedrockUpstreamError(`Amazon Bedrock stopped with ${stopReason}`, stopReason)
     case 'stop_sequence':
       return 'stop_sequence'
     case 'guardrail_intervened':
