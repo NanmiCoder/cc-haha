@@ -192,7 +192,7 @@ test('closing or changing the focused task aborts its fetch and late output cann
   }
 })
 
-test('subagent run reads the by-tool transcript with escaped IDs; taskId is optional', async () => {
+test('subagent run reads by-tool or by-agent transcript with escaped IDs', async () => {
   const urls: string[] = []
   const client = new ApiClient({ id: 'a', name: 'a', url: 'http://192.168.1.2:3456', auth: 'lan' }, 'fixture', { fetch: async (url) => {
     urls.push(url)
@@ -201,8 +201,10 @@ test('subagent run reads the by-tool transcript with escaped IDs; taskId is opti
   const signal = new AbortController().signal
   expect(await loadSubagentRun(client, 'session/a', 'tool/a', 'task?b', signal)).toEqual({ messages: [], status: 'running' })
   await loadSubagentRun(client, 'session/a', 'tool/a', undefined, signal)
+  await loadSubagentRun(client, 'session/a', 'agent:wf-agent?1', 'ignored-task', signal)
   expect(urls).toEqual([
     'http://192.168.1.2:3456/api/sessions/session%2Fa/subagents/by-tool/tool%2Fa?taskId=task%3Fb',
     'http://192.168.1.2:3456/api/sessions/session%2Fa/subagents/by-tool/tool%2Fa',
+    'http://192.168.1.2:3456/api/sessions/session%2Fa/subagents/by-agent/wf-agent%3F1',
   ])
 })

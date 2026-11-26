@@ -4,6 +4,7 @@ import { useIsFocused } from 'expo-router'
 import type { ApiClient } from './client'
 import { sendToSession } from './sessionSender'
 import type { ClientMessage, Host, SubagentLive } from './types'
+import { hasActiveLiveWorkflow, type WorkflowLiveRun } from './workflows'
 import {
   ActivityStore,
   createActivityFetcher,
@@ -44,6 +45,8 @@ export type UseSessionActivityOptions = {
   pendingApprovals?: number
   /** 聊天状态里的 `subagents`：子 Agent 的实时步骤和计数。 */
   live?: Record<string, SubagentLive>
+  /** 聊天状态里的 `workflows`：工作流的实时阶段和子代理状态。 */
+  workflows?: Record<string, WorkflowLiveRun>
   /** 工作目录，用于把步骤里的路径显示成相对路径。 */
   workDir?: string | null
   /** 团队方案的 planId 与状态；确认、启动、结束时立刻重读团队。 */
@@ -79,6 +82,7 @@ export function useSessionActivity({
   send,
   pendingApprovals = 0,
   live,
+  workflows,
   workDir,
   teamPlan,
 }: UseSessionActivityOptions): SessionActivity {
@@ -104,16 +108,28 @@ export function useSessionActivity({
   const visible = focused && appActive
   const teamPlanKey = teamPlan ? `${teamPlan.planId}:${teamPlan.state}` : ''
   const teamLaunching = teamPlan?.state === 'launching'
-  useEffect(() => {
-    store?.configure({ enabled: enabled && !!client, visible, turnActive, backgroundKey, teamPlanKey, teamLaunching })
-  }, [store, enabled, client, visible, turnActive, backgroundKey, teamPlanKey, teamLaunching])
   const data = useSyncExternalStore(
     store ? store.subscribe : noopSubscribe,
     store ? store.getSnapshot : emptySnapshot
   )
+  const workflowActive = useMemo(
+    () => hasActiveLiveWorkflow(workflows, data.workflowRuns, data.background),
+    [workflows, data.workflowRuns, data.background]
+  )
+  useEffect(() => {
+    store?.configure({
+      enabled: enabled && !!client,
+      visible,
+      turnActive,
+      backgroundKey,
+      teamPlanKey,
+      teamLaunching,
+      workflowActive,
+    })
+  }, [store, enabled, client, visible, turnActive, backgroundKey, teamPlanKey, teamLaunching, workflowActive])
   const model = useMemo(
-    () => deriveActivity(data, { live, pendingApprovals, turnActive, workDir }),
-    [data, live, pendingApprovals, turnActive, workDir]
+    () => deriveActivity(data, { live, workflows, pendingApprovals, turnActive, workDir }),
+    [data, live, workflows, pendingApprovals, turnActive, workDir]
   )
   const stopping = useMemo(() => Object.keys(data.stopping), [data.stopping])
   const refresh = useCallback(async () => {

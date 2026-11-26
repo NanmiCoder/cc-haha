@@ -1,0 +1,2 @@
+-keep class app.cchaha.updater.UpdaterModule { *; }
+-keep class app.cchaha.updater.UpdaterFileProvider { *; }

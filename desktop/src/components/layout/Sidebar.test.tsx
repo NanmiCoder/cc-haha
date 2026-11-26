@@ -84,6 +84,17 @@ vi.mock('../../i18n', () => ({
       'sidebar.sessionListFailed': 'Session list failed',
       'sidebar.refreshSessions': 'Refresh sessions',
       'search.global.trigger': 'Search chats',
+      'search.global.placeholder': 'Search projects and chats…',
+      'search.global.recentTitle': 'Recent chats',
+      'search.global.projectsTitle': 'Projects',
+      'search.global.chatsTitle': 'Chats',
+      'search.global.projectSessionCountOne': '1 chat',
+      'search.global.projectSessionCount': '{count} chats',
+      'search.global.projectArchivedOnly': 'Archived',
+      'search.global.noResults': 'No matches found',
+      'search.global.loading': 'Searching…',
+      'search.global.error': 'Search failed',
+      'search.global.close': 'Close',
       'sidebar.projects': 'Projects',
       'sidebar.projectMenu': 'Project menu',
       'sidebar.newProject': 'New project',
@@ -3750,6 +3761,104 @@ describe('Sidebar', () => {
           Reflect.deleteProperty(window.navigator, 'userAgent')
         }
       }
+    })
+
+    it('locates, expands, and reveals a project in the sidebar when selected from global search', async () => {
+      const scrolledElements: Element[] = []
+      const previousScrollIntoView = Element.prototype.scrollIntoView
+      Element.prototype.scrollIntoView = function scrollIntoViewStub() {
+        scrolledElements.push(this)
+      }
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-alpha', 'Alpha thread', '/workspace/alpha-repo', at),
+          makeSession('s-beta', 'Beta thread', '/workspace/beta-repo', at),
+        ],
+      })
+      useUIStore.setState({ sidebarOpen: true, activeModal: null } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      try {
+        render(<Sidebar />)
+
+        // Collapse beta-repo and switch to task view so locating must restore both.
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse beta-repo' }))
+        expect(screen.queryByText('Beta thread')).not.toBeInTheDocument()
+        fireEvent.click(screen.getByTestId('sidebar-task-view-toggle'))
+        expect(screen.queryByTestId('sidebar-project-group-workspace-beta-repo')).not.toBeInTheDocument()
+
+        // Open global search from the sidebar trigger and search by project name.
+        fireEvent.click(screen.getByRole('button', { name: 'Search chats' }))
+        const input = screen.getByPlaceholderText('Search projects and chats…')
+        fireEvent.change(input, { target: { value: 'beta-repo' } })
+
+        const projectOption = screen.getByRole('option', { name: /beta-repo/i })
+        fireEvent.click(projectOption)
+
+        // Modal closes, project view returns, beta-repo expands and scrolls/focuses its header button.
+        expect(useUIStore.getState().activeModal).toBeNull()
+        const betaGroup = await screen.findByTestId('sidebar-project-group-workspace-beta-repo')
+        expect(within(betaGroup).getByText('Beta thread')).toBeInTheDocument()
+        const betaHeader = within(betaGroup).getByRole('button', { name: 'Collapse beta-repo' })
+        expect(scrolledElements).toContain(betaHeader)
+        expect(betaHeader).toHaveFocus()
+      } finally {
+        Element.prototype.scrollIntoView = previousScrollIntoView
+      }
+    })
+
+    it('merges task-view exit and hidden-project restore into a single sidebar preference write', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      localStorage.setItem('cc-haha-sidebar-project-organization', 'time')
+      localStorage.setItem('cc-haha-sidebar-hidden-projects', JSON.stringify(['/workspace/hidden-repo']))
+      desktopUiPreferencesApiMock.updateSidebarPreferences.mockClear()
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-visible', 'Visible thread', '/workspace/visible-repo', at),
+          makeSession('s-hidden', 'Hidden thread', '/workspace/hidden-repo', at),
+        ],
+      })
+      useUIStore.setState({ sidebarOpen: true, activeModal: null } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      render(<Sidebar />)
+      expect(screen.queryByTestId('sidebar-project-group-workspace-hidden-repo')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search chats' }))
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'hidden-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /hidden-repo/i }))
+
+      const hiddenGroup = await screen.findByTestId('sidebar-project-group-workspace-hidden-repo')
+      expect(within(hiddenGroup).getByText('Hidden thread')).toBeInTheDocument()
+
+      expect(desktopUiPreferencesApiMock.updateSidebarPreferences).toHaveBeenCalledTimes(1)
+      expect(desktopUiPreferencesApiMock.updateSidebarPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectOrganization: 'recentProject',
+          hiddenProjects: [],
+        }),
+      )
+      expect(localStorage.getItem('cc-haha-sidebar-project-organization')).toBe('recentProject')
+      expect(localStorage.getItem('cc-haha-sidebar-hidden-projects')).toBe('[]')
+    })
+
+    it('expands a collapsed sidebar when a project is selected from global search', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('s-rail', 'Rail thread', '/workspace/rail-repo', at)],
+      })
+      useUIStore.setState({ sidebarOpen: false, activeModal: 'globalSearch' } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      render(<Sidebar />)
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'rail-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /rail-repo/i }))
+
+      expect(useUIStore.getState().sidebarOpen).toBe(true)
+      const railGroup = await screen.findByTestId('sidebar-project-group-workspace-rail-repo')
+      expect(within(railGroup).getByText('Rail thread')).toBeInTheDocument()
     })
   })
 })

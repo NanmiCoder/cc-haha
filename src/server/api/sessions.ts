@@ -570,6 +570,16 @@ export async function handleSessionsApi(
       )
     }
 
+    // Reject unknown sub-resources before falling through to /api/sessions/:id
+    // item handlers (otherwise DELETE /api/sessions/:id/<unknown> would delete
+    // the session itself).
+    if (subResource) {
+      return Response.json(
+        { error: 'NOT_FOUND', message: `Unknown session sub-resource: ${subResource}` },
+        { status: 404 }
+      )
+    }
+
     // -----------------------------------------------------------------------
     // Item routes: /api/sessions/:id
     // -----------------------------------------------------------------------

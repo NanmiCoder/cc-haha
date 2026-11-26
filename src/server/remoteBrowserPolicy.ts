@@ -125,6 +125,43 @@ export function projectRemoteWorkflows(body: Record<string, unknown>) {
   }
 }
 
+const WORKFLOW_RUN_PUBLIC_KEYS = [
+  'runId', 'sessionId', 'workflowName', 'startedAt', 'completedAgents', 'status',
+] as const
+
+/** `GET /api/workflows/runs`: omit local desktop `scriptPath`. */
+export function projectRemoteWorkflowRuns(body: Record<string, unknown>) {
+  return {
+    runs: asRecords(body.runs).map(run => pickScalars(run, WORKFLOW_RUN_PUBLIC_KEYS)),
+  }
+}
+
+const WORKFLOW_RUN_DETAIL_SCALARS = [
+  'runId', 'sessionId', 'workflowName', 'startedAt', 'completedAgents', 'status',
+  'description', 'error', 'totalTokens', 'totalToolCalls',
+] as const
+
+const WORKFLOW_PHASE_META_KEYS = ['title', 'detail', 'model'] as const
+
+/** `GET /api/workflows/runs/:sessionId/:runId`: explicit read-only projection; local paths, scripts and raw logs stay on the desktop. */
+export function projectRemoteWorkflowRunDetail(body: Record<string, unknown>) {
+  const phases = Array.isArray(body.phases)
+    ? asRecords(body.phases).map(phase => pickScalars(phase, WORKFLOW_PHASE_META_KEYS))
+    : undefined
+  const agents = Array.isArray(body.agents)
+    ? asRecords(body.agents).map(agent => ({
+        ...pickScalars(agent, ['key', 'agentId']),
+        ...('result' in agent ? { result: agent.result } : {}),
+      }))
+    : undefined
+  return {
+    ...pickScalars(body, WORKFLOW_RUN_DETAIL_SCALARS),
+    ...(phases ? { phases } : {}),
+    ...(agents ? { agents } : {}),
+    ...(body.result !== undefined ? { result: body.result } : {}),
+  }
+}
+
 const AGENT_PUBLIC_KEYS = ['agentType', 'description', 'modelDisplay', 'color', 'source', 'isActive'] as const
 const projectRemoteAgent = (agent: Record<string, unknown>) => pickScalars(agent, AGENT_PUBLIC_KEYS)
 

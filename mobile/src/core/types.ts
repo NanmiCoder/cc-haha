@@ -189,6 +189,8 @@ export type ChatState = {
   backgroundTaskIds: string[]
   /** 子 Agent 实时轨迹，键见 core/subagentLive.ts；没有事件时不存在。 */
   subagents?: Record<string, SubagentLive>
+  /** 工作流实时运行状态，键为 taskId；没有事件时不存在。 */
+  workflows?: Record<string, import('./workflows').WorkflowLiveRun>
   runtime?: RuntimeConfig
   permissionMode?: PermissionMode
   usage?: TokenUsage

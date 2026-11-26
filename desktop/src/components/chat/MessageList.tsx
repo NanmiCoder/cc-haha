@@ -3096,7 +3096,7 @@ export function MessageList({
   }, [completedTurnTargets, historyMutationEpoch, historyWindowed, resolvedSessionId, turnCheckpointQueryPaused, turnTargetsCurrent])
   const [checkpointResult, setCheckpointResult] = useState<({ request: NonNullable<typeof checkpointRequest> } & (
     | { kind: 'ready'; cards: TurnChangeCardModel[] }
-    | { kind: 'over-budget'; files: WorkspaceChangedFile[] | null }
+    | { kind: 'over-budget'; files: WorkspaceChangedFile[] | null; truncated: boolean }
     | { kind: 'error'; message: string }
   )) | null>(null)
   // 上次结果可以继续阅读；只有当前请求的结果才可以用于撤销。
@@ -3518,7 +3518,12 @@ export function MessageList({
               workspaceStatus.changedFiles.every((file) => typeof file?.path === 'string' && file.path.trim().length > 0)
               ? workspaceStatus.changedFiles
               : null
-            setCheckpointResult({ request: checkpointRequest, kind: 'over-budget', files })
+            setCheckpointResult({
+              request: checkpointRequest,
+              kind: 'over-budget',
+              files,
+              truncated: files !== null && workspaceStatus?.truncated === true,
+            })
           } else {
             setCheckpointResult({ request: checkpointRequest, kind: 'error', message: getApiErrorMessage(checkpointResponse.reason) })
           }
@@ -4337,6 +4342,7 @@ export function MessageList({
                 key={workspaceChangesFallback.request.sessionId}
                 sessionId={workspaceChangesFallback.request.sessionId}
                 files={workspaceChangesFallback.files}
+                truncated={workspaceChangesFallback.truncated}
               />
             ) : null}
 

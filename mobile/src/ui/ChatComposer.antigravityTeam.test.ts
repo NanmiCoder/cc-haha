@@ -31,6 +31,12 @@ test('ChatComposer and RunToggles hide team controls and pill when onTeam is omi
     mock.module(${JSON.stringify(import.meta.resolve('./compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))
     mock.module(${JSON.stringify(import.meta.resolve('./chat/ImagePreview'))}, () => ({ ImagePreview: 'ImagePreview' }))
     mock.module(${JSON.stringify(import.meta.resolve('../core/useVoiceDictation'))}, () => ({ useVoiceDictation: () => ({ phase: 'idle', live: false, issue: null, pendingText: null }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../core/usePromptOptimize'))}, () => ({
+      usePromptOptimize: () => ({
+        phase: 'idle', optimizing: false, restoreSnapshot: null, notice: null, issue: null,
+        optimize() {}, cancel() {}, restore() {}, edited() {}, dismissRestore() {}, dismissNotice() {}, dismissIssue() {},
+      }),
+    }))
     mock.module(${JSON.stringify(import.meta.resolve('./ComputerUseControl'))}, () => ({
       ComputerUseRow: 'ComputerUseRow',
       ComputerUseConsent: 'ComputerUseConsent',
