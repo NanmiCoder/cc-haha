@@ -396,7 +396,11 @@ export function anthropicToBedrockConverse(
       textFormat: {
         type: 'json_schema',
         structure: {
-          jsonSchema: { name: format.name, description: format.description, schema: JSON.stringify(format.schema) },
+          jsonSchema: {
+            name: format.name,
+            ...(format.description?.trim() ? { description: format.description } : {}),
+            schema: JSON.stringify(format.schema),
+          },
         },
       },
     }

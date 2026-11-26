@@ -47,6 +47,21 @@ describe('anthropicToBedrockConverse', () => {
         requestCompatibility: { structuredOutput: 'unsupported' },
       })).toThrow(RequestCompatibilityError)
     }
+
+    // Blank/omitted description is omitted from jsonSchema, and Claude effort stays in additionalModelRequestFields.output_config.
+    const claudeWithEffortAndSchema = anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 1024,
+      output_config: {
+        effort: 'high',
+        format: { type: 'json_schema', name: 'record', description: '   ', schema },
+      },
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+    expect(claudeWithEffortAndSchema.additionalModelRequestFields?.output_config).toEqual({ effort: 'high' })
+    const jsonSchema = claudeWithEffortAndSchema.outputConfig?.textFormat?.structure?.jsonSchema
+    expect(jsonSchema).toEqual({ name: 'record', schema: JSON.stringify(schema) })
+    expect(Object.prototype.hasOwnProperty.call(jsonSchema, 'description')).toBe(false)
   })
 
   test('converts system, messages, tools, images, documents, and serviceTier', () => {
