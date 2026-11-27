@@ -409,6 +409,7 @@ import {
 import {
   partitionLeadMailboxMessages,
   resolveTeammatePermissionRequests,
+  takeLeadMailboxTurn,
 } from '../utils/swarm/printLeaderPermissionBridge.js'
 import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath, unregisterTeamForSessionCleanup } from '../utils/swarm/teamHelpers.js'
 import { clearLeaderTeamName, setLeaderTeamName } from '../utils/tasks.js'
@@ -520,43 +521,37 @@ export type LeadMailboxPollStep =
  */
 export async function takeLeadMailboxBatch(
   state: LeadMailboxPollState,
-  options: { teamName: string | undefined; hasActiveTeammates: boolean },
+  options: { teamName: string | undefined; hasActiveTeammates: boolean; canPoll?: () => boolean },
 ): Promise<LeadMailboxPollStep> {
-  const { teamName, hasActiveTeammates } = options
+  const { teamName, hasActiveTeammates, canPoll } = options
   const revision = state.revision
-  const fresh = () => !state.held && state.revision === revision
+  const fresh = () => !state.held && state.revision === revision && (canPoll?.() ?? true)
   if (!fresh()) return { kind: 'held' }
   const unread = await readUnreadMessages(TEAM_LEAD_NAME, teamName)
   if (!fresh()) return { kind: 'held' }
 
-  if (!hasActiveTeammates) {
-    if (
-      unread.length === 0 ||
-      state.finalDrainDone ||
-      state.consecutiveAckFailures >= MAX_LEAD_MAILBOX_ACK_FAILURES
-    ) {
-      if (unread.length === 0) {
-        Object.assign(state, createLeadMailboxPollState(), { revision })
-      }
-      return { kind: 'stop' }
-    }
-    state.finalDrainDone = true
-  } else {
-    state.finalDrainDone = false
-  }
-
+  if (hasActiveTeammates) state.finalDrainDone = false
   if (unread.length === 0) {
     state.consecutiveAckFailures = 0
-    return { kind: 'idle' }
+    state.finalDrainDone = false
+    return { kind: hasActiveTeammates ? 'idle' : 'stop' }
   }
+  if (!hasActiveTeammates && state.finalDrainDone) return { kind: 'stop' }
 
-  const claimed = await claimMailboxMessages(TEAM_LEAD_NAME, teamName, unread, fresh)
+  const turn = takeLeadMailboxTurn(unread)
+  const candidates = [
+    ...turn.permissionRequests.map(({ message }) => message),
+    ...turn.sandboxPermissionRequests.map(({ message }) => message),
+    ...turn.remaining,
+  ]
+  const claimed = await claimMailboxMessages(TEAM_LEAD_NAME, teamName, candidates, fresh)
   if (!fresh()) {
     if (claimed) await returnClaimedMailboxMessages(TEAM_LEAD_NAME, teamName, claimed)
     return { kind: 'held' }
   }
   if (claimed) {
     state.consecutiveAckFailures = 0
+    state.finalDrainDone = !hasActiveTeammates && candidates.length === unread.length
     if (claimed.length === 0) {
       // Another consumer (a mid-turn attachment) took the whole batch.
       return hasActiveTeammates ? { kind: 'idle' } : { kind: 'stop' }
@@ -579,7 +574,8 @@ export async function takeLeadMailboxBatch(
     `[print.ts] Could not mark ${unread.length} inbox message(s) read for ${state.consecutiveAckFailures} polls; processing the batch unmarked`,
     { level: 'warn' },
   )
-  return { kind: 'batch', messages: unread }
+  if (!hasActiveTeammates) state.finalDrainDone = true
+  return { kind: 'batch', messages: candidates }
 }
 
 /**
@@ -1368,6 +1364,7 @@ function runHeadlessStreaming(
   let disposed = false
   let shutdownPromptInjected = false
   const leadMailboxPoll = createLeadMailboxPollState()
+  let pollingLeadMailbox = false
   const teamFinishedReminder: TeamFinishedReminderState = {}
   let heldBackResult: StdoutMessage | null = null
   const deferredAgentNotifications = new TaskNotificationFollowUpBatch()
@@ -2428,7 +2425,7 @@ function runHeadlessStreaming(
     }
   })
 
-  const run = async () => {
+  const run = async (leadMail?: { teamName: string; revision: number; messages: TeammateMessage[] }) => {
     if (running || disposed) {
       return
     }
@@ -2508,7 +2505,15 @@ function runHeadlessStreaming(
       // ask() call so messages that queued up during a long turn coalesce
       // into a single follow-up turn instead of N separate turns.
       const drainCommandQueue = async () => {
-        while ((command = dequeue(isMainThread))) {
+        while (true) {
+          // Mail starts its own turn. Never leave it in the SDK prompt queue,
+          // where Stop could miss it or batching could merge it with a command.
+          const mail = leadMail
+          leadMail = undefined
+          command = mail
+            ? { mode: 'prompt', value: formatTeammateMessages(mail.messages), uuid: randomUUID(), isSynthetic: true }
+            : dequeue(isMainThread)
+          if (!command) break
           if (
             command.mode !== 'prompt' &&
             command.mode !== 'orphaned-permission' &&
@@ -2523,7 +2528,7 @@ function runHeadlessStreaming(
           // side effects or orphanedPermission state, so they process singly.
           // Prompt commands greedily collect followers with matching workload.
           const batch: QueuedCommand[] = [command]
-          if (command.mode === 'prompt') {
+          if (!mail && command.mode === 'prompt') {
             while (canBatchWith(command, peek(isMainThread))) {
               batch.push(dequeue(isMainThread)!)
             }
@@ -2605,6 +2610,12 @@ function runHeadlessStreaming(
           }
 
           const allTools = buildAllTools(appState)
+
+          if (mail && (leadMailboxPoll.held || leadMailboxPoll.revision !== mail.revision || peek(isMainThread))) {
+            leadMailboxPoll.finalDrainDone = false
+            await returnClaimedMailboxMessages(TEAM_LEAD_NAME, mail.teamName, mail.messages)
+            continue
+          }
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'started')
@@ -2993,7 +3004,6 @@ function runHeadlessStreaming(
     ) {
       if (peek(isMainThread) === undefined && !inputClosed) {
         scheduleProactiveTick!()
-        return
       }
     }
 
@@ -3007,44 +3017,37 @@ function runHeadlessStreaming(
       return
     }
 
-    // Check for unread teammate messages and process them
-    // This mirrors what useInboxPoller does in interactive REPL mode
-    // Poll until no more messages (teammates may still be working)
-    {
-      const currentAppState = getAppState()
-      const teamContext = currentAppState.teamContext
-
-      if (teamContext && isTeamLead(teamContext)) {
-        // Poll for messages while teammates are active
-        // This is needed because teammates may send messages while we're waiting
-        // Keep polling until the team is shut down
+    if (pollingLeadMailbox) return
+    const leadContext = getAppState().teamContext
+    if (leadContext && isTeamLead(leadContext)) {
+      pollingLeadMailbox = true
+      try {
         const POLL_INTERVAL_MS = 500
-
         while (true) {
-          if (disposed) return
-          // Check if teammates are still active
+          if (disposed || running) return
           const refreshedState = getAppState()
           const teamName = refreshedState.teamContext?.teamName
-          // Claims exactly the batch it read before handing it out, and
-          // drains leftover mail once after the last teammate is gone.
+          if (!teamName) break
+          const canPoll = () => !disposed && !running && getAppState().teamContext?.teamName === teamName
           const pollRevision = leadMailboxPoll.revision
+          const canDeliver = () => canPoll() && !leadMailboxPoll.held && leadMailboxPoll.revision === pollRevision
           const step = await takeLeadMailboxBatch(leadMailboxPoll, {
             teamName,
             hasActiveTeammates: hasTeammatesRequiringShutdown(refreshedState),
+            canPoll,
           })
-          if (disposed) return
-
+          if (!canDeliver()) {
+            if (step.kind === 'batch') {
+              leadMailboxPoll.finalDrainDone = false
+              await returnClaimedMailboxMessages(TEAM_LEAD_NAME, teamName, step.messages)
+            }
+            if (disposed || running) return
+            if (leadMailboxPoll.held) break
+            continue
+          }
           if (step.kind === 'stop') {
             logForDebugging(
               '[print.ts] No more active teammates, stopping poll',
-            )
-            break
-          }
-
-          if (step.kind === 'held') {
-            if (!leadMailboxPoll.held) { void run(); return }
-            logForDebugging(
-              '[print.ts] Team paused by the host; teammate mail waits for the next user message',
             )
             break
           }
@@ -3142,23 +3145,12 @@ function runHeadlessStreaming(
               continue
             }
 
-            // Format remaining teammate chat the same way as useInboxPoller.
-            // Permission requests stay out of the model context.
-            const formatted = formatTeammateMessages(partitioned.remaining)
-
-            if (leadMailboxPoll.held || leadMailboxPoll.revision !== pollRevision) {
+            if (!canDeliver()) {
+              leadMailboxPoll.finalDrainDone = false
               await returnClaimedMailboxMessages(TEAM_LEAD_NAME, teamName, partitioned.remaining)
-              if (!leadMailboxPoll.held) { void run(); return }
-              break
+              continue
             }
-            // Enqueue and process
-            enqueue({
-              mode: 'prompt',
-              value: formatted,
-              uuid: randomUUID(),
-              isSynthetic: true,
-            })
-            void run()
+            void run({ teamName, revision: pollRevision, messages: partitioned.remaining })
             return // run() will come back here after processing
           }
 
@@ -3180,7 +3172,7 @@ function runHeadlessStreaming(
             teamFinishedReminder,
             teamName,
           )
-          if (disposed) return
+          if (!canDeliver()) continue
           if (teamFinishedPrompt) {
             logForDebugging(
               '[print.ts] Approved team finished, reminding the lead to shut it down',
@@ -3193,6 +3185,8 @@ function runHeadlessStreaming(
           // Wait and check again
           await sleep(POLL_INTERVAL_MS)
         }
+      } finally {
+        pollingLeadMailbox = false
       }
     }
 
@@ -3407,6 +3401,7 @@ function runHeadlessStreaming(
             setLeaderTeamName(teamContext.teamName)
             setAppState(prev => ({ ...prev, teamContext }))
             sendControlResponseSuccess(message)
+            if (!leadMailboxPoll.held) void run()
           } catch (error) {
             sendControlResponseError(message, error instanceof Error ? error.message : String(error))
           }
@@ -3427,6 +3422,7 @@ function runHeadlessStreaming(
             unregisterTeamForSessionCleanup(endedTeam)
             clearTeammateColors()
             clearLeaderTeamName()
+            Object.assign(leadMailboxPoll, createLeadMailboxPollState(), { revision: leadMailboxPoll.revision + 1 })
             setAppState(prev => ({ ...prev, teamContext: undefined, inbox: { messages: [] } }))
           }
           sendControlResponseSuccess(message)
@@ -4989,10 +4985,13 @@ function runHeadlessStreaming(
         trackReceivedMessageUuid(message.uuid)
       }
 
-      // The user speaking again ends a host pause: mail held since then reaches
-      // the lead after this turn, alongside whatever the user now wants.
-      leadMailboxPoll.held = false
-      leadMailboxPoll.revision++
+      // Only a human message ends a host pause; SDK notices can still arrive
+      // while the team is stopped.
+      if (!message.isSynthetic) {
+        leadMailboxPoll.held = false
+        leadMailboxPoll.finalDrainDone = false
+        leadMailboxPoll.revision++
+      }
       resumeBackgroundTaskFollowUp()
       enqueue({
         mode: 'prompt' as const,
