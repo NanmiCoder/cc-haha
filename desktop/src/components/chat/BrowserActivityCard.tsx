@@ -109,18 +109,22 @@ export type BrowserActivityCardProps = {
   toolCalls: ToolCall[]
   resultMap: Map<string, ToolResult>
   isStreaming?: boolean
+  /** True while this card is the tail of an active turn (bridges thinking gaps between tool calls). */
+  isLive?: boolean
 }
 
 /**
  * Collapsible Codex-style activity card for Browser Use tool runs.
- * Shows human-readable steps (with password fields masked), latest screenshot
- * thumbnail, and desktop/H5-aware controls (`View`, `Takeover`, `Stop`).
+ * Stays calm and flicker-free across multi-step browser turns: keeps a single
+ * stable action button (`View` for Workspace Browser; `Take over` only for
+ * live System Chrome runs) and never swaps buttons or headers between steps.
  */
 export const BrowserActivityCard = memo(function BrowserActivityCard({
   sessionId,
   toolCalls,
   resultMap,
   isStreaming = false,
+  isLive = false,
 }: BrowserActivityCardProps) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -164,25 +168,33 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
 
   const hasUnresolved = toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status !== 'stopped')
   const isRunning = hasUnresolved || (isStreaming && toolCalls.some((tc) => tc.status !== 'stopped' && !resultMap.has(tc.toolUseId)))
-  const hasError = toolCalls.some((tc) => resultMap.get(tc.toolUseId)?.isError)
-  const allStopped = !hasUnresolved && !hasError && toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status === 'stopped')
+  const lastToolCall = toolCalls.at(-1)
+  const lastResult = lastToolCall ? resultMap.get(lastToolCall.toolUseId) : undefined
+  const allStopped = !hasUnresolved && !lastResult?.isError && toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status === 'stopped')
   const hasDisabledError = toolCalls.some((tc) => {
     const result = resultMap.get(tc.toolUseId)
     if (!result?.isError) return false
     return DISABLED_ERROR_RE.test(extractResultText(result.content))
   })
+  // Bridge brief LLM thinking gaps between consecutive Browser* tool calls in
+  // the same live turn so the header, icon, and controls never flicker on/off.
+  const isActive = isRunning || (isLive && !allStopped && !hasDisabledError)
+  // Only surface a terminal red error when the run has settled and its final
+  // step failed (or Browser Use is disabled) — intermediate self-recovered
+  // errors stay visible inside the expanded timeline without flashing red.
+  const hasTerminalError = !isActive && (Boolean(lastResult?.isError) || hasDisabledError)
 
-  // Only consult session-level liveActivities while THIS card is actively running
+  // Only consult session-level liveActivities while THIS card is actively live
   // so completed historical cards never bleed screenshots from a later turn.
   const latestScreenshot = useMemo(
-    () => extractScreenshotFromResults(toolCalls, resultMap, isRunning ? liveActivities : EMPTY_ACTIVITIES),
-    [isRunning, liveActivities, resultMap, toolCalls],
+    () => extractScreenshotFromResults(toolCalls, resultMap, isActive ? liveActivities : EMPTY_ACTIVITIES),
+    [isActive, liveActivities, resultMap, toolCalls],
   )
 
-  const latestActivity = isRunning ? liveActivities.at(-1) : undefined
-  const activeTabId = latestActivity?.tabId ?? (isRunning ? activeTakeover?.tabId : undefined)
-  const targetKind = latestActivity?.target ?? (isRunning ? activeTakeover?.target : undefined) ?? 'workspace'
-  const headerLabel = isRunning && steps.length > 0
+  const latestActivity = isActive ? liveActivities.at(-1) : undefined
+  const activeTabId = latestActivity?.tabId ?? (isActive ? activeTakeover?.tabId : undefined)
+  const targetKind = latestActivity?.target ?? (isActive ? activeTakeover?.target : undefined) ?? 'workspace'
+  const headerLabel = isActive && steps.length > 0
     ? steps[steps.length - 1]!.label
     : t(steps.length === 1 ? 'browserUse.chat.summaryOne' : 'browserUse.chat.summaryMany', {
         count: steps.length,
@@ -223,9 +235,9 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
             className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             <span aria-hidden="true" className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-info)]">
-              {isRunning ? (
+              {isActive ? (
                 <LoaderCircle size={14} strokeWidth={1.75} className="animate-spin" />
-              ) : hasError ? (
+              ) : hasTerminalError ? (
                 <CircleX size={14} strokeWidth={1.75} className="text-[var(--color-error)]" />
               ) : allStopped ? (
                 <CircleStop size={14} strokeWidth={1.75} className="text-[var(--color-text-tertiary)]" />
@@ -233,7 +245,7 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
                 <Globe size={14} strokeWidth={1.75} />
               )}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+            <span className={`min-w-0 flex-1 truncate text-[13px] font-medium ${isActive ? 'codex-shimmer-text' : 'text-[var(--color-text-primary)]'}`}>
               {headerLabel}
             </span>
             <Badge tone={targetKind === 'chrome' ? 'info' : 'neutral'} size="xs">
@@ -259,8 +271,7 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
               >
                 {t('browserUse.chat.view')}
               </Button>
-            ) : null}
-            {isDesktop && isRunning && activeTabId ? (
+            ) : isDesktop && targetKind === 'chrome' && isActive && activeTabId ? (
               <Button
                 variant="secondary"
                 size="xs"

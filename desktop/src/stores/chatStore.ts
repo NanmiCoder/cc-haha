@@ -45,6 +45,7 @@ import type { ComposerAttachment } from '../lib/composerAttachments'
 import type { ComposerMention } from '../lib/composerMentions'
 import type { MessageEntry } from '../types/session'
 import { stripAgentTeamRequest } from '../lib/agentTeamRequest'
+import { stripBrowserUseRequest } from '../lib/browserUseRequest'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import type {
@@ -8566,10 +8567,14 @@ type RestoredUserDisplay = {
 }
 
 export function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
-  // The Agent Team switch prefixes an instruction block the user never typed.
+  // The Agent Team and Browser Use switches prefix instruction blocks the user never typed.
   const teamRequest = stripAgentTeamRequest(text)
   if (teamRequest.requested) {
     return { ...extractRestoredUserDisplay(teamRequest.content), modelContent: text }
+  }
+  const browserRequest = stripBrowserUseRequest(text)
+  if (browserRequest.requested) {
+    return { ...extractRestoredUserDisplay(browserRequest.content), modelContent: text }
   }
   const referenceContext = splitSessionReferenceContext(text)
   if (referenceContext.sessionReferences.length) {

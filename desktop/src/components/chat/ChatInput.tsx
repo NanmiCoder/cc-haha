@@ -66,6 +66,7 @@ import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEn
 import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import { useCapabilityCatalogStore } from '@/stores/capabilityCatalogStore'
@@ -1250,12 +1251,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     const sessionReferences = getSessionReferences(input, mentions)
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     const joinedContent = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
-    // Agent Team armed in the + menu: the model gets the team instruction, the
-    // bubble keeps what the user typed.
+    // Agent Team / Browser Use armed in the + menu: the model gets the
+    // instruction block, the bubble keeps what the user typed plus the chip.
+    const sendAsBrowserUse = capabilityMenu.browserUse.armed && !isMemberSession
     const sendAsTeam = capabilityMenu.agentTeamArmed && !isMemberSession
-    const contentForModel = sendAsTeam
-      ? (isAntigravity ? withAntigravitySwarmRequest(joinedContent) : withAgentTeamRequest(joinedContent))
+    const contentWithBrowser = sendAsBrowserUse
+      ? withBrowserUseRequest(joinedContent, capabilityMenu.browserUse.preferredTarget)
       : joinedContent
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(contentWithBrowser) : withAgentTeamRequest(contentWithBrowser))
+      : contentWithBrowser
     const displayContent = text || (
       workspaceReferences.length > 0
         ? t('chat.contextReferencesOnly', { count: workspaceReferences.length })
@@ -1416,6 +1421,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
+    if (sendAsBrowserUse) capabilityMenu.browserUse.disarm()
     // The send can wait for the launch branch to be read again. If the user moved
     // to another chat meanwhile, the editor holds that chat's draft now, not what
     // was just sent: leave it alone. (The sent chat's saved draft is cleared below.)
@@ -2241,11 +2247,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
                   ) : null}
 
-                  {capabilityMenu.browserUse.enabled && !isMemberSession ? (
+                  {capabilityMenu.browserUse.armed && !isMemberSession ? (
                     <BrowserUseTargetPill
                       target={capabilityMenu.browserUse.preferredTarget}
                       onChange={capabilityMenu.browserUse.setPreferredTarget}
-                      onDisable={capabilityMenu.browserUse.disable}
+                      onRemove={capabilityMenu.browserUse.disarm}
                       touch={isMobileComposer}
                     />
                   ) : null}

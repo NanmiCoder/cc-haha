@@ -356,6 +356,7 @@ function ToolCallGroupContent({
         toolCalls={toolCalls}
         resultMap={resultMap}
         isStreaming={isStreaming}
+        isLive={isLive}
       />
     )
   }
@@ -392,11 +393,12 @@ function ToolCallGroupContent({
       <div className="space-y-2">
         {segments.map((segment, index) => segment.kind === 'browser' ? (
           <BrowserActivityCard
-            key={segment.toolCalls.map((toolCall) => toolCall.id).join(':')}
+            key={`browser-${segment.toolCalls[0]?.id ?? index}`}
             sessionId={sessionId}
             toolCalls={segment.toolCalls}
             resultMap={resultMap}
-            isStreaming={isStreaming}
+            isStreaming={isStreaming && index === segments.length - 1}
+            isLive={isLive && index === segments.length - 1}
           />
         ) : (
           <ToolCallGroupContent

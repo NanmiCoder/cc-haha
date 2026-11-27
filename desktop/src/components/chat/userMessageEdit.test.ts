@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { UIAttachment, UIMessage } from '../../types/chat'
 import { withAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { withBrowserUseRequest } from '../../lib/browserUseRequest'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { formatWorkspaceReferencePrompt, type WorkspaceChatReference } from '../../stores/workspaceChatContextStore'
 import {
@@ -322,6 +323,24 @@ describe('capability pills in edit and resend', () => {
     const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页`, modelContent: withAgentTeamRequest(`${SKILL} 做个落地页`) })
     const payload = buildUserMessageResendPayload({ ...draft, text: '做个落地页', agentTeam: false }, labels)
     expect(payload?.content).toBe('做个落地页')
+  })
+
+  it('restores the Browser Use pill target, lets the user change or remove it, and resends cleanly', () => {
+    const modelContent = withBrowserUseRequest('打开 modeldial.com', 'workspace')
+    const draft = createUserMessageEditDraft({ content: '打开 modeldial.com', modelContent })
+    expect(draft).toEqual({
+      text: '打开 modeldial.com',
+      attachments: [],
+      sessionReferences: [],
+      browserUse: 'workspace',
+    })
+
+    const switched = buildUserMessageResendPayload({ ...draft, browserUse: 'chrome' }, labels)
+    expect(switched?.content).toBe(withBrowserUseRequest('打开 modeldial.com', 'chrome'))
+    expect(switched?.options.displayContent).toBe('打开 modeldial.com')
+
+    const removed = buildUserMessageResendPayload({ ...draft, browserUse: undefined }, labels)
+    expect(removed?.content).toBe('打开 modeldial.com')
   })
 
   it('edits a pill under the name the composer showed and still sends its identity', () => {

@@ -109,6 +109,7 @@ import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEn
 import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { executeFastSlashCommand } from '@/lib/fastModeCommand'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { formatBytes } from '@/lib/formatBytes'
@@ -1048,12 +1049,16 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }))
     // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
     // serialized from the live document; the bubble keeps the pill text.
-    // Agent Team armed in the + menu: the model gets the team instruction,
-    // the bubble keeps what the user typed.
+    // Agent Team / Browser Use armed in the + menu: the model gets the
+    // instruction block, the bubble keeps what the user typed plus the chip.
+    const sendAsBrowserUse = capabilityMenu.browserUse.armed
     const sendAsTeam = capabilityMenu.agentTeamArmed
-    const contentForModel = sendAsTeam
-      ? (isAntigravity ? withAntigravitySwarmRequest(serializedText) : withAgentTeamRequest(serializedText))
+    const contentWithBrowser = sendAsBrowserUse
+      ? withBrowserUseRequest(serializedText, capabilityMenu.browserUse.preferredTarget)
       : serializedText
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(contentWithBrowser) : withAgentTeamRequest(contentWithBrowser))
+      : contentWithBrowser
     // The local server drops a frame over its input budget by closing the
     // socket, and the client would only reconnect: the first turn, with its
     // pasted screenshots inlined as data URLs, would vanish without a trace.
@@ -1101,6 +1106,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       }
       recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
       if (sendAsTeam) capabilityMenu.disarmAgentTeam()
+      if (sendAsBrowserUse) capabilityMenu.browserUse.disarm()
       setInput('')
       setMentions([])
       setAttachments([])
@@ -1841,11 +1847,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
                 ) : null}
 
-                {capabilityMenu.browserUse.enabled ? (
+                {capabilityMenu.browserUse.armed ? (
                   <BrowserUseTargetPill
                     target={capabilityMenu.browserUse.preferredTarget}
                     onChange={capabilityMenu.browserUse.setPreferredTarget}
-                    onDisable={capabilityMenu.browserUse.disable}
+                    onRemove={capabilityMenu.browserUse.disarm}
                     touch={isMobileComposer}
                   />
                 ) : null}

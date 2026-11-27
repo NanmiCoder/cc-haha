@@ -239,6 +239,7 @@ export const useBrowserUseStore = create<BrowserUseStore>((set, get) => ({
         const previous = state.tabStates[event.tabId] ?? createDefaultTabOverlay(event.tabId)
         const next: BrowserUseTabOverlayState = {
           ...previous,
+          controlState: previous.controlState === 'idle' ? 'active' : previous.controlState,
           actionLabel: event.label ?? previous.actionLabel,
           cursor: {
             moveId: event.moveId,

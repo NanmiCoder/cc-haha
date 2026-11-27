@@ -1630,6 +1630,7 @@ export class BrowserUseEngine {
         let y = 200
         if (step.ref) {
           const resolved = await this.resolveRef(tab.info.tabId, step.ref, signal)
+          await this.moveVisualCursor(tab, resolved, 'scroll', humanLabel, signal)
           x = resolved.coords.xDispatch
           y = resolved.coords.yDispatch
         }
@@ -2070,8 +2071,8 @@ export class BrowserUseEngine {
     const dx = resolved.coords.xSlot - tab.lastCursorPos.x
     const dy = resolved.coords.ySlot - tab.lastCursorPos.y
     const dist = Math.hypot(dx, dy)
-    const style = dist <= 196 ? 'scoot' : 'bezier'
-    const durationMs = Math.round(Math.min(380, Math.max(160, 140 + dist * 0.35)))
+    const style = dist <= 160 ? 'scoot' : 'bezier'
+    const durationMs = Math.round(Math.min(460, Math.max(220, 180 + dist * 0.42)))
     tab.lastCursorPos = { x: resolved.coords.xSlot, y: resolved.coords.ySlot }
 
     const payload = {

@@ -380,10 +380,14 @@ describe('the Agent mode row', () => {
 })
 
 describe('the Browser Use row', () => {
-  it('renders a live toggle switch when browserUse config is loaded, and falls back to settings otherwise', () => {
-    const loaded = rootItem(buildInput({ browserUse: { enabled: true, preferredTarget: 'chrome' } }), 'browser-use')
-    expect(loaded.switch).toEqual({ checked: true, disabled: false })
-    expect(loaded.action).toEqual({ type: 'toggleBrowserUse' })
+  it('renders a live per-message toggle switch reflecting armed state when loaded, and falls back to settings otherwise', () => {
+    const loadedIdle = rootItem(buildInput({ browserUse: { enabled: true, armed: false, preferredTarget: 'chrome' } }), 'browser-use')
+    expect(loadedIdle.switch).toEqual({ checked: false, disabled: false })
+    expect(loadedIdle.action).toEqual({ type: 'toggleBrowserUse' })
+
+    const loadedArmed = rootItem(buildInput({ browserUse: { enabled: true, armed: true, preferredTarget: 'chrome' } }), 'browser-use')
+    expect(loadedArmed.switch).toEqual({ checked: true, disabled: false })
+    expect(loadedArmed.action).toEqual({ type: 'toggleBrowserUse' })
 
     const fallback = rootItem(buildInput({ browserUse: null }), 'browser-use')
     expect(fallback.switch).toBeUndefined()

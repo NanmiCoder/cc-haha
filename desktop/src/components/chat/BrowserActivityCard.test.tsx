@@ -244,7 +244,7 @@ describe('BrowserActivityCard', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('opens and closes screenshot preview modal, focuses workspace tab on View, and triggers desktop Takeover', () => {
+  it('keeps a single stable View button for workspace runs without button swapping, and offers Take over only for live Chrome runs', () => {
     const sendUserAction = vi.fn().mockResolvedValue(undefined)
     window.desktopHost = {
       ...browserHost,
@@ -275,22 +275,61 @@ describe('BrowserActivityCard', () => {
     const calls: ToolCall[] = [
       makeCall({ id: 'c1', toolUseId: 'tu-1', toolName: 'BrowserAct', input: { steps: [{ action: 'click', label: 'Submit' }] } }),
     ]
-    render(<BrowserActivityCard sessionId="s1" toolCalls={calls} resultMap={new Map()} isStreaming />)
+    const { rerender } = render(
+      <BrowserActivityCard sessionId="s1" toolCalls={calls} resultMap={new Map()} isStreaming isLive />,
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }))
     expect(useWorkspaceStore.getState().getSession('s1').layout).toBe('split')
+    // Workspace runs keep a single steady View button (takeover lives on the browser overlay pill).
+    expect(screen.queryByRole('button', { name: 'Take over' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Take over' }))
-    expect(sendUserAction).toHaveBeenCalledWith({
-      tabId: browserTabId,
-      action: 'takeover',
-      reason: 'user_requested',
-    })
+    // While isLive is true, a thinking gap after tool_result arrives keeps the card calmly active
+    // instead of flipping back to the settled summary or flashing a recovered error.
+    const settledMap = new Map<string, ToolResult>([
+      ['tu-1', { id: 'r1', type: 'tool_result', toolUseId: 'tu-1', content: 'ok', isError: false, timestamp: 1100 }],
+    ])
+    rerender(<BrowserActivityCard sessionId="s1" toolCalls={calls} resultMap={settledMap} isLive />)
+    expect(screen.getByTestId('browser-activity-card')).toHaveTextContent('Submit')
+    expect(screen.queryByRole('button', { name: 'Take over' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview browser screenshot' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    // System Chrome live runs expose Take over directly since there is no Workspace tab to View.
+    useBrowserUseStore.getState().applyActivityEvent('s1', {
+      id: 'ev-chrome',
+      timestamp: 1200,
+      sessionId: 's1',
+      tabId: 'chrome-tab-1',
+      target: 'chrome',
+      kind: 'act',
+      humanLabel: 'Click login',
+      status: 'running',
+    })
+    rerender(<BrowserActivityCard sessionId="s1" toolCalls={calls} resultMap={new Map()} isStreaming isLive />)
+    expect(screen.queryByRole('button', { name: 'View' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }))
+    expect(sendUserAction).toHaveBeenCalledWith({
+      tabId: 'chrome-tab-1',
+      action: 'takeover',
+      reason: 'user_requested',
+    })
+  })
+
+  it('does not show a red error icon on intermediate self-recovered steps when the final browser step succeeded', () => {
+    const calls: ToolCall[] = [
+      makeCall({ id: 'c1', toolUseId: 'tu-1', toolName: 'BrowserAct', input: { steps: [{ action: 'click', label: 'Retry' }] } }),
+      makeCall({ id: 'c2', toolUseId: 'tu-2', toolName: 'BrowserSnapshot', input: {} }),
+    ]
+    const results = new Map<string, ToolResult>([
+      ['tu-1', { id: 'r1', type: 'tool_result', toolUseId: 'tu-1', content: 'stale ref', isError: true, timestamp: 1100 }],
+      ['tu-2', { id: 'r2', type: 'tool_result', toolUseId: 'tu-2', content: 'ok', isError: false, timestamp: 1200 }],
+    ])
+    const { container } = render(<BrowserActivityCard sessionId="s1" toolCalls={calls} resultMap={results} />)
+    expect(container.querySelector('.lucide-circle-x')).toBeNull()
   })
 
   it('extracts screenshots from structured image blocks and data URLs, and renders EnableCard on disabled error', () => {

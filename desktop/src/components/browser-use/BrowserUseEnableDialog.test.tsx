@@ -33,21 +33,30 @@ describe('BrowserUseTargetPill', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
-  it('cycles Auto -> Workspace -> Chrome and supports one-click disable', () => {
+  it('cycles Auto -> Workspace -> Chrome and supports one-click disarm', () => {
     const onChange = vi.fn()
-    const onDisable = vi.fn()
+    const onRemove = vi.fn()
     render(
       <BrowserUseTargetPill
         target="auto"
         onChange={onChange}
-        onDisable={onDisable}
+        onRemove={onRemove}
       />,
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Browser target: Auto/i }))
     expect(onChange).toHaveBeenCalledWith('workspace')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disable Browser Use' }))
-    expect(onDisable).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Browser Use' }))
+    expect(onRemove).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders a read-only chip without interactive buttons when used on a sent message', () => {
+    render(<BrowserUseTargetPill target="workspace" />)
+
+    const pill = screen.getByTestId('browser-use-target-pill')
+    expect(pill).toHaveTextContent('Browser')
+    expect(pill).toHaveTextContent('Workspace')
+    expect(screen.queryByRole('button')).toBeNull()
   })
 })
