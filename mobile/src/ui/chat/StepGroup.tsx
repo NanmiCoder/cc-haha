@@ -112,6 +112,13 @@ function Trailing({ item, state, label }: { item: ChatItem; state: StepState; la
 
 function StepText({ label }: { label: ReturnType<typeof describeStep> }) {
   const colors = useColors()
+  if (label.description) {
+    return (
+      <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 14, color: colors.ink2 }}>
+        {label.verb}
+      </Text>
+    )
+  }
   return (
     <>
       <Text style={{ fontSize: 14, color: colors.ink2, flexShrink: 0 }}>{label.verb}</Text>
@@ -214,13 +221,25 @@ function StepDetail({ item, state }: { item: ChatItem; state: StepState }) {
     state === 'running' ? '正在运行…' : state === 'missing' ? '没有拿到结果' : '（没有输出）'
   if (name === 'Bash' || name === 'PowerShell') {
     const command = typeof input?.command === 'string' ? input.command : ''
+    // 折叠行只放得下一行说明，展开后把完整原文补在这里。
+    const description = typeof input?.description === 'string' ? input.description.trim() : ''
     return (
-      <CodeText>
-        {command ? <Mono style={{ color: colors.ink }}>{`$ ${command}`}</Mono> : null}
-        {command && output.text ? '\n' : null}
-        <Omitted count={output.omitted} />
-        {output.text || empty}
-      </CodeText>
+      <>
+        {description ? (
+          <Text
+            selectable
+            style={{ fontSize: 13, lineHeight: 19, color: colors.ink2, paddingHorizontal: 12, paddingBottom: 6 }}
+          >
+            {description}
+          </Text>
+        ) : null}
+        <CodeText>
+          {command ? <Mono style={{ color: colors.ink }}>{`$ ${command}`}</Mono> : null}
+          {command && output.text ? '\n' : null}
+          <Omitted count={output.omitted} />
+          {output.text || empty}
+        </CodeText>
+      </>
     )
   }
   if (name === 'Edit' || name === 'MultiEdit') {

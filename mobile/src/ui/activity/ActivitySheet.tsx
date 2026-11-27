@@ -715,8 +715,12 @@ function WorkflowAgentLine({
 
 /* ───────────── 子 Agent ───────────── */
 
-const stepIcon = (verb: string): IconName =>
-  verb === '运行' ? 'terminal' : verb === '搜索' || verb === '查找' || verb === '搜网页' ? 'search' : 'file'
+const stepIcon = (step: Pick<StepLine, 'description' | 'verb'>): IconName =>
+  step.description || step.verb === '运行'
+    ? 'terminal'
+    : step.verb === '搜索' || step.verb === '查找' || step.verb === '搜网页'
+      ? 'search'
+      : 'file'
 
 function SubagentCard({ row, now, onPress }: { row: SubagentRow; now: number; onPress(): void }) {
   const colors = useColors()
@@ -792,7 +796,7 @@ function StepRow({ step, current }: { step: StepLine; current: boolean }) {
       {current ? (
         <Spinner size={13} thickness={2.4} />
       ) : (
-        <Icon name={step.error ? 'circle-alert' : stepIcon(step.verb)} size={13} color={step.error ? colors.err : colors.ink3} strokeWidth={1.9} />
+        <Icon name={step.error ? 'circle-alert' : stepIcon(step)} size={13} color={step.error ? colors.err : colors.ink3} strokeWidth={1.9} />
       )}
       {step.mono ? (
         <Mono numberOfLines={1} style={style}>

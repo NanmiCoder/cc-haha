@@ -102,8 +102,12 @@ export function StatusCaption({
         <Spinner size={13} thickness={2.4} />
       )}
       <Text
+        numberOfLines={1}
+        ellipsizeMode="tail"
         style={{
-          flexShrink: 0,
+          // 前导词与后面的 object 都可收缩：无论哪一侧很长（含未知工具名），整行都留在 24 高的一行里。
+          flexShrink: 1,
+          minWidth: 0,
           fontSize: 13,
           lineHeight: 18,
           fontWeight: attention ? '600' : '400',

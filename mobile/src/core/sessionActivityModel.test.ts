@@ -143,6 +143,20 @@ describe('子 Agent 与后台命令', () => {
       { verb: '读取', object: 'src/c.ts', mono: true, done: false, error: false },
     ])
   })
+  test('带说明的命令步骤保留 description 标记，图标不会退化成文件', () => {
+    const bash: Record<string, SubagentLive> = {
+      [runKey('a1')]: {
+        reads: [],
+        steps: [
+          { toolUseId: '9', toolName: 'Bash', input: { command: 'bun test', description: '运行单元测试' }, done: false },
+        ],
+      },
+    }
+    const [row] = subagentRows([agent()], bash, {})
+    expect(row?.steps).toEqual([
+      { verb: '运行单元测试', object: undefined, mono: false, description: true, done: false, error: false },
+    ])
+  })
   test('没有实时数据时不显示步骤和统计，更不编造', () => {
     const [row] = subagentRows([agent()], undefined, {})
     expect(row?.steps).toEqual([])

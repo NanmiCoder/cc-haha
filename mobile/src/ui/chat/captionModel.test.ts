@@ -45,6 +45,13 @@ describe('currentStepLabel', () => {
     ]
     expect(currentStepLabel(items)).toMatchObject({ verb: '子 Agent', object: '梳理' })
   })
+  test('命令说明优先于命令原文成为当前步骤', () => {
+    const items = [
+      user('u'),
+      tool('b', 'Bash', { command: 'bun test', description: '运行单元测试' }, { pending: true }),
+    ]
+    expect(currentStepLabel(items)).toMatchObject({ verb: '运行单元测试', description: true })
+  })
   test('工具有多个未完成时取最后一个', () => {
     const items = [
       user('u'),
@@ -77,6 +84,26 @@ describe('captionParts 文案', () => {
       lead: '正在整理上下文',
       mono: false,
     })
+  })
+  test('命令自带说明时整句成为状态，不再套动词', () => {
+    expect(captionParts({ step: { verb: '运行单元测试', mono: false, description: true } })).toEqual({
+      tone: 'run',
+      lead: '正在运行单元测试',
+      mono: false,
+    })
+    expect(captionParts({ step: { verb: 'Run tests', mono: false, description: true } }).lead).toBe('Run tests')
+    // 英文里的弯引号、破折号不是中文，不能拼成「正在Don’t run」。
+    expect(captionParts({ step: { verb: 'Run the user’s tests', mono: false, description: true } }).lead).toBe(
+      'Run the user’s tests'
+    )
+    // 假名、谚文也是「中文类」语序，加“正在”；纯假名说明不能退化成裸动词。
+    expect(captionParts({ step: { verb: 'テストを実行', mono: false, description: true } }).lead).toBe(
+      '正在テストを実行'
+    )
+    expect(captionParts({ step: { verb: '테스트 실행', mono: false, description: true } }).lead).toBe('正在테스트 실행')
+    expect(
+      captionParts({ waiting: true, step: { verb: '运行单元测试', mono: false, description: true } })
+    ).toMatchObject({ tone: 'attention', lead: '等你批准 · 运行单元测试' })
   })
   test('思考块、子 Agent、未知工具的措辞不会读成病句', () => {
     expect(captionParts({ step: { verb: '思考过程', mono: false } }).lead).toBe('正在思考')

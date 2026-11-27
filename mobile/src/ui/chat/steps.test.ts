@@ -304,6 +304,25 @@ describe('step labels', () => {
     })
     expect(label('Write', { file_path: '/elsewhere/a.md' })).toMatchObject({ verb: '写入', object: '/elsewhere/a.md' })
     expect(label('Bash', { command: 'bun test src\n&& echo done' })).toMatchObject({ verb: '运行', object: 'bun test src' })
+    expect(label('Bash', { command: 'bun test src', description: '运行单元测试' })).toEqual({
+      verb: '运行单元测试',
+      mono: false,
+      description: true,
+    })
+    expect(label('PowerShell', { command: 'Get-ChildItem', description: '查看目录内容' })).toMatchObject({
+      verb: '查看目录内容',
+      description: true,
+    })
+    expect(label('Bash', { command: 'ls', description: '   ' })).toMatchObject({ verb: '运行', object: 'ls', mono: true })
+    expect(label('Bash', { command: 'bun test', description: '运行单元测试\n并汇总失败项' })).toMatchObject({
+      verb: '运行单元测试 并汇总失败项',
+      description: true,
+    })
+    // 全角空格是正文的一部分，压空白时保留。
+    expect(label('Bash', { command: 'ls', description: '构建\t产物\u3000预览' })).toMatchObject({
+      verb: '构建 产物\u3000预览',
+      description: true,
+    })
     expect(label('Grep', { pattern: 'useTheme' })).toMatchObject({ verb: '搜索', object: 'useTheme', mono: true })
     expect(label('Glob', { pattern: '**/*.tsx' })).toMatchObject({ verb: '查找', object: '**/*.tsx' })
     expect(label('WebFetch', { url: 'https://example.com' })).toMatchObject({ verb: '打开', mono: true })
