@@ -39,6 +39,12 @@ describe('SlashCommandMenu', () => {
     expect(options[0]).toHaveAttribute('id', getSlashCommandOptionId('slash-menu', 0))
     expect(options[1]).toHaveAttribute('id', getSlashCommandOptionId('slash-menu', 1))
     expect(options[1]).toHaveAttribute('aria-selected', 'true')
+    // Regression (#2013): the page hover wash vanished against the dark glass
+    // sheet, so the keyboard-selected row has to carry the brand menu tint and
+    // a brand rim.
+    expect(options[1]).toHaveClass('bg-[var(--color-menu-item-active)]')
+    expect(options[1]).toHaveClass('ring-[var(--color-brand)]')
+    expect(options[1]).not.toHaveClass('bg-[var(--color-surface-hover)]')
     expect(options[1]).toHaveTextContent(
       translate(useSettingsStore.getState().locale, 'chat.slashSkillProject'),
     )

@@ -13,8 +13,23 @@ export const COMPOSER_POPOVER =
 export const COMPOSER_MENU_ITEM =
   'flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
-/** The selected/highlighted row keeps the hover fill at rest. */
+/**
+ * The current value in a single-select popover (model, permission mode, agent
+ * profile) keeps the neutral hover fill at rest. These rows mark the value with
+ * their own check/brand glyph and deliberately avoid a filled selection row;
+ * leave them on the page wash.
+ */
 export const COMPOSER_MENU_ITEM_ACTIVE = 'bg-[var(--color-surface-hover)]'
+
+/**
+ * Suggestion rows (slash commands, `@` references, the `+` menu) paint on the
+ * dense composer menu sheet, where the page hover wash is invisible. Their
+ * hover and keyboard-selected states carry the brand tint instead; the selected
+ * row adds a brand rim so the active line is unmistakable (#2013).
+ */
+export const COMPOSER_MENU_ITEM_HOVER = 'hover:bg-[var(--color-menu-item-active)]'
+export const COMPOSER_MENU_ITEM_SELECTED =
+  'bg-[var(--color-menu-item-active)] ring-1 ring-inset ring-[var(--color-brand)]'
 
 /** Group heading: 11px semibold tertiary, sentence case. */
 export const COMPOSER_MENU_SECTION =

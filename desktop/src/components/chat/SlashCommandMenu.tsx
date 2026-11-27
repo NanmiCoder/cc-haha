@@ -31,7 +31,7 @@ import { safeMentionIcon } from '@/lib/composerMentions'
 import { publicAssetPath } from '@/lib/publicAsset'
 import { Kbd } from '@/components/ui/Kbd'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
-import { COMPOSER_MENU_SECTION } from './composerMenuStyles'
+import { COMPOSER_MENU_ITEM_HOVER, COMPOSER_MENU_ITEM_SELECTED, COMPOSER_MENU_SECTION } from './composerMenuStyles'
 
 /** One menu row: icon, then the name over its description (the 「素」 menu item). */
 const ROW = 'flex min-h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
@@ -124,11 +124,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           ref={(element) => { itemRefs.current[index] = element }}
           onClick={() => onSelect(command.name)}
           onMouseEnter={() => onHighlight(index)}
-          className={`${ROW} ${
-            index === selectedIndex
-              ? 'bg-[var(--color-surface-hover)]'
-              : 'hover:bg-[var(--color-surface-hover)]'
-          }`}
+          className={`${ROW} ${index === selectedIndex ? COMPOSER_MENU_ITEM_SELECTED : COMPOSER_MENU_ITEM_HOVER}`}
         >
           <Icon
             aria-hidden="true"
@@ -157,7 +153,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         ref={setMenuRef}
         onMouseDown={event => event.preventDefault()}
         style={{ maxHeight: room }}
-        className={`dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 right-0 z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`}
+        className={`dropdown-glass composer-menu-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 right-0 z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`}
       >
         {isSearching ? <div className={`${COMPOSER_MENU_SECTION} px-3 pt-2.5`}>
           {t('chat.slashSearchResults')}
@@ -191,7 +187,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                   title={[candidate?.displayName || command.name, command.argumentHint, command.description].filter(Boolean).join(' — ')}
                   ref={element => { itemRefs.current[index] = element }}
                   onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
-                  className={`${ROW} ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
+                  className={`${ROW} ${index === selectedIndex ? COMPOSER_MENU_ITEM_SELECTED : COMPOSER_MENU_ITEM_HOVER}`}>
                   {icon ? <img src={publicAssetPath(icon)} alt="" className="h-4 w-4 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
                   <span className="grid min-w-0 flex-1 gap-px">
                     <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>

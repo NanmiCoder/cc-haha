@@ -964,6 +964,19 @@
   --color-surface-sidebar: var(--cc-s0);
   --color-surface-hover: var(--cc-s1);
   --color-surface-selected: var(--cc-s1);
+  /* Composer menu selection and hover. The menu sheet is a lifted surface, so
+     re-using `--color-surface-hover` for a row painted on it disappears: in
+     dark the two are ~2 RGB steps apart, and the keyboard highlight read as
+     missing (#2013). A brand tint gives the row its own value; the alpha stays
+     low enough that tertiary descriptions keep AA contrast on top of it. */
+  --color-menu-item-active: rgba(var(--cc-ac-rgb), 0.12);
+  /* The composer's `/` and `@` menus are the one overlay that floats over the
+     frosted composer card, so the nested `backdrop-filter` cannot be relied on
+     to hide the text behind them (Windows renders the nested blur weakly, and
+     opacity was already too low at 0.82 in dark). These two menus get a denser
+     surface and rim of their own instead of changing every glass surface. */
+  --color-surface-menu-glass: rgba(var(--cc-bg-rgb), 0.96);
+  --color-surface-menu-glass-border: rgba(var(--cc-t1-rgb), 0.10);
   --color-surface-info: var(--cc-s0);
   --color-surface-user-msg: var(--cc-s1);
 
@@ -1329,6 +1342,11 @@
   --color-surface-glass: rgba(var(--cc-s1-rgb), 0.82);
   --color-surface-dialog-glass: rgba(var(--cc-s1-rgb), 0.84);
   --color-surface-glass-border: rgba(255, 255, 255, 0.08);
+  /* Denser composer menus (#2013): light text on the near-black ground showed
+     through the 0.82 sheet, and the nested blur over the composer card did not
+     hide it. The rim gets a step stronger so the sheet still reads as an edge. */
+  --color-surface-menu-glass: rgba(var(--cc-s1-rgb), 0.96);
+  --color-surface-menu-glass-border: rgba(255, 255, 255, 0.16);
   --glass-top-rim: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --shadow-dialog-glass: 0 24px 72px -20px rgba(0, 0, 0, 0.88), 0 4px 16px rgba(0, 0, 0, 0.45);
   --shadow-dropdown-glass: 0 16px 40px -18px rgba(0, 0, 0, 0.80), 0 2px 8px rgba(0, 0, 0, 0.40);
@@ -1532,6 +1550,14 @@ body > :not(#root, [role="tooltip"]) * {
   box-shadow: var(--glass-top-rim), var(--shadow-dropdown-glass);
 }
 
+/* The composer's `/` and `@` menus alone get the dense sheet (#2013): they float
+   over the frosted composer card, whose own `backdrop-filter` makes the nested
+   blur unreliable, so opacity — not blur — has to keep the composer text out. */
+.dropdown-glass.composer-menu-glass {
+  background: var(--color-surface-menu-glass);
+  border-color: var(--color-surface-menu-glass-border);
+}
+
 /* Focus inside a popover is shown on the focused control itself; ringing the
    whole sheet as well doubled the indicator. The edge sharpens one step instead. */
 .glass-panel:focus-within,
@@ -1583,6 +1609,10 @@ body > :not(#root, [role="tooltip"]) * {
   .glass-panel,
   .surface-glass,
   .dropdown-glass {
+    background: rgb(var(--cc-bg-rgb));
+  }
+
+  .dropdown-glass.composer-menu-glass {
     background: rgb(var(--cc-bg-rgb));
   }
 
