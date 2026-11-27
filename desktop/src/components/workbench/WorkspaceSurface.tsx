@@ -17,6 +17,7 @@ import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
 import { WorkspaceAddMenu } from './WorkspaceAddMenu'
 import { WorkspaceBrowserTab } from './WorkspaceBrowserTab'
+import { WorkspaceBackgroundTaskTab } from './WorkspaceBackgroundTaskTab'
 import { WorkspaceTerminalTab } from './WorkspaceTerminalTab'
 import { useWorkspaceFileWatch } from '@/lib/workspace/useWorkspaceFileWatch'
 import { WorkspaceFileTab } from './WorkspaceFileTab'
@@ -241,6 +242,8 @@ export function WorkspaceSurface({
           />
         ) : activeTab === null ? null : activeTab.kind === 'side-chat' ? (
           <SideChatSurface parentSessionId={sessionId} sideChatId={activeTab.sideChatId} visible={visible} />
+        ) : activeTab.kind === 'background-task' ? (
+          <WorkspaceBackgroundTaskTab sessionId={sessionId} tab={activeTab} active={visible} />
         ) : activeTab.kind === 'browser' ? (
           <WorkspaceBrowserTab sessionId={sessionId} tab={activeTab} active={visible} />
         ) : activeTab.kind === 'terminal' ? (

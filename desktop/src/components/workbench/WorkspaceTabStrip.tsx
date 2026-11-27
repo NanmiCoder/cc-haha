@@ -15,6 +15,7 @@ const DRAG_START_THRESHOLD = 4
 
 const KIND_ICON = {
   'side-chat': MessageCircle,
+  'background-task': SquareTerminal,
   file: FolderClosed,
   browser: Globe,
   review: SquareSplitVertical,
@@ -236,6 +237,7 @@ export function WorkspaceTabStrip({
               newTab: t('workspace.newTabTitle'),
               review: t('workspace.reviewTabTitle'),
               sideChat: t('sideChat.title'),
+              backgroundTask: t('workspace.backgroundTask.header'),
               files: t('workspace.files.openTitle'),
               terminal: (ordinal) => t('workspace.terminalTabTitle', { n: ordinal }),
             })

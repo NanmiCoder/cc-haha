@@ -16,7 +16,7 @@
  * up destroying a page whenever the panel switched modes.
  */
 
-export type WorkspaceTabKind = 'file' | 'browser' | 'review' | 'terminal' | 'side-chat'
+export type WorkspaceTabKind = 'file' | 'browser' | 'review' | 'terminal' | 'side-chat' | 'background-task'
 
 /** Where a tab is parked. Only terminals may use `bottom`. */
 export type WorkspaceDock = 'side' | 'bottom'
@@ -144,8 +144,17 @@ export type WorkspaceSideChatTab = WorkspaceTabBase & {
   sideChatId: string
 }
 
+export type WorkspaceBackgroundTaskTab = WorkspaceTabBase & {
+  kind: 'background-task'
+  dock: 'side'
+  taskId: string
+  title?: string
+  toolUseId?: string
+}
+
 export type WorkspaceTab =
   | WorkspaceSideChatTab
+  | WorkspaceBackgroundTaskTab
   | WorkspaceFileTab
   | WorkspaceBrowserTab
   | WorkspaceReviewTab
@@ -154,6 +163,12 @@ export type WorkspaceTab =
 /** What `openWorkspaceTarget` accepts from every entry point in the app. */
 export type WorkspaceTarget =
   | { kind: 'side-chat'; sideChatId: string }
+  | {
+      kind: 'background-task'
+      taskId: string
+      title?: string
+      toolUseId?: string
+    }
   | {
       kind: 'file'
       path: string
@@ -237,6 +252,10 @@ export function isFileTab(tab: WorkspaceTab): tab is WorkspaceFileTab {
 
 export function isReviewTab(tab: WorkspaceTab): tab is WorkspaceReviewTab {
   return tab.kind === 'review'
+}
+
+export function isBackgroundTaskTab(tab: WorkspaceTab): tab is WorkspaceBackgroundTaskTab {
+  return tab.kind === 'background-task'
 }
 
 /** A blank browser tab is one placeholder another kind may replace. */

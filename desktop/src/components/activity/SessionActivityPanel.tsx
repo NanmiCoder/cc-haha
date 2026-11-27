@@ -13,6 +13,7 @@ import type { BackgroundAgentTask } from '../../types/chat'
 import type { TeamMember } from '../../types/team'
 import { delegatedSessionStatusLabel, delegatedSessionStatusTone, pendingSwitchLabel } from '../sessionDelegation/delegationLabels'
 import { formatTokenCount } from '../../lib/formatTokenCount'
+import { isShellBackgroundTask } from '../../lib/backgroundTaskOutput'
 
 export type OpenSubagentPayload = {
   sessionId: string
@@ -407,6 +408,7 @@ function ActivityRowView({
   onOpenMember,
   onOpenDelegatedSession,
   onOpenBackgroundTask,
+  opensBackgroundTaskInWorkspace,
   onStopBackgroundTask,
   stoppingBackgroundTask,
   selected,
@@ -417,6 +419,7 @@ function ActivityRowView({
   onOpenMember?: (member: TeamMember) => void
   onOpenDelegatedSession?: (sessionId: string, title: string) => void
   onOpenBackgroundTask?: (row: ActivityRow) => void
+  opensBackgroundTaskInWorkspace?: boolean
   onStopBackgroundTask?: (taskId: string) => void
   stoppingBackgroundTask?: boolean
   selected?: boolean
@@ -509,7 +512,7 @@ function ActivityRowView({
           {...(delegatedTone ? { tone: delegatedTone } : {})}
         />
       )}
-      {!isTask && row.openable ? (
+      {!isTask && (row.openable || opensBackgroundTaskInWorkspace) ? (
         <ChevronRight size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
       ) : null}
     </>
@@ -585,12 +588,12 @@ function ActivityRowView({
     ) : openButton
   }
 
-  if (row.section === 'backgroundTasks' && onOpenBackgroundTask && hasBackgroundTaskDetails(row)) {
+  if (row.section === 'backgroundTasks' && onOpenBackgroundTask && (hasBackgroundTaskDetails(row) || opensBackgroundTaskInWorkspace)) {
     const openButton = (
       <button
         type="button"
         aria-label={t('session.activity.openBackgroundTask', { name: row.label })}
-        aria-expanded={selected}
+        {...(opensBackgroundTaskInWorkspace ? {} : { 'aria-expanded': selected })}
         onClick={() => onOpenBackgroundTask(row)}
         className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'v6c-row-highlight' : ''}`}
       >
@@ -679,6 +682,7 @@ export function SessionActivityPanel({
   open,
   onClose,
   onOpenSubagent,
+  onOpenBackgroundTaskOutput,
   onClearFinishedBackgroundTasks,
   onOpenMember,
   onStopBackgroundTask,
@@ -691,6 +695,7 @@ export function SessionActivityPanel({
   open: boolean
   onClose: () => void
   onOpenSubagent: (payload: OpenSubagentPayload) => void
+  onOpenBackgroundTaskOutput?: (row: ActivityRow) => void
   onClearFinishedBackgroundTasks?: (taskKeys: string[]) => void
   onOpenMember?: (member: TeamMember) => void
   onStopBackgroundTask?: (taskId: string) => void
@@ -797,7 +802,21 @@ export function SessionActivityPanel({
                 onOpenDelegatedSession={onOpenDelegatedSession}
                 onStopBackgroundTask={onStopBackgroundTask}
                 stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
+                opensBackgroundTaskInWorkspace={Boolean(
+                  section.id === 'backgroundTasks' &&
+                  onOpenBackgroundTaskOutput &&
+                  row.taskId &&
+                  isShellBackgroundTask(row),
+                )}
                 onOpenBackgroundTask={(backgroundRow) => {
+                  if (
+                    onOpenBackgroundTaskOutput &&
+                    backgroundRow.taskId &&
+                    isShellBackgroundTask(backgroundRow)
+                  ) {
+                    onOpenBackgroundTaskOutput(backgroundRow)
+                    return
+                  }
                   setSelectedBackgroundTaskId((current) => (
                     current === backgroundRow.id ? null : backgroundRow.id
                   ))

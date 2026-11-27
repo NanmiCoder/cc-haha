@@ -715,3 +715,26 @@ it('keeps side chats alive on navigation and releases them only on close without
   expect(store().getTab(SESSION, fileId)).not.toBeNull()
   expect(store().bySession[SESSION]?.closed.flatMap(group => group.tabs)).toEqual([])
 })
+
+it('deduplicates background-task tabs by taskId and updates their title', () => {
+  const firstId = store().openTarget(SESSION, {
+    kind: 'background-task',
+    taskId: 'ci-1',
+    title: 'Watch CI',
+    toolUseId: 'tool-1',
+  })!
+  const secondId = store().openTarget(SESSION, {
+    kind: 'background-task',
+    taskId: 'ci-1',
+    title: 'Watch GitHub CI checks',
+  })!
+  expect(secondId).toBe(firstId)
+  expect(store().getTabs(SESSION, 'side')).toHaveLength(1)
+  expect(store().getTab(SESSION, firstId)).toMatchObject({
+    kind: 'background-task',
+    taskId: 'ci-1',
+    title: 'Watch GitHub CI checks',
+    toolUseId: 'tool-1',
+  })
+  expect(store().getSession(SESSION).layout).toBe('split')
+})

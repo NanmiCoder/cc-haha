@@ -9,6 +9,7 @@ import type { RefObject } from 'react'
 import { ArrowLeft, Folder, GitBranch, GitFork, History, Target, MessageCircleQuestion, TriangleAlert } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { openSideChat } from '@/lib/workspace/openSideChat'
+import { workspaceOpen } from '@/lib/workspace/openTarget'
 import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
@@ -60,7 +61,7 @@ import {
   SessionActivityPanel,
   type OpenSubagentPayload,
 } from '../components/activity/SessionActivityPanel'
-import { getMainSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
+import { getMainSessionActivityModel, hasVisibleSessionActivity, type ActivityRow } from '../components/activity/sessionActivityModel'
 import { runsForSession, useWorkflowStore } from '../stores/workflowStore'
 import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState, TokenUsage } from '../types/chat'
@@ -704,6 +705,13 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     if (!activeTabId) return
     stopBackgroundTask(activeTabId, taskId)
   }, [activeTabId, stopBackgroundTask])
+  const handleOpenBackgroundTaskOutput = useCallback((row: ActivityRow) => {
+    if (!activeTabId || !row.taskId) return
+    workspaceOpen.backgroundTask(activeTabId, row.taskId, {
+      title: row.label,
+      toolUseId: row.toolUseId,
+    })
+  }, [activeTabId])
 
   const lastUpdated = useMemo(() => {
     if (!session?.modifiedAt) return ''
@@ -848,6 +856,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           open={isActivityPanelOpen}
           onClose={() => closeActivityPanel(activeTabId)}
           onOpenSubagent={handleOpenSubagentRun}
+          onOpenBackgroundTaskOutput={handleOpenBackgroundTaskOutput}
           onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
           onOpenMember={handleOpenTeamMember}
           onStopBackgroundTask={handleStopBackgroundTask}
@@ -1019,6 +1028,10 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               open={isActivityPanelOpen}
               onClose={() => closeActivityPanel(activeTabId)}
               onOpenSubagent={handleOpenSubagentRun}
+              onOpenBackgroundTaskOutput={(row) => {
+                closeActivityPanel(activeTabId)
+                handleOpenBackgroundTaskOutput(row)
+              }}
               onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
               onOpenMember={handleOpenTeamMember}
               onStopBackgroundTask={handleStopBackgroundTask}

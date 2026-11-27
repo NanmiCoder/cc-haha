@@ -50,6 +50,7 @@ import { MagpieConnectionHint, isCliApiErrorText } from './MagpieConnectionHint'
 import { AskUserQuestion } from './AskUserQuestion'
 import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
+import { BackgroundTasksIndicator } from './BackgroundTasksIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from './turnRewind'
@@ -4349,6 +4350,15 @@ export function MessageList({
             <div className={renderItems.length === 0 ? undefined : turnRailClass('end')}>
               <StreamingIndicator />
             </div>
+          )}
+
+          {resolvedSessionId && hasRunningBackgroundTasks && (
+            <BackgroundTasksIndicator
+              sessionId={resolvedSessionId}
+              backgroundTasks={backgroundAgentTasks}
+              messages={messages}
+              onOpenAgentRun={onOpenAgentRun}
+            />
           )}
 
           {turnChangeLoadError && (
