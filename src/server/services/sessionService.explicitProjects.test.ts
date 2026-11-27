@@ -101,9 +101,9 @@ test('v7 preference fixture migrates without creating project boundaries or losi
   await mkdir(join(process.env.CLAUDE_CONFIG_DIR!, 'cc-haha'), { recursive: true })
   await writeFile(file, JSON.stringify({ schemaVersion: 7, future: { keep: true }, projectAdditionalDirectories: { [repository]: [extra] } }))
   const service = new DesktopUiPreferencesService()
-  expect((await service.readPreferences()).preferences).toMatchObject({ schemaVersion: 8, explicitProjectRoots: [], future: { keep: true } })
+  expect((await service.readPreferences()).preferences).toMatchObject({ schemaVersion: 9, explicitProjectRoots: [], future: { keep: true } })
   await service.updateProjectDirectories({ workDir: repository, additionalDirectories: [extra] })
-  expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ schemaVersion: 8, explicitProjectRoots: [], future: { keep: true } })
+  expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ schemaVersion: 9, explicitProjectRoots: [], future: { keep: true } })
 })
 
 test('create preview does not inherit parent auxiliaries or register a root', async () => {

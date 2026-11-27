@@ -76,6 +76,7 @@ import {
   type ProviderSearchMatch,
 } from './providerListSearch'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
+import { OfficialProviderPlanUsage } from '../../components/settings/OfficialProviderPlanUsage'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { DeepSeekAccountLogin } from '../../components/settings/DeepSeekAccountLogin'
@@ -499,7 +500,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                   <OfficialProviderModelSettings providerId={item.id} />
                 </>
               ) : item.kind === 'claude-official' ? <ClaudeOfficialLogin usageOnly /> : null}
-              {item.kind !== 'claude-official' && (
+              {(item.kind === 'openai-official' || item.kind === 'grok-official') && (
+                <OfficialProviderPlanUsage providerId={item.kind} />
+              )}
+              {item.kind === 'deepseek-account' && (
                 <p className="text-xs text-[var(--color-text-secondary)]">{t('settings.providers.officialUsageNotIntegrated')}</p>
               )}
             </div>

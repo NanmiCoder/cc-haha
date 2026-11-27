@@ -24,6 +24,7 @@ import { SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT } from '../../lib/sessionListPagi
 import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
 import { ArchivedSessionsPanel } from '@/components/layout/ArchivedSessionsPanel'
 import { SidebarMenuItem } from '@/components/layout/SidebarMenuItem'
+import { SidebarUsageWidget } from '@/components/usage/SidebarUsageWidget'
 import { ApiError } from '@/api/client'
 import {
   buildSidebarTaskGroups,
@@ -1707,6 +1708,8 @@ export function Sidebar({
           </span>
         </div>
       )}
+
+      <SidebarUsageWidget collapsed={!expanded} />
 
       <div
         data-testid="sidebar-settings-dock"

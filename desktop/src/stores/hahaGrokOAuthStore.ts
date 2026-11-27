@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { hahaGrokOAuthApi, type HahaGrokOAuthStatus } from '../api/hahaGrokOAuth'
+import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
 
@@ -26,7 +27,12 @@ export const useHahaGrokOAuthStore = create<HahaGrokOAuthState>((set, get) => {
 
     fetchStatus: async () => {
       try {
-        set({ status: await hahaGrokOAuthApi.status(), error: null })
+        const previous = get().status
+        const status = await hahaGrokOAuthApi.status()
+        set({ status, error: null })
+        if (previous !== null && previous.loggedIn !== status.loggedIn) {
+          void useUsageSummaryStore.getState().fetchSummary({ force: true })
+        }
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
@@ -53,6 +59,7 @@ export const useHahaGrokOAuthStore = create<HahaGrokOAuthState>((set, get) => {
       try {
         await hahaGrokOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({
           isLoading: false,
