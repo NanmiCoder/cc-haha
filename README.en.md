@@ -21,6 +21,9 @@
 
 cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, mobile app and H5 remote access, IM integration, and scheduled tasks, all in one app. **Computer Use keeps the existing native macOS engine and reuses agent-desktop on Windows / Linux. Supported background semantic actions leave the physical pointer alone; physical input still uses the foreground.** The companion Android / iPhone app pairs with your computer by QR code, so you can approve actions and start tasks away from your desk.
 
+> [!TIP]
+> **Antigravity CLI (ACP) integration is now supported!** Connect your local Antigravity CLI directly inside cc-haha across desktop, H5, and mobile to use native Composer, built-in Browser Use, Native Swarm, slash skills, and mid-turn steering out of the box.
+
 <p align="center"><b>Platinum Sponsor · Modelflare</b></p>
 
 <p align="center">
