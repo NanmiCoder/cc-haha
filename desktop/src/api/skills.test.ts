@@ -19,4 +19,10 @@ it('requests draft slash commands with optional cwd and agentProfile parameters'
     '/api/skills/commands?cwd=%2Fworkspace%2Fproject&agentProfile=lean',
     { timeout: 120_000 },
   )
+
+  skillsApi.commands('/workspace/project', undefined, 'antigravity-acp')
+  expect(api.get).toHaveBeenLastCalledWith(
+    '/api/skills/commands?cwd=%2Fworkspace%2Fproject&providerId=antigravity-acp',
+    { timeout: 120_000 },
+  )
 })

@@ -3368,6 +3368,64 @@ describe('EmptySession', () => {
       const createdOptions = mocks.createSession.mock.calls.at(-1)?.[0] as Record<string, unknown>
       expect(createdOptions.effortLevel).toBeUndefined()
     })
+
+    it('loads and searches Antigravity skills on draft slash menu and inserts /skill without turning into a Claude mention', async () => {
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.listReferences.mockResolvedValue({
+        skills: [{
+          kind: 'skill',
+          id: 'skill-vetter',
+          name: 'skill-vetter',
+          displayName: 'Skill Vetter',
+          description: 'Claude mention version',
+          source: 'user',
+          modelText: 'Use the Skill tool with skill: "skill-vetter" for this request.',
+        }],
+        plugins: [],
+      })
+      mocks.listSkillCommands.mockImplementation(async (_cwd?: string, _profile?: string, providerId?: string) => {
+        if (providerId === 'antigravity-acp') {
+          return {
+            commands: [
+              { name: 'skill-vetter', description: 'AGY security skill vetter', kind: 'skill', source: 'user' },
+              { name: 'release-announcement', description: 'Project release skill', kind: 'skill', source: 'project' },
+            ],
+          }
+        }
+        return {
+          commands: [
+            { name: 'claude-only-skill', description: 'Claude only', kind: 'skill', source: 'user' },
+          ],
+        }
+      })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      await waitFor(() => {
+        expect(mocks.listSkillCommands).toHaveBeenCalledWith('/workspace/project', undefined, 'antigravity-acp')
+      })
+
+      setComposerText('/s', 2)
+      const skillOption = await screen.findByRole('option', { name: 'skill-vetter' })
+      expect(skillOption).toBeInTheDocument()
+      expect(screen.getByText('/swarm')).toBeInTheDocument()
+      expect(screen.queryByText('claude-only-skill')).not.toBeInTheDocument()
+      expect(screen.queryByText('/btw')).not.toBeInTheDocument()
+
+      fireEvent.click(skillOption)
+      await waitFor(() => {
+        expect(getComposerText()).toBe('/skill-vetter ')
+      })
+      expect(document.querySelector('.composer-mention')).toBeNull()
+    })
   })
 
 })
