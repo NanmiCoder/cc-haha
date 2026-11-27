@@ -3,6 +3,7 @@ import { isLoopbackHost } from './h5AccessPolicy.js'
 
 export const LOCAL_ACCESS_TOKEN_ENV = 'CC_HAHA_LOCAL_ACCESS_TOKEN'
 export const PET_ACCESS_TOKEN_ENV = 'CC_HAHA_PET_ACCESS_TOKEN'
+export const USAGE_WIDGET_ACCESS_TOKEN_ENV = 'CC_HAHA_USAGE_WIDGET_ACCESS_TOKEN'
 /** Per-launch credential of the desktop's P2P endpoint link (set by Electron). */
 export const P2P_ENDPOINT_TOKEN_ENV = 'CC_HAHA_P2P_ENDPOINT_TOKEN'
 
@@ -17,6 +18,10 @@ function configuredLocalAccessToken(): string | null {
 
 function configuredPetAccessToken(): string | null {
   return configuredAccessToken(PET_ACCESS_TOKEN_ENV)
+}
+
+function configuredUsageWidgetAccessToken(): string | null {
+  return configuredAccessToken(USAGE_WIDGET_ACCESS_TOKEN_ENV)
 }
 
 function tokensEqual(actual: string, expected: string): boolean {
@@ -39,6 +44,10 @@ export function hasConfiguredLocalAccessToken(): boolean {
 
 export function hasConfiguredPetAccessToken(): boolean {
   return configuredPetAccessToken() !== null
+}
+
+export function hasConfiguredUsageWidgetAccessToken(): boolean {
+  return configuredUsageWidgetAccessToken() !== null
 }
 
 export function isLocalAccessAuthorized(
@@ -67,6 +76,17 @@ export function isPetAccessAuthorized(
   tokenOverride?: string | null,
 ): boolean {
   const expected = configuredPetAccessToken()
+  if (!expected) return false
+
+  const candidate = tokenOverride ?? bearerToken(request)
+  return candidate ? tokensEqual(candidate, expected) : false
+}
+
+export function isUsageWidgetAccessAuthorized(
+  request: Request,
+  tokenOverride?: string | null,
+): boolean {
+  const expected = configuredUsageWidgetAccessToken()
   if (!expected) return false
 
   const candidate = tokenOverride ?? bearerToken(request)

@@ -15,10 +15,27 @@ export const AGENT_TEAM_REQUEST_INSTRUCTION =
   + 'and coordinate the teammates until the goal is done.'
 
 const REQUEST_BLOCK = new RegExp(`${OPEN_TAG}[\\s\\S]*?${CLOSE_TAG}\\n*`)
+const LEADING_SWARM_COMMAND = /^\/swarm(?:\s|$)/i
 
 export function withAgentTeamRequest(content: string): string {
   const block = `${OPEN_TAG}\n${AGENT_TEAM_REQUEST_INSTRUCTION}\n${CLOSE_TAG}`
   return content ? `${block}\n\n${content}` : block
+}
+
+export function isAntigravitySwarmRequest(text: string): boolean {
+  return LEADING_SWARM_COMMAND.test(text.trim())
+}
+
+/**
+ * Antigravity triggers multi-agent swarms via its native `/swarm` slash
+ * command. Prefix idempotently so arming the + menu toggle and typing
+ * `/swarm ...` manually never double-prefix.
+ */
+export function withAntigravitySwarmRequest(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed) return '/swarm'
+  if (LEADING_SWARM_COMMAND.test(trimmed)) return trimmed
+  return `/swarm ${trimmed}`
 }
 
 /** The user-facing text of a message, with the Agent Team block removed. */

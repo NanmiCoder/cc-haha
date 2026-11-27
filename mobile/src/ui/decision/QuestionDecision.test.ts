@@ -412,6 +412,40 @@ test('QuestionDecision defers iOS reopen during mid-dismissal animation until on
   `)
 })
 
+test('allowFreeText: false hides custom input and discuss button while still submitting fixed options and showing subagent attribution', () => {
+  checkQuestionPage(`
+    let submitted
+    const props = {
+      visible: true,
+      onClose: () => {},
+      request: { requestId: 'ag-q', toolName: 'AskUserQuestion', subagentName: '@verifier' },
+      input: {
+        allowFreeText: false,
+        questions: [{ question: '选择方案？', options: [{ label: '方案 A' }, { label: '方案 B' }] }],
+      },
+      ready: true,
+      sent: false,
+      signalActivity: () => true,
+      submit: (answers) => { submitted = answers; return true },
+      discuss: () => true,
+    }
+    const render = () => renderPage(props)
+    const has = (label) => render().some((n) => n.props?.accessibilityLabel === label)
+    assert.equal(has('其他，我自己说'), false, 'fixed-option question hides free text option')
+    assert.equal(has('先讨论一下'), false, 'fixed-option question hides discuss action')
+    assert.ok(JSON.stringify(render()).includes('来自 @verifier'), 'page shows subagent attribution')
+    render().find((n) => n.props?.accessibilityLabel === '方案 B').props.onPress()
+    render().find((n) => n.props?.accessibilityLabel === '提交').props.onPress()
+    assert.deepEqual(submitted, { '选择方案？': '方案 B' })
+
+    const decisionTree = renderDecision(props)
+    assert.ok(
+      decisionTree.some((n) => n.props?.accessibilityLabel === '@verifier：有 1 个问题等你回答'),
+      'prompt row includes subagent attribution'
+    )
+  `)
+})
+
 test('real QuestionPage + real Sheet mounts only one native Modal and unmounts NoteInput when discuss is closed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'mobile-sheet-inline-'))
   const script = `

@@ -12,8 +12,14 @@ import {
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  ANTIGRAVITY_ENABLED_STORAGE_KEY,
+  ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+  ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+  parseAntigravitySavedSelection,
+} from './antigravityPreferences'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 7
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 8
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -381,6 +387,21 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
     if (stored !== '0' && stored !== '1') {
       storage.setItem(PREVENT_SLEEP_STORAGE_KEY, '0')
       report.migratedKeys.push(PREVENT_SLEEP_STORAGE_KEY)
+    }
+  })
+  // Schema 8 adds local Antigravity dual-engine UI preferences. Unset keys
+  // mean defaults (enabled when installed, cc-haha engine); only invalid values
+  // are removed so upgrades stay idempotent and preserve user choices.
+  runMigrationStep(report, ANTIGRAVITY_ENABLED_STORAGE_KEY, () =>
+    normalizeEnumKey(storage, ANTIGRAVITY_ENABLED_STORAGE_KEY, ['0', '1'], report))
+  runMigrationStep(report, ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, () =>
+    normalizeEnumKey(storage, ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, ['cc-haha', 'antigravity'], report))
+  runMigrationStep(report, ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, () => {
+    const raw = storage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
+    if (raw === null) return
+    if (!parseAntigravitySavedSelection(raw)) {
+      storage.removeItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
+      report.migratedKeys.push(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
     }
   })
   try {

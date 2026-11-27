@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ComponentRef } from 'react'
 import { Linking, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import Constants from 'expo-constants'
@@ -21,6 +21,7 @@ import {
   Segmented,
   Separator,
   Switch,
+  Toast,
   useColors,
   type IconName,
 } from '../ui/kit'
@@ -36,6 +37,7 @@ import {
   scheduleTestNotification,
 } from '../core/systemPermissions'
 import { DeliveryCard } from '../ui/settings/DeliveryCard'
+import { AndroidUpdateAboutItem, AndroidUpdateNotice } from '../ui/settings/AndroidUpdateSection'
 import { ProfileEntry } from '../ui/profile/ProfileEntry'
 import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
 import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
@@ -89,8 +91,26 @@ export default function Settings() {
   const [notifyError, setNotifyError] = useState('')
   const [appearanceError, setAppearanceError] = useState('')
   const [linkError, setLinkError] = useState('')
+  const [toastText, setToastText] = useState('')
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null)
   const [quietOpen, setQuietOpen] = useState(0)
   const [quietVisible, setQuietVisible] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
+  }, [])
+
+  function showToast(text: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToastText(text)
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null
+      setToastText('')
+    }, 2200)
+  }
   const { decisions, completed, errors } = preferences.notifications
   // Only when this computer reaches the phone through the background connection.
   const duty = useDutyStatus(
@@ -202,7 +222,9 @@ export default function Settings() {
   return (
     <ScreenView>
       <NavBar floating />
+      <Toast text={toastText} top={58} />
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         keyboardShouldPersistTaps="handled"
       >
@@ -210,6 +232,7 @@ export default function Settings() {
         <InlineError text={preferenceError} style={{ marginBottom: 8 }} />
 
         <ProfileEntry />
+        <AndroidUpdateNotice onPress={() => scrollRef.current?.scrollToEnd({ animated: true })} />
 
         {/* 网页版收不到推送，也没有锁屏、系统权限：这些只在手机 App 里设置。 */}
         {isH5 ? null : (
@@ -443,6 +466,7 @@ export default function Settings() {
               </View>
             }
           />
+          <AndroidUpdateAboutItem onCopied={showToast} onLinkError={setLinkError} />
           <Separator />
           <LinkRow title="使用指南" onPress={() => void open(aboutLinks.guide)} />
           <Separator />

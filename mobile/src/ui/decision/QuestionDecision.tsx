@@ -6,6 +6,8 @@ import { Button, HaloDot, Icon, InlineError, Sheet, Spinner, TextButton, useColo
 import { Text } from '../Text'
 import { KeyboardViewport } from '../KeyboardViewport'
 import {
+  permissionSubagentName,
+  questionAllowsFreeText,
   questionClock,
   questionOptionPresentation,
   readQuestions,
@@ -45,18 +47,21 @@ export function QuestionPrompt({
   onOpen,
   sent,
   clock,
+  subagentName,
 }: {
   count: number
   onOpen(): void
   sent?: boolean
   clock?: QuestionClock | null
+  subagentName?: string
 }) {
   const colors = useColors()
   const label = questionPromptLabel(count)
+  const displayLabel = subagentName ? `${subagentName}：${label}` : label
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={sent ? `${label}，已提交` : label}
+      accessibilityLabel={sent ? `${displayLabel}，已提交` : displayLabel}
       accessibilityHint="打开回答页"
       disabled={sent}
       onPress={onOpen}
@@ -74,7 +79,7 @@ export function QuestionPrompt({
     >
       {sent ? <Spinner size={16} /> : <HaloDot size={9} />}
       <Text numberOfLines={1} style={{ flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink }}>
-        {sent ? '已提交，正在等待电脑确认。' : label}
+        {sent ? '已提交，正在等待电脑确认。' : displayLabel}
       </Text>
       {!sent && clock?.state === 'counting' ? (
         <Text style={{ fontSize: 13, color: colors.attn }}>{clock.label} 后 AI 代答</Text>
@@ -269,6 +274,7 @@ export function QuestionPage({
   visible,
   onClose,
   onDismiss,
+  request,
   input,
   ready,
   sent,
@@ -281,9 +287,11 @@ export function QuestionPage({
 }: QuestionPageProps) {
   const colors = useColors()
   const questions = readQuestions(input)
+  const allowFreeText = questionAllowsFreeText(input)
+  const subagentName = permissionSubagentName(request, input)
   const [flow, setFlow] = useState(initialQuestionFlow)
   const change = (action: Parameters<typeof changeQuestionFlow>[2]) =>
-    setFlow((current) => changeQuestionFlow(current, questions, action))
+    setFlow((current) => changeQuestionFlow(current, questions, action, allowFreeText))
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({})
   const [discussOpen, setDiscussOpen] = useState(false)
   const [note, setNote] = useState('')
@@ -297,13 +305,14 @@ export function QuestionPage({
       if (notSent) setNotSent(false)
     }
   }
-  const discussShowing = visible && discussOpen
+  const discussShowing = allowFreeText && visible && discussOpen
   const pageError = notSent
     ? NOT_SENT
     : serverError && serverError !== initialError
       ? serverError.message
       : undefined
-  const model = questionPageModel(flow, questions, { ready, sent })
+  const pageState = { ready, sent, allowFreeText }
+  const model = questionPageModel(flow, questions, pageState)
   const { current } = model
   const locked = !ready || sent
   const activity = () => {
@@ -322,14 +331,14 @@ export function QuestionPage({
     change({ type: 'choose', label })
   }
   const back = () => {
-    const step = backQuestionStep(flow, questions, { ready, sent })
+    const step = backQuestionStep(flow, questions, pageState)
     if (!step) return
     setNotSent(false)
     activity()
     change(step)
   }
   const primary = () => {
-    const step = primaryQuestionStep(flow, questions, { ready, sent })
+    const step = primaryQuestionStep(flow, questions, pageState)
     if (!step) return
     activity()
     if (step.type === 'open') {
@@ -342,8 +351,8 @@ export function QuestionPage({
       setNotSent(true)
     }
   }
-  const customText = current ? (flow.custom[current.question] ?? '') : ''
-  const showCustom = Boolean(current && customOpen[current.question])
+  const customText = allowFreeText && current ? (flow.custom[current.question] ?? '') : ''
+  const showCustom = Boolean(allowFreeText && current && customOpen[current.question])
   const webInert = (Platform.OS === 'web' && discussShowing ? { inert: true } : {}) as object
 
   return (
@@ -429,7 +438,9 @@ export function QuestionPage({
               {current ? (
                 <>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 }}>
-                    <Text style={{ fontSize: 13, color: colors.ink3 }}>{model.kind}</Text>
+                    <Text style={{ fontSize: 13, color: colors.ink3 }}>
+                      {subagentName ? `${model.kind} · 来自 ${subagentName}` : model.kind}
+                    </Text>
                     <View style={{ flex: 1 }} />
                     {clock ? (
                       <CountdownPill
@@ -464,7 +475,7 @@ export function QuestionPage({
                         onInspect={activity}
                       />
                     ))}
-                    {showCustom ? (
+                    {!allowFreeText ? null : showCustom ? (
                       <View
                         style={{
                           borderRadius: 16,
@@ -601,27 +612,31 @@ export function QuestionPage({
                   </Pressable>
                 </View>
               )}
-              <View style={{ minHeight: 56, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="先讨论一下"
-                  accessibilityState={{ disabled: !model.discussEnabled }}
-                  disabled={!model.discussEnabled}
-                  onPress={() => {
-                    setNotSent(false)
-                    activity()
-                    setDiscussOpen(true)
-                  }}
-                  style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 16,
-                    justifyContent: 'center',
-                    opacity: !model.discussEnabled ? 0.4 : pressed ? 0.6 : 1,
-                  })}
-                >
-                  <Text style={{ fontSize: 15, color: colors.ink2 }}>先讨论一下</Text>
-                </Pressable>
-              </View>
+              {allowFreeText ? (
+                <View style={{ minHeight: 56, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="先讨论一下"
+                    accessibilityState={{ disabled: !model.discussEnabled }}
+                    disabled={!model.discussEnabled}
+                    onPress={() => {
+                      setNotSent(false)
+                      activity()
+                      setDiscussOpen(true)
+                    }}
+                    style={({ pressed }) => ({
+                      height: 44,
+                      paddingHorizontal: 16,
+                      justifyContent: 'center',
+                      opacity: !model.discussEnabled ? 0.4 : pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Text style={{ fontSize: 15, color: colors.ink2 }}>先讨论一下</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={{ height: 18 }} />
+              )}
             </View>
           </View>
           </KeyboardViewport>
@@ -697,6 +712,7 @@ export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onC
   const bottom = simulatedPhoneChrome ? 34 : Math.max(insets.bottom, 12)
   const { clock, interact } = useQuestionClock(props.request)
   const count = readQuestions(props.input).length
+  const subagentName = permissionSubagentName(props.request, props.input)
   const openPage = () => {
     if (Platform.OS === 'ios' && dismissing.current) {
       reopenPending.current = true
@@ -721,7 +737,7 @@ export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onC
   return (
     <>
       <View style={{ backgroundColor: colors.bg, paddingHorizontal: 12, paddingTop: 8, paddingBottom: bottom }}>
-        <QuestionPrompt count={count} sent={props.sent} clock={clock} onOpen={openPage} />
+        <QuestionPrompt count={count} sent={props.sent} clock={clock} subagentName={subagentName} onOpen={openPage} />
       </View>
       <QuestionPage
         {...props}

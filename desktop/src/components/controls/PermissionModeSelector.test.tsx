@@ -45,6 +45,20 @@ vi.mock('../../i18n', () => ({
     'permMode.enableAutoBody': 'Auto mode reduces prompts but does not guarantee safety.',
     'permMode.enableAutoDetail': 'Claude reviews tool calls and blocks actions it considers risky.',
     'permMode.enableAutoBtn': 'Enable Auto mode',
+    'permMode.badge.optIn': 'Opt-in required',
+    'permMode.badge.risky': 'High risk',
+    'permMode.antigravity.default': 'Default',
+    'permMode.antigravity.defaultDesc': 'Ask before edits and commands, per your Antigravity permission settings',
+    'permMode.antigravity.acceptEdits': 'Accept edits',
+    'permMode.antigravity.acceptEditsDesc': 'Approve file edits in the workspace without asking',
+    'permMode.antigravity.auto': 'Auto',
+    'permMode.antigravity.autoDesc': 'Approve edits and safe commands; ask before irreversible actions',
+    'permMode.antigravity.plan': 'Plan',
+    'permMode.antigravity.planDesc': 'Plan carefully before executing a task without editing files',
+    'permMode.antigravity.bypass': 'Turbo (Bypass all)',
+    'permMode.antigravity.bypassDesc': 'Run all edits and commands without restrictions (--dangerously-skip-permissions)',
+    'permMode.antigravity.enableBypassBody': 'Antigravity will have unrestricted access to execute shell commands and modify files within:',
+    'permMode.antigravity.label.bypassPermissions': 'Turbo',
     'common.cancel': 'Cancel',
     'tabs.close': 'Close',
   }[key] ?? key),
@@ -797,5 +811,41 @@ describe('the quiet trigger', () => {
     render(<PermissionModeSelector trigger="quiet" />)
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
+  })
+
+  it('uses Antigravity ACP modes including Turbo, omits Claude copy, and applies native Auto without Claude opt-in dialog', () => {
+    viewportMocks.isMobile = false
+    useSettingsStore.setState({ locale: 'en' })
+    const onChange = vi.fn()
+    render(
+      <PermissionModeSelector
+        antigravity
+        allowedModes={['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']}
+        value="default"
+        onChange={onChange}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    const menu = screen.getByRole('menu')
+    expect(menu.textContent).not.toContain('Claude')
+    expect(menu.textContent).not.toContain('Opt-in required')
+    expect(screen.getByRole('menuitem', { name: /Accept edits/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /^Auto\b/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Turbo \(Bypass all\)/ })).toBeInTheDocument()
+
+    // Antigravity native Auto switches directly without Claude Code's AutoModeOptInDialog
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Auto\b/ }))
+    expect(onChange).toHaveBeenCalledWith('auto')
+    expect(screen.queryByText(/Enable Auto mode/i)).not.toBeInTheDocument()
+
+    // Turbo (bypassPermissions) opens confirmation dialog with Antigravity copy and applies on confirm
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Turbo \(Bypass all\)/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.textContent).toContain('Antigravity')
+    expect(dialog.textContent).not.toContain('Claude')
+    fireEvent.click(screen.getByRole('button', { name: 'Enable bypass' }))
+    expect(onChange).toHaveBeenCalledWith('bypassPermissions')
   })
 })

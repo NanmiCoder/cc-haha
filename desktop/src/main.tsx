@@ -27,17 +27,21 @@ export function isPetWindowLocation(search = window.location.search): boolean {
   return new URLSearchParams(search).get('petWindow') === '1'
 }
 
+export function isUsageWidgetWindowLocation(search = window.location.search): boolean {
+  return new URLSearchParams(search).get('usageWidgetWindow') === '1'
+}
+
 /**
  * Whether this renderer is the one that owns workspace state.
  *
- * Every window — main and pet — loads this same entry. They share one
- * `localStorage` origin, and the workspace document is written whole rather
- * than merged per session, so a second writer would overwrite the main
+ * Every window — main, pet, and usage widget — loads this same entry. They
+ * share one `localStorage` origin, and the workspace document is written whole
+ * rather than merged per session, so a second writer would overwrite the main
  * window's state with whatever it hydrated at open time.
  */
 export function isPrimaryWorkspaceWindow(search = window.location.search): boolean {
   const params = new URLSearchParams(search)
-  return params.get('petWindow') !== '1'
+  return params.get('petWindow') !== '1' && params.get('usageWidgetWindow') !== '1'
 }
 
 async function loadDesktopBootstrapModules() {
@@ -51,7 +55,9 @@ async function loadDesktopBootstrapModules() {
 
   const appModule = isPetWindowLocation()
     ? import('./features/pets/PetApp').then(({ PetApp }) => ({ App: PetApp }))
-    : import('./App')
+    : isUsageWidgetWindowLocation()
+      ? import('./components/usage/UsageWidgetApp').then(({ UsageWidgetApp }) => ({ App: UsageWidgetApp }))
+      : import('./App')
   return Promise.all([
     appModule,
     import('./components/ErrorBoundary'),
@@ -62,6 +68,8 @@ async function loadDesktopBootstrapModules() {
 
 if (isPetWindowLocation()) {
   document.documentElement.dataset.windowKind = 'pet'
+} else if (isUsageWidgetWindowLocation()) {
+  document.documentElement.dataset.windowKind = 'usage-widget'
 }
 
 export async function bootstrapDesktopApp(
@@ -101,6 +109,8 @@ export async function bootstrapDesktopApp(
 runDesktopPersistenceMigrations()
 initializeChatAppearance()
 initializeTouchH5()
-void initializeAppZoom()
+if (isPrimaryWorkspaceWindow()) {
+  void initializeAppZoom()
+}
 
 void bootstrapDesktopApp()

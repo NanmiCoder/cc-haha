@@ -52,6 +52,7 @@ import { LeanModeSettings } from './LeanModeSettings'
 import { CyberRiskInstructionSettings } from './CyberRiskInstructionSettings'
 import { PreventSleepSettings } from './PreventSleepSettings'
 import { IdlePowerSettings } from './IdlePowerSettings'
+import { UsageWidgetSettings } from './UsageWidgetSettings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
 
 /**
@@ -1330,6 +1331,7 @@ export function GeneralSettings() {
         </SettingsGroup>
       </SettingsSection>
 
+      <UsageWidgetSettings />
       <PreventSleepSettings />
       <IdlePowerSettings />
 

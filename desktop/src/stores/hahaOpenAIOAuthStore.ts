@@ -5,6 +5,7 @@ import {
   hahaOpenAIOAuthApi,
   type HahaOpenAIOAuthStatus,
 } from '../api/hahaOpenAIOAuth'
+import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
 
@@ -32,8 +33,12 @@ export const useHahaOpenAIOAuthStore = create<HahaOpenAIOAuthState>((set, get) =
 
     fetchStatus: async () => {
       try {
+        const previous = get().status
         const status = await hahaOpenAIOAuthApi.status()
         set({ status, error: null })
+        if (previous !== null && previous.loggedIn !== status.loggedIn) {
+          void useUsageSummaryStore.getState().fetchSummary({ force: true })
+        }
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
@@ -60,6 +65,7 @@ export const useHahaOpenAIOAuthStore = create<HahaOpenAIOAuthState>((set, get) =
       try {
         await hahaOpenAIOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({
           isLoading: false,

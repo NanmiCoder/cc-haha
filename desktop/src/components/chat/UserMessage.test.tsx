@@ -371,4 +371,15 @@ describe('UserMessage capability pills', () => {
     expect(pills(container)).toEqual([])
     expect(screen.queryByTestId('agent-team-chip')).toBeNull()
   })
+
+  it('shows the Agent Team chip for Antigravity + menu /swarm sends without duplicating when /swarm was typed', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const armed = render(<UserMessage content="Parallel code audit" modelContent="/swarm Parallel code audit" />)
+    expect(armed.container.querySelector('[data-testid="agent-team-chip"]')?.textContent).toBe('Agent Teams')
+    expect(bubbleOf(armed.container).textContent).toBe('Parallel code audit')
+
+    const typed = render(<UserMessage content="/swarm Parallel code audit" modelContent="/swarm Parallel code audit" />)
+    expect(typed.container.querySelector('[data-testid="agent-team-chip"]')).toBeNull()
+    expect(pills(typed.container)).toEqual(['command:/swarm'])
+  })
 })

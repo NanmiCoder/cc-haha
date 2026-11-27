@@ -12,6 +12,7 @@ import {
   truncateSubagentMessages,
 } from './subagentRunService.js'
 import { SessionService, sessionService, type MessageEntry } from './sessionService.js'
+import { conversationService } from './conversationService.js'
 import { cleanupOldSessionFiles } from '../../utils/cleanup.js'
 
 let tmpDir: string | null = null
@@ -2008,6 +2009,380 @@ describe('getSubagentRunByAgentId', () => {
       expect(scanSpy).not.toHaveBeenCalled()
     } finally {
       scanSpy.mockRestore()
+    }
+  })
+
+  it('resolves Antigravity invoke_subagent runs from .system_generated/subagents and child transcript.jsonl', async () => {
+    await setupTmpConfigDir()
+    const agyAppData = path.join(tmpDir!, 'agy-app-data')
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-000000000003'
+    const nativeSessionId = 'a8380e90-ddba-43f5-8e65-a0e2d0c0bc73'
+    const childResearchId = 'cbce3c87-0047-4ac1-83a6-683ca132ffcc'
+    const childShellId = '358b978d-07df-4e32-9089-41f656e9afa6'
+    const projectDir = '-tmp-agy-subagent-test'
+
+    await writeSessionFile(projectDir, sessionId, [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_1385447622702057450',
+            name: 'invoke_subagent',
+            input: {
+              Prompt: 'Please list all files in /tmp/agy-p2-VDLzFK',
+              Role: 'list_file',
+              TypeName: 'research',
+            },
+          }],
+        },
+        uuid: 'agy-parent-call-1',
+        timestamp: '2026-11-26T09:33:33Z',
+      },
+      {
+        // Matches real agy 1.5.17 ACP wire: invoke_subagent tool_result omits childId/rawOutput
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'call_1385447622702057450',
+            content: '',
+          }],
+        },
+        uuid: 'agy-parent-res-1',
+        timestamp: '2026-11-26T09:33:41Z',
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_12074788633215414081',
+            name: 'invoke_subagent',
+            input: {
+              Prompt: 'Run echo subagent_perm_ok',
+              Role: 'Shell Executor',
+              TypeName: 'shell_probe',
+            },
+          }],
+        },
+        uuid: 'agy-parent-call-2',
+        timestamp: '2026-11-26T09:33:51Z',
+      },
+    ])
+
+    // Authoritative disk registry + child transcripts under temp agyAppData
+    const subagentsDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    await fs.writeFile(
+      path.join(subagentsDir, `${childResearchId}.json`),
+      JSON.stringify({
+        conversationId: childResearchId,
+        subagentDescriptor: { typeName: 'research', role: 'list_file' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 2,
+        workspaceUris: ['file:///tmp/agy-p2-VDLzFK'],
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(subagentsDir, `${childShellId}.json`),
+      JSON.stringify({
+        conversationId: childShellId,
+        subagentDescriptor: { typeName: 'shell_probe', role: 'Shell Executor' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 9,
+        workspaceUris: ['file:///tmp/agy-p2-VDLzFK'],
+      }),
+      'utf8',
+    )
+
+    const writeChildTranscript = async (childId: string, lines: Record<string, unknown>[]) => {
+      const logDir = path.join(agyAppData, 'brain', childId, '.system_generated', 'logs')
+      await fs.mkdir(logDir, { recursive: true })
+      await fs.writeFile(
+        path.join(logDir, 'transcript.jsonl'),
+        `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`,
+        'utf8',
+      )
+    }
+
+    await writeChildTranscript(childResearchId, [
+      {
+        step_index: 0,
+        source: 'SYSTEM',
+        type: 'SYSTEM_MESSAGE',
+        status: 'DONE',
+        created_at: '2026-11-26T09:33:33Z',
+        content:
+          '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T09:33:33Z sender=a8380e90-ddba-43f5-8e65-a0e2d0c0bc73 priority=MESSAGE_PRIORITY_HIGH content=Please list all files in /tmp/agy-p2-VDLzFK\n</SYSTEM_MESSAGE>',
+      },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-26T09:33:38Z',
+        model: 'gemini-3.8-flash-low',
+        input_tokens: 14134,
+        output_tokens: 81,
+        tool_calls: [{
+          name: 'send_message',
+          args: {
+            Message: '"Found hello.txt"',
+            Recipient: `"${nativeSessionId}"`,
+          },
+        }],
+      },
+      {
+        step_index: 2,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-26T09:33:41Z',
+        content: `Message sent to "${nativeSessionId}".`,
+      },
+    ])
+    await writeChildTranscript(childShellId, [
+      {
+        step_index: 0,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'RUNNING',
+        created_at: '2026-11-26T09:33:52Z',
+        model: 'gemini-3.8-flash-low',
+        input_tokens: 500,
+        output_tokens: 20,
+        tool_calls: [{ name: 'run_command', args: { CommandLine: '"echo subagent_perm_ok"' } }],
+      },
+    ])
+
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`),
+      projectDir,
+      workDir: '/tmp/agy-p2-VDLzFK',
+      transcriptMessageCount: 3,
+      customTitle: null,
+      runtimeProviderId: 'antigravity-acp',
+      antigravitySessionId: nativeSessionId,
+    } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>)
+
+    try {
+      const researchRun = await getSubagentRunByTool(
+        sessionId,
+        'call_1385447622702057450',
+        undefined,
+        { appDataDir: agyAppData },
+      )
+      expect(researchRun).not.toBeNull()
+      expect(researchRun!.agentId).toBe(childResearchId)
+      expect(researchRun!.status).toBe('completed')
+      expect(researchRun!.description).toBe('list_file')
+      expect(researchRun!.result).toBe('Found hello.txt')
+      expect(researchRun!.model).toBe('gemini-3.8-flash-low')
+      expect(researchRun!.effort).toBe('low')
+      expect(researchRun!.usage).toEqual({
+        inputTokens: 14134,
+        outputTokens: 81,
+        totalTokens: 14215,
+      })
+      expect(researchRun!.source).toBe('subagent-jsonl')
+      expect(researchRun!.messages).toHaveLength(3)
+      expect(researchRun!.canSendMessage).toBe(false)
+
+      // Running second subagent resolved cleanly by role/typeName
+      const shellRun = await getSubagentRunByTool(
+        sessionId,
+        'call_12074788633215414081',
+        undefined,
+        { appDataDir: agyAppData },
+      )
+      expect(shellRun?.agentId).toBe(childShellId)
+      expect(shellRun?.status).toBe('running')
+      expect(shellRun?.description).toBe('Shell Executor')
+
+      // Direct by-agent lookup on antigravity-acp session
+      const byAgent = await getSubagentRunByAgentId(sessionId, childResearchId, {
+        appDataDir: agyAppData,
+      })
+      expect(byAgent?.agentId).toBe(childResearchId)
+      expect(byAgent?.result).toBe('Found hello.txt')
+      expect(byAgent?.source).toBe('subagent-jsonl')
+
+      // Child-prefixed toolCallId (<childId>:call_<digits>) lookup
+      const byChildPrefixedRef = await getSubagentRunByTool(
+        sessionId,
+        `${childShellId}:call_1614613776603159592`,
+        undefined,
+        { appDataDir: agyAppData },
+      )
+      expect(byChildPrefixedRef?.agentId).toBe(childShellId)
+      expect(byChildPrefixedRef?.status).toBe('running')
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it('resolves in-progress Antigravity subagent via live SDK fallback and counts sibling (TypeName, Role) ordinals accurately', async () => {
+    await setupTmpConfigDir()
+    const agyAppData = path.join(tmpDir!, 'agy-app-data-siblings')
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-000000000009'
+    const nativeSessionId = 'b9491f01-eecb-44a6-9f76-b1f3e1d1cd84'
+    const child1 = 'child-sib-11111111'
+    const child2 = 'child-sib-22222222'
+    const child3 = 'child-sib-33333333'
+    const projectDir = '-tmp-agy-siblings-test'
+
+    // Persist 2 sibling spawns with identical (TypeName, Role) on disk; 3rd is still live in memory (not yet on disk)
+    await writeSessionFile(projectDir, sessionId, [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_1',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module A',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module A',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+        uuid: 'sib-u1',
+        timestamp: '2026-11-26T10:00:01Z',
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_2',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module B',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module B',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+        uuid: 'sib-u2',
+        timestamp: '2026-11-26T10:00:02Z',
+      },
+    ])
+
+    const subagentsDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    for (const [childId, spawnStepIndex] of [[child1, 2], [child2, 5], [child3, 9]] as const) {
+      await fs.writeFile(
+        path.join(subagentsDir, `${childId}.json`),
+        JSON.stringify({
+          conversationId: childId,
+          subagentDescriptor: { typeName: 'research', role: 'Code Explorer' },
+          state: 'SUBAGENT_STATE_ALIVE',
+          spawnStepIndex,
+          workspaceUris: ['file:///tmp/agy-siblings'],
+        }),
+        'utf8',
+      )
+      const logDir = path.join(agyAppData, 'brain', childId, '.system_generated', 'logs')
+      await fs.mkdir(logDir, { recursive: true })
+      await fs.writeFile(
+        path.join(logDir, 'transcript.jsonl'),
+        `${JSON.stringify({
+          step_index: 0,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          status: 'RUNNING',
+          created_at: '2026-11-26T10:00:03Z',
+          model: 'gemini-3.8-flash-low',
+          content: `Running ${childId}`,
+        })}\n`,
+        'utf8',
+      )
+    }
+
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`),
+      projectDir,
+      workDir: '/tmp/agy-siblings',
+      transcriptMessageCount: 2,
+      customTitle: null,
+      runtimeProviderId: 'antigravity-acp',
+      nativeSessionId,
+    } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>)
+
+    const liveSdkSpy = spyOn(conversationService, 'getRecentSdkMessages').mockReturnValue([
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_2',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module B',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_sib_3_live',
+            name: 'Agent',
+            input: {
+              Prompt: 'Analyze module C',
+              Role: 'Code Explorer',
+              TypeName: 'research',
+              description: 'Code Explorer',
+              prompt: 'Analyze module C',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+      },
+    ])
+
+    try {
+      // 1st sibling on disk -> child1 (ordinal 0)
+      const run1 = await getSubagentRunByTool(sessionId, 'call_sib_1', undefined, { appDataDir: agyAppData })
+      expect(run1?.agentId).toBe(child1)
+
+      // 2nd sibling on disk -> child2 (ordinal 1, NOT child1!)
+      const run2 = await getSubagentRunByTool(sessionId, 'call_sib_2', undefined, { appDataDir: agyAppData })
+      expect(run2?.agentId).toBe(child2)
+
+      // 3rd sibling live in-progress (not yet flushed to disk) -> resolves immediately to child3 (ordinal 2, deduping call_sib_2!)
+      const run3 = await getSubagentRunByTool(sessionId, 'call_sib_3_live', undefined, { appDataDir: agyAppData })
+      expect(run3).not.toBeNull()
+      expect(run3?.agentId).toBe(child3)
+      expect(run3?.status).toBe('running')
+      expect(run3?.prompt).toBe('Analyze module C')
+    } finally {
+      liveSdkSpy.mockRestore()
+      launchSpy.mockRestore()
     }
   })
 })

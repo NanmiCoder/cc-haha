@@ -153,6 +153,7 @@ export class ElectronServerRuntime {
   private readonly resolveBrowserBridgeUrl?: () => Promise<string | null>
   private readonly localAccessToken = randomBytes(32).toString('base64url')
   private readonly petAccessToken = randomBytes(32).toString('base64url')
+  private readonly usageWidgetAccessToken = randomBytes(32).toString('base64url')
   /** Authorizes only the hidden P2P host window's loopback endpoint, never the local API. */
   private readonly p2pEndpointToken = randomBytes(32).toString('base64url')
   /** Authorizes only the local server sidecar's loopback Browser Use bridge, never adapters/CLI/renderer. */
@@ -238,6 +239,10 @@ export class ElectronServerRuntime {
 
   getPetAccessToken(): string {
     return this.petAccessToken
+  }
+
+  getUsageWidgetAccessToken(): string {
+    return this.usageWidgetAccessToken
   }
 
   getP2PEndpointToken(): string {
@@ -631,6 +636,7 @@ export class ElectronServerRuntime {
     const next: NodeJS.ProcessEnv = {
       ...this.withLocalAccessToken(env),
       CC_HAHA_PET_ACCESS_TOKEN: this.petAccessToken,
+      CC_HAHA_USAGE_WIDGET_ACCESS_TOKEN: this.usageWidgetAccessToken,
       CC_HAHA_P2P_ENDPOINT_TOKEN: this.p2pEndpointToken,
     }
     if (browserBridgeUrl) {

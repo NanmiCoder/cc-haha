@@ -95,6 +95,9 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      antigravityToolName?: string
+      subagentName?: string
+      supportsAllowAlways?: boolean
       /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
       autoAnswerDeadline?: number | null
     }

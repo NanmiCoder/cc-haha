@@ -156,6 +156,59 @@ describe('MobileApprovalDock', () => {
     render(<MobileApprovalDock sessionId={SESSION} />)
     expect(screen.queryByTestId('mobile-approval-dock')).not.toBeInTheDocument()
   })
+
+  it('shows subagent attribution and hides Allow for session when supportsAllowAlways is false', () => {
+    seed([{
+      requestId: 'perm-ag',
+      toolName: 'Edit',
+      toolUseId: 'toolu-ag',
+      antigravityToolName: 'edit_file',
+      subagentName: 'researcher',
+      supportsAllowAlways: false,
+      input: { Path: '/repo/src/app.ts', Target: 'oldLine()', Replacement: 'newLine()' },
+    }])
+    render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = screen.getByTestId('mobile-approval-dock')
+    expect(within(dock).getByTestId('mobile-approval-subagent-badge')).toHaveTextContent('From researcher')
+    expect(within(dock).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(dock).getByRole('button', { name: 'View details' }))
+    const sheet = screen.getByTestId('mobile-approval-sheet')
+    expect(within(sheet).getByTestId('permission-subagent-badge')).toHaveTextContent('From researcher')
+    expect(within(sheet).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
+  })
+
+  it('uses Antigravity actor title and displays tool summary description cleanly', () => {
+    seed([{
+      requestId: 'perm-ag-cmd',
+      toolName: 'Bash',
+      toolUseId: 'toolu-ag-cmd',
+      displayName: 'Antigravity',
+      description: 'Verify TypeScript build',
+      antigravityToolName: 'run_command',
+      input: { CommandLine: 'bun run typecheck' },
+    }])
+    const { rerender } = render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = screen.getByTestId('mobile-approval-dock')
+    expect(within(dock).getByRole('heading', { name: 'Allow Antigravity to run this command?' })).toBeInTheDocument()
+    expect(within(dock).getByText('Verify TypeScript build')).toBeInTheDocument()
+    expect(within(dock).getByText('bun run typecheck')).toBeInTheDocument()
+
+    // Fallback when displayName is omitted on an Antigravity tool
+    seed([{
+      requestId: 'perm-ag-edit-fallback',
+      toolName: 'Edit',
+      toolUseId: 'toolu-ag-edit',
+      description: 'Update permission helper',
+      antigravityToolName: 'replace_file_content',
+      input: { TargetFile: '/repo/src/helper.ts' },
+    }])
+    rerender(<MobileApprovalDock sessionId={SESSION} />)
+    expect(within(screen.getByTestId('mobile-approval-dock')).getByRole('heading', { name: 'Allow Antigravity to Edit helper.ts?' })).toBeInTheDocument()
+    expect(within(screen.getByTestId('mobile-approval-dock')).getByText('Update permission helper')).toBeInTheDocument()
+  })
 })
 
 describe('PermissionDialog marker mode', () => {

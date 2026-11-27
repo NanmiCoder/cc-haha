@@ -10,6 +10,7 @@ import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANN
 import {
   isElectronIpcChannel,
   isElectronIpcChannelAllowedForPetWindow,
+  isElectronIpcChannelAllowedForUsageWidgetWindow,
   validateElectronIpcPayload,
 } from './ipc/capabilities'
 import { ElectronServerRuntime } from './services/serverRuntime'
@@ -30,7 +31,7 @@ import { saveWorkspaceBrowserPdf } from './services/workspaceBrowserPdf'
 import { workspaceBrowserMenuPosition } from './services/workspaceBrowserMenu'
 import type { WorkspaceBrowserMenuOptions } from '../src/lib/desktopHost/types'
 import { acquireSingleInstanceLock } from './services/singleInstance'
-import { installTray, shouldInstallTray, type TrayController } from './services/tray'
+import { installTray, installUsageMenuBarTray, shouldInstallTray, type TrayController } from './services/tray'
 import { ElectronUpdaterService, updaterSessionProxyConfig } from './services/updater'
 import { createUpdateSmokeUpdaterFromEnv } from './services/updateSmoke'
 import { ElectronTerminalService, type TerminalSpawnInput } from './services/terminal'
@@ -96,6 +97,12 @@ import {
   type PetWindowDragPayload,
 } from './services/petWindow'
 import {
+  UsageWidgetWindowController,
+  readUsageWidgetWindowState,
+  writeUsageWidgetWindowState,
+  type UsageWidgetWindowDragPayload,
+} from './services/usageWidgetWindow'
+import {
   readLocalePreference,
   writeLocalePreference,
 } from './services/localePreference'
@@ -142,6 +149,8 @@ let workspaceBrowserService: ElectronWorkspaceBrowserService | null = null
 let browserUseBridge: ElectronBrowserBridge | null = null
 let workspaceBrowserSessionConfigured = false
 let petWindowController: PetWindowController | null = null
+let usageWidgetWindowController: UsageWidgetWindowController | null = null
+let usageMenuBarTrayController: TrayController | null = null
 let isQuitting = false
 let quitCleanupStarted = false
 let quitCleanupFinished = false
@@ -204,6 +213,10 @@ function previewPreloadPath() {
 
 function petPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
+}
+
+function usageWidgetPreloadPath() {
+  return path.join(appRoot(), 'electron-dist', 'usage-widget-preload.cjs')
 }
 
 function p2pHostScriptPath() {
@@ -345,6 +358,8 @@ function getDataMigration() {
       if (mainWindow && !mainWindow.isDestroyed()) saveWindowState(app, mainWindow)
       petWindowController?.dispose()
       petWindowController = null
+      usageWidgetWindowController?.dispose()
+      usageWidgetWindowController = null
       await p2pTerminator?.dispose()
       await publicAccessManager?.dispose()
       publicAccessManager = null
@@ -436,6 +451,14 @@ function resolvePetServerAccess(): PreviewLocalAccess | null {
     : null
 }
 
+function resolveUsageWidgetServerAccess(): PreviewLocalAccess | null {
+  const runtime = getServerRuntime()
+  const serverUrl = runtime.getActiveServerUrl()
+  return serverUrl
+    ? { serverUrl, token: runtime.getUsageWidgetAccessToken() }
+    : null
+}
+
 function resolveMainRendererServerAccess(): PreviewLocalAccess | null {
   const runtime = getServerRuntime()
   const serverUrl = runtime.getActiveServerUrl()
@@ -524,6 +547,114 @@ function getPetWindowController() {
     },
   })
   return petWindowController
+}
+
+function getUsageWidgetWindowController() {
+  usageWidgetWindowController ??= new UsageWidgetWindowController({
+    createWindow: options => new BrowserWindow(options),
+    getCursorScreenPoint: () => screen.getCursorScreenPoint(),
+    getCurrentWorkArea: () => screen.getDisplayNearestPoint(
+      screen.getCursorScreenPoint(),
+    ).workArea,
+    getWorkAreaForPoint: point => screen.getDisplayNearestPoint(point).workArea,
+    preloadPath: usageWidgetPreloadPath(),
+    platform: process.platform,
+    readState: () => readUsageWidgetWindowState(process.env, app.getPath('home')),
+    writeState: state => writeUsageWidgetWindowState(state, process.env, app.getPath('home')),
+    onCreated: (window) => {
+      configurePreviewSessionPermissions(window.webContents.session)
+      configureLocalServerRequestAuth(
+        window.webContents.session.webRequest,
+        resolveUsageWidgetServerAccess,
+      )
+      installMainWindowNavigationGuards(window.webContents, { openExternal: openExternalUrl })
+    },
+    load: window => loadRendererEntry(window, { usageWidgetWindow: '1' }),
+    onVisibilityChanged: (visible) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send(ELECTRON_EVENT_CHANNELS.usageWidgetVisibilityChanged, visible)
+      }
+    },
+  })
+  return usageWidgetWindowController
+}
+
+type UsageMenuBarSyncPayload = { enabled: boolean; title?: string; tooltip?: string }
+let pendingUsageMenuBarSync: UsageMenuBarSyncPayload | null = null
+let usageMenuBarSyncLoop: Promise<void> | null = null
+
+async function applyUsageMenuBarSync(payload: UsageMenuBarSyncPayload) {
+  if (process.platform === 'darwin') {
+    if (!payload.enabled) {
+      usageMenuBarTrayController?.dispose()
+      usageMenuBarTrayController = null
+      return
+    }
+    if (!usageMenuBarTrayController) {
+      const created = await installUsageMenuBarTray({
+        app,
+        desktopRoot: appRoot(),
+        toggleUsageWidget: () => {
+          void getUsageWidgetWindowController().toggle()
+        },
+        showMain: () => showMainWindow(mainWindow, app),
+        quit: () => {
+          isQuitting = true
+          app.quit()
+        },
+      }).catch((error) => {
+        console.error('[desktop] failed to create macOS usage menu bar tray', error)
+        return null
+      })
+      if (isQuitting || pendingUsageMenuBarSync?.enabled === false) {
+        created?.dispose()
+        return
+      }
+      usageMenuBarTrayController = created
+    }
+    usageMenuBarTrayController?.setUsageSummary({
+      title: payload.title ?? '',
+      tooltip: payload.tooltip,
+    })
+    return
+  }
+
+  // On Windows/Linux, update the existing system tray tooltip cleanly.
+  if (payload.enabled) {
+    trayController?.setUsageSummary({ tooltip: payload.tooltip })
+  } else {
+    trayController?.setUsageSummary({})
+  }
+}
+
+function syncUsageMenuBar(payload: UsageMenuBarSyncPayload): Promise<void> {
+  pendingUsageMenuBarSync = payload
+  if (!usageMenuBarSyncLoop) {
+    usageMenuBarSyncLoop = (async () => {
+      while (pendingUsageMenuBarSync) {
+        const next = pendingUsageMenuBarSync
+        pendingUsageMenuBarSync = null
+        await applyUsageMenuBarSync(next)
+      }
+    })().finally(() => {
+      usageMenuBarSyncLoop = null
+      if (pendingUsageMenuBarSync) {
+        const next = pendingUsageMenuBarSync
+        pendingUsageMenuBarSync = null
+        void syncUsageMenuBar(next)
+      }
+    })
+  }
+  return usageMenuBarSyncLoop
+}
+
+function broadcastUsageWidgetPreferencesChanged(sender?: BrowserWindow | null) {
+  for (const target of [mainWindow, usageWidgetWindowController?.getWindow() ?? null]) {
+    if (!target || target === sender || target.isDestroyed() || target.webContents.isDestroyed()) {
+      continue
+    }
+    target.webContents.send(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged)
+  }
 }
 
 const loadCustomPetCatalog = createCustomPetCatalogLoader(() => loadCustomPets({
@@ -643,6 +774,12 @@ function registerHandler<T>(
     ) {
       throw new Error(`Electron IPC channel ${channel} is not available to the pet window`)
     }
+    if (
+      usageWidgetWindowController?.owns(senderWindow) &&
+      !isElectronIpcChannelAllowedForUsageWidgetWindow(channel)
+    ) {
+      throw new Error(`Electron IPC channel ${channel} is not available to the usage widget window`)
+    }
     if (migrationControl) return handler(event, payload)
     const operation = Promise.resolve().then(() => handler(event, payload))
     hostOperations.add(operation)
@@ -743,6 +880,10 @@ function registerIpcHandlers() {
   registerHandler(
     ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken,
     () => getServerRuntime().getPetAccessToken(),
+  )
+  registerHandler(
+    ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken,
+    () => getServerRuntime().getUsageWidgetAccessToken(),
   )
   registerHandler(ELECTRON_IPC_CHANNELS.commandInvoke, (_event, payload) => handleCommandInvoke(payload))
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardReadText, () => clipboard.readText())
@@ -892,6 +1033,39 @@ function registerIpcHandlers() {
   })
   registerHandler(ELECTRON_IPC_CHANNELS.petsFocusSession, (_event, payload) =>
     focusPetSession(String(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetShow, async (_event, payload) => {
+    await getUsageWidgetWindowController().show(
+      payload as { compact?: boolean; alwaysOnTop?: boolean } | undefined,
+    )
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetHide, () => {
+    getUsageWidgetWindowController().hide()
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetToggle, (_event, payload) =>
+    getUsageWidgetWindowController().toggle(
+      payload as { compact?: boolean; alwaysOnTop?: boolean } | undefined,
+    ))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetSetCompact, (_event, payload) =>
+    getUsageWidgetWindowController().setCompact(Boolean(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop, (_event, payload) =>
+    getUsageWidgetWindowController().setAlwaysOnTop(Boolean(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop, () =>
+    getUsageWidgetWindowController().snapToTop())
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetDragWindow, (_event, payload) =>
+    getUsageWidgetWindowController().dragWindow(payload as UsageWidgetWindowDragPayload))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar, (_event, payload) =>
+    syncUsageMenuBar(payload as { enabled: boolean; title?: string; tooltip?: string }))
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow, () => {
+    showMainWindow(mainWindow, app)
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, (_event, payload) => {
+    showMainWindow(mainWindow, app)
+    const destination = payload === 'providers' ? 'settings:providers' : 'settings'
+    mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.nativeMenuNavigate, destination)
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged, (event) => {
+    broadcastUsageWidgetPreferencesChanged(BrowserWindow.fromWebContents(event.sender))
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.dialogOpen, (event, payload) =>
     openDialog(currentWindow(event), payload as Parameters<typeof openDialog>[1]))
   registerHandler(ELECTRON_IPC_CHANNELS.dialogSave, (event, payload) =>
@@ -1269,6 +1443,9 @@ app.whenReady().then(async () => {
       app,
       desktopRoot: appRoot(),
       show: () => showMainWindow(mainWindow, app),
+      toggleUsageWidget: () => {
+        void getUsageWidgetWindowController().toggle()
+      },
       quit: () => {
         isQuitting = true
         app.quit()
@@ -1319,10 +1496,12 @@ app.on('before-quit', event => {
     idlePower: () => idlePowerService?.dispose(),
     window: () => { if (mainWindow) saveWindowState(app, mainWindow) },
     tray: () => { trayController?.dispose() },
+    usageMenuBarTray: () => { usageMenuBarTrayController?.dispose() },
     terminal: () => { terminalService?.killAll() },
     preview: () => { previewService?.close() },
     workspaceBrowser: () => { workspaceBrowserService?.closeAll() },
     pet: () => { petWindowController?.dispose() },
+    usageWidget: () => { usageWidgetWindowController?.dispose() },
   }
   // A destroyed native view or PTY can throw during cleanup. Keep going so a
   // failed resource cannot leave every later quit blocked by cleanupStarted.
@@ -1334,7 +1513,9 @@ app.on('before-quit', event => {
     }
   }
   trayController = null
+  usageMenuBarTrayController = null
   petWindowController = null
+  usageWidgetWindowController = null
   // Keep Electron (and the server's stdout/stderr pipes) alive until the server
   // has waited for its CLI children to finish their graceful cleanup. The CLI
   // owns the launchd-reparented Computer Use helper, so exiting the host first

@@ -117,6 +117,9 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      antigravityToolName?: string
+      subagentName?: string
+      supportsAllowAlways?: boolean
     }
   | {
       type: 'computer_use_permission_request'
@@ -448,6 +451,9 @@ export type UIMessage =
       input: unknown
       description?: string
       displayName?: string
+      antigravityToolName?: string
+      subagentName?: string
+      supportsAllowAlways?: boolean
       timestamp: number
     }
   | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; transcriptMessageId?: string; timestamp: number }

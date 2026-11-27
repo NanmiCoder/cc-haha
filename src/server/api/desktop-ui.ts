@@ -81,6 +81,24 @@ export async function handleDesktopUiApi(
       })
     }
 
+    if (detail === 'usage-widget') {
+      if (req.method === 'GET') {
+        const result = await desktopUiPreferencesService.readPreferences()
+        return Response.json({
+          exists: result.exists,
+          usageWidget: result.preferences.usageWidget,
+        })
+      }
+      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+      const body = await parseJsonBody(req)
+      const preferences = await desktopUiPreferencesService.updateUsageWidgetPreferences(body)
+      return Response.json({
+        ok: true,
+        preferences,
+        usageWidget: preferences.usageWidget,
+      })
+    }
+
     if (detail === 'profile') {
       const action = segments[4]
 

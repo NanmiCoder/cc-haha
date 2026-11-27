@@ -6,6 +6,7 @@ import { getSessionCollaborationService } from './services/sessionCollaborationH
 
 import { handleSessionsApi } from './api/sessions.js'
 import { handleMobilePushApi } from './api/mobilePush.js'
+import { handleMobileUpdateApi } from './api/mobileUpdate.js'
 import { handleSettingsApi } from './api/settings.js'
 import { handleModelsApi } from './api/models.js'
 import { handleScheduledTasksApi } from './api/scheduled-tasks.js'
@@ -30,6 +31,7 @@ import { handleDiagnosticsApi } from './api/diagnostics.js'
 import { handleDoctorApi } from './api/doctor.js'
 import { handleH5AccessApi } from './api/h5-access.js'
 import { handleActivityStatsApi } from './api/activityStats.js'
+import { handleUsageSummaryApi } from './api/usage-summary.js'
 import { handleOpenTargetsApi } from './api/open-targets.js'
 import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
@@ -58,7 +60,7 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
   if (mobileParts[1] === 'sessions' && mobileParts[2] === 'mobile-push') return handleMobilePushApi(req, mobileParts, context)
   if (!context.remoteBrowser) return routeApiRequest(req, url)
   const parts = url.pathname.split('/').filter(Boolean)
-  if (parts[1] === 'browser-use') {
+  if (parts[1] === 'browser-use' || parts[1] === 'usage-summary') {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
   const isProvider = parts[1] === 'providers'
@@ -213,6 +215,9 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
     case 'activity-stats':
       return handleActivityStatsApi(req, url, segments)
 
+    case 'usage-summary':
+      return handleUsageSummaryApi(req, url, segments)
+
     case 'open-targets':
       return handleOpenTargetsApi(req, url, segments)
 
@@ -230,6 +235,9 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
 
     case 'filesystem':
       return handleFilesystemRoute(url.pathname, url, req.signal, req.headers)
+
+    case 'mobile-update':
+      return handleMobileUpdateApi(req, url, segments)
 
     default:
       return Response.json(

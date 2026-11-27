@@ -32,6 +32,7 @@ export type TraceCallRecord = {
   sessionId: string
   source: 'anthropic' | 'proxy'
   querySource?: string
+  agentId?: string
   provider?: TraceProviderInfo
   model?: string
   status?: TraceCallStatus

@@ -136,6 +136,7 @@ export function resetPopularSkillsCache(): void {
 export function useCapabilityMenu(options: {
   open: boolean
   lean?: boolean
+  antigravity?: boolean
   /**
    * Shows the Agent mode row. Without `onChange` the row is the read-only
    * record of a session's fixed mode.
@@ -155,7 +156,7 @@ export function useCapabilityMenu(options: {
   browserUseConsent: BrowserUseConsent
   browserUse: BrowserUseComposerState
 } {
-  const { open, cwd, references, handlers, lean = false, agentProfile } = options
+  const { open, cwd, references, handlers, lean = false, antigravity = false, agentProfile } = options
   const t = useTranslation()
   const [data, setData] = useState<CapabilityMenuData>(EMPTY_DATA)
   const [popularSkills, setPopularSkills] = useState<NormalizedSkill[]>([])
@@ -172,7 +173,10 @@ export function useCapabilityMenu(options: {
   const browserUseLoaded = useBrowserUseStore(state => state.loaded)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
-  const agentTeamArmed = armed && agentTeamsEnabled && !lean
+  // Antigravity runs multi-agent swarms natively via `/swarm` without relying
+  // on Claude Code's experimental Agent Teams flag in Settings.
+  const agentTeamAvailable = antigravity || agentTeamsEnabled
+  const agentTeamArmed = armed && agentTeamAvailable && !lean
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
 
@@ -180,7 +184,7 @@ export function useCapabilityMenu(options: {
   // reflects Settings even before opening `+`. On non-desktop / remote H5 (or
   // after a 403/error), do not loop-fetch or render a broken toggle.
   useEffect(() => {
-    if (lean || !isDesktop || browserUseLoaded || open || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
+    if (lean || antigravity || !isDesktop || browserUseLoaded || open || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
     let active = true
     browserUseFetchInFlightRef.current = true
     void browserUseApi.getConfig().then(config => {
@@ -194,13 +198,12 @@ export function useCapabilityMenu(options: {
       browserUseFetchInFlightRef.current = false
     })
     return () => { active = false }
-  }, [lean, isDesktop, browserUseLoaded, open])
+  }, [lean, antigravity, isDesktop, browserUseLoaded, open])
 
   useEffect(() => {
     if (!open || lean) return
     let active = true
     const cwdArg = cwd || undefined
-    setRecentSkillIds(readRecentSkills())
 
     // Each source is independent: a failing one (e.g. computer-use off macOS)
     // must not blank the others.
@@ -210,25 +213,28 @@ export function useCapabilityMenu(options: {
       }).catch(() => {})
     }
 
-    load(agentsApi.list(cwdArg), value => ({ agents: value.activeAgents }))
-    load(connectorsApi.list(), value => ({ connectors: value.items }))
-    load(workflowsApi.list(cwdArg), value => ({ workflows: value.workflows }))
-    void loadPopularSkills().then(items => {
-      if (active) setPopularSkills(items)
-    }).catch(() => {})
-    if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
-      browserUseFetchInFlightRef.current = true
-      void browserUseApi.getConfig().then(config => {
-        if (active) {
-          setBrowserUseUnavailable(false)
-          useBrowserUseStore.setState({ config, loaded: true })
-        }
-      }).catch(() => {
-        browserUseFetchFailedRef.current = true
-        if (active) setBrowserUseUnavailable(true)
-      }).finally(() => {
-        browserUseFetchInFlightRef.current = false
-      })
+    if (!antigravity) {
+      setRecentSkillIds(readRecentSkills())
+      load(agentsApi.list(cwdArg), value => ({ agents: value.activeAgents }))
+      load(connectorsApi.list(), value => ({ connectors: value.items }))
+      load(workflowsApi.list(cwdArg), value => ({ workflows: value.workflows }))
+      void loadPopularSkills().then(items => {
+        if (active) setPopularSkills(items)
+      }).catch(() => {})
+      if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
+        browserUseFetchInFlightRef.current = true
+        void browserUseApi.getConfig().then(config => {
+          if (active) {
+            setBrowserUseUnavailable(false)
+            useBrowserUseStore.setState({ config, loaded: true })
+          }
+        }).catch(() => {
+          browserUseFetchFailedRef.current = true
+          if (active) setBrowserUseUnavailable(true)
+        }).finally(() => {
+          browserUseFetchInFlightRef.current = false
+        })
+      }
     }
     void (async () => {
       try {
@@ -248,9 +254,10 @@ export function useCapabilityMenu(options: {
     })()
 
     return () => { active = false }
-  }, [open, cwd, lean])
+  }, [open, cwd, lean, antigravity])
 
   const sections = useMemo(() => buildCapabilitySections({
+    antigravity,
     skills: references.filter(reference => reference.kind === 'skill'),
     plugins: references.filter(reference => reference.kind === 'plugin'),
     recentSkillIds,
@@ -259,14 +266,14 @@ export function useCapabilityMenu(options: {
     agents: data.agents,
     connectors: data.connectors,
     workflows: data.workflows,
-    agentTeam: { enabled: agentTeamsEnabled, armed: agentTeamArmed },
+    agentTeam: { enabled: agentTeamAvailable, armed: agentTeamArmed },
     computerUse: data.computerUse,
-    browserUse: isDesktop && !browserUseUnavailable && browserUseConfig
+    browserUse: !antigravity && isDesktop && !browserUseUnavailable && browserUseConfig
       ? { enabled: browserUseConfig.enabled, preferredTarget: browserUseConfig.preferredTarget }
       : null,
-    agentProfile: profileValue ? { value: profileValue, locked: profileLocked ?? true } : undefined,
+    agentProfile: profileValue && !antigravity ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, isDesktop, browserUseUnavailable, browserUseConfig, profileValue, profileLocked, t])
+  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamAvailable, agentTeamArmed, isDesktop, browserUseUnavailable, browserUseConfig, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }
@@ -296,6 +303,7 @@ export function useCapabilityMenu(options: {
   }
 
   const onAction = (action: CapabilityAction) => {
+    if (antigravity && !isAntigravityAction(action)) return
     if (lean && !isLeanAction(action)) return
     switch (action.type) {
       case 'attachment':
@@ -490,6 +498,10 @@ export function useCapabilityMenu(options: {
     browserUseConsent,
     browserUse,
   }
+}
+
+function isAntigravityAction(action: CapabilityAction): boolean {
+  return action.type === 'attachment' || action.type === 'slashTrigger' || action.type === 'toggleAgentTeam' || action.type === 'toggleComputerUse' || action.type === 'settings'
 }
 
 function isLeanAction(action: CapabilityAction): boolean {

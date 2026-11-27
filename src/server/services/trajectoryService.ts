@@ -9,7 +9,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { open, type FileHandle } from 'node:fs/promises'
+import { open, readdir, stat, type FileHandle } from 'node:fs/promises'
 import * as path from 'node:path'
 import { ApiError } from '../middleware/errorHandler.js'
 import {
@@ -60,6 +60,8 @@ const SNAPSHOT_ROWS_PER_SCOPE = 2000
 const SNAPSHOT_BLOB_RE = /^[0-9a-f]{16}$/
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 const ROW_ID_RE = /^([ucmat]):(.{1,1024})$/s
+const SUBAGENT_METADATA_MAX_FILES = 4096
+const SUBAGENT_METADATA_MAX_BYTES = 64 * 1024
 
 /**
  * Prompt snapshot markers that represent the conversation's own requests.
@@ -73,7 +75,7 @@ const ROW_ID_RE = /^([ucmat]):(.{1,1024})$/s
 export function isConversationQuerySource(qs: unknown): boolean {
   if (qs === undefined || qs === null) return true
   if (typeof qs !== 'string') return false
-  return qs === 'sdk' || qs === 'repl_main_thread' || qs.startsWith('repl_main_thread:') || qs.startsWith('agent:')
+  return qs === 'sdk' || qs === 'repl_main_thread' || qs.startsWith('repl_main_thread:') || qs.startsWith('agent:') || qs === 'workflow_agent'
 }
 
 function aborted(signal?: AbortSignal) {
@@ -316,6 +318,7 @@ export async function turnsBefore(filePath: string, byteOffset: number, signal?:
 export function resetTrajectoryCachesForTests() {
   turnIndexes.clear()
   snapshotIndexes.clear()
+  subagentMetaIndexes.clear()
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +479,7 @@ async function snapshotRows(sidecarPath: string, scope: string, signal?: AbortSi
 // Source resolution and tokens
 // ---------------------------------------------------------------------------
 
-type Source = { filePath: string; sidecarPath: string; scope: string; skipSidechain: boolean }
+type Source = { filePath: string; sidecarPath: string; subagentsDir: string; scope: string; skipSidechain: boolean }
 
 export function parseAgentIdParam(value: string | null): string | undefined {
   if (value === null || value === '') return undefined
@@ -489,12 +492,161 @@ async function resolveSource(sessionId: string, agentId: string | undefined): Pr
   const found = await sessionService.findSessionFile(sessionId)
   if (!found) throw ApiError.notFound(`Session not found: ${sessionId}`)
   const sessionDir = path.join(path.dirname(found.filePath), sessionId)
+  const subagentsDir = path.join(sessionDir, 'subagents')
   return {
-    filePath: agentId ? path.join(sessionDir, 'subagents', `agent-${agentId}.jsonl`) : found.filePath,
+    filePath: agentId ? path.join(subagentsDir, `agent-${agentId}.jsonl`) : found.filePath,
     sidecarPath: path.join(sessionDir, 'prompt-snapshots.jsonl'),
+    subagentsDir,
     scope: agentId ?? 'main',
     skipSidechain: !agentId,
   }
+}
+
+type CachedSubagentMeta = {
+  mtimeMs: number
+  size: number
+  agentId: string
+  toolUseId?: string
+  ownerAgentId?: string
+  complete: boolean
+}
+
+type SubagentMetaIndex = {
+  files: Map<string, CachedSubagentMeta>
+  byToolUseId: Map<string, Array<{ agentId: string; ownerAgentId?: string }>>
+  metadataComplete: boolean
+}
+
+const subagentMetaIndexes = new Lru<SubagentMetaIndex>(CACHE_FILES)
+
+function needsAgentIdLookup(row: TrajectoryRow): boolean {
+  return row.kind === 'tool' && !row.agentId && Boolean(row.toolUseId) &&
+    (row.toolName === 'Agent' || row.toolName === 'Task' || row.partial === true)
+}
+
+async function readBoundedMetaJson(filePath: string, signal?: AbortSignal): Promise<Record<string, unknown> | null> {
+  const handle = await open(filePath, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(SUBAGENT_METADATA_MAX_BYTES + 1)
+    let length = 0
+    while (length < buffer.length) {
+      aborted(signal)
+      const part = await handle.read(buffer, length, buffer.length - length, length)
+      if (!part.bytesRead) break
+      length += part.bytesRead
+    }
+    if (length > SUBAGENT_METADATA_MAX_BYTES) return null
+    return parseObject(buffer.subarray(0, length))
+  } finally {
+    await handle.close()
+  }
+}
+
+async function loadSubagentMetaIndex(subagentsDir: string, signal?: AbortSignal): Promise<SubagentMetaIndex | null> {
+  return withFileLock(`submeta\0${subagentsDir}`, async () => {
+    const entries = await readdir(subagentsDir).catch(() => null)
+    if (!entries || !entries.length) {
+      subagentMetaIndexes.delete(subagentsDir)
+      return null
+    }
+    if (entries.length > SUBAGENT_METADATA_MAX_FILES) return null
+
+    const previous = subagentMetaIndexes.get(subagentsDir)
+    const nextFiles = new Map<string, CachedSubagentMeta>()
+    const byToolUseId = new Map<string, Array<{ agentId: string; ownerAgentId?: string }>>()
+    let metadataComplete = true
+
+    for (const file of entries) {
+      aborted(signal)
+      if (!file.startsWith('agent-') || !file.endsWith('.meta.json')) continue
+      const agentId = file.slice('agent-'.length, -'.meta.json'.length)
+      if (!AGENT_ID_RE.test(agentId)) continue
+      const fullPath = path.join(subagentsDir, file)
+      try {
+        const info = await stat(fullPath)
+        const cached = previous?.files.get(file)
+        let record: CachedSubagentMeta
+        if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+          record = cached
+        } else if (info.size > SUBAGENT_METADATA_MAX_BYTES) {
+          record = { mtimeMs: info.mtimeMs, size: info.size, agentId, complete: false }
+        } else {
+          const meta = await readBoundedMetaJson(fullPath, signal)
+          if (!meta) {
+            record = { mtimeMs: info.mtimeMs, size: info.size, agentId, complete: false }
+          } else {
+            const toolUseId = str(meta.toolUseId)
+            const rawOwner = str(meta.ownerAgentId)
+            const ownerAgentId = rawOwner ? normalizeScope(rawOwner) : undefined
+            record = {
+              mtimeMs: info.mtimeMs,
+              size: info.size,
+              agentId,
+              ...(toolUseId ? { toolUseId } : {}),
+              ...(ownerAgentId ? { ownerAgentId } : {}),
+              complete: true,
+            }
+          }
+        }
+        nextFiles.set(file, record)
+        if (!record.complete) {
+          metadataComplete = false
+        } else if (record.toolUseId) {
+          const list = byToolUseId.get(record.toolUseId) ?? []
+          list.push({ agentId: record.agentId, ...(record.ownerAgentId ? { ownerAgentId: record.ownerAgentId } : {}) })
+          byToolUseId.set(record.toolUseId, list)
+        }
+      } catch {
+        if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+        metadataComplete = false
+      }
+    }
+
+    const index: SubagentMetaIndex = { files: nextFiles, byToolUseId, metadataComplete }
+    subagentMetaIndexes.set(subagentsDir, index)
+    return index
+  })
+}
+
+/**
+ * Fill in missing subagent ids from `subagents/agent-*.meta.json` by
+ * `toolUseId`. Covers one-shot built-ins (Explore / Plan) whose tool_result
+ * omits the `agentId:` trailer, running/errored/oversized Agent calls, and
+ * nested subagents whose transcript strips `toolUseResult`. Reuses a per-dir
+ * stat-validated cache so live tool_result appends never re-read unchanged
+ * metadata files, and does zero I/O when no unresolved rows exist.
+ */
+async function enrichUnresolvedAgentIds(
+  subagentsDir: string,
+  scope: string,
+  rows: TrajectoryRow[],
+  signal?: AbortSignal,
+): Promise<void> {
+  const unresolved = rows.filter(needsAgentIdLookup)
+  if (!unresolved.length) return
+  await withHistoryReadBudget(signal, async () => {
+    const index = await loadSubagentMetaIndex(subagentsDir, signal)
+    if (!index) return
+    const expectedOwner = scope === 'main' ? undefined : scope
+    for (const row of unresolved) {
+      const candidates = index.byToolUseId.get(row.toolUseId!)
+      if (!candidates?.length) continue
+      const exact = candidates.filter(candidate => expectedOwner === undefined
+        ? candidate.ownerAgentId === undefined
+        : candidate.ownerAgentId === expectedOwner)
+      if (exact.length === 1) {
+        row.agentId = exact[0]!.agentId
+      } else if (
+        expectedOwner !== undefined &&
+        exact.length === 0 &&
+        index.metadataComplete &&
+        candidates.length === 1 &&
+        candidates[0]!.ownerAgentId === undefined
+      ) {
+        row.agentId = candidates[0]!.agentId
+      }
+    }
+  }, 'metadata')
 }
 
 type TailToken = { v: 1; dev: string; ino: string; offset: number; prefix: string; boundary: string }
@@ -655,8 +807,10 @@ export async function getTrajectoryPage(
   ])
   // A tool result shown as `resultOmittedBytes` is not missing from the ledger.
   const omitted = page.omittedOversizedEntries - represented
+  const rows = projectTrajectoryRows(entries, { turnBase, skipSidechain: source.skipSidechain, precedingTimestamps: preceding })
+  await enrichUnresolvedAgentIds(source.subagentsDir, source.scope, rows, signal)
   return {
-    rows: projectTrajectoryRows(entries, { turnBase, skipSidechain: source.skipSidechain, precedingTimestamps: preceding }),
+    rows,
     ...(snapshots ? { snapshots } : {}),
     turnBase,
     olderCursor: page.nextCursor,
@@ -707,8 +861,10 @@ async function readAppend(source: Source, tokenValue: string, snapshots: Traject
     read.entries.length ? precedingTimestamps(source.filePath, token.offset, source.skipSidechain, signal) : [],
   ])
   const omitted = read.omitted - read.represented
+  const rows = projectTrajectoryRows(read.entries, { turnBase, skipSidechain: source.skipSidechain, precedingTimestamps: preceding })
+  await enrichUnresolvedAgentIds(source.subagentsDir, source.scope, rows, signal)
   return {
-    rows: projectTrajectoryRows(read.entries, { turnBase, skipSidechain: source.skipSidechain, precedingTimestamps: preceding }),
+    rows,
     snapshots,
     turnBase,
     olderCursor: null,

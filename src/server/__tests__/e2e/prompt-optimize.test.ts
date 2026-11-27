@@ -168,7 +168,14 @@ test('prompt optimize HTTP controls work on empty, running, and idle sessions wi
     )
     expect(missing.status).toBe(404)
 
-    // Transcript never contains ephemeral prompt optimization traffic.
+    // Unknown session sub-resources must return 404 and never fall through to DELETE /api/sessions/:id.
+    const unknownSubresource = await fetch(
+      `${base}/api/sessions/${root.sessionId}/unknown-subresource/${crypto.randomUUID()}`,
+      { method: 'DELETE' },
+    )
+    expect(unknownSubresource.status).toBe(404)
+
+    // Transcript never contains ephemeral prompt optimization traffic (and session still exists).
     const transcript = await api(`/api/sessions/${root.sessionId}/messages`)
     expect(JSON.stringify(transcript)).not.toContain('Optimized:')
     expect(JSON.stringify(transcript)).not.toContain('refine next draft')

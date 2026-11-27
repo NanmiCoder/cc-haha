@@ -46,6 +46,12 @@ test('on the web the composer leaves the caret to the browser while typing and m
         }
       },
     }))
+    mock.module(${JSON.stringify(import.meta.resolve('../core/usePromptOptimize'))}, () => ({
+      usePromptOptimize: () => ({
+        phase: 'idle', optimizing: false, restoreSnapshot: null, notice: null, issue: null,
+        optimize() {}, cancel() {}, restore() {}, edited() {}, dismissRestore() {}, dismissNotice() {}, dismissIssue() {},
+      }),
+    }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const props = {
       client: { host: { id: 'phone-fixture' } }, sessionId: 'fixture-chat',

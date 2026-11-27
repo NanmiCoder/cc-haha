@@ -390,3 +390,17 @@ describe('the Browser Use row', () => {
     expect(fallback.action).toEqual({ type: 'settings', tab: 'browserUse' })
   })
 })
+
+describe('Antigravity capability menu', () => {
+  it('keeps add-files, agent-team, computer-use, and slash-commands while hiding Claude-only controls', () => {
+    const sections = buildCapabilitySections(buildInput({
+      antigravity: true,
+      agentProfile: { value: 'standard', locked: false },
+    }))
+    const allKeys = sections.flatMap((section) => section.items.map((item) => item.key))
+    expect(allKeys).toEqual(['add-files', 'agent-team', 'computer-use', 'slash-commands'])
+    expect(allKeys).not.toContain('agent-profile')
+    expect(allKeys).not.toContain('skills')
+    expect(allKeys).not.toContain('connectors')
+  })
+})

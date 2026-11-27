@@ -18,8 +18,16 @@ import {
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
 } from '../constants/deepseekAccountProvider'
 import { BUNDLED_PROVIDER_PRESETS } from '../config/providerPresets'
+import {
+  clearAntigravityCachedCatalog,
+  readAntigravityCachedCatalog,
+  readAntigravityEnabled,
+  writeAntigravityCachedCatalog,
+  writeAntigravityEnabled,
+} from '../lib/antigravityPreferences'
 import { resolveProviderRuntimeModelId, resolveProviderSlotModelId } from '../lib/runtimeSelection'
 import type {
+  AntigravityStatus,
   SavedProvider,
   ModelMapping,
   CreateProviderInput,
@@ -40,12 +48,20 @@ type ProviderStore = {
   activeId: string | null
   /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
   deepSeekAccountModels: ModelMapping
+  /** Local Antigravity ACP runtime status discovered by the server. */
+  antigravity: AntigravityStatus | undefined
+  /** Whether a live Antigravity ACP model discovery request is currently in flight. */
+  antigravityDiscovering: boolean
+  /** User toggle to show/hide Antigravity in the new-session engine switcher. */
+  antigravityEnabled: boolean
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
   isLoading: boolean
   error: string | null
 
   fetchProviders: () => Promise<void>
+  discoverAntigravity: () => Promise<AntigravityStatus | undefined>
+  setAntigravityEnabled: (enabled: boolean) => void
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
   updateProvider: (id: string, input: UpdateProviderInput) => Promise<SavedProvider>
   deleteProvider: (id: string) => Promise<void>
@@ -179,11 +195,46 @@ function refreshSessionsForProvider(provider: SavedProvider, activeId: string | 
   }
 }
 
+let inFlightAntigravityDiscovery: Promise<AntigravityStatus | undefined> | null = null
+
+function hydrateAntigravityWithCache(status: AntigravityStatus | undefined): AntigravityStatus | undefined {
+  if (!status) return undefined
+  if (status.status === 'ready' && status.models.length > 0) {
+    writeAntigravityCachedCatalog({
+      models: status.models,
+      currentModelId: status.currentModelId,
+      currentEffortLevel: status.currentEffortLevel,
+      version: status.version,
+    })
+    return status
+  }
+  if (status.status === 'not_installed' || status.status === 'login_required') {
+    clearAntigravityCachedCatalog()
+    return status
+  }
+  if (status.status === 'unchecked' && status.models.length === 0) {
+    const cached = readAntigravityCachedCatalog()
+    if (cached) {
+      return {
+        ...status,
+        models: cached.models,
+        ...(cached.currentModelId && !status.currentModelId ? { currentModelId: cached.currentModelId } : {}),
+        ...(cached.currentEffortLevel && !status.currentEffortLevel ? { currentEffortLevel: cached.currentEffortLevel } : {}),
+        ...(cached.version && !status.version ? { version: cached.version } : {}),
+      }
+    }
+  }
+  return status
+}
+
 export const useProviderStore = create<ProviderStore>((set, get) => ({
   providers: [],
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
   deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
+  antigravity: undefined,
+  antigravityDiscovering: false,
+  antigravityEnabled: readAntigravityEnabled(),
   hasLoadedProviders: false,
   presets: BUNDLED_PROVIDER_PRESETS,
   isLoading: false,
@@ -193,17 +244,32 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const firstLoad = !get().hasLoadedProviders
-      const { providers, activeId, providerOrder, deepSeekAccountModels } = await providersApi.list()
+      const previousAntigravity = get().antigravity
+      const { providers, activeId, providerOrder, deepSeekAccountModels, antigravity } = await providersApi.list()
+      const hydratedAntigravity = hydrateAntigravityWithCache(antigravity)
+      const shouldUpdateAntigravity = get().antigravity === previousAntigravity && hydratedAntigravity !== undefined
       set({
         providers,
         providerOrder: normalizeProviderOrder(providerOrder, providers),
         activeId,
         ...(deepSeekAccountModels && { deepSeekAccountModels }),
+        // A list request started before discovery must not erase its result.
+        ...(shouldUpdateAntigravity ? { antigravity: hydratedAntigravity } : {}),
         hasLoadedProviders: true,
         isLoading: false,
       })
       if (firstLoad) {
         for (const provider of providers) refreshSessionsForProvider(provider, activeId, true)
+      }
+      if (
+        shouldUpdateAntigravity &&
+        hydratedAntigravity?.status === 'unchecked' &&
+        get().antigravityEnabled &&
+        typeof providersApi.discoverAntigravity === 'function'
+      ) {
+        // Warm up the live ACP model list in the background on startup so switching
+        // to Antigravity and opening ModelSelector shows all models immediately.
+        void get().discoverAntigravity().catch(() => {})
       }
     } catch (err) {
       set({
@@ -211,6 +277,35 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  },
+
+  discoverAntigravity: async () => {
+    if (inFlightAntigravityDiscovery) return inFlightAntigravityDiscovery
+    set({ antigravityDiscovering: true })
+    const promise = (async () => {
+      try {
+        const response = await providersApi.discoverAntigravity()
+        const antigravity = hydrateAntigravityWithCache(response.antigravity)
+        set({ antigravity, antigravityDiscovering: false })
+        return antigravity
+      } catch (error) {
+        set({ antigravityDiscovering: false })
+        throw error
+      }
+    })()
+    inFlightAntigravityDiscovery = promise
+    const clearInFlight = () => {
+      if (inFlightAntigravityDiscovery === promise) {
+        inFlightAntigravityDiscovery = null
+      }
+    }
+    promise.then(clearInFlight, clearInFlight)
+    return promise
+  },
+
+  setAntigravityEnabled: (enabled) => {
+    writeAntigravityEnabled(enabled)
+    set({ antigravityEnabled: enabled })
   },
 
   createProvider: async (input) => {

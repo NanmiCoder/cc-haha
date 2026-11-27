@@ -10,6 +10,8 @@ import { isImageGenerationToolName } from '@/components/chat/imageGenerationTool
 import { hasToolResultImageBlock } from '@/lib/toolResultContent'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
+import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { Component, useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { ArrowDown, BookMarked, ChevronDown, ChevronRight, FileStack, LoaderCircle, Settings, Target, Undo2 } from 'lucide-react'
@@ -488,6 +490,9 @@ function SelectableChatMessage({
   children: ReactNode
 }) {
   const isLean = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.agentProfile === 'lean'))
+  const isAntigravityRuntime = useSessionRuntimeStore(state => Boolean(sessionId && state.selections[sessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const isAntigravitySession = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const isAntigravity = isAntigravityRuntime || isAntigravitySession
   const rootRef = useRef<HTMLDivElement>(null)
   const selectionMenuRef = useRef<HTMLDivElement>(null)
   const lastSelectionPointerRef = useRef<SelectionPointer | null>(null)
@@ -656,7 +661,7 @@ function SelectableChatMessage({
       }}
     >
       {children}
-      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
+      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean || isAntigravity ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
     </div>
   )
 }
@@ -2589,7 +2594,11 @@ export function MessageList({
     Boolean(sessionState?.activeToolUseId) ||
     Boolean(sessionState?.activeToolName)
   const isLean = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.agentProfile === 'lean'))
-  const branchActionsDisabled = isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
+  const isAntigravityRuntime = useSessionRuntimeStore(state => Boolean(resolvedSessionId && state.selections[resolvedSessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const isAntigravitySession = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID))
+  const isAntigravity = isAntigravityRuntime || isAntigravitySession
+  const supportsTurnCheckpoints = !isDirectAgentSession && !isAntigravity
+  const branchActionsDisabled = isAntigravity || isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
 
@@ -3078,7 +3087,7 @@ export function MessageList({
     return null
   }, [renderItems, turnCompletionByMessageId])
   const waitingForReconnect = sessionState?.connectionState === 'reconnecting' || sessionState?.awaitingReconnectSync === true
-  const turnCheckpointQueryPaused = !checkpointHistoryReady || isDirectAgentSession || turnInProgress ||
+  const turnCheckpointQueryPaused = !checkpointHistoryReady || !supportsTurnCheckpoints || turnInProgress ||
     hasRunningBackgroundTasks || waitingForReconnect || sessionState?.awaitingStopIdle === true
   const historyWindowed = sessionState?.historyWindowed === true
   const turnTargetsCurrent = deferredMessages === messages
@@ -3088,7 +3097,7 @@ export function MessageList({
   }, [completedTurnTargets, historyMutationEpoch, historyWindowed, resolvedSessionId, turnCheckpointQueryPaused, turnTargetsCurrent])
   const [checkpointResult, setCheckpointResult] = useState<({ request: NonNullable<typeof checkpointRequest> } & (
     | { kind: 'ready'; cards: TurnChangeCardModel[] }
-    | { kind: 'over-budget'; files: WorkspaceChangedFile[] | null }
+    | { kind: 'over-budget'; files: WorkspaceChangedFile[] | null; truncated: boolean }
     | { kind: 'error'; message: string }
   )) | null>(null)
   // 上次结果可以继续阅读；只有当前请求的结果才可以用于撤销。
@@ -3510,7 +3519,12 @@ export function MessageList({
               workspaceStatus.changedFiles.every((file) => typeof file?.path === 'string' && file.path.trim().length > 0)
               ? workspaceStatus.changedFiles
               : null
-            setCheckpointResult({ request: checkpointRequest, kind: 'over-budget', files })
+            setCheckpointResult({
+              request: checkpointRequest,
+              kind: 'over-budget',
+              files,
+              truncated: files !== null && workspaceStatus?.truncated === true,
+            })
           } else {
             setCheckpointResult({ request: checkpointRequest, kind: 'error', message: getApiErrorMessage(checkpointResponse.reason) })
           }
@@ -3729,7 +3743,7 @@ export function MessageList({
     completedMessageIds: completedTurnMessageIds,
     blockedReason: editBlockedReason,
     pendingReason: editPendingReason,
-    disabled: isDirectAgentSession || isSideChatSession || Boolean(confirmTurnCard),
+    disabled: isAntigravity || isDirectAgentSession || isSideChatSession || Boolean(confirmTurnCard),
     rewindingTurnId,
     setRewindingTurnId,
     t,
@@ -4331,6 +4345,7 @@ export function MessageList({
                 key={workspaceChangesFallback.request.sessionId}
                 sessionId={workspaceChangesFallback.request.sessionId}
                 files={workspaceChangesFallback.files}
+                truncated={workspaceChangesFallback.truncated}
               />
             ) : null}
 
@@ -4574,6 +4589,9 @@ export const MessageBlock = memo(function MessageBlock({
           input={message.input}
           description={message.description}
           displayName={message.displayName}
+          antigravityToolName={message.antigravityToolName}
+          subagentName={message.subagentName}
+          supportsAllowAlways={message.supportsAllowAlways}
           markerWhenPending={decisionsInComposer}
         />
       )

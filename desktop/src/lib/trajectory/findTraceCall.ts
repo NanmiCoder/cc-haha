@@ -22,13 +22,44 @@ const END_SLACK_MS = 30_000
 /** How far before the first response block a request may have started when its start is unknown. */
 const UNKNOWN_START_LOOKBACK_MS = 10 * 60_000
 
+function normalizeAgentId(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  return trimmed.startsWith('agent-') ? trimmed.slice('agent-'.length) : trimmed
+}
+
+function isMainConversationQuerySource(qs: string): boolean {
+  return qs === 'sdk' || qs === 'repl_main_thread' || qs.startsWith('repl_main_thread:')
+}
+
+function isSubagentQuerySource(qs: string): boolean {
+  return qs.startsWith('agent:') || qs === 'workflow_agent'
+}
+
+export type TraceCallMatchOptions = {
+  /** Subagent id when viewing a subagent trajectory; absent for the main session. */
+  agentId?: string
+}
+
 /**
  * Score how well a captured call explains an assistant response: the call
  * must start no later than the response's first block, and the closer its
  * completion is to the response's last block the better. Lower is better;
  * null means "cannot be this response".
  */
-export function scoreTraceCall(call: TraceCallRecord, row: TrajectoryRow): number | null {
+export function scoreTraceCall(call: TraceCallRecord, row: TrajectoryRow, options: TraceCallMatchOptions = {}): number | null {
+  const targetAgentId = normalizeAgentId(options.agentId)
+  const callAgentId = normalizeAgentId(call.agentId)
+  const callQuerySource = call.querySource?.trim()
+  if (targetAgentId) {
+    if (callAgentId && callAgentId !== targetAgentId) return null
+    if (!callAgentId && callQuerySource && !isSubagentQuerySource(callQuerySource)) return null
+  } else {
+    if (callAgentId) return null
+    if (callQuerySource && isSubagentQuerySource(callQuerySource)) return null
+  }
+
   const responseStart = timeOf(row.ts)
   const responseEnd = timeOf(row.endTs ?? row.ts)
   const requestStart = timeOf(row.startTs) ?? (responseStart === null ? null : responseStart - UNKNOWN_START_LOOKBACK_MS)
@@ -37,8 +68,14 @@ export function scoreTraceCall(call: TraceCallRecord, row: TrajectoryRow): numbe
   if (startedAt < requestStart - START_SLACK_MS || startedAt > responseStart + START_SLACK_MS) return null
   const completedAt = timeOf(call.completedAt) ?? startedAt + (call.durationMs ?? 0)
   if (completedAt > responseEnd + END_SLACK_MS) return null
+  // A legacy untagged call (e.g. a main-session proxy call that emitted tool_use: Agent)
+  // that already completed before this subagent's response even started cannot explain it.
+  if (targetAgentId && !callAgentId && !callQuerySource && completedAt < responseStart - START_SLACK_MS) return null
   let score = Math.abs(completedAt - responseEnd)
+  // Prefer an explicit matching agentId over untagged/legacy calls in subagent views.
+  if (targetAgentId && !callAgentId) score += callQuerySource ? 120_000 : 240_000
   if (row.model && call.model && row.model !== call.model) score += 60_000
+  if (!targetAgentId && callQuerySource && !isMainConversationQuerySource(callQuerySource)) score += 60_000
   if (call.status === 'error') score += 30_000
   return score
 }
@@ -48,7 +85,11 @@ export function scoreTraceCall(call: TraceCallRecord, row: TrajectoryRow): numbe
  * time on the server (through its index), so this costs one request however
  * large the capture file is.
  */
-export async function findTraceCallForRow(row: TrajectoryRow, loadNear: TraceCallsNearLoader): Promise<TraceCallLookup> {
+export async function findTraceCallForRow(
+  row: TrajectoryRow,
+  loadNear: TraceCallsNearLoader,
+  options: TraceCallMatchOptions = {},
+): Promise<TraceCallLookup> {
   const responseStart = timeOf(row.ts)
   if (responseStart === null) return { status: 'unmatched' }
   const requestStart = timeOf(row.startTs) ?? responseStart - UNKNOWN_START_LOOKBACK_MS
@@ -59,7 +100,7 @@ export async function findTraceCallForRow(row: TrajectoryRow, loadNear: TraceCal
   let best: TraceCallRecord | null = null
   let bestScore = Infinity
   for (const call of near.calls) {
-    const score = scoreTraceCall(call, row)
+    const score = scoreTraceCall(call, row, options)
     if (score !== null && score < bestScore) {
       best = call
       bestScore = score

@@ -34,6 +34,26 @@ export type DesktopPetInteractiveRegion = {
   height: number
 }
 
+export type DesktopUsageWidgetBoundsState = {
+  compact: boolean
+  alwaysOnTop: boolean
+  snappedTop: boolean
+}
+
+export type DesktopUsageWidgetDrag = {
+  phase: 'start' | 'move' | 'end'
+  x: number
+  y: number
+}
+
+export type DesktopUsageWidgetMenuBarSync = {
+  enabled: boolean
+  title?: string
+  tooltip?: string
+}
+
+export type DesktopUsageWidgetSettingsTab = 'general' | 'providers'
+
 export type DialogFileFilter = {
   name: string
   extensions: string[]
@@ -581,6 +601,21 @@ export type DesktopHost = {
     onPanelPlacementChanged(
       handler: (placement: DesktopPetPanelPlacement) => void,
     ): Promise<DesktopHostUnlisten>
+  }
+  usageWidget?: {
+    show(options?: { compact?: boolean; alwaysOnTop?: boolean }): Promise<void>
+    hide(): Promise<void>
+    toggle(options?: { compact?: boolean; alwaysOnTop?: boolean }): Promise<boolean>
+    setCompact(compact: boolean): Promise<DesktopUsageWidgetBoundsState>
+    setAlwaysOnTop(alwaysOnTop: boolean): Promise<DesktopUsageWidgetBoundsState>
+    snapToTop(): Promise<DesktopUsageWidgetBoundsState>
+    dragWindow(payload: DesktopUsageWidgetDrag): Promise<DesktopUsageWidgetBoundsState>
+    syncMenuBar(payload: DesktopUsageWidgetMenuBarSync): Promise<void>
+    focusMainWindow(): Promise<void>
+    openSettings(tab?: DesktopUsageWidgetSettingsTab): Promise<void>
+    notifyPreferencesChanged(): Promise<void>
+    onVisibilityChanged(handler: (visible: boolean) => void): Promise<DesktopHostUnlisten>
+    onPreferencesChanged(handler: () => void): Promise<DesktopHostUnlisten>
   }
   dialogs: {
     open(options?: DialogOpenOptions): Promise<string | string[] | null>

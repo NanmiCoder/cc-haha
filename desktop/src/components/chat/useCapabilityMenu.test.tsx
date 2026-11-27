@@ -368,4 +368,25 @@ describe('the Agent mode row', () => {
     const { result } = renderMenu()
     expect(runItems(result)).not.toContain('agent-profile')
   })
+
+  it('exposes and arms Agent Team for Antigravity even when Claude Code agentTeamsEnabled is false', () => {
+    dismissAgentTeamsNotice()
+    useSettingsStore.setState({ agentTeamsEnabled: false })
+    const composer = handlers()
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true,
+      antigravity: true,
+      cwd: '/repo',
+      references: [],
+      handlers: composer,
+    }))
+    const teamRow = result.current.sections.flatMap(section => section.items).find(item => item.key === 'agent-team')
+    expect(teamRow).toMatchObject({ action: { type: 'toggleAgentTeam' }, switch: { checked: false, disabled: false } })
+
+    act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+    expect(result.current.agentTeamArmed).toBe(true)
+
+    act(() => result.current.disarmAgentTeam())
+    expect(result.current.agentTeamArmed).toBe(false)
+  })
 })

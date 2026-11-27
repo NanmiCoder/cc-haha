@@ -12,15 +12,24 @@ import { handleApiRequest } from '../router.js'
 import {
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
+  shouldCaptureApiTrace,
   traceCaptureService,
+  updateTraceCaptureSettings,
   type TraceCallRecord,
 } from '../services/traceCaptureService.js'
+import { createDumpPromptsFetch } from '../../services/api/dumpPrompts.js'
 import { TRACE_WINDOW_RECORD_LIMIT } from '../../services/api/traceCapture.js'
 import type { TraceCallsNear } from '../services/trajectoryTypes.js'
 
 let tmpDir: string
 const saved: Record<string, string | undefined> = {}
-const ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'CC_HAHA_LOCAL_INDEX', 'CC_HAHA_TRACE_API_CALLS'] as const
+const ENV_KEYS = [
+  'CLAUDE_CONFIG_DIR',
+  'CC_HAHA_LOCAL_INDEX',
+  'CC_HAHA_TRACE_API_CALLS',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CC_HAHA_TRANSCRIPT_ENTRYPOINT',
+] as const
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-near-'))
@@ -103,6 +112,48 @@ describe('GET /api/sessions/:id/trace/near', () => {
     expect((await near('near-scan', at(30), at(40))).calls).toEqual([])
   })
 
+  test('hydrates querySource and agentId in both indexed and scan modes', async () => {
+    await traceCaptureService.recordCall({
+      id: 'call-main',
+      sessionId: 'near-scopes',
+      source: 'anthropic',
+      querySource: 'sdk',
+      model: 'fixture-model',
+      startedAt: at(1),
+      completedAt: at(1, 5),
+      durationMs: 5000,
+      request: { body: { model: 'fixture-model' } },
+      response: { status: 200, body: { ok: true } },
+    })
+    await traceCaptureService.recordCall({
+      id: 'call-sub',
+      sessionId: 'near-scopes',
+      source: 'proxy',
+      querySource: 'agent:builtin',
+      agentId: 'explore42',
+      model: 'fixture-model',
+      startedAt: at(1, 2),
+      completedAt: at(1, 6),
+      durationMs: 4000,
+      request: { body: { model: 'fixture-model' } },
+      response: { status: 200, body: { ok: true } },
+    })
+
+    const indexed = await near('near-scopes', at(0), at(2))
+    expect(indexed.calls.map(call => ({ id: call.id, querySource: call.querySource, agentId: call.agentId }))).toEqual([
+      { id: 'call-main', querySource: 'sdk', agentId: undefined },
+      { id: 'call-sub', querySource: 'agent:builtin', agentId: 'explore42' },
+    ])
+
+    process.env.CC_HAHA_LOCAL_INDEX = 'off'
+    clearTraceCaptureStateForTests()
+    const scanned = await near('near-scopes', at(0), at(2))
+    expect(scanned.calls.map(call => ({ id: call.id, querySource: call.querySource, agentId: call.agentId }))).toEqual([
+      { id: 'call-main', querySource: 'sdk', agentId: undefined },
+      { id: 'call-sub', querySource: 'agent:builtin', agentId: 'explore42' },
+    ])
+  })
+
   test('reaches calls beyond the indexed overview window and hydrates them through the locator', async () => {
     const sessionId = 'near-large'
     const tracePath = path.join(tmpDir, 'cc-haha', 'traces', `${sessionId}.jsonl`)
@@ -167,5 +218,63 @@ describe('GET /api/sessions/:id/trace/near', () => {
       const response = await get(`/api/sessions/near-validate/trace/calls/call-1?at=${locator}`)
       expect({ locator, status: response.status }).toEqual({ locator, status: 400 })
     }
+  })
+
+  test('shouldCaptureApiTrace honors CC_HAHA_TRANSCRIPT_ENTRYPOINT for custom providers and team workers, and respects falsy CC_HAHA_TRACE_API_CALLS', async () => {
+    delete process.env.CC_HAHA_TRACE_API_CALLS
+    await updateTraceCaptureSettings({ enabled: true })
+
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-cli'
+    delete process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT
+    expect(shouldCaptureApiTrace()).toBe(false)
+
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop'
+    expect(shouldCaptureApiTrace()).toBe(true)
+
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop-team-worker'
+    expect(shouldCaptureApiTrace()).toBe(true)
+
+    // Side-chat safeguard: explicit 0 disables capture even with desktop transcript entrypoint.
+    process.env.CC_HAHA_TRACE_API_CALLS = '0'
+    expect(shouldCaptureApiTrace()).toBe(false)
+  })
+
+  test('createDumpPromptsFetch injects trace scope headers only for local proxy requests', async () => {
+    const originalFetch = globalThis.fetch
+    const seen: Array<{ url: string; headers: Headers }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      seen.push({ url, headers: new Headers(init?.headers) })
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    try {
+      const wrapped = createDumpPromptsFetch('explore42', {
+        traceSessionId: 'sess-proxy-headers',
+        querySource: 'agent:builtin',
+        agentId: 'explore42',
+      })
+      await wrapped!('http://127.0.0.1:3456/proxy/providers/p1/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model' }),
+      })
+      await wrapped!('https://api.example.invalid/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model' }),
+      })
+      await drainTraceCaptureForTests()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]!.headers.get('x-claude-code-session-id')).toBe('sess-proxy-headers')
+    expect(seen[0]!.headers.get('x-cc-haha-trace-agent-id')).toBe('explore42')
+    expect(seen[0]!.headers.get('x-cc-haha-trace-query-source')).toBe('agent:builtin')
+
+    expect(seen[1]!.headers.get('x-cc-haha-trace-agent-id')).toBeNull()
+    expect(seen[1]!.headers.get('x-cc-haha-trace-query-source')).toBeNull()
   })
 })

@@ -63,6 +63,7 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
+import { AntigravityProviderCard } from './AntigravityProviderCard'
 import {
   highlightSegments,
   initialProviderTab,
@@ -75,6 +76,7 @@ import {
   type ProviderSearchMatch,
 } from './providerListSearch'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
+import { OfficialProviderPlanUsage } from '../../components/settings/OfficialProviderPlanUsage'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { DeepSeekAccountLogin } from '../../components/settings/DeepSeekAccountLogin'
@@ -498,7 +500,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                   <OfficialProviderModelSettings providerId={item.id} />
                 </>
               ) : item.kind === 'claude-official' ? <ClaudeOfficialLogin usageOnly /> : null}
-              {item.kind !== 'claude-official' && (
+              {(item.kind === 'openai-official' || item.kind === 'grok-official') && (
+                <OfficialProviderPlanUsage providerId={item.kind} />
+              )}
+              {item.kind === 'deepseek-account' && (
                 <p className="text-xs text-[var(--color-text-secondary)]">{t('settings.providers.officialUsageNotIntegrated')}</p>
               )}
             </div>
@@ -722,6 +727,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           <Spinner size={20} tone="brand" label={t('common.loading')} />
         </div>
       ) : null}
+
+      {(!searching || terms.some((term) => 'antigravity'.includes(term) || 'agy'.includes(term) || 'local'.includes(term))) && (
+        <AntigravityProviderCard browserMode={browserMode} />
+      )}
 
       {/* Create Modal — conditionally rendered so state resets on close */}
       {showCreateModal && (

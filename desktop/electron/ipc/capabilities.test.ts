@@ -5,6 +5,7 @@ import {
   ELECTRON_IPC_VALIDATORS,
   isElectronIpcChannel,
   isElectronIpcChannelAllowedForPetWindow,
+  isElectronIpcChannelAllowedForUsageWidgetWindow,
   validateElectronIpcPayload,
 } from './capabilities'
 
@@ -406,6 +407,31 @@ describe('Electron IPC capabilities', () => {
       ELECTRON_IPC_CHANNELS.adaptersRestartSidecar,
     ]) {
       expect(isElectronIpcChannelAllowedForPetWindow(forbidden)).toBe(false)
+    }
+  })
+
+  it('gives the usage widget renderer only scoped access and widget controls', () => {
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
+    )).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'providers')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'general')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'shell')).toBe(false)
+
+    for (const forbidden of [
+      ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken,
+      ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken,
+      ELECTRON_IPC_CHANNELS.appearanceSetApplied,
+      ELECTRON_IPC_CHANNELS.zoomSet,
+      ELECTRON_IPC_CHANNELS.shellOpen,
+      ELECTRON_IPC_CHANNELS.terminalSpawn,
+      ELECTRON_IPC_CHANNELS.commandInvoke,
+    ]) {
+      expect(isElectronIpcChannelAllowedForUsageWidgetWindow(forbidden)).toBe(false)
     }
   })
 })
