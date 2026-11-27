@@ -882,17 +882,63 @@ describe('useBrowserUseEventBridge', () => {
         expect.objectContaining({ sessionId: SESSION_B }),
       )
 
-      // focus-tab / close-tab carrying SESSION_B must ignore SESSION A's tab.
+      // focus-tab / close-tab / control-state carrying SESSION_B must ignore SESSION A's tab.
       useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
       act(() => {
         listener!({ type: 'focus-tab', tabId: browserTabA, sessionId: SESSION_B, revealWorkbench: true })
         listener!({ type: 'close-tab', tabId: browserTabA, sessionId: SESSION_B })
+        listener!({ type: 'control-state', tabId: browserTabA, sessionId: SESSION_B, state: 'active', autoReveal: true })
       })
       expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('hidden')
+      expect(useBrowserUseStore.getState().tabStates[browserTabA]).toBeUndefined()
       expect(useWorkspaceStore.getState().findBrowserTabOwner(browserTabA)).toEqual({
         sessionId: SESSION,
         tabId: tabAId,
       })
+
+      // ensure-tab with a URL arriving while a blank tab's initial registration is still in flight
+      // must still navigate once that in-flight registration settles.
+      let resolvePendingCreate!: (value: { ok: true }) => void
+      const pendingCreate = new Promise<{ ok: true }>((resolve) => {
+        resolvePendingCreate = resolve
+      })
+      mocks.workspaceBrowserHost.create.mockReturnValueOnce(pendingCreate)
+      mocks.workspaceBrowserHost.navigate.mockClear()
+
+      const blankTabId = useWorkspaceStore.getState().openTarget('session-c', { kind: 'browser' })!
+      const blankBrowserTabId = (useWorkspaceStore.getState().getTab('session-c', blankTabId) as WorkspaceBrowserTab).browserTabId
+      mocks.isWorkspaceBrowserAvailable.mockReturnValue(true)
+      render(<WorkspaceSurface sessionId="session-c" dock="side" cwd="/repo" />)
+      await waitFor(() => {
+        expect(mocks.workspaceBrowserHost.create).toHaveBeenCalledWith(
+          blankBrowserTabId,
+          expect.objectContaining({ sessionId: 'session-c' }),
+        )
+      })
+
+      act(() => {
+        listener!({
+          type: 'ensure-tab',
+          requestId: 'req-inflight-url',
+          sessionId: 'session-c',
+          url: 'https://modeldial.com/live',
+        })
+      })
+      await act(async () => {
+        resolvePendingCreate({ ok: true })
+        await Promise.resolve()
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-inflight-url',
+          tabId: blankBrowserTabId,
+          ok: true,
+        }))
+      })
+      expect(mocks.workspaceBrowserHost.navigate).toHaveBeenCalledWith(
+        blankBrowserTabId,
+        'https://modeldial.com/live',
+      )
     } finally {
       Reflect.deleteProperty(window, 'desktopHost')
     }

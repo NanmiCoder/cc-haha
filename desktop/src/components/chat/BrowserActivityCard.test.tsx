@@ -869,4 +869,45 @@ describe('BrowserActivityCard', () => {
       expect(renderItems[0].toolCalls.map((tc) => tc.toolUseId)).toEqual(['tu-b1', 'tu-b2', 'tu-b3'])
     }
   })
+
+  it('focuses only the current session workspace tab when clicking View even if an activity references a foreign tabId', () => {
+    useWorkspaceStore.setState({ bySession: {} })
+    const tabAId = useWorkspaceStore.getState().openTarget('sess-a', { kind: 'browser', url: 'https://a.test/' })!
+    const tabA = useWorkspaceStore.getState().getTab('sess-a', tabAId)
+    expect(tabA?.kind).toBe('browser')
+    const foreignBrowserTabId = tabA?.kind === 'browser' ? tabA.browserTabId : ''
+    useWorkspaceStore.getState().setLayout('sess-a', 'hidden')
+
+    const tabBId = useWorkspaceStore.getState().openTarget('sess-b', { kind: 'browser', url: 'https://b.test/' })!
+    useWorkspaceStore.getState().setLayout('sess-b', 'hidden')
+
+    useBrowserUseStore.getState().applyActivityEvent('sess-b', {
+      id: 'act-cross',
+      sessionId: 'sess-b',
+      tabId: foreignBrowserTabId,
+      target: 'workspace',
+      kind: 'navigate',
+      action: 'goto',
+      humanLabel: 'Opening page',
+      status: 'running',
+      timestamp: Date.now(),
+    })
+
+    const calls = [
+      makeCall({ id: 'c-view', toolUseId: 'tu-view', toolName: 'BrowserNavigate', input: { url: 'https://b.test/' } }),
+    ]
+    render(
+      <BrowserActivityCard
+        sessionId="sess-b"
+        toolCalls={calls}
+        resultMap={new Map()}
+        isLive
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }))
+    expect(useWorkspaceStore.getState().getSession('sess-a').layout).toBe('hidden')
+    expect(useWorkspaceStore.getState().getSession('sess-b').layout).toBe('split')
+    expect(useWorkspaceStore.getState().getSession('sess-b').activeSideTabId).toBe(tabBId)
+  })
 })

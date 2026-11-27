@@ -995,4 +995,92 @@ describe('browserUse/engine', () => {
 
     engine.dispose()
   })
+
+  it('tracks active takeover and control state independently per tab across concurrent sessions', async () => {
+    const transport = new MockCdpTransport('workspace')
+    const controlEvents: Array<{ tabId: string; state: string; sessionId?: string }> = []
+    const engine = new BrowserUseEngine({
+      transport,
+      noInPageOverlay: true,
+      uiHooks: {
+        setControlState: async payload => {
+          controlEvents.push({
+            tabId: payload.tabId,
+            state: payload.state,
+            sessionId: payload.sessionId,
+          })
+        },
+      },
+    })
+
+    engine.registerTab({
+      tabId: 'wb-a',
+      target: 'workspace',
+      cdpSessionId: 'wb-a',
+      url: 'https://a.example.com/',
+      title: 'A',
+      active: true,
+      ownerSessionId: 'sess-a',
+    })
+    engine.registerTab({
+      tabId: 'wb-b',
+      target: 'workspace',
+      cdpSessionId: 'wb-b',
+      url: 'https://b.example.com/',
+      title: 'B',
+      active: false,
+      ownerSessionId: 'sess-b',
+    })
+
+    // Both tabs enter takeover independently without clobbering each other.
+    const toA = await engine.requestTakeover({
+      tabId: 'wb-a',
+      sessionId: 'sess-a',
+      reason: 'login',
+      message: 'Login A',
+    })
+    const toB = await engine.requestTakeover({
+      tabId: 'wb-b',
+      sessionId: 'sess-b',
+      reason: 'captcha',
+      message: 'Captcha B',
+    })
+
+    expect(engine.getActiveTakeover({ tabId: 'wb-a' })?.takeoverId).toBe(toA.takeoverId)
+    expect(engine.getActiveTakeover({ tabId: 'wb-b' })?.takeoverId).toBe(toB.takeoverId)
+    expect(engine.getActiveTakeover({ sessionId: 'sess-a' })?.takeoverId).toBe(toA.takeoverId)
+    expect(engine.getControlState('wb-a')).toBe('takeover')
+    expect(engine.getControlState('wb-b')).toBe('takeover')
+    expect(engine.getControlState()).toBe('takeover')
+
+    // wb-a remains protected while wb-b also has a pending takeover.
+    await expect(
+      engine.navigate({ tabId: 'wb-a', url: 'https://a.example.com/next', waitUntil: 'none' }),
+    ).rejects.toThrow(/paused for user takeover/)
+    await engine.releaseControl('wb-a')
+    expect(engine.getControlState('wb-a')).toBe('takeover')
+
+    // Resuming wb-a settles wb-a while leaving wb-b in takeover.
+    const resumedA = await engine.resumeTakeover(toA.takeoverId)
+    expect(resumedA?.status).toBe('resumed')
+    expect(engine.getActiveTakeover({ tabId: 'wb-a' })).toBeNull()
+    expect(engine.getActiveTakeover({ tabId: 'wb-b' })?.takeoverId).toBe(toB.takeoverId)
+    expect(engine.getControlState('wb-a')).toBe('idle')
+    expect(engine.getControlState('wb-b')).toBe('takeover')
+    expect(engine.getControlState()).toBe('takeover')
+    expect(controlEvents.at(-1)).toEqual({ tabId: 'wb-a', state: 'idle', sessionId: 'sess-a' })
+
+    // Releasing control on wb-a while wb-b is active must not flip aggregate state to idle.
+    await engine.abortTakeover(toB.takeoverId)
+    expect(engine.getControlState()).toBe('idle')
+    await engine.navigate({ tabId: 'wb-b', url: 'https://b.example.com/run', waitUntil: 'none', sessionId: 'sess-b' })
+    expect(engine.getControlState('wb-b')).toBe('active')
+    await engine.releaseControl('wb-a')
+    expect(engine.getControlState('wb-b')).toBe('active')
+    expect(engine.getControlState()).toBe('active')
+    await engine.releaseControl('wb-b')
+    expect(engine.getControlState()).toBe('idle')
+
+    engine.dispose()
+  })
 })

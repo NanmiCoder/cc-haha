@@ -1360,6 +1360,13 @@ export class BrowserUseService {
           },
           { signal: input.signal },
         )
+        if (ensured.sessionId && ensured.sessionId !== input.sessionId) {
+          throw new ApiError(
+            409,
+            `Workspace browser tab ${ensured.tabId} belongs to another session`,
+            'WORKSPACE_TAB_SESSION_MISMATCH',
+          )
+        }
         const tab = this.workspaceEngine.registerTab({
           tabId: ensured.tabId,
           target: 'workspace',
@@ -1423,12 +1430,12 @@ export class BrowserUseService {
             'WORKSPACE_TAB_SESSION_MISMATCH',
           )
         }
-        await this.workspaceTransport?.releaseLease(input.tabId)
         await this.bridgeClient.rpc(
           'tabs.close',
           { tabId: input.tabId, sessionId: input.sessionId },
           { signal: input.signal },
         )
+        await this.workspaceTransport?.releaseLease(input.tabId)
         this.workspaceEngine.unregisterTab(input.tabId)
         this.clearTrackedTab(input.tabId)
         return { ok: true, target, tabId: input.tabId }
@@ -1667,8 +1674,8 @@ export class BrowserUseService {
     }
     const candidates: Array<BrowserTakeoverState | null | undefined> = [
       this.sessionTakeovers.get(sessionId),
-      this.workspaceEngine?.getActiveTakeover(),
-      this.chromeEngine?.getActiveTakeover(),
+      this.workspaceEngine?.getActiveTakeover({ sessionId, takeoverId }),
+      this.chromeEngine?.getActiveTakeover({ sessionId, takeoverId }),
     ]
     const match = candidates.find(candidate => {
       if (!candidate || candidate.status !== 'pending') return false
@@ -1705,15 +1712,17 @@ export class BrowserUseService {
     try {
       let resumed: BrowserTakeoverState | null = null
       if (
-        this.workspaceEngine?.getActiveTakeover()?.takeoverId ===
-        claimed.takeoverId
+        this.workspaceEngine?.getActiveTakeover({
+          takeoverId: claimed.takeoverId,
+        })
       ) {
         resumed = await this.workspaceEngine.resumeTakeover(claimed.takeoverId)
       }
       if (
         !resumed &&
-        this.chromeEngine?.getActiveTakeover()?.takeoverId ===
-          claimed.takeoverId
+        this.chromeEngine?.getActiveTakeover({
+          takeoverId: claimed.takeoverId,
+        })
       ) {
         resumed = await this.chromeEngine.resumeTakeover(claimed.takeoverId)
       }
@@ -1839,15 +1848,17 @@ export class BrowserUseService {
     try {
       let aborted: BrowserTakeoverState | null = null
       if (
-        this.workspaceEngine?.getActiveTakeover()?.takeoverId ===
-        claimed.takeoverId
+        this.workspaceEngine?.getActiveTakeover({
+          takeoverId: claimed.takeoverId,
+        })
       ) {
         aborted = await this.workspaceEngine.abortTakeover(claimed.takeoverId)
       }
       if (
         !aborted &&
-        this.chromeEngine?.getActiveTakeover()?.takeoverId ===
-          claimed.takeoverId
+        this.chromeEngine?.getActiveTakeover({
+          takeoverId: claimed.takeoverId,
+        })
       ) {
         aborted = await this.chromeEngine.abortTakeover(claimed.takeoverId)
       }

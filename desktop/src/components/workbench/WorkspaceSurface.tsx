@@ -486,9 +486,11 @@ export function useBrowserUseEventBridge() {
           const browserTabId = targetTab.browserTabId
           const storageId = targetTab.storageId
           const alreadyRegistered = isWorkspaceBrowserGuestRegistered(browserTabId)
+          let createdWithUrl = false
           const ensurePromise = alreadyRegistered
             ? Promise.resolve()
             : ensureWorkspaceBrowserGuest(browserTabId, async (webContentsId) => {
+                createdWithUrl = Boolean(event.url)
                 const res = await workspaceBrowserHost.create(browserTabId, {
                   sessionId: ownerSessionId,
                   storageId,
@@ -500,7 +502,7 @@ export function useBrowserUseEventBridge() {
           void ensurePromise.then(async () => {
             if (
               reusedExisting
-              && alreadyRegistered
+              && !createdWithUrl
               && !event.createNew
               && event.url
               && targetTab.url !== event.url
@@ -540,10 +542,11 @@ export function useBrowserUseEventBridge() {
           break
         }
         case 'control-state': {
+          const owner = workspaceStore.findBrowserTabOwner(event.tabId)
+          if (event.sessionId && owner && owner.sessionId !== event.sessionId) return
           browserUseStore.applyHostEvent(event)
           const shouldReveal = event.autoReveal ?? browserUseStore.config?.autoOpenWorkspacePanel ?? true
           if (event.state !== 'idle' && shouldReveal) {
-            const owner = workspaceStore.findBrowserTabOwner(event.tabId)
             if (owner && workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
               workspaceStore.setLayout(owner.sessionId, 'split')
             }

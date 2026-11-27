@@ -733,5 +733,41 @@ describe('ElectronBrowserBridge JSON-RPC, WS push events & cursor ceiling', () =
     })
     expect(JSON.parse(badClose.body).error.message).toMatch(/belongs to another session/)
     expect(workspace.closedTabs).toEqual([])
+
+    // 4. Untagged pages are also rejected when a caller scopes focus/close by sessionId,
+    // and ui.controlState rejects mismatched sessionId.
+    workspace.pages.set('wb-untagged', {
+      tabId: 'wb-untagged',
+      url: 'https://untagged.test/',
+      title: 'Untagged',
+      visible: true,
+      zoomFactor: 1,
+      appZoomFactor: 1.25,
+    })
+    const untaggedFocus = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'focus-untagged', method: 'tabs.focus', params: { sessionId: 'sess-b', tabId: 'wb-untagged' } }),
+    })
+    expect(JSON.parse(untaggedFocus.body).error.message).toMatch(/belongs to another session/)
+
+    const untaggedClose = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'close-untagged', method: 'tabs.close', params: { sessionId: 'sess-b', tabId: 'wb-untagged' } }),
+    })
+    expect(JSON.parse(untaggedClose.body).error.message).toMatch(/belongs to another session/)
+    expect(workspace.closedTabs).toEqual([])
+
+    const badControl = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'ctrl-bad',
+        method: 'ui.controlState',
+        params: { tabId: 'wb-sess-a', sessionId: 'sess-b', state: 'active' },
+      }),
+    })
+    expect(JSON.parse(badControl.body).error.message).toMatch(/belongs to another session/)
   })
 })

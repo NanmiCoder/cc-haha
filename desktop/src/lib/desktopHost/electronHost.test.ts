@@ -322,6 +322,29 @@ describe('electron desktop host', () => {
     expect(host.capabilities.workspaceBrowser).toBe(true)
   })
 
+  it('forwards optional sessionId on workspace browser create and rejects invalid sessionId', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+
+    await host.browser.create('wb-1', {
+      sessionId: 'session-42',
+      storageId: 'wsb-1',
+      webContentsId: 7,
+    })
+    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, {
+      tabId: 'wb-1',
+      sessionId: 'session-42',
+      storageId: 'wsb-1',
+      webContentsId: 7,
+    })
+
+    await expect(host.browser.create('wb-1', {
+      sessionId: '../escape',
+      storageId: 'wsb-1',
+      webContentsId: 7,
+    })).rejects.toThrow('Invalid Electron IPC payload')
+  })
+
   it('refuses to register a page without the guest it names', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     const host = createElectronHost({ invoke, subscribe: vi.fn() })

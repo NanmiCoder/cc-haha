@@ -678,7 +678,7 @@ export class ElectronBrowserBridge {
         if (!existing) {
           throw new Error(`workspace browser tab not open: ${tabId}`)
         }
-        if (sessionId && existing.sessionId && existing.sessionId !== sessionId) {
+        if (sessionId && existing.sessionId !== sessionId) {
           throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
         }
         this.emitToRenderer({
@@ -696,7 +696,7 @@ export class ElectronBrowserBridge {
           ? params.sessionId.trim()
           : undefined
         const existing = this.workspaceBrowser.getPageInfo(tabId)
-        if (sessionId && existing?.sessionId && existing.sessionId !== sessionId) {
+        if (sessionId && existing && existing.sessionId !== sessionId) {
           throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
         }
         this.activeControlTabs.delete(tabId)
@@ -753,15 +753,22 @@ export class ElectronBrowserBridge {
 
       case 'ui.controlState': {
         const tabId = requireStringParam(params, 'tabId')
+        const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+          ? params.sessionId.trim()
+          : undefined
         const state = params.state
         if (state !== 'idle' && state !== 'active' && state !== 'takeover') {
           throw new Error('ui.controlState requires state: idle | active | takeover')
+        }
+        const existing = this.workspaceBrowser.getPageInfo(tabId)
+        if (sessionId && existing?.sessionId && existing.sessionId !== sessionId) {
+          throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
         }
         const active = state === 'active'
         if (active) this.activeControlTabs.add(tabId)
         else this.activeControlTabs.delete(tabId)
         context.markControlledTab(tabId, active)
-        if (this.workspaceBrowser.getPageInfo(tabId)) {
+        if (existing) {
           await this.workspaceBrowser.setAgentControlActive(tabId, active).catch(() => {})
         }
         this.emitToRenderer({
@@ -770,7 +777,7 @@ export class ElectronBrowserBridge {
           state,
           ...(typeof params.actionLabel === 'string' ? { actionLabel: params.actionLabel } : {}),
           ...(typeof params.takeoverReason === 'string' ? { takeoverReason: params.takeoverReason } : {}),
-          ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+          ...(sessionId ? { sessionId } : {}),
           ...(typeof params.showOverlay === 'boolean' ? { showOverlay: params.showOverlay } : {}),
           ...(typeof params.autoReveal === 'boolean' ? { autoReveal: params.autoReveal } : {}),
         })
