@@ -61,7 +61,9 @@ vi.mock('../../api/review', () => ({
 import { useTabStore } from '../../stores/tabStore'
 import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
-import { WorkspaceSurface, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
+import { WorkspaceSurface, useBrowserUseEventBridge, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
+import { browserHost } from '../../lib/desktopHost/browserHost'
+import type { BrowserUseHostEvent } from '../../lib/desktopHost/types'
 import { WorkspaceHeaderProvider } from '../layout/WorkspaceHeaderContext'
 import { TabBar } from '../layout/TabBar'
 import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
@@ -652,6 +654,65 @@ describe('useWorkspaceBrowserEventBridge', () => {
     // The slot the closed page occupied now belongs to another page; a late
     // event must not repaint it.
     expect(useWorkspaceStore.getState().getTab(SESSION, second)).toMatchObject({ url: 'http://b.test/' })
+  })
+})
+
+describe('useBrowserUseEventBridge', () => {
+  it('resolves ensure-tab by sessionId even while Settings is active and honors createNew=true', async () => {
+    let listener: ((event: BrowserUseHostEvent) => void) | null = null
+    const reportTabReady = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      browserUse: {
+        ...browserHost.browserUse,
+        reportTabReady,
+        onEvent: async (handler) => {
+          listener = handler
+          return () => { listener = null }
+        },
+      },
+    }
+    try {
+      // User switched to Settings tab while a session has an existing browser tab.
+      useTabStore.setState({
+        tabs: [
+          { sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' },
+          { sessionId: '__settings__', title: 'Settings', type: 'settings', status: 'idle' },
+        ],
+        activeTabId: '__settings__',
+      })
+      const existingId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://first.test/' })!
+      expect(existingId).toBeTruthy()
+
+      renderHook(() => useBrowserUseEventBridge())
+      await act(async () => { await Promise.resolve() })
+      expect(listener).not.toBeNull()
+
+      // createNew: true must open a brand-new browser tab in SESSION even though Settings is active.
+      act(() => {
+        listener!({
+          type: 'ensure-tab',
+          requestId: 'req-new-1',
+          sessionId: SESSION,
+          url: 'https://second.test/',
+          createNew: true,
+        })
+      })
+
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-new-1',
+          ok: true,
+        }))
+      })
+      const browserTabs = useWorkspaceStore.getState().getTabs(SESSION, 'side').filter((t) => t.kind === 'browser')
+      expect(browserTabs).toHaveLength(2)
+      expect(browserTabs.some((t) => t.url === 'https://second.test/')).toBe(true)
+    } finally {
+      Reflect.deleteProperty(window, 'desktopHost')
+    }
   })
 })
 

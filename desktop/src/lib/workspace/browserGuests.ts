@@ -20,6 +20,8 @@ import {
  */
 
 const ATTACH_TIMEOUT_MS = 10_000
+const DEFAULT_AGENT_HIDDEN_WIDTH = 1280
+const DEFAULT_AGENT_HIDDEN_HEIGHT = 800
 
 type WebviewElement = HTMLElement & { getWebContentsId(): number }
 
@@ -27,10 +29,12 @@ type GuestRecord = {
   tabId: string
   slot: HTMLDivElement
   webview: WebviewElement
+  overlayHost: HTMLDivElement
   webContentsId: number | null
   attach: Promise<number> | null
   registration: Promise<void> | null
   registered: boolean
+  lastValidSize: { width: number; height: number } | null
 }
 
 type Placement = {
@@ -45,6 +49,9 @@ let layerObserver: ResizeObserver | null = null
 let layerWaiters: Array<(element: HTMLElement) => void> = []
 const guests = new Map<string, GuestRecord>()
 const placements = new Map<string, Placement>()
+const agentActiveTabs = new Set<string>()
+const overlayListeners = new Map<string, Set<(host: HTMLDivElement | null) => void>>()
+const gestureListeners = new Set<(active: boolean) => void>()
 let gesture = false
 let gestureListenersInstalled = false
 
@@ -110,6 +117,66 @@ export function isWorkspaceBrowserGuestRegistered(tabId: string): boolean {
 }
 
 /**
+ * Returns the overlay host element mounted INSIDE `record.slot` as a sibling
+ * after `<webview>`, so agent UI (virtual cursor, takeover shield, control
+ * pill) composites above the guest page instead of behind the guest layer.
+ */
+export function getWorkspaceBrowserOverlayHost(tabId: string): HTMLDivElement | null {
+  const record = guests.get(tabId)
+  if (!record || !record.slot.isConnected) return null
+  return record.overlayHost
+}
+
+export function subscribeWorkspaceBrowserOverlayHost(
+  tabId: string,
+  listener: (host: HTMLDivElement | null) => void,
+): () => void {
+  let set = overlayListeners.get(tabId)
+  if (!set) {
+    set = new Set()
+    overlayListeners.set(tabId, set)
+  }
+  set.add(listener)
+  listener(getWorkspaceBrowserOverlayHost(tabId))
+  return () => {
+    set?.delete(listener)
+    if (set?.size === 0) overlayListeners.delete(tabId)
+  }
+}
+
+export function getWorkspaceBrowserSlot(tabId: string): HTMLDivElement | null {
+  const record = guests.get(tabId)
+  if (!record || !record.slot.isConnected) return null
+  return record.slot
+}
+
+export function isWorkspaceBrowserSlotShown(tabId: string): boolean {
+  const record = guests.get(tabId)
+  return Boolean(record?.slot.isConnected && record.slot.dataset.shown === 'true')
+}
+
+export function isWorkspaceBrowserGestureActive(): boolean {
+  return gesture
+}
+
+export function subscribeWorkspaceBrowserGesture(listener: (active: boolean) => void): () => void {
+  gestureListeners.add(listener)
+  return () => { gestureListeners.delete(listener) }
+}
+
+/**
+ * Marks a browser tab as actively driven by the Browser Use agent. While
+ * active, hiding or switching away from the tab preserves its last valid
+ * non-zero viewport dimensions (or a safe default if never shown) so CDP
+ * layout metrics, hit-testing, and screenshots never collapse to 0x0.
+ */
+export function setWorkspaceBrowserAgentActive(tabId: string, active: boolean): void {
+  if (active) agentActiveTabs.add(tabId)
+  else agentActiveTabs.delete(tabId)
+  applyPlacement(tabId)
+}
+
+/**
  * Draws the page over `stage` while `visible`, otherwise parks it. Returns a
  * release that parks the page only if no later placement replaced this one.
  * A placement may precede the page's creation; it applies once the page exists.
@@ -138,6 +205,7 @@ export function placeWorkspaceBrowserGuest(
 
 /** Ends the page: removing its element destroys the guest. */
 export function disposeWorkspaceBrowserGuest(tabId: string): void {
+  agentActiveTabs.delete(tabId)
   const record = guests.get(tabId)
   if (record) dispose(record)
   placements.get(tabId)?.observer?.disconnect()
@@ -146,6 +214,7 @@ export function disposeWorkspaceBrowserGuest(tabId: string): void {
 
 /** The host reported the guest gone; forget it so a retry builds a new one. */
 export function forgetLostWorkspaceBrowserGuest(tabId: string): void {
+  agentActiveTabs.delete(tabId)
   const record = guests.get(tabId)
   if (record) dispose(record)
 }
@@ -171,18 +240,37 @@ function createGuest(tabId: string): GuestRecord {
   webview.setAttribute('allowpopups', '')
   webview.setAttribute('src', WORKSPACE_BROWSER_INITIAL_SRC)
   Object.assign(webview.style, { display: 'flex', width: '100%', height: '100%', border: '0' })
+
+  const overlayHost = document.createElement('div')
+  overlayHost.dataset.workspaceBrowserOverlay = tabId
+  Object.assign(overlayHost.style, {
+    position: 'absolute',
+    inset: '0',
+    zIndex: '1',
+    pointerEvents: 'none',
+  })
+
   slot.appendChild(webview)
+  slot.appendChild(overlayHost)
   const record: GuestRecord = {
     tabId,
     slot,
     webview,
+    overlayHost,
     webContentsId: null,
     attach: null,
     registration: null,
     registered: false,
+    lastValidSize: null,
   }
   guests.set(tabId, record)
   return record
+}
+
+function notifyOverlayHost(tabId: string, host: HTMLDivElement | null): void {
+  const listeners = overlayListeners.get(tabId)
+  if (!listeners) return
+  for (const listener of listeners) listener(host)
 }
 
 function attachGuest(record: GuestRecord): Promise<number> {
@@ -212,6 +300,7 @@ function attachGuest(record: GuestRecord): Promise<number> {
     }
     record.webview.addEventListener('dom-ready', onReady)
     target.appendChild(record.slot)
+    notifyOverlayHost(record.tabId, record.overlayHost)
     applyPlacement(record.tabId)
   }))
   return record.attach
@@ -228,19 +317,38 @@ function dispose(record: GuestRecord): void {
 }
 
 function forget(record: GuestRecord): void {
-  if (guests.get(record.tabId) === record) guests.delete(record.tabId)
+  if (guests.get(record.tabId) === record) {
+    guests.delete(record.tabId)
+    notifyOverlayHost(record.tabId, null)
+  }
 }
 
 function applyAllPlacements(): void {
   for (const tabId of guests.keys()) applyPlacement(tabId)
 }
 
+function ensureNonZeroHiddenSize(record: GuestRecord): void {
+  const currentWidth = Number.parseFloat(record.slot.style.width) || 0
+  const currentHeight = Number.parseFloat(record.slot.style.height) || 0
+  if (currentWidth > 0 && currentHeight > 0) return
+  const fallback = record.lastValidSize ?? {
+    width: DEFAULT_AGENT_HIDDEN_WIDTH,
+    height: DEFAULT_AGENT_HIDDEN_HEIGHT,
+  }
+  record.slot.style.width = `${fallback.width}px`
+  record.slot.style.height = `${fallback.height}px`
+}
+
 function applyPlacement(tabId: string): void {
   const record = guests.get(tabId)
   if (!record) return
+  const agentActive = agentActiveTabs.has(tabId)
   const placement = placements.get(tabId)
   if (!placement || !layer || !placement.stage.isConnected) {
     // Parked pages keep their last size, so hiding never reflows the page.
+    // When under active agent control, guarantee non-zero bounds even if the
+    // tab was created while hidden.
+    if (agentActive) ensureNonZeroHiddenSize(record)
     setShown(record, false)
     return
   }
@@ -249,12 +357,26 @@ function applyPlacement(tabId: string): void {
   const ratio = window.devicePixelRatio || 1
   // Whole device pixels keep text crisp, as the native view's bounds did.
   const snap = (value: number) => Math.round(value * ratio) / ratio
-  Object.assign(record.slot.style, {
-    left: `${snap(stage.left - origin.left)}px`,
-    top: `${snap(stage.top - origin.top)}px`,
-    width: `${snap(stage.width)}px`,
-    height: `${snap(stage.height)}px`,
-  })
+  const width = snap(stage.width)
+  const height = snap(stage.height)
+  if (width > 0 && height > 0) {
+    record.lastValidSize = { width, height }
+    Object.assign(record.slot.style, {
+      left: `${snap(stage.left - origin.left)}px`,
+      top: `${snap(stage.top - origin.top)}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    })
+  } else if (agentActive) {
+    ensureNonZeroHiddenSize(record)
+  } else {
+    Object.assign(record.slot.style, {
+      left: `${snap(stage.left - origin.left)}px`,
+      top: `${snap(stage.top - origin.top)}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    })
+  }
   setShown(record, placement.visible && stage.width > 0 && stage.height > 0)
 }
 
@@ -269,12 +391,16 @@ function setShown(record: GuestRecord, shown: boolean): void {
  * a text selection) must keep receiving its moves and its release when the
  * pointer crosses a page: a guest otherwise takes them, and the drag stalls
  * with its button still "held". Pages ignore the pointer until it ends.
- * A gesture that starts inside a page is never seen here, so pages keep it.
+ * A gesture that starts inside a page (or its in-slot agent overlay) is not
+ * an app drag, so the slot keeps pointer events.
  */
 function installGestureListeners(): void {
   if (gestureListenersInstalled) return
   gestureListenersInstalled = true
-  document.addEventListener('pointerdown', () => setGesture(true), true)
+  document.addEventListener('pointerdown', (event) => {
+    if (event.target instanceof Node && layer?.contains(event.target)) return
+    setGesture(true)
+  }, true)
   window.addEventListener('pointerup', () => setGesture(false), true)
   window.addEventListener('pointercancel', () => setGesture(false), true)
   window.addEventListener('blur', () => setGesture(false))
@@ -290,4 +416,5 @@ function setGesture(active: boolean): void {
   for (const record of guests.values()) {
     setShown(record, record.slot.dataset.shown === 'true')
   }
+  for (const listener of gestureListeners) listener(active)
 }

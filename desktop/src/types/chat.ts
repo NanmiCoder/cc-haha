@@ -2,6 +2,7 @@ import type { ScheduledTaskTrigger } from './task'
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
 import type { TeamMemberActivity, TeamMemberAutoRetry } from './team'
+import type { BrowserTakeoverState, BrowserUseActivityEvent } from '../api/browserUse'
 
 // Source: src/server/ws/events.ts
 
@@ -182,6 +183,8 @@ export type ServerMessage =
   | { type: 'session_title_updated'; sessionId: string; title: string }
   /** Predicted next user prompt for the composer; sent after a turn ends. */
   | { type: 'prompt_suggestion'; suggestion: string }
+  | { type: 'browser_use_activity'; activity: BrowserUseActivityEvent }
+  | { type: 'browser_use_takeover'; takeover: BrowserTakeoverState }
 
 export type CompactProgress = {
   /** Cumulative summary characters for the current compaction attempt; restarts from 0 on a CLI retry. */

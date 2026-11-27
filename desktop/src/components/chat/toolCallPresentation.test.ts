@@ -3,6 +3,8 @@ import { translate } from '../../i18n'
 import {
   countDiffLines,
   countReadLines,
+  describeBrowserToolCall,
+  formatTakeoverReason,
   hasToolVerb,
   parseSearchResult,
   parseShellExitCode,
@@ -111,5 +113,25 @@ describe('parseTodos', () => {
 describe('countReadLines', () => {
   it('ignores the reminders appended to a Read result', () => {
     expect(countReadLines('1\tconst a = 1\n2\tconst b = 2\n<system-reminder>\nnote\n</system-reminder>\n')).toBe(2)
+  })
+})
+
+describe('Browser Use presentation helpers', () => {
+  const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate('en', key, params)
+
+  it('formats BrowserTabs action="open" with URL just like "new"', () => {
+    expect(describeBrowserToolCall('BrowserTabs', { action: 'open', url: 'https://example.com' }, en)).toEqual([
+      { id: 'tabs-new', label: 'Open new tab: https://example.com' },
+    ])
+    expect(describeBrowserToolCall('BrowserTabs', { action: 'open' }, en)).toEqual([
+      { id: 'tabs-new', label: 'Open new browser tab' },
+    ])
+  })
+
+  it('maps raw takeover reason codes to localized copy instead of showing raw codes', () => {
+    expect(formatTakeoverReason('user_requested', 'user_requested', en)).toBe('You took over browser control')
+    expect(formatTakeoverReason('captcha', undefined, en)).toBe('Complete the verification challenge (CAPTCHA)')
+    expect(formatTakeoverReason('sensitive_confirm', 'sensitive_confirm', en)).toBe('Confirm this sensitive action in the browser')
+    expect(formatTakeoverReason('manual', 'Finish checkout form', en)).toBe('Finish checkout form')
   })
 })

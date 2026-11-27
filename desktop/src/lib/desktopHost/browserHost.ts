@@ -340,6 +340,14 @@ export const browserHost: DesktopHost = {
       return noopUnlisten
     },
   },
+  browserUse: {
+    async reportTabReady() {},
+    async reportCursorArrived() {},
+    async sendUserAction() {},
+    async onEvent(): Promise<DesktopHostUnlisten> {
+      return noopUnlisten
+    },
+  },
   appMode: {
     async get() {
       return defaultAppMode

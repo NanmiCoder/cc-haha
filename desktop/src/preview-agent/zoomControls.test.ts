@@ -54,4 +54,27 @@ describe('native page zoom controls', () => {
     expect(host.style.getPropertyValue('--zoom-background')).toBe('#222')
     controls.destroy()
   })
+
+  it('sets display:none and inert while agent control is active and restores cleanly afterwards', () => {
+    const controls = createZoomControls(vi.fn())
+    controls.update(config)
+    const host = document.querySelector<HTMLElement>('[data-workspace-browser-zoom]')!
+
+    controls.setAgentSuppressed(true)
+    expect(host.style.display).toBe('none')
+    expect(host.hasAttribute('inert')).toBe(true)
+    expect(host.getAttribute('aria-hidden')).toBe('true')
+
+    // Subsequent config updates must not reveal the capsule while agent control is active.
+    controls.update({ ...config, zoomFactor: 1.2 })
+    expect(host.style.display).toBe('none')
+    expect(host.hasAttribute('inert')).toBe(true)
+
+    controls.setAgentSuppressed(false)
+    expect(host.style.display).toBe('')
+    expect(host.hasAttribute('inert')).toBe(false)
+    expect(host.hasAttribute('aria-hidden')).toBe(false)
+    expect(host.style.visibility).toBe('visible')
+    controls.destroy()
+  })
 })

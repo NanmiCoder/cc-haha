@@ -50,6 +50,7 @@ it('shows one grouped list: connection, provider, phone-editable preferences, an
   // offer nothing to press.
   const desktopOnly = screen.getByTestId('h5-settings-desktop-only')
   expect(desktopOnly).toHaveTextContent('MCP')
+  expect(desktopOnly).toHaveTextContent('Browser Use')
   expect(within(desktopOnly).queryAllByRole('button')).toHaveLength(0)
 })
 it('explains thinking mode and Ultracode on the browser settings list too', () => {

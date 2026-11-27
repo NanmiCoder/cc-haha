@@ -21,8 +21,9 @@ import {
 } from './activityGroupModel'
 import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
+import { BrowserActivityCard } from './BrowserActivityCard'
 import { useAgentRunActivity } from './useAgentRunActivity'
-import { toolVerb } from './toolCallPresentation'
+import { isBrowserUseToolName, toolVerb } from './toolCallPresentation'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Badge, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -331,6 +332,81 @@ function ToolCallGroupContent({
   if (allImageGeneration) {
     return (
       <ImageGenerationGroup items={imageGenerationItems(toolCalls, resultMap)} />
+    )
+  }
+
+  const hasBrowserUse = toolCalls.some((toolCall) => isBrowserUseToolName(toolCall.toolName))
+  const hasNonBrowserSteps = steps.some(
+    (step) => step.kind === 'thinking' || !isBrowserUseToolName(step.toolCall.toolName),
+  )
+  if (hasBrowserUse && !hasNonBrowserSteps) {
+    return (
+      <BrowserActivityCard
+        sessionId={sessionId}
+        toolCalls={toolCalls}
+        resultMap={resultMap}
+        isStreaming={isStreaming}
+      />
+    )
+  }
+  if (hasBrowserUse && hasNonBrowserSteps) {
+    const segments: Array<
+      | { kind: 'browser'; toolCalls: ToolCall[] }
+      | { kind: 'regular'; steps: ActivityStep[] }
+    > = []
+    let regularSteps: ActivityStep[] = []
+    let browserToolCalls: ToolCall[] = []
+    const flushRegular = () => {
+      if (regularSteps.length === 0) return
+      segments.push({ kind: 'regular', steps: regularSteps })
+      regularSteps = []
+    }
+    const flushBrowser = () => {
+      if (browserToolCalls.length === 0) return
+      segments.push({ kind: 'browser', toolCalls: browserToolCalls })
+      browserToolCalls = []
+    }
+    for (const step of steps) {
+      if (step.kind === 'tool' && isBrowserUseToolName(step.toolCall.toolName)) {
+        flushRegular()
+        browserToolCalls.push(step.toolCall)
+      } else {
+        flushBrowser()
+        regularSteps.push(step)
+      }
+    }
+    flushRegular()
+    flushBrowser()
+
+    return (
+      <div className="space-y-2">
+        {segments.map((segment, index) => segment.kind === 'browser' ? (
+          <BrowserActivityCard
+            key={segment.toolCalls.map((toolCall) => toolCall.id).join(':')}
+            sessionId={sessionId}
+            toolCalls={segment.toolCalls}
+            resultMap={resultMap}
+            isStreaming={isStreaming}
+          />
+        ) : (
+          <ToolCallGroupContent
+            key={`regular-browser-${index}`}
+            sessionId={sessionId}
+            onOpenAgentRun={onOpenAgentRun}
+            resolveAgentActivityTarget={resolveAgentActivityTarget}
+            steps={segment.steps}
+            resultMap={resultMap}
+            childToolCallsByParent={childToolCallsByParent}
+            agentTaskNotifications={agentTaskNotifications}
+            agentTaskStatuses={agentTaskStatuses}
+            activeThinkingId={activeThinkingId}
+            showOpenRun={showOpenRun}
+            isStreaming={isStreaming}
+            revealToolUseId={revealToolUseId}
+            activityPresentation={activityPresentation}
+          />
+        ))}
+      </div>
     )
   }
 

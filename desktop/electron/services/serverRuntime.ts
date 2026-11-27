@@ -44,6 +44,8 @@ type ServerRuntimeOptions = {
   env?: NodeJS.ProcessEnv
   deps?: Partial<ServerRuntimeDeps>
   resolveSystemProxy?: (url: string) => Promise<string>
+  /** Resolves the authenticated loopback Browser Use bridge URL for the server sidecar only. */
+  resolveBrowserBridgeUrl?: () => Promise<string | null>
 }
 
 type ServerRuntimeDeps = {
@@ -148,12 +150,16 @@ export class ElectronServerRuntime {
   private readonly baseEnv: NodeJS.ProcessEnv
   private readonly deps: ServerRuntimeDeps
   private readonly resolveSystemProxy?: (url: string) => Promise<string>
+  private readonly resolveBrowserBridgeUrl?: () => Promise<string | null>
   private readonly localAccessToken = randomBytes(32).toString('base64url')
   private readonly petAccessToken = randomBytes(32).toString('base64url')
   /** Authorizes only the hidden P2P host window's loopback endpoint, never the local API. */
   private readonly p2pEndpointToken = randomBytes(32).toString('base64url')
+  /** Authorizes only the local server sidecar's loopback Browser Use bridge, never adapters/CLI/renderer. */
+  private readonly browserBridgeToken = randomBytes(32).toString('base64url')
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private systemProxyBridge: SystemProxyBridgeLike | null = null
+  private systemProxyBridgeUrl: string | null = null
   private server: ActiveServer | null = null
   private adapters: SidecarChild[] = []
   private adapterLabels = new WeakMap<SidecarChild, string>()
@@ -183,6 +189,7 @@ export class ElectronServerRuntime {
     this.baseEnv = options.env ?? process.env
     this.deps = { ...DEFAULT_SERVER_RUNTIME_DEPS, ...options.deps }
     this.resolveSystemProxy = options.resolveSystemProxy
+    this.resolveBrowserBridgeUrl = options.resolveBrowserBridgeUrl
   }
 
   async startServer(): Promise<string> {
@@ -237,8 +244,16 @@ export class ElectronServerRuntime {
     return this.p2pEndpointToken
   }
 
+  getBrowserBridgeToken(): string {
+    return this.browserBridgeToken
+  }
+
   getActiveServerUrl(): string | null {
     return this.server?.url ?? null
+  }
+
+  getSystemProxyBridgeUrl(): string | null {
+    return this.systemProxyBridgeUrl
   }
 
   getOwnedProcessIds(): number[] {
@@ -432,7 +447,14 @@ export class ElectronServerRuntime {
     )
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
-    const env = this.withServerAccessTokens(await this.resolveSidecarBaseEnv())
+    const browserBridgeUrl = this.resolveBrowserBridgeUrl
+      ? await this.resolveBrowserBridgeUrl().catch(error => {
+          const message = error instanceof Error ? error.message : String(error)
+          console.error(`[desktop] failed to start browser use bridge for server sidecar: ${sanitizeHostDiagnostic(message)}`)
+          return null
+        })
+      : null
+    const env = this.withServerAccessTokens(await this.resolveSidecarBaseEnv(), browserBridgeUrl)
     this.assertCurrentGeneration(generation)
     const plan = createServerPlan({
       desktopRoot: this.desktopRoot,
@@ -602,12 +624,20 @@ export class ElectronServerRuntime {
     }
   }
 
-  private withServerAccessTokens(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    return {
+  private withServerAccessTokens(
+    env: NodeJS.ProcessEnv,
+    browserBridgeUrl?: string | null,
+  ): NodeJS.ProcessEnv {
+    const next: NodeJS.ProcessEnv = {
       ...this.withLocalAccessToken(env),
       CC_HAHA_PET_ACCESS_TOKEN: this.petAccessToken,
       CC_HAHA_P2P_ENDPOINT_TOKEN: this.p2pEndpointToken,
     }
+    if (browserBridgeUrl) {
+      next.CC_HAHA_BROWSER_BRIDGE_URL = browserBridgeUrl
+      next.CC_HAHA_BROWSER_BRIDGE_TOKEN = this.browserBridgeToken
+    }
+    return next
   }
 
   private removeOwnedAdapters(owned: SidecarChild[] | undefined, removed: SidecarChild[]) {
@@ -776,7 +806,10 @@ export class ElectronServerRuntime {
   }
 
   private async resolveSidecarBaseEnvOnce(): Promise<NodeJS.ProcessEnv> {
-    const baseEnv = clearProxyEnv(this.baseEnv)
+    const baseEnv = { ...clearProxyEnv(this.baseEnv) }
+    // Never let adapters or other non-server sidecars inherit bridge credentials.
+    delete baseEnv.CC_HAHA_BROWSER_BRIDGE_URL
+    delete baseEnv.CC_HAHA_BROWSER_BRIDGE_TOKEN
     if (!this.resolveSystemProxy) return this.applyPowerShellOverride(baseEnv)
 
     const bridge = this.deps.createSystemProxyBridge(this.resolveSystemProxy,
@@ -787,10 +820,12 @@ export class ElectronServerRuntime {
       if (this.systemProxyBridge !== bridge) {
         throw new Error('system proxy bridge startup was stopped')
       }
+      this.systemProxyBridgeUrl = bridgeUrl
       return this.applyPowerShellOverride(withSystemProxyBridgeEnv(baseEnv, bridgeUrl))
     } catch (error) {
       if (this.systemProxyBridge === bridge) {
         this.systemProxyBridge = null
+        this.systemProxyBridgeUrl = null
         await bridge.stop().catch(() => {})
       }
       const message = error instanceof Error ? error.message : String(error)
@@ -802,6 +837,7 @@ export class ElectronServerRuntime {
   private stopSystemProxyBridge(): void {
     const bridge = this.systemProxyBridge
     this.systemProxyBridge = null
+    this.systemProxyBridgeUrl = null
     this.sidecarEnvPromise = null
     if (bridge) void bridge.stop()
   }

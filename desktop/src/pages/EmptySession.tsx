@@ -89,6 +89,7 @@ import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
 import { AgentProfileChip } from '@/components/chat/AgentProfileChip'
 import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { executeFastSlashCommand } from '@/lib/fastModeCommand'
@@ -1553,11 +1554,21 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                     />
                   )}
                   <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                  <BrowserUseEnableDialog {...capabilityMenu.browserUseConsent} />
                   <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                 </div>
 
                 {capabilityMenu.agentTeamArmed ? (
                   <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                ) : null}
+
+                {capabilityMenu.browserUse.enabled ? (
+                  <BrowserUseTargetPill
+                    target={capabilityMenu.browserUse.preferredTarget}
+                    onChange={capabilityMenu.browserUse.setPreferredTarget}
+                    onDisable={capabilityMenu.browserUse.disable}
+                    touch={isMobileComposer}
+                  />
                 ) : null}
 
                 {isLean && !isMobileComposer ? (

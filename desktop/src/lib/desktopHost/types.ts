@@ -275,6 +275,82 @@ export type WorkspaceBrowserEvent =
   /** The page died (crash, host teardown). The tab shows a retry entry point. */
   | { type: 'destroyed'; tabId: string; reason: 'crashed' | 'closed' }
 
+export type BrowserUseControlState = 'idle' | 'active' | 'takeover'
+
+export type BrowserUseTargetRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type BrowserUseHostEvent =
+  | {
+      type: 'ensure-tab'
+      requestId: string
+      sessionId?: string
+      tabId?: string
+      url?: string
+      focus?: boolean
+      revealWorkbench?: boolean
+      createNew?: boolean
+    }
+  | {
+      type: 'focus-tab'
+      tabId: string
+      revealWorkbench?: boolean
+    }
+  | {
+      type: 'close-tab'
+      tabId: string
+    }
+  | {
+      type: 'control-state'
+      tabId: string
+      state: BrowserUseControlState
+      actionLabel?: string
+      takeoverReason?: string
+      sessionId?: string
+      showOverlay?: boolean
+      autoReveal?: boolean
+    }
+  | {
+      type: 'move-cursor'
+      tabId: string
+      moveId: string
+      x: number
+      y: number
+      targetRect?: BrowserUseTargetRect
+      durationMs: number
+      label?: string
+    }
+  | {
+      type: 'click-ripple'
+      tabId: string
+      x: number
+      y: number
+      button?: 'left' | 'right' | 'middle'
+    }
+
+export type BrowserUseTabReadyPayload = {
+  requestId: string
+  tabId: string
+  ok: boolean
+  error?: string
+}
+
+export type BrowserUseCursorArrivedPayload = {
+  moveId: string
+  tabId: string
+  skipped?: boolean
+}
+
+export type BrowserUseUserActionPayload = {
+  tabId: string
+  action: 'takeover' | 'resume' | 'stop' | 'cancel'
+  reason?: string
+}
+
 type DesktopPetBase = {
   id: string
   displayName: string
@@ -577,6 +653,12 @@ export type DesktopHost = {
     printToPdf(tabId: string): Promise<void>
     close(tabId: string): Promise<void>
     onEvent(handler: (event: WorkspaceBrowserEvent) => void): Promise<DesktopHostUnlisten>
+  }
+  browserUse: {
+    reportTabReady(payload: BrowserUseTabReadyPayload): Promise<void>
+    reportCursorArrived(payload: BrowserUseCursorArrivedPayload): Promise<void>
+    sendUserAction(payload: BrowserUseUserActionPayload): Promise<void>
+    onEvent(handler: (event: BrowserUseHostEvent) => void): Promise<DesktopHostUnlisten>
   }
   appMode: {
     get(): Promise<AppModeConfig>

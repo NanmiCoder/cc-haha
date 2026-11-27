@@ -29,6 +29,229 @@ const TOOL_VERB_KEYS: Record<string, TranslationKey> = {
   WebFetch: 'toolVerb.fetchWeb',
   Agent: 'toolVerb.agent',
   Skill: 'toolVerb.skill',
+  BrowserTabs: 'toolVerb.browserTabs',
+  BrowserNavigate: 'toolVerb.browserNavigate',
+  BrowserSnapshot: 'toolVerb.browserSnapshot',
+  BrowserAct: 'toolVerb.browserAct',
+  BrowserInspect: 'toolVerb.browserInspect',
+  BrowserTakeover: 'toolVerb.browserTakeover',
+}
+
+export const BROWSER_USE_TOOL_NAMES = new Set([
+  'BrowserTabs',
+  'BrowserNavigate',
+  'BrowserSnapshot',
+  'BrowserAct',
+  'BrowserInspect',
+  'BrowserTakeover',
+])
+
+export function isBrowserUseToolName(toolName: string): boolean {
+  return BROWSER_USE_TOOL_NAMES.has(toolName)
+}
+
+const SENSITIVE_FIELD_RE = /pass(?:word|code)?|secret|token|pin|otp|cvv|cvc|credit.?card|密码|口令|验证码|密钥/i
+const RAW_REF_RE = /^@?e\d+$/i
+
+export function maskSensitiveBrowserValue(
+  value: string,
+  sensitive?: boolean,
+  label?: string,
+): string {
+  if (sensitive || (label && SENSITIVE_FIELD_RE.test(label))) {
+    return '••••••'
+  }
+  return value
+}
+
+function cleanHumanTarget(label?: unknown, fallback?: string): string {
+  if (typeof label === 'string') {
+    const trimmed = label.trim()
+    if (trimmed && !RAW_REF_RE.test(trimmed)) return trimmed
+  }
+  return fallback ?? ''
+}
+
+const TAKEOVER_REASON_KEYS: Record<string, TranslationKey> = {
+  user_requested: 'browserUse.takeoverReason.userRequested',
+  login: 'browserUse.takeoverReason.login',
+  '2fa': 'browserUse.takeoverReason.twoFactor',
+  two_factor: 'browserUse.takeoverReason.twoFactor',
+  captcha: 'browserUse.takeoverReason.captcha',
+  payment: 'browserUse.takeoverReason.payment',
+  destructive: 'browserUse.takeoverReason.sensitiveConfirm',
+  sensitive_confirm: 'browserUse.takeoverReason.sensitiveConfirm',
+  permission: 'browserUse.takeoverReason.permission',
+  manual: 'browserUse.takeoverReason.manual',
+  manual_help: 'browserUse.takeoverReason.manual',
+}
+
+/**
+ * Formats a browser takeover reason/message into localized copy, ensuring raw
+ * internal codes such as `'user_requested'` or `'sensitive_confirm'` never
+ * leak verbatim into the bottom pill or chat takeover card.
+ */
+export function formatTakeoverReason(
+  reason: string | undefined,
+  message: string | undefined,
+  t: Translate,
+): string {
+  const trimmedMessage = message?.trim()
+  if (trimmedMessage) {
+    const codeKey = TAKEOVER_REASON_KEYS[trimmedMessage.toLowerCase()]
+    return codeKey ? t(codeKey) : trimmedMessage
+  }
+  const trimmedReason = reason?.trim()
+  if (trimmedReason) {
+    const codeKey = TAKEOVER_REASON_KEYS[trimmedReason.toLowerCase()]
+    if (codeKey) return t(codeKey)
+  }
+  return t('browserUse.overlay.takeoverDefaultReason')
+}
+
+export type BrowserStepDescription = {
+  id: string
+  label: string
+  detail?: string
+}
+
+/**
+ * Turns a Browser Use tool invocation into concise, human-readable activity
+ * descriptions (never exposing raw `@e14` ref tokens and always masking
+ * passwords/secrets to `••••••`).
+ */
+export function describeBrowserToolCall(
+  toolName: string,
+  input: unknown,
+  t: Translate,
+): BrowserStepDescription[] {
+  const obj = input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : {}
+
+  switch (toolName) {
+    case 'BrowserNavigate': {
+      const action = typeof obj.action === 'string' ? obj.action : 'goto'
+      const url = typeof obj.url === 'string' ? obj.url.trim() : ''
+      if (action === 'back') return [{ id: 'nav-back', label: t('browserUse.action.back') }]
+      if (action === 'forward') return [{ id: 'nav-fwd', label: t('browserUse.action.forward') }]
+      if (action === 'reload') return [{ id: 'nav-reload', label: t('browserUse.action.reload') }]
+      return [{
+        id: 'nav-goto',
+        label: url ? t('browserUse.action.navigateUrl', { url }) : t('browserUse.action.navigate'),
+      }]
+    }
+    case 'BrowserSnapshot':
+      return [{
+        id: 'snapshot',
+        label: obj.screenshot ? t('browserUse.action.snapshotScreenshot') : t('browserUse.action.snapshot'),
+      }]
+    case 'BrowserTabs': {
+      const action = typeof obj.action === 'string' ? obj.action : 'list'
+      const url = typeof obj.url === 'string' ? obj.url.trim() : ''
+      if (action === 'open' || action === 'new') {
+        return [{
+          id: 'tabs-new',
+          label: url ? t('browserUse.action.tabNewUrl', { url }) : t('browserUse.action.tabNew'),
+        }]
+      }
+      if (action === 'close') return [{ id: 'tabs-close', label: t('browserUse.action.tabClose') }]
+      if (action === 'switch' || action === 'focus') return [{ id: 'tabs-switch', label: t('browserUse.action.tabSwitch') }]
+      return [{ id: 'tabs-list', label: t('browserUse.action.tabList') }]
+    }
+    case 'BrowserInspect': {
+      const kind = typeof obj.kind === 'string' ? obj.kind : 'text'
+      if (kind === 'console') return [{ id: 'inspect-console', label: t('browserUse.action.inspectConsole') }]
+      if (kind === 'network') return [{ id: 'inspect-network', label: t('browserUse.action.inspectNetwork') }]
+      if (kind === 'eval') return [{ id: 'inspect-eval', label: t('browserUse.action.inspectEval') }]
+      return [{ id: 'inspect-page', label: t('browserUse.action.inspectPage') }]
+    }
+    case 'BrowserTakeover': {
+      const reason = typeof obj.reason === 'string' ? obj.reason : undefined
+      const message = typeof obj.message === 'string' ? obj.message : undefined
+      return [{
+        id: 'takeover',
+        label: t('browserUse.overlay.takeoverPrompt', {
+          reason: formatTakeoverReason(reason, message, t),
+        }),
+      }]
+    }
+    case 'BrowserAct': {
+      const steps = Array.isArray(obj.steps) ? obj.steps : []
+      if (steps.length === 0) {
+        return [{ id: 'act-empty', label: t('browserUse.action.generic') }]
+      }
+      return steps.map((raw, idx) => {
+        const step = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+        const action = typeof step.action === 'string' ? step.action : 'click'
+        const target = cleanHumanTarget(step.label)
+        const sensitive = step.sensitive === true
+        const rawText = typeof step.text === 'string'
+          ? step.text
+          : typeof step.value === 'string'
+            ? step.value
+            : ''
+        const safeText = rawText ? maskSensitiveBrowserValue(rawText, sensitive, target) : ''
+
+        switch (action) {
+          case 'click':
+            return {
+              id: `step-${idx}`,
+              label: target ? t('browserUse.action.clickTarget', { target }) : t('browserUse.action.click'),
+            }
+          case 'dblclick':
+            return {
+              id: `step-${idx}`,
+              label: target ? t('browserUse.action.dblclickTarget', { target }) : t('browserUse.action.dblclick'),
+            }
+          case 'fill':
+          case 'type':
+            return {
+              id: `step-${idx}`,
+              label: target
+                ? t('browserUse.action.fillTarget', { target, value: safeText })
+                : t('browserUse.action.fill', { value: safeText }),
+            }
+          case 'press':
+            return {
+              id: `step-${idx}`,
+              label: t('browserUse.action.pressKey', { key: typeof step.key === 'string' ? step.key : '' }),
+            }
+          case 'select':
+            return {
+              id: `step-${idx}`,
+              label: target
+                ? t('browserUse.action.selectTarget', { target, value: safeText })
+                : t('browserUse.action.select', { value: safeText }),
+            }
+          case 'hover':
+            return {
+              id: `step-${idx}`,
+              label: target ? t('browserUse.action.hoverTarget', { target }) : t('browserUse.action.hover'),
+            }
+          case 'scroll':
+            return {
+              id: `step-${idx}`,
+              label: t('browserUse.action.scroll'),
+            }
+          case 'wait':
+            return {
+              id: `step-${idx}`,
+              label: t('browserUse.action.wait'),
+            }
+          case 'dialog':
+            return {
+              id: `step-${idx}`,
+              label: step.accept === false ? t('browserUse.action.dialogDismiss') : t('browserUse.action.dialogAccept'),
+            }
+          default:
+            return { id: `step-${idx}`, label: t('browserUse.action.generic') }
+        }
+      })
+    }
+    default:
+      return [{ id: 'unknown', label: toolVerb(toolName, t) }]
+  }
 }
 
 export function toolVerb(toolName: string, t: Translate): string {

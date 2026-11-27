@@ -37,6 +37,7 @@ import {
   type OpenAgentRunPayload,
   type ResolveAgentActivityTarget,
 } from './ToolCallGroup'
+import { SessionBrowserTakeoverBanner } from './BrowserActivityCard'
 import type { ActivityStep } from './activityGroupModel'
 import { ToolResultBlock } from './ToolResultBlock'
 import { PermissionDialog } from './PermissionDialog'
@@ -4322,6 +4323,8 @@ export function MessageList({
               {turnChangeLoadError}
             </div>
           )}
+
+          <SessionBrowserTakeoverBanner sessionId={resolvedSessionId} />
 
           {workspaceChangesFallback ? (
               <WorkspaceChangesFallback

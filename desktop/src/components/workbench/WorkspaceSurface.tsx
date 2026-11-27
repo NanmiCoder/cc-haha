@@ -5,13 +5,21 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { t, useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
+import { useTabStore } from '../../stores/tabStore'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { discardNavigatedBrowserSelections, handleBrowserSelectionEvent } from '../../lib/workspace/browserSelections'
 import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { openWorkspaceTarget, workspaceOpen } from '../../lib/workspace/openTarget'
-import { subscribeWorkspaceBrowserEvents } from '../../lib/workspace/browserHost'
-import { forgetLostWorkspaceBrowserGuest } from '../../lib/workspace/browserGuests'
+import { getDesktopHost } from '../../lib/desktopHost'
+import { subscribeWorkspaceBrowserEvents, workspaceBrowserHost } from '../../lib/workspace/browserHost'
+import {
+  ensureWorkspaceBrowserGuest,
+  forgetLostWorkspaceBrowserGuest,
+  isWorkspaceBrowserGuestRegistered,
+} from '../../lib/workspace/browserGuests'
+import { shouldSkipCursorAnimation } from './WorkspaceBrowserAgentOverlay'
 import type { WorkspaceCloseScope, WorkspaceDock, WorkspaceTabKind } from '../../lib/workspace/types'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
@@ -384,4 +392,173 @@ export function useWorkspaceBrowserEventBridge(enabled: boolean) {
       unsubscribe?.()
     }
   }, [enabled])
+}
+
+/**
+ * Window-level Browser Use host event bridge.
+ *
+ * Mounted once in `ContentRouter` alongside `WorkspaceBrowserGuestLayer` (NOT
+ * gated on `ActiveSession`), so `ensure-tab`, `control-state`, `move-cursor`,
+ * `click-ripple`, `focus-tab`, and `close-tab` never drop when the user visits
+ * Settings, Market, Scheduled, Terminal, or EmptySession.
+ */
+export function useBrowserUseEventBridge() {
+  useEffect(() => {
+    let cancelled = false
+    let unsubscribeBrowserUse: (() => void) | undefined
+    const host = getDesktopHost()
+
+    void host.browserUse.onEvent((event) => {
+      const workspaceStore = useWorkspaceStore.getState()
+      const browserUseStore = useBrowserUseStore.getState()
+      switch (event.type) {
+        case 'ensure-tab': {
+          const existingOwner = event.tabId ? workspaceStore.findBrowserTabOwner(event.tabId) : null
+          const tabStore = useTabStore.getState()
+          const activeSessionTabId = tabStore.tabs.find(
+            (tab) => tab.sessionId === tabStore.activeTabId && tab.type === 'session',
+          )?.sessionId
+          const targetSessionId =
+            (event.sessionId && event.sessionId.trim())
+            || existingOwner?.sessionId
+            || activeSessionTabId
+            || Object.keys(workspaceStore.bySession)[0]
+          if (!targetSessionId) {
+            void host.browserUse.reportTabReady({
+              requestId: event.requestId,
+              tabId: event.tabId ?? '',
+              ok: false,
+              error: 'No active session available for workspace browser tab',
+            }).catch(() => {})
+            return
+          }
+          const sessionWorkspace = workspaceStore.getSession(targetSessionId)
+          let targetTab = event.createNew
+            ? undefined
+            : existingOwner
+              ? workspaceStore.getSession(existingOwner.sessionId).tabs.find(
+                  (tab) => tab.id === existingOwner.tabId && tab.kind === 'browser',
+                )
+              : sessionWorkspace.tabs.find((tab) => tab.kind === 'browser')
+          const ownerSessionId = !event.createNew && existingOwner ? existingOwner.sessionId : targetSessionId
+          const reusedExisting = Boolean(targetTab)
+          if (!targetTab) {
+            const openedId = workspaceOpen.browser(targetSessionId, event.url, {
+              background: event.focus === false,
+            })
+            if (openedId) {
+              targetTab = useWorkspaceStore.getState().getTab(targetSessionId, openedId) ?? undefined
+            }
+          } else if (event.focus !== false) {
+            workspaceStore.activateTab(ownerSessionId, targetTab.id)
+          }
+          if (!targetTab || targetTab.kind !== 'browser') {
+            void host.browserUse.reportTabReady({
+              requestId: event.requestId,
+              tabId: event.tabId ?? '',
+              ok: false,
+              error: 'Failed to create workspace browser tab',
+            }).catch(() => {})
+            return
+          }
+          if (
+            event.revealWorkbench !== false
+            && useWorkspaceStore.getState().getSession(ownerSessionId).layout === 'hidden'
+          ) {
+            workspaceStore.setLayout(ownerSessionId, 'split')
+          }
+          const browserTabId = targetTab.browserTabId
+          const storageId = targetTab.storageId
+          const alreadyRegistered = isWorkspaceBrowserGuestRegistered(browserTabId)
+          const ensurePromise = alreadyRegistered
+            ? Promise.resolve()
+            : ensureWorkspaceBrowserGuest(browserTabId, async (webContentsId) => {
+                const res = await workspaceBrowserHost.create(browserTabId, {
+                  storageId,
+                  webContentsId,
+                  ...(event.url ? { url: event.url } : {}),
+                })
+                if (!res.ok) throw new Error('Workspace browser unavailable')
+              })
+          void ensurePromise.then(async () => {
+            if (
+              reusedExisting
+              && alreadyRegistered
+              && !event.createNew
+              && event.url
+              && targetTab.url !== event.url
+            ) {
+              await workspaceBrowserHost.navigate(browserTabId, event.url).catch(() => {})
+            }
+            void host.browserUse.reportTabReady({
+              requestId: event.requestId,
+              tabId: browserTabId,
+              ok: true,
+            }).catch(() => {})
+          }).catch((error: unknown) => {
+            void host.browserUse.reportTabReady({
+              requestId: event.requestId,
+              tabId: browserTabId,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            }).catch(() => {})
+          })
+          break
+        }
+        case 'focus-tab': {
+          const owner = workspaceStore.findBrowserTabOwner(event.tabId)
+          if (!owner) return
+          workspaceStore.activateTab(owner.sessionId, owner.tabId)
+          if (event.revealWorkbench !== false && workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
+            workspaceStore.setLayout(owner.sessionId, 'split')
+          }
+          break
+        }
+        case 'close-tab': {
+          browserUseStore.applyHostEvent(event)
+          const owner = workspaceStore.findBrowserTabOwner(event.tabId)
+          if (owner) workspaceStore.closeTab(owner.sessionId, owner.tabId)
+          break
+        }
+        case 'control-state': {
+          browserUseStore.applyHostEvent(event)
+          const shouldReveal = event.autoReveal ?? browserUseStore.config?.autoOpenWorkspacePanel ?? true
+          if (event.state !== 'idle' && shouldReveal) {
+            const owner = workspaceStore.findBrowserTabOwner(event.tabId)
+            if (owner && workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
+              workspaceStore.setLayout(owner.sessionId, 'split')
+            }
+          }
+          break
+        }
+        case 'move-cursor': {
+          browserUseStore.applyHostEvent(event)
+          const showOverlay = useBrowserUseStore.getState().tabStates[event.tabId]?.showOverlay
+            ?? browserUseStore.config?.showCursorOverlay
+            ?? true
+          // If the tab is hidden/unmounted (e.g. user switched to a code file
+          // or Settings), ACK immediately in 0ms so Electron host never stalls.
+          if (shouldSkipCursorAnimation(event.tabId, showOverlay)) {
+            void host.browserUse.reportCursorArrived({
+              moveId: event.moveId,
+              tabId: event.tabId,
+              skipped: true,
+            }).catch(() => {})
+          }
+          break
+        }
+        case 'click-ripple':
+          browserUseStore.applyHostEvent(event)
+          break
+      }
+    }).then((dispose) => {
+      if (cancelled) dispose()
+      else unsubscribeBrowserUse = dispose
+    })
+
+    return () => {
+      cancelled = true
+      unsubscribeBrowserUse?.()
+    }
+  }, [])
 }

@@ -2,6 +2,7 @@
 import { useMemo } from 'react'
 import type { Tools, ToolPermissionContext } from '../Tool.js'
 import { assembleToolPool } from '../tools.js'
+import { isBrowserUseToolName } from '../tools/BrowserUseTool/index.js'
 import { mergeAndFilterTools } from '../utils/toolPool.js'
 
 /**
@@ -29,7 +30,7 @@ export function useMergedTools(
     const assembled = assembleToolPool(toolPermissionContext, mcpTools)
 
     return mergeAndFilterTools(
-      initialTools,
+      initialTools.filter(tool => !isBrowserUseToolName(tool.name)),
       assembled,
       toolPermissionContext.mode,
     )

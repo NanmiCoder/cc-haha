@@ -299,6 +299,66 @@ describe('Electron IPC capabilities', () => {
     )).toBe(false)
   })
 
+  it('validates browser-use IPC payloads and denies the pet window access', () => {
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, {
+      requestId: 'ensure-1',
+      tabId: 'wb-1',
+      ok: true,
+    })).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, {
+      requestId: 'ensure-1',
+      tabId: '',
+      ok: false,
+      error: 'failed to mount tab',
+    })).toBe(true)
+    for (const bad of [
+      undefined,
+      { requestId: 'ensure-1', tabId: '', ok: true },
+      { requestId: '../bad', tabId: 'wb-1', ok: true },
+      { requestId: 'ensure-1', tabId: 'wb-1', ok: 'yes' },
+      { requestId: 'ensure-1', tabId: 'wb-1', ok: true, extra: 1 },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, bad)).toBe(false)
+    }
+
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, {
+      moveId: 'move-1',
+      tabId: 'wb-1',
+      skipped: false,
+    })).toBe(true)
+    for (const bad of [
+      undefined,
+      { moveId: '', tabId: 'wb-1' },
+      { moveId: 'move-1', tabId: '../escape' },
+      { moveId: 'move-1', tabId: 'wb-1', skipped: 'no' },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, bad)).toBe(false)
+    }
+
+    for (const action of ['takeover', 'resume', 'stop', 'cancel'] as const) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseUserAction, {
+        tabId: 'wb-1',
+        action,
+      })).toBe(true)
+    }
+    for (const bad of [
+      undefined,
+      { tabId: 'wb-1', action: 'destroy' },
+      { tabId: 'wb-1', action: 'takeover', reason: 'x'.repeat(501) },
+      { tabId: 'wb-1', action: 'takeover', extra: true },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseUserAction, bad)).toBe(false)
+    }
+
+    for (const channel of [
+      ELECTRON_IPC_CHANNELS.browserUseTabReady,
+      ELECTRON_IPC_CHANNELS.browserUseCursorArrived,
+      ELECTRON_IPC_CHANNELS.browserUseUserAction,
+    ]) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+  })
+
   it('gives the pet renderer only runtime bootstrap and companion controls', () => {
     expect(isElectronIpcChannelAllowedForPetWindow(
       ELECTRON_IPC_CHANNELS.appGetLocalePreference,

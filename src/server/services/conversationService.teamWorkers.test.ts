@@ -112,6 +112,26 @@ test('independent configured providers produce disjoint child credentials and ro
   expect(process.env.ANTHROPIC_API_KEY).toBe('parent-key')
 })
 
+test('never leaks browser bridge credentials into spawned CLI child environments', async () => {
+  const originalToken = process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+  const originalUrl = process.env.CC_HAHA_BROWSER_BRIDGE_URL
+  process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = 'super-secret-browser-bridge-token'
+  process.env.CC_HAHA_BROWSER_BRIDGE_URL = 'http://127.0.0.1:49999'
+  try {
+    const service = new ConversationService() as any
+    const childEnv = await service.buildChildEnv(home, 'ws://127.0.0.1/sdk/browser-child?token=sdk-tok')
+    expect(childEnv.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBeUndefined()
+    expect(childEnv.CC_HAHA_BROWSER_BRIDGE_URL).toBeUndefined()
+    expect(process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBe('super-secret-browser-bridge-token')
+    expect(process.env.CC_HAHA_BROWSER_BRIDGE_URL).toBe('http://127.0.0.1:49999')
+  } finally {
+    if (originalToken === undefined) delete process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+    else process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = originalToken
+    if (originalUrl === undefined) delete process.env.CC_HAHA_BROWSER_BRIDGE_URL
+    else process.env.CC_HAHA_BROWSER_BRIDGE_URL = originalUrl
+  }
+})
+
 test('parent permission responses route exclusively to the requesting worker', () => {
   const service = new ConversationService() as any
   const responses: unknown[] = []

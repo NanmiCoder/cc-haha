@@ -3,6 +3,8 @@ import { configureSessionCollaborationHost, getSessionCollaborationService } fro
 import { authenticateCollaborationCaller, collaborationToolAction } from './sessionCollaborationAuth.js'
 import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
 import { handleScheduledTaskToolsApi } from './api/scheduledTaskTools.js'
+import { browserUseToolAction, handleBrowserUseToolApi } from './api/browser-use.js'
+import { configureBrowserUseHost, getBrowserUseService } from './services/browserUseService.js'
 /**
  * Claude Code Desktop App — HTTP + WebSocket Server
  *
@@ -414,6 +416,12 @@ export function startServer(port = PORT, host = HOST) {
           if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
           return handleSessionCollaborationApi(req, collaborationAction, caller, await getSessionCollaborationService())
         }
+        const browserUseAction = browserUseToolAction(url.pathname)
+        if (browserUseAction) {
+          const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
+          if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
+          return handleBrowserUseToolApi(req, browserUseAction, caller, getBrowserUseService())
+        }
         const origin = req.headers.get('Origin')
         const clientAddress = server.requestIP(req)?.address ?? null
         const localTokenOverride = url.searchParams.get('localToken') ?? url.searchParams.get('token')
@@ -741,12 +749,14 @@ export function startServer(port = PORT, host = HOST) {
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
     const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
+    const disposeBrowserUseHost = configureBrowserUseHost(localConnectHost, server.port)
     const disposeMcpHostProxy = configureMcpHostProxy()
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
       disposeScheduledTaskHost()
+      disposeBrowserUseHost()
       disposeMcpHostProxy()
       publicAccess.disable()
       broker.closeAll()

@@ -36,6 +36,12 @@ import { createUpdateSmokeUpdaterFromEnv } from './services/updateSmoke'
 import { ElectronTerminalService, type TerminalSpawnInput } from './services/terminal'
 import { ElectronPreviewService, type PreviewBounds } from './services/preview'
 import {
+  ElectronBrowserBridge,
+  type BrowserUseCursorArrivedPayload,
+  type BrowserUseTabReadyPayload,
+  type BrowserUseUserActionPayload,
+} from './services/browserUseBridge'
+import {
   ElectronWorkspaceBrowserService,
   WORKSPACE_BROWSER_PARTITION,
   type WorkspaceBrowserCaptureKind,
@@ -133,6 +139,7 @@ let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
 let previewService: ElectronPreviewService | null = null
 let workspaceBrowserService: ElectronWorkspaceBrowserService | null = null
+let browserUseBridge: ElectronBrowserBridge | null = null
 let workspaceBrowserSessionConfigured = false
 let petWindowController: PetWindowController | null = null
 let isQuitting = false
@@ -269,7 +276,7 @@ async function loadRendererEntry(
   }
 }
 
-function getServerRuntime() {
+function getServerRuntime(): ElectronServerRuntime {
   serverRuntime ??= new ElectronServerRuntime({
     onServerUnavailable: () => { void publicAccessManager?.serverUnavailable() },
     onServerReady: () => {
@@ -281,8 +288,53 @@ function getServerRuntime() {
     h5DistDir: path.join(unpackedRoot(), 'dist'),
     diagnosticsFile: electronHostDiagnosticsFile(process.env),
     resolveSystemProxy: (url) => session.defaultSession.resolveProxy(url),
+    resolveBrowserBridgeUrl: () => getBrowserUseBridge().start(),
   })
   return serverRuntime
+}
+
+function parseLoopbackUrlPort(rawUrl: string | null | undefined): number | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80)
+    return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null
+  } catch {
+    return null
+  }
+}
+
+function collectInternalLoopbackPorts() {
+  const blockedPorts: number[] = []
+  const bridgePort = parseLoopbackUrlPort(browserUseBridge?.getUrl())
+  if (bridgePort) blockedPorts.push(bridgePort)
+  const proxyPort = parseLoopbackUrlPort(serverRuntime?.getSystemProxyBridgeUrl())
+  if (proxyPort) blockedPorts.push(proxyPort)
+  return {
+    serverPort: parseLoopbackUrlPort(serverRuntime?.getActiveServerUrl()),
+    blockedPorts,
+  }
+}
+
+function getBrowserUseBridge(): ElectronBrowserBridge {
+  if (browserUseBridge) return browserUseBridge
+  const browserService = getWorkspaceBrowserService()
+  const bridge = new ElectronBrowserBridge({
+    token: getServerRuntime().getBrowserBridgeToken(),
+    workspaceBrowser: browserService,
+    emitToRenderer: event => {
+      const window = mainWindow
+      if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return false
+      window.webContents.send(ELECTRON_EVENT_CHANNELS.browserUseEvent, event)
+      return true
+    },
+    isRendererVisible: () => Boolean(
+      mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized(),
+    ),
+  })
+  browserService.setCdpEventHandler(event => bridge.pushCdpEvent(event))
+  browserUseBridge = bridge
+  return bridge
 }
 
 function getDataMigration() {
@@ -497,6 +549,12 @@ function getWorkspaceBrowserService() {
     emit: event => {
       mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, event)
     },
+    getAppZoomFactor: () => (
+      mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()
+        ? mainWindow.webContents.getZoomFactor()
+        : 1
+    ),
+    getInternalPorts: () => collectInternalLoopbackPorts(),
     writePdf: async ({ data, filename }) => {
       return saveWorkspaceBrowserPdf(data, async () => {
         if (!mainWindow || mainWindow.isDestroyed()) return null
@@ -575,6 +633,9 @@ function registerHandler<T>(
     }
     if (channel.startsWith('desktop:public-access:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Public access management requires the main desktop window')
+    }
+    if (channel.startsWith('desktop:browser-use:') && (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame)) {
+      throw new Error('Browser use control requires the main desktop frame')
     }
     if (
       petWindowController?.owns(senderWindow) &&
@@ -978,6 +1039,12 @@ function registerIpcHandlers() {
     getWorkspaceBrowserService().printToPdf((payload as { tabId: string }).tabId))
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserClose, (_event, payload) =>
     getWorkspaceBrowserService().close((payload as { tabId: string }).tabId))
+  registerHandler(ELECTRON_IPC_CHANNELS.browserUseTabReady, (_event, payload) =>
+    getBrowserUseBridge().handleRendererTabReady(payload as BrowserUseTabReadyPayload))
+  registerHandler(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, (_event, payload) =>
+    getBrowserUseBridge().handleRendererCursorArrived(payload as BrowserUseCursorArrivedPayload))
+  registerHandler(ELECTRON_IPC_CHANNELS.browserUseUserAction, (_event, payload) =>
+    getBrowserUseBridge().handleRendererUserAction(payload as BrowserUseUserActionPayload))
   registerHandler(ELECTRON_IPC_CHANNELS.appModeGet, () => getAppMode(app))
   registerHandler(ELECTRON_IPC_CHANNELS.migrationPrepare, (_event, payload) => getDataMigration().prepare((payload as { targetDir: string }).targetDir))
   registerHandler(ELECTRON_IPC_CHANNELS.migrationStart, (_event, payload) => getDataMigration().start((payload as { id: string }).id))
@@ -1291,6 +1358,14 @@ app.on('before-quit', event => {
         console.error('[desktop] public access cleanup failed during quit')
       }
       await directConnectionsClosed
+      if (typeof browserUseBridge !== 'undefined' && browserUseBridge) {
+        try {
+          await browserUseBridge.dispose()
+        } catch {
+          console.error('[desktop] browser use bridge cleanup failed during quit')
+        }
+        browserUseBridge = null
+      }
       await getServerRuntime().stopAllAndWait()
     } catch (error) {
       console.error('[desktop] graceful server shutdown failed', error)

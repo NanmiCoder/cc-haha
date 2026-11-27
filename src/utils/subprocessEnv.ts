@@ -59,6 +59,9 @@ const ALWAYS_SUBPROCESS_SCRUB = [
   // Lets the in-process session tools read, message and create sessions as this
   // session; shell commands, hooks, and MCP servers have no use for it.
   'CC_HAHA_SESSION_COLLABORATION_TOKEN',
+  // Loopback bridge secret between the local server and Electron Main's Browser
+  // Use CDP broker; child processes (CLI, Bash, hooks, MCP) must never inherit it.
+  'CC_HAHA_BROWSER_BRIDGE_TOKEN',
 ] as const
 
 /**
