@@ -8,7 +8,7 @@ function at(seconds: number) {
   return new Date(Date.UTC(2026, 9, 4, 10, 0, 0) + seconds * 1000).toISOString()
 }
 
-function call(id: string, start: number, end: number, model = 'm'): TraceCallRecord {
+function call(id: string, start: number, end: number, model = 'm', extra: Partial<TraceCallRecord> = {}): TraceCallRecord {
   return {
     id,
     sessionId: 's',
@@ -19,6 +19,7 @@ function call(id: string, start: number, end: number, model = 'm'): TraceCallRec
     completedAt: at(end),
     durationMs: (end - start) * 1000,
     request: { method: 'POST', url: '', headers: {}, body: { contentType: 'json', bytes: 0, sha256: '', preview: '', truncated: false } },
+    ...extra,
   } as TraceCallRecord
 }
 
@@ -39,6 +40,36 @@ describe('scoreTraceCall', () => {
     const same = scoreTraceCall(call('same', 100, 111, 'm'), row)!
     const other = scoreTraceCall(call('other', 100, 110, 'haiku'), row)!
     expect(same).toBeLessThan(other)
+  })
+
+  it('isolates main-session and subagent calls by agentId and querySource', () => {
+    const mainCall = call('main', 100, 110, 'm', { querySource: 'sdk' })
+    const subACall = call('sub-a', 100, 110, 'm', { querySource: 'agent:builtin', agentId: 'sub-a' })
+    const subBCall = call('sub-b', 100, 110, 'm', { querySource: 'agent:builtin', agentId: 'sub-b' })
+    const workflowCall = call('wf-a', 100, 110, 'm', { querySource: 'workflow_agent' })
+    const legacyCall = call('legacy', 100, 110, 'm')
+    const preSubagentMainProxy = call('main-proxy-before', 98, 100, 'm')
+
+    // Main view rejects subagent and workflow calls and keeps main/legacy calls.
+    expect(scoreTraceCall(mainCall, row)).toBe(0)
+    expect(scoreTraceCall(subACall, row)).toBeNull()
+    expect(scoreTraceCall(workflowCall, row)).toBeNull()
+    expect(scoreTraceCall(legacyCall, row)).toBe(0)
+
+    // Subagent view prefers exact agentId over untagged/legacy calls and rejects pre-response legacy proxy calls.
+    expect(scoreTraceCall(subACall, row, { agentId: 'sub-a' })).toBe(0)
+    expect(scoreTraceCall(subACall, row, { agentId: 'agent-sub-a' })).toBe(0)
+    expect(scoreTraceCall(subBCall, row, { agentId: 'sub-a' })).toBeNull()
+    expect(scoreTraceCall(mainCall, row, { agentId: 'sub-a' })).toBeNull()
+    expect(scoreTraceCall(preSubagentMainProxy, row, { agentId: 'sub-a' })).toBeNull()
+    const untaggedAgentScore = scoreTraceCall(workflowCall, row, { agentId: 'sub-a' })!
+    const legacyScore = scoreTraceCall(legacyCall, row, { agentId: 'sub-a' })!
+    expect(untaggedAgentScore).toBeGreaterThan(0)
+    expect(legacyScore).toBeGreaterThan(untaggedAgentScore)
+
+    // Even an errored exact agentId call beats a closer untagged call.
+    const erroredExact = call('sub-a-err', 100, 108, 'm', { querySource: 'agent:builtin', agentId: 'sub-a', status: 'error' })
+    expect(scoreTraceCall(erroredExact, row, { agentId: 'sub-a' })!).toBeLessThan(legacyScore)
   })
 })
 

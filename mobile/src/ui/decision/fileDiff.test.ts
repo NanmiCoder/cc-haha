@@ -103,3 +103,41 @@ test('NotebookEdit shows new cell content only and incomplete input yields no di
   expect(fileChange('Write', { file_path: 'a' })).toBeNull()
   expect(fileChange('Bash', { command: 'ls' })).toBeNull()
 })
+
+test('Antigravity file edit and write tool names produce diff previews', () => {
+  const edit = fileChange('replace_file_content', {
+    TargetFile: 'src/app.ts',
+    TargetContent: 'old',
+    ReplacementContent: 'new',
+  })!
+  expect(edit.path).toBe('src/app.ts')
+  expect(kinds(edit.lines)).toEqual(['r:old', 'a:new'])
+
+  const multi = fileChange('multi_replace_file_content', {
+    TargetFile: 'src/app.ts',
+    ReplacementChunks: [{ TargetContent: 'a', ReplacementContent: 'b' }],
+  })!
+  expect(kinds(multi.lines)).toEqual(['h:@@ 第 1 处 @@', 'r:a', 'a:b'])
+
+  const write = fileChange('write_to_file', {
+    TargetFile: 'src/new.ts',
+    CodeContent: 'hello\nworld',
+  })!
+  expect(write.path).toBe('src/new.ts')
+  expect(write.added).toBe(2)
+
+  const agyEdit = fileChange('edit_file', {
+    Path: 'src/v2.ts',
+    Target: 'before',
+    Replacement: 'after',
+  })!
+  expect(agyEdit.path).toBe('src/v2.ts')
+  expect(kinds(agyEdit.lines)).toEqual(['r:before', 'a:after'])
+
+  const agyWrite = fileChange('write_file', {
+    Path: 'src/v2.ts',
+    Content: 'line 1\nline 2',
+  })!
+  expect(agyWrite.path).toBe('src/v2.ts')
+  expect(agyWrite.added).toBe(2)
+})

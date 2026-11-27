@@ -26,7 +26,15 @@ export function projectSessionBackgroundActivity(sessionId: string, messages: Me
   const tasks = new Map<string, SessionBackgroundTask>()
   for (const notice of notifications) {
     if (notice.ownerAgentId) continue
-    tasks.set(notice.taskId, { taskId: notice.taskId, toolUseId: notice.toolUseId, status: notice.status, summary: notice.summary, result: notice.result, outputFile: notice.outputFile })
+    tasks.set(notice.taskId, {
+      taskId: notice.taskId,
+      toolUseId: notice.toolUseId,
+      ...(notice.workflowRunId ? { taskType: 'local_workflow' } : {}),
+      status: notice.status,
+      summary: notice.summary,
+      result: notice.result,
+      outputFile: notice.outputFile,
+    })
   }
   for (const task of [...(activeAgentTasks.get(sessionId)?.values() ?? []), ...(activeNonAgentTasks.get(sessionId)?.values() ?? [])]) {
     if (task.ownerAgentId || task.taskType === 'in_process_teammate') continue
@@ -42,7 +50,20 @@ export function projectSessionBackgroundActivity(sessionId: string, messages: Me
   return [...tasks.values()].map(task => {
     const tool = task.toolUseId ? tools.get(task.toolUseId) : undefined
     const description = tool?.input.description ?? tool?.input.command
-    return { ...task, taskType: task.taskType ?? (tool?.name === 'Agent' || tool?.name === 'Task' ? 'local_agent' : tool?.name === 'Bash' || tool?.name === 'PowerShell' ? 'local_bash' : undefined), description: task.description ?? (typeof description === 'string' ? description : undefined), startedAt: tool?.timestamp }
+    return {
+      ...task,
+      taskType: task.taskType ?? (
+        tool?.name === 'Agent' || tool?.name === 'Task'
+          ? 'local_agent'
+          : tool?.name === 'Bash' || tool?.name === 'PowerShell'
+            ? 'local_bash'
+            : tool?.name === 'Workflow'
+              ? 'local_workflow'
+              : undefined
+      ),
+      description: task.description ?? (typeof description === 'string' ? description : undefined),
+      startedAt: tool?.timestamp,
+    }
   })
 }
 

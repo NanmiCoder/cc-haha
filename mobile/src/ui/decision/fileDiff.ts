@@ -96,21 +96,30 @@ function limit(lines: DiffLine[], max: number): DiffLine[] {
   ]
 }
 
-/** Edit / MultiEdit / NotebookEdit / Write 的改动预览；输入不完整时返回 null。 */
+/** Edit / MultiEdit / NotebookEdit / Write（含 Antigravity 同类工具）的改动预览；输入不完整时返回 null。 */
 export function fileChange(
   toolName: string,
   input: Record<string, unknown>
 ): FileChange | null {
-  const path = str(input.file_path) ?? str(input.notebook_path) ?? ''
-  if (toolName === 'Edit') {
-    const before = str(input.old_string)
-    const after = str(input.new_string)
+  const path =
+    str(input.file_path) ??
+    str(input.Path) ??
+    str(input.TargetFile) ??
+    str(input.notebook_path) ??
+    ''
+  if (toolName === 'Edit' || toolName === 'edit_file' || toolName === 'replace_file_content') {
+    const before =
+      str(input.old_string) ?? str(input.Target) ?? str(input.TargetContent)
+    const after =
+      str(input.new_string) ??
+      str(input.Replacement) ??
+      str(input.ReplacementContent)
     if (before === undefined || after === undefined) return null
     const lines = lineDiff(before, after)
     return {
       path,
       lines: limit(
-        input.replace_all === true
+        input.replace_all === true || input.AllowMultiple === true
           ? [{ text: '@@ 替换文件里所有相同内容 @@', kind: 'hunk' }, ...lines]
           : lines,
         EDIT_PREVIEW_LINES
@@ -119,16 +128,21 @@ export function fileChange(
       removed: count(lines, 'remove'),
     }
   }
-  if (toolName === 'MultiEdit') {
-    if (!Array.isArray(input.edits)) return null
-    const edits = input.edits.flatMap((edit: unknown) => {
+  if (toolName === 'MultiEdit' || toolName === 'multi_replace_file_content') {
+    const rawEdits = Array.isArray(input.edits)
+      ? input.edits
+      : Array.isArray(input.ReplacementChunks)
+        ? input.ReplacementChunks
+        : null
+    if (!rawEdits) return null
+    const edits = rawEdits.flatMap((edit: unknown) => {
       if (!edit || typeof edit !== 'object') return []
       const value = edit as Record<string, unknown>
-      const before = str(value.old_string)
-      const after = str(value.new_string)
+      const before = str(value.old_string) ?? str(value.TargetContent)
+      const after = str(value.new_string) ?? str(value.ReplacementContent)
       return before === undefined || after === undefined
         ? []
-        : [{ lines: lineDiff(before, after), all: value.replace_all === true }]
+        : [{ lines: lineDiff(before, after), all: value.replace_all === true || value.AllowMultiple === true }]
     })
     if (!edits.length) return null
     const all = edits.flatMap((edit) => edit.lines)
@@ -148,8 +162,9 @@ export function fileChange(
       removed: count(all, 'remove'),
     }
   }
-  if (toolName === 'Write') {
-    const content = str(input.content)
+  if (toolName === 'Write' || toolName === 'write_file' || toolName === 'write_to_file') {
+    const content =
+      str(input.content) ?? str(input.Content) ?? str(input.CodeContent)
     if (content === undefined) return null
     const lines = splitLines(content).map(
       (text): DiffLine => ({ text, kind: 'add' })

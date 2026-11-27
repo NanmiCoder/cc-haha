@@ -7111,6 +7111,27 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByRole('button', { name: /Undo current turn|Rewind to before this turn|Roll back conversation/ })).toBeNull()
   })
 
+  it.each([{ paths: [] }, { paths: ['partial.txt'] }])('marks truncated workspace results as partial and retains available files: $paths', async ({ paths }) => {
+    vi.mocked(sessionsApi.getTurnCheckpoints).mockRejectedValue(new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' }))
+    vi.mocked(sessionsApi.getWorkspaceStatus).mockResolvedValue({
+      state: 'ok', workDir: '/tmp/example-project', repoName: null, branch: null, isGitRepo: true,
+      changedFiles: paths.map(path => ({ path, status: 'untracked', additions: 0, deletions: 0 })),
+      truncated: true,
+    })
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [
+      { id: 'user-1', type: 'user_text', content: 'Continue', timestamp: 1 },
+      { id: 'assistant-1', type: 'assistant_text', content: 'Done', timestamp: 2 },
+    ] }) } })
+    render(<MessageList />)
+    const fallback = await screen.findByRole('region', { name: 'Workspace changed files' })
+    expect(within(fallback).queryByText('No current workspace changes were found.')).toBeNull()
+    expect(within(fallback).getByText(/the workspace scan was limited/i)).toBeTruthy()
+    if (paths.length) {
+      fireEvent.click(within(fallback).getByRole('button', { name: 'Show 1 changed files' }))
+      expect(within(fallback).getByRole('button', { name: 'Open current content of partial.txt' })).toBeTruthy()
+    }
+  })
+
   it('explains the checkpoint preview limit even when the verified workspace has no changed files', async () => {
     vi.mocked(sessionsApi.getTurnCheckpoints).mockRejectedValue(new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' }))
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [

@@ -50,7 +50,17 @@ export function decisionKind(activity?: MobileActivity): DecisionKind {
   return 'other'
 }
 
-const fileTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const fileTools = new Set([
+  'Edit',
+  'Write',
+  'MultiEdit',
+  'NotebookEdit',
+  'edit_file',
+  'write_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+  'write_to_file',
+])
 const readTools = new Set(['Read', 'Glob', 'Grep', 'LS'])
 
 export function decisionAction(activity?: MobileActivity) {
@@ -64,7 +74,7 @@ export function decisionAction(activity?: MobileActivity) {
       return activity?.preview?.trim() || '团队组好了，等你确认'
   }
   if (!tool) return '需要你决定'
-  if (tool === 'Bash' || tool === 'PowerShell') return '想运行命令'
+  if (tool === 'Bash' || tool === 'PowerShell' || tool === 'run_command') return '想运行命令'
   if (fileTools.has(tool)) return '想修改文件'
   if (readTools.has(tool)) return '想读取文件'
   if (tool === 'WebFetch') return '想访问网页'
@@ -105,7 +115,9 @@ export function previewText(activity?: MobileActivity) {
 export function approvalPreview(activity?: MobileActivity) {
   const text = previewText(activity)
   if (!text) return ''
-  return activity?.toolName === 'Bash' || activity?.toolName === 'PowerShell'
+  return activity?.toolName === 'Bash' ||
+    activity?.toolName === 'PowerShell' ||
+    activity?.toolName === 'run_command'
     ? `$ ${text}`
     : text
 }

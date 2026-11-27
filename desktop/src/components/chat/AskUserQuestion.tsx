@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, ClipboardEvent } from 'react'
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react'
 import {
   listPendingPermissions,
   useChatStore,
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/Button'
 import { Kbd } from '@/components/ui/Kbd'
 import { detectPlatform } from '@/lib/workspace/shortcuts'
 import { isInlineImagePath } from '../../lib/attachmentImages'
+import { isTouchH5Document } from '../../lib/touchH5'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
@@ -119,6 +120,22 @@ function parseInput(input: unknown): Question[] {
 type QuestionSelections = Record<number, string[]>
 type QuestionFreeTexts = Record<number, string>
 type QuestionImages = Record<number, ComposerAttachment[]>
+const EMPTY_FREE_TEXTS: QuestionFreeTexts = {}
+const EMPTY_QUESTION_IMAGES: QuestionImages = {}
+type TabChangeFocusTarget = 'textarea' | 'answer' | 'card' | null
+
+function isCursorAtLineEnd(textarea: HTMLTextAreaElement): boolean {
+  const start = textarea.selectionStart ?? textarea.value.length
+  const end = textarea.selectionEnd ?? textarea.value.length
+  if (start !== end) return false
+  return end >= textarea.value.length || textarea.value[end] === '\n'
+}
+
+function isCursorAtTextStart(textarea: HTMLTextAreaElement): boolean {
+  const start = textarea.selectionStart ?? 0
+  const end = textarea.selectionEnd ?? 0
+  return start === 0 && end === 0
+}
 
 function getSelectedAnswer(question: Question, selected: string[] | undefined) {
   if (!selected || selected.length === 0) return ''
@@ -231,7 +248,8 @@ export function AskUserQuestion({
   const t = useTranslation()
   const textareaId = useId()
   const questions = useMemo(() => parseInput(input), [input])
-  const inputObject = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
+  const inputObject = isRecord(input) ? input : {}
+  const allowFreeText = inputObject.allowFreeText !== false
   // Read once instead of subscribing: this card writes the draft on every
   // change, and a subscription would feed its own writes back as re-renders.
   const storedDraft = targetSessionId
@@ -239,15 +257,24 @@ export function AskUserQuestion({
     : undefined
   const [activeTab, setActiveTab] = useState(storedDraft?.activeTab ?? 0)
   const [selections, setSelections] = useState<QuestionSelections>(storedDraft?.selections ?? {})
-  const [freeTexts, setFreeTexts] = useState<QuestionFreeTexts>(storedDraft?.freeTexts ?? {})
-  const [imagesByQuestion, setImagesByQuestion] = useState<QuestionImages>(storedDraft?.images ?? {})
-  const [hasSubmitted, setHasSubmitted] = useState(storedDraft?.submitted === true)
-  const [hasRequestedChat, setHasRequestedChat] = useState(storedDraft?.handedOff === true)
+  const [draftFreeTexts, setFreeTexts] = useState<QuestionFreeTexts>(storedDraft?.freeTexts ?? EMPTY_FREE_TEXTS)
+  const [draftImages, setImagesByQuestion] = useState<QuestionImages>(storedDraft?.images ?? EMPTY_QUESTION_IMAGES)
+  const [hasSubmitted, setHasSubmitted] = useState(allowFreeText && storedDraft?.submitted === true)
+  const [handedOff, setHasRequestedChat] = useState(storedDraft?.handedOff === true)
   // The question had no live request left, so the answers went out as a message.
-  const [hasSentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
+  const [sentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
+  // Fixed-choice questions cannot restore free-text, image, or chat-handoff drafts.
+  const freeTexts = allowFreeText ? draftFreeTexts : EMPTY_FREE_TEXTS
+  const imagesByQuestion = allowFreeText ? draftImages : EMPTY_QUESTION_IMAGES
+  const hasRequestedChat = allowFreeText && handedOff
+  const hasSentAsMessage = allowFreeText && sentAsMessage
   const composingRef = useRef(false)
   const activitySentForRequest = useRef<string | null>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const firstOptionRef = useRef<HTMLButtonElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const focusAfterTabChangeRef = useRef<TabChangeFocusTarget>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const imageLoadGenRef = useRef(0)
   const mountedRef = useRef(true)
@@ -264,6 +291,25 @@ export function AskUserQuestion({
       imageLoadGenRef.current += 1
     }
   }, [])
+
+  // Keep keyboard focus inside the newly shown question after keyboard tab
+  // navigation or when a control unmounts (e.g. clicking Next onto the last
+  // question). Typists stay in the textarea; option pickers land on the first
+  // option (or textarea on free-text-only questions).
+  useEffect(() => {
+    const focusTarget = focusAfterTabChangeRef.current
+    if (!focusTarget) return
+    focusAfterTabChangeRef.current = null
+    if (focusTarget === 'textarea') {
+      textareaRef.current?.focus()
+      return
+    }
+    if (focusTarget === 'answer') {
+      ;(firstOptionRef.current ?? textareaRef.current)?.focus()
+      return
+    }
+    cardRef.current?.focus({ preventScroll: true })
+  }, [clampedActiveTab])
 
   // If the server rejects attachment materialization and restores the pending
   // permission, reopen the card with the user's draft intact so they can retry.
@@ -332,10 +378,9 @@ export function AskUserQuestion({
     sessionChatState === 'tool_executing' ||
     sessionChatState === 'compacting' ||
     sessionChatState === 'permission_pending'
-  // Delivering an expired answer means sending a message, which needs a connected
-  // session. While reconnecting, the permission snapshot may not have arrived yet,
+  // While reconnecting, the permission snapshot may not have arrived yet,
   // so stay neutral rather than declaring the question dead.
-  const canSendAsMessage = Boolean(targetSessionId) && sessionConnectionState === 'connected'
+  const connected = Boolean(targetSessionId) && sessionConnectionState === 'connected'
   /**
    * The question outlived its live permission request: whoever was waiting for it
    * is gone (renderer was away, CLI reclaimed, turn interrupted) or the user has
@@ -346,12 +391,13 @@ export function AskUserQuestion({
    * answer MUST travel as a permission response — routing it to a message would
    * drop the real prompt and can cancel the turn waiting on it.
    */
-  const expired = !submitted && !pendingRequest && canSendAsMessage &&
+  const expired = !submitted && !pendingRequest && connected &&
     (supersededByUserMessage === true || !sessionBusy)
+  const readOnly = expired && !allowFreeText
   // Direct team-member messages (`sendMessageToMember`) are text-only; live
   // member questions still support images because they route through the lead
   // session's `permission_response`.
-  const canAttachImages = !(memberLeadSessionId && expired)
+  const canAttachImages = allowFreeText && !(memberLeadSessionId && expired)
 
   const allLocalImages = useMemo(
     () => questions.flatMap((_, index) => imagesByQuestion[index] ?? []),
@@ -545,7 +591,7 @@ export function AskUserQuestion({
     attachments?: AttachmentRef[],
   ) => {
     const sessionId = targetSessionId
-    if (!sessionId) return false
+    if (!allowFreeText || !sessionId) return false
     const effectiveAttachments = canAttachImages && attachments?.length ? attachments : undefined
     if (effectiveAttachments && !enforcePayloadBudget({
       type: 'user_message',
@@ -640,8 +686,8 @@ export function AskUserQuestion({
     event.target.value = ''
   }
 
-  const handleSelect = (qIndex: number, label: string) => {
-    if (submitted) return
+  const handleSelect = (qIndex: number, label: string, optIndex?: number) => {
+    if (submitted || readOnly) return
     markUserActivity()
     // Computed from the render snapshot rather than inside the updater: React
     // may run a state updater twice, and advancing the tab is a side effect.
@@ -678,11 +724,22 @@ export function AskUserQuestion({
       }
       return { ...prev, [qIndex]: [label] }
     })
-    if (shouldAdvance) setActiveTab(qIndex + 1)
+    if (shouldAdvance) {
+      const nextOptionCount = questions[qIndex + 1]?.options?.length ?? 0
+      const focusWouldDrop =
+        typeof optIndex === 'number' &&
+        optIndex >= nextOptionCount &&
+        document.activeElement instanceof HTMLElement &&
+        Boolean(cardRef.current?.contains(document.activeElement))
+      if (focusWouldDrop) {
+        focusAfterTabChangeRef.current = 'card'
+      }
+      setActiveTab(qIndex + 1)
+    }
   }
 
   const handleFreeTextChange = (qIndex: number, value: string) => {
-    if (submitted) return
+    if (!allowFreeText || submitted) return
     markUserActivity()
     setFreeTexts((prev) => {
       const next = { ...prev }
@@ -805,7 +862,7 @@ export function AskUserQuestion({
    * an ordinary message instead — the model still gets asked to follow up.
    */
   const handleChatAboutThis = () => {
-    if (submitted) return
+    if (!allowFreeText || submitted) return
 
     const attachments = collectAttachmentRefs()
 
@@ -862,8 +919,76 @@ export function AskUserQuestion({
   // Gates the Next button: ChatGPT's `canAdvance`, so a step forward cannot
   // silently drop a question the user never answered.
   const activeAnswered = isQuestionAnswered(safeActiveTab)
+  const hasMultipleQuestions = questions.length > 1
+  const isLastQuestion = safeActiveTab >= questions.length - 1
+  const canGoToPreviousQuestion = !submitted && hasMultipleQuestions && safeActiveTab > 0
+  // Same gate as the Next button below: the shortcut is only an alternative
+  // control for that button, so it must not skip an unanswered question.
+  const canGoToNextQuestion = !submitted && hasMultipleQuestions && !isLastQuestion && activeAnswered
+  // Mirrors the Submit button's `disabled` condition.
+  const canSubmit = !submitted && !readOnly && allAnswered && (expired || Boolean(pendingRequest))
   const hasActiveSelection = (selections[safeActiveTab]?.length ?? 0) > 0
   const activeImages = canAttachImages ? (imagesByQuestion[safeActiveTab] ?? []) : []
+  const isMac = detectPlatform() === 'mac'
+  const isTouchH5 = isTouchH5Document()
+
+  const navigateToQuestion = (nextIndex: number, focusTarget: TabChangeFocusTarget) => {
+    focusAfterTabChangeRef.current = focusTarget
+    setActiveTab(nextIndex)
+  }
+
+  // Keyboard shortcuts belong to the whole card, not just the textarea: after
+  // picking options with the keyboard the focus sits on the option button, and
+  // Ctrl/⌘+Enter has to keep working there.
+  const handleShortcutKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (submitted) return
+    // IME candidate navigation uses Enter and the arrow keys too.
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.altKey || event.shiftKey) return
+    // Reject bare keys and simultaneous Ctrl+⌘ chords.
+    if (event.ctrlKey === event.metaKey) return
+
+    if (event.key === 'Enter') {
+      // Always claim the chord, even when submission is gated: falling through
+      // would trigger the focused option button's default Enter activation and
+      // silently toggle the answer instead.
+      event.preventDefault()
+      event.stopPropagation()
+      if (!event.repeat && canSubmit) handleSubmit()
+      return
+    }
+
+    // Match the platform's own navigation modifier so macOS keeps Ctrl+Arrow
+    // free (Mission Control / readline) and Windows/Linux keeps Win+Arrow free.
+    const isPrimaryNavModifier = isMac ? event.metaKey : event.ctrlKey
+    if (!isPrimaryNavModifier) return
+
+    const textareaTarget = event.target instanceof HTMLTextAreaElement ? event.target : null
+
+    if (event.key === 'ArrowRight') {
+      if (!canGoToNextQuestion) return
+      // On macOS, ⌘→ jumps to the end of the line in a textarea (MacBooks have
+      // no End key). Preserve that while editing mid-line; once at line end,
+      // native ⌘→ is a no-op so advancing is conflict-free.
+      if (isMac && textareaTarget && !isCursorAtLineEnd(textareaTarget)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      navigateToQuestion(safeActiveTab + 1, textareaTarget ? 'textarea' : 'answer')
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      if (!canGoToPreviousQuestion) return
+      // Preserve text navigation (⌘← line-start on macOS, Ctrl+← word-left on
+      // Windows/Linux) whenever the caret is not already at the very start.
+      if (textareaTarget && !isCursorAtTextStart(textareaTarget)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      navigateToQuestion(safeActiveTab - 1, textareaTarget ? 'textarea' : 'answer')
+    }
+  }
   const submittedImages: AttachmentPreview[] = resultAttachments.length > 0
     ? resultAttachments
     : (canAttachImages ? allLocalImages : [])
@@ -877,11 +1002,16 @@ export function AskUserQuestion({
         : terminalWithoutAnswers ? 'question.completed' : 'question.answered'
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border ${
-      submitted
-        ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
-        : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
-    }`}>
+    <div
+      ref={cardRef}
+      tabIndex={submitted ? undefined : -1}
+      className={`overflow-hidden rounded-[var(--radius-lg)] border focus:outline-none ${
+        submitted
+          ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
+          : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
+      }`}
+      onKeyDown={submitted ? undefined : handleShortcutKeyDown}
+    >
       {/* Header: 42px, the shared card head of the ask / plan cards. */}
       <div className={`flex h-[42px] items-center gap-2 px-3.5 ${submitted ? '' : 'border-b border-[var(--color-border)]'}`}>
         <MessageCircleQuestion aria-hidden="true" size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
@@ -894,7 +1024,7 @@ export function AskUserQuestion({
           // never answered at all, whatever happened to the answers
           <Badge className="shrink-0">{t(statusBadgeKey)}</Badge>
         )}
-        {!submitted && questions.length > 1 && (
+        {!submitted && hasMultipleQuestions && (
           <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
             <span className="font-medium text-[var(--color-text-primary)]">{safeActiveTab + 1}</span> / {questions.length}
           </span>
@@ -902,7 +1032,7 @@ export function AskUserQuestion({
       </div>
 
       {/* Question tabs (only when there are several questions) */}
-      {!submitted && questions.length > 1 && (
+      {!submitted && hasMultipleQuestions && (
         <div className="flex gap-0.5 overflow-x-auto px-2.5 pt-2">
           {questions.map((q, i) => {
             const isActive = safeActiveTab === i
@@ -933,10 +1063,8 @@ export function AskUserQuestion({
       {/* Active question content */}
       {!submitted && (
         <div className="px-2.5 pt-3">
-          {/* Nothing is waiting on this question any more. The form below stays
-              usable on purpose — the answers are still worth sending — but which
-              channel they take changes, and that has to be visible. */}
-          {expired && (
+          {/* Only free-form questions can send their answers using a new message. */}
+          {expired && allowFreeText && (
             <div
               role="status"
               aria-live="polite"
@@ -960,11 +1088,12 @@ export function AskUserQuestion({
                 return (
                   <button
                     key={optIndex}
+                    ref={optIndex === 0 ? firstOptionRef : undefined}
                     type="button"
-                    onClick={() => handleSelect(safeActiveTab, opt.label)}
-                    disabled={submitted}
+                    onClick={() => handleSelect(safeActiveTab, opt.label, optIndex)}
+                    disabled={submitted || readOnly}
                     aria-pressed={isSelected}
-                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default ${
                       isSelected
                         ? 'bg-[var(--color-brand-soft)] shadow-[inset_0_0_0_1.5px_var(--color-brand)]'
                         : 'shadow-[inset_0_0_0_1px_var(--color-border)] hover:shadow-[inset_0_0_0_1px_var(--color-outline)]'
@@ -1004,71 +1133,67 @@ export function AskUserQuestion({
 
           {/* Free text & image input: the sunken answer slot. Works standalone
               or alongside selected options to attach extra context or images. */}
-          <div
-            ref={dropZoneRef}
-            className="mt-2.5"
-            {...dragHandlers}
-          >
-            <div className="mb-1 flex items-center justify-between gap-2 px-1">
-              <label htmlFor={textareaId} className="text-xs text-[var(--color-text-tertiary)]">
-                {t(hasActiveSelection ? 'question.additionalResponse' : 'question.customResponse')}
-              </label>
-              {canAttachImages && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={openImagePicker}
-                    icon={<ImagePlus aria-hidden="true" size={14} strokeWidth={1.75} />}
-                  >
-                    {t('question.attachImage')}
-                  </Button>
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept={ACCEPTED_IMAGE_INPUT}
-                    multiple
-                    className="hidden"
-                    onChange={handleImageFileSelect}
-                  />
-                </>
-              )}
-            </div>
+          {allowFreeText && (
             <div
-              className={`rounded-[var(--radius-md)] border bg-[var(--color-surface-container-low)] transition-colors focus-within:border-[var(--color-outline)] focus-within:bg-[var(--color-surface-container-lowest)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
-                isDragActive ? 'border-[var(--color-brand)]' : 'border-[var(--color-border)]'
-              }`}
+              ref={dropZoneRef}
+              className="mt-2.5"
+              {...dragHandlers}
             >
-              {activeImages.length > 0 && (
-                <div className="px-3 pt-2.5">
-                  <AttachmentGallery
-                    attachments={activeImages}
-                    variant="composer"
-                    onRemove={(id) => handleRemoveImage(safeActiveTab, id)}
-                  />
-                </div>
-              )}
-              <textarea
-                id={textareaId}
-                value={freeTexts[safeActiveTab] ?? ''}
-                onChange={(e) => handleFreeTextChange(safeActiveTab, e.target.value)}
-                onPaste={(e) => handlePaste(safeActiveTab, e)}
-                onCompositionStart={() => { composingRef.current = true }}
-                onCompositionEnd={() => { composingRef.current = false }}
-                onKeyDown={(e) => {
-                  if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && allAnswered) {
-                    e.preventDefault()
-                    handleSubmit()
-                  }
-                }}
-                placeholder={t('question.typePlaceholder')}
-                rows={3}
-                wrap="soft"
-                className="scrollbar-autohide max-h-48 min-h-[72px] w-full resize-y bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
-              />
+              <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                <label htmlFor={textareaId} className="text-xs text-[var(--color-text-tertiary)]">
+                  {t(hasActiveSelection ? 'question.additionalResponse' : 'question.customResponse')}
+                </label>
+                {canAttachImages && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={openImagePicker}
+                      icon={<ImagePlus aria-hidden="true" size={14} strokeWidth={1.75} />}
+                    >
+                      {t('question.attachImage')}
+                    </Button>
+                    <input
+                      ref={imageInputRef}
+                      type="file"
+                      accept={ACCEPTED_IMAGE_INPUT}
+                      multiple
+                      className="hidden"
+                      onChange={handleImageFileSelect}
+                    />
+                  </>
+                )}
+              </div>
+              <div
+                className={`rounded-[var(--radius-md)] border bg-[var(--color-surface-container-low)] transition-colors focus-within:border-[var(--color-outline)] focus-within:bg-[var(--color-surface-container-lowest)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
+                  isDragActive ? 'border-[var(--color-brand)]' : 'border-[var(--color-border)]'
+                }`}
+              >
+                {activeImages.length > 0 && (
+                  <div className="px-3 pt-2.5">
+                    <AttachmentGallery
+                      attachments={activeImages}
+                      variant="composer"
+                      onRemove={(id) => handleRemoveImage(safeActiveTab, id)}
+                    />
+                  </div>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  id={textareaId}
+                  value={freeTexts[safeActiveTab] ?? ''}
+                  onChange={(e) => handleFreeTextChange(safeActiveTab, e.target.value)}
+                  onPaste={(e) => handlePaste(safeActiveTab, e)}
+                  onCompositionStart={() => { composingRef.current = true }}
+                  onCompositionEnd={() => { composingRef.current = false }}
+                  placeholder={t('question.typePlaceholder')}
+                  rows={3}
+                  wrap="soft"
+                  className="scrollbar-autohide max-h-48 min-h-[72px] w-full resize-y bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -1116,43 +1241,68 @@ export function AskUserQuestion({
           label (kr/jp run long) can outgrow a narrow side-by-side pane. Next is
           pushed to the end of the row and wraps alone onto a second line when
           it runs out of room. */}
-      {!submitted && (
+      {!submitted && !readOnly && (
         <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-3">
           <Button
             variant="primary"
             size="base"
             // `expired` is the one state where a button may work without a live
             // request: it sends the answers as a message instead of answering.
-            disabled={!allAnswered || (!expired && !pendingRequest)}
+            // Fixed-choice questions (`readOnly`) remain disabled when expired.
+            disabled={!canSubmit}
             onClick={handleSubmit}
           >
             <span>{t(expired ? 'question.sendAsMessage' : 'question.submit')}</span>
-            <Kbd size="xs" appearance="inverse" aria-hidden="true" className="ml-0.5 opacity-85">{detectPlatform() === 'mac' ? '⌘↵' : 'Ctrl+↵'}</Kbd>
+            {!isTouchH5 && (
+              <Kbd
+                size="xs"
+                appearance={canSubmit ? 'inverse' : 'subtle'}
+                aria-hidden="true"
+                className={canSubmit ? 'ml-0.5 opacity-85' : 'ml-0.5'}
+              >
+                {isMac ? '⌘↵' : 'Ctrl+↵'}
+              </Kbd>
+            )}
           </Button>
-          <Button
-            variant="ghost"
-            size="base"
-            disabled={!expired && !pendingRequest}
-            onClick={handleChatAboutThis}
-            title={t('question.chatAboutThisHint')}
-            icon={<MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} />}
-          >
-            {t('question.chatAboutThis')}
-          </Button>
+          {allowFreeText && (
+            <Button
+              variant="ghost"
+              size="base"
+              disabled={!expired && !pendingRequest}
+              onClick={handleChatAboutThis}
+              title={t('question.chatAboutThisHint')}
+              icon={<MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} />}
+            >
+              {t('question.chatAboutThis')}
+            </Button>
+          )}
           {/* Only on multi-question input, and never on the last one. Pushed to
               the end of the row so it stays out of the way of Submit, which is
               the action that actually ends the exchange. */}
-          {questions.length > 1 && safeActiveTab < questions.length - 1 && (
+          {hasMultipleQuestions && !isLastQuestion && (
             <Button
               variant="secondary"
               size="base"
               className="ml-auto"
-              disabled={!activeAnswered}
-              onClick={() => setActiveTab(safeActiveTab + 1)}
-              icon={<ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} />}
+              disabled={!canGoToNextQuestion}
+              onClick={(event) => {
+                const targetIndex = safeActiveTab + 1
+                const isKeyboardClick = event.detail === 0
+                const nextButtonWillUnmount = targetIndex >= questions.length - 1
+                navigateToQuestion(
+                  targetIndex,
+                  isKeyboardClick ? 'answer' : nextButtonWillUnmount ? 'card' : null,
+                )
+              }}
+              icon={isTouchH5 ? <ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} /> : undefined}
               iconPosition="end"
             >
-              {t('question.next')}
+              <span>{t('question.next')}</span>
+              {!isTouchH5 && (
+                <Kbd size="xs" appearance="subtle" aria-hidden="true" className="ml-0.5">
+                  {isMac ? '⌘→' : 'Ctrl+→'}
+                </Kbd>
+              )}
             </Button>
           )}
         </div>

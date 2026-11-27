@@ -1,5 +1,10 @@
-import { Redirect } from 'expo-router'
-/** Providers are configured on the computer; old links open the mobile model picker. */
+import { Redirect, useLocalSearchParams } from 'expo-router'
+/** Providers and local runtimes (including Antigravity) live on the mobile models screen. */
 export default function Providers() {
-  return <Redirect href="/models" />
+  const { host } = useLocalSearchParams<{ host?: string }>()
+  return (
+    <Redirect
+      href={host ? { pathname: '/models', params: { host } } : '/models'}
+    />
+  )
 }

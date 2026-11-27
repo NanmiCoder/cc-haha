@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const apiGetMock = vi.hoisted(() => vi.fn())
+const apiPostMock = vi.hoisted(() => vi.fn())
 const apiPutMock = vi.hoisted(() => vi.fn())
 
 vi.mock('./client', () => ({
-  api: { get: apiGetMock, put: apiPutMock },
+  api: { get: apiGetMock, post: apiPostMock, put: apiPutMock },
 }))
 
 import { providersApi } from './providers'
@@ -39,5 +40,10 @@ describe('providersApi.authStatus', () => {
   it('preserves the unconditional settings API for callers without an owner', () => {
     providersApi.updateSettings({ futureSetting: true })
     expect(apiPutMock).toHaveBeenCalledWith('/api/providers/settings', { futureSetting: true })
+  })
+
+  it('discovers local Antigravity ACP status via POST /api/providers/antigravity-acp/discover', () => {
+    providersApi.discoverAntigravity()
+    expect(apiPostMock).toHaveBeenCalledWith('/api/providers/antigravity-acp/discover')
   })
 })

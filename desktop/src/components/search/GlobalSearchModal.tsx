@@ -1,17 +1,30 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { MessageSquare, Search } from 'lucide-react'
+import { Folder, MessageSquare, Search } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useUIStore } from '../../stores/uiStore'
 import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
+import {
+  resolveProjectDisplayName,
+  useProjectDisplayNameRevision,
+} from '@/stores/projectDisplayNameStore'
 import { sessionsApi } from '@/api/sessions'
 import { searchApi, type SessionSearchResult, type SessionMatch, type SessionMatchRole } from '../../api/search'
+import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { Badge } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
+import {
+  buildSearchableProjects,
+  searchProjects,
+  type HighlightRange,
+  type ProjectSearchMatch,
+} from './projectSearch'
 
 const DEBOUNCE_MS = 250
 const RECENT_LIMIT = 8
+const PROJECT_SEARCH_LIMIT = 12
 const SEARCH_LIMIT = 50
 const MATCH_PREVIEW_PER_SESSION = 3
 const OPEN_SUMMARY_TIMEOUT_MS = 5_000
@@ -19,22 +32,31 @@ const OPEN_SUMMARY_TIMEOUT_MS = 5_000
 type Props = {
   open: boolean
   onClose: () => void
+  onSelectProject?: (projectKey: string) => void
 }
 
-/** A row in the result list — either a recent session (no matches) or a search hit. */
+/** A session row in the result list — either a recent session (no matches) or a search hit. */
 type Row = {
   sessionId: string
   title: string
   projectPath: string
+  projectRoot?: string | null
   workDir: string | null
   modifiedAt: string
   matchCount: number
   matches: SessionMatch[]
 }
 
-export function GlobalSearchModal({ open, onClose }: Props) {
+type SearchPaletteItem =
+  | { kind: 'project'; project: ProjectSearchMatch }
+  | { kind: 'session'; row: Row }
+
+export function GlobalSearchModal({ open, onClose, onSelectProject }: Props) {
   const t = useTranslation()
   const sessions = useSessionStore((s) => s.sessions)
+  const projectSessionTotals = useSessionStore((s) => s.projectSessionTotals)
+  const projectArchivedTotals = useSessionStore((s) => s.projectArchivedTotals)
+  const projectDisplayNameRevision = useProjectDisplayNameRevision()
 
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -155,7 +177,23 @@ export function GlobalSearchModal({ open, onClose }: Props) {
     [sessions],
   )
 
+  const searchableProjects = useMemo(
+    () => buildSearchableProjects(
+      sessions,
+      projectSessionTotals,
+      projectArchivedTotals,
+      resolveProjectDisplayName,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, projectSessionTotals, projectArchivedTotals, projectDisplayNameRevision],
+  )
+
   const isSearching = query.trim().length > 0
+
+  const matchedProjects = useMemo(
+    () => (isSearching ? searchProjects(searchableProjects, query, PROJECT_SEARCH_LIMIT) : []),
+    [isSearching, query, searchableProjects],
+  )
 
   const rows: Row[] = useMemo(() => {
     if (!isSearching) {
@@ -163,6 +201,7 @@ export function GlobalSearchModal({ open, onClose }: Props) {
         sessionId: s.id,
         title: s.title,
         projectPath: s.projectPath,
+        projectRoot: s.projectRoot,
         workDir: s.workDir,
         modifiedAt: s.modifiedAt,
         matchCount: 0,
@@ -180,16 +219,49 @@ export function GlobalSearchModal({ open, onClose }: Props) {
     }))
   }, [isSearching, recentSessions, results])
 
+  const items: SearchPaletteItem[] = useMemo(() => {
+    if (!isSearching) {
+      return rows.map((row) => ({ kind: 'session', row }))
+    }
+    return [
+      ...matchedProjects.map((project): SearchPaletteItem => ({ kind: 'project', project })),
+      ...rows.map((row): SearchPaletteItem => ({ kind: 'session', row })),
+    ]
+  }, [isSearching, matchedProjects, rows])
+
   // Keep the active row in view.
   useEffect(() => {
-    setActiveIndex((index) => rows.length === 0 ? 0 : Math.min(index, rows.length - 1))
-  }, [rows.length])
+    setActiveIndex((index) => items.length === 0 ? 0 : Math.min(index, items.length - 1))
+  }, [items.length])
 
   useEffect(() => {
     listRef.current
       ?.querySelector(`[data-index="${activeIndex}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
+      ?.scrollIntoView?.({ block: 'nearest' })
   }, [activeIndex])
+
+  function openProject(project: ProjectSearchMatch) {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
+    requestIdRef.current += 1
+    setLoading(false)
+    if (onSelectProject) {
+      onSelectProject(project.key)
+      onClose()
+      return
+    }
+    if (project.latestSession) {
+      useSessionStore.getState().openHistoricalSession(project.latestSession)
+      onClose()
+      return
+    }
+    if (project.workDir) {
+      useUIStore.getState().startNewSessionDraft(project.workDir)
+      useSessionStore.getState().setActiveSession(null)
+      useTabStore.getState().setActiveTab(null)
+    }
+    onClose()
+  }
 
   async function openRow(row: Row) {
     requestControllerRef.current?.abort()
@@ -232,16 +304,18 @@ export function GlobalSearchModal({ open, onClose }: Props) {
     if (isComposing || e.nativeEvent.isComposing) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      if (rows.length === 0) return
-      setActiveIndex((i) => Math.min(i + 1, rows.length - 1))
+      if (items.length === 0) return
+      setActiveIndex((i) => Math.min(i + 1, items.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      if (rows.length === 0) return
+      if (items.length === 0) return
       setActiveIndex((i) => Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const row = rows[activeIndex]
-      if (row) openRow(row)
+      const item = items[activeIndex]
+      if (!item) return
+      if (item.kind === 'project') openProject(item.project)
+      else void openRow(item.row)
     } else if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
@@ -311,36 +385,75 @@ export function GlobalSearchModal({ open, onClose }: Props) {
                 />
               ))}
             </>
-          ) : loading && results.length === 0 ? (
+          ) : matchedProjects.length === 0 && loading && results.length === 0 ? (
             <div className="px-4 py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">
               {t('search.global.loading')}
             </div>
-          ) : error ? (
+          ) : matchedProjects.length === 0 && error ? (
             <div className="px-4 py-8 text-center text-[13px] text-[var(--color-error)]">
               {t('search.global.error')}
             </div>
-          ) : rows.length === 0 ? (
+          ) : matchedProjects.length === 0 && rows.length === 0 ? (
             <div className="px-4 py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">
               {t('search.global.noResults')}
             </div>
           ) : (
             <>
-              <div className="h-1.5" aria-hidden="true" />
-              {rows.map((row, i) => (
-                <ResultRow
-                  key={row.sessionId}
-                  row={row}
-                  index={i}
-                  active={i === activeIndex}
-                  onActivate={setActiveIndex}
-                  onOpen={openRow}
-                  t={t}
-                />
-              ))}
-              {truncated && (
-                <div className="px-4 py-2 text-center text-[12px] text-[var(--color-text-tertiary)]">
-                  {t('search.global.truncated', { count: SEARCH_LIMIT })}
-                </div>
+              {matchedProjects.length > 0 && (
+                <>
+                  <SectionTitle>{t('search.global.projectsTitle')}</SectionTitle>
+                  {matchedProjects.map((project, i) => (
+                    <ProjectRow
+                      key={project.key}
+                      project={project}
+                      index={i}
+                      active={i === activeIndex}
+                      onActivate={setActiveIndex}
+                      onSelect={openProject}
+                      t={t}
+                    />
+                  ))}
+                </>
+              )}
+              {rows.length > 0 && (
+                <>
+                  <SectionTitle>{t('search.global.chatsTitle')}</SectionTitle>
+                  {rows.map((row, i) => {
+                    const itemIndex = matchedProjects.length + i
+                    return (
+                      <ResultRow
+                        key={row.sessionId}
+                        row={row}
+                        index={itemIndex}
+                        active={itemIndex === activeIndex}
+                        onActivate={setActiveIndex}
+                        onOpen={openRow}
+                        t={t}
+                      />
+                    )
+                  })}
+                  {truncated && (
+                    <div className="px-4 py-2 text-center text-[12px] text-[var(--color-text-tertiary)]">
+                      {t('search.global.truncated', { count: SEARCH_LIMIT })}
+                    </div>
+                  )}
+                </>
+              )}
+              {matchedProjects.length > 0 && rows.length === 0 && loading && (
+                <>
+                  <SectionTitle>{t('search.global.chatsTitle')}</SectionTitle>
+                  <div className="px-4 py-3 text-[12px] text-[var(--color-text-tertiary)]">
+                    {t('search.global.loading')}
+                  </div>
+                </>
+              )}
+              {matchedProjects.length > 0 && rows.length === 0 && error && (
+                <>
+                  <SectionTitle>{t('search.global.chatsTitle')}</SectionTitle>
+                  <div className="px-4 py-3 text-[12px] text-[var(--color-error)]">
+                    {t('search.global.error')}
+                  </div>
+                </>
               )}
             </>
           )}
@@ -374,6 +487,59 @@ function SectionTitle({ children }: { children: ReactNode }) {
     <div className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
       {children}
     </div>
+  )
+}
+
+type ProjectRowProps = {
+  project: ProjectSearchMatch
+  index: number
+  active: boolean
+  onActivate: (index: number) => void
+  onSelect: (project: ProjectSearchMatch) => void
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string
+}
+
+function ProjectRow({ project, index, active, onActivate, onSelect, t }: ProjectRowProps) {
+  const countLabel = project.sessionCount > 0
+    ? (project.sessionCount === 1
+      ? t('search.global.projectSessionCountOne')
+      : t('search.global.projectSessionCount', { count: project.sessionCount }))
+    : project.archivedCount > 0
+      ? t('search.global.projectArchivedOnly')
+      : ''
+
+  return (
+    <button
+      type="button"
+      data-index={index}
+      data-search-result-kind="project"
+      role="option"
+      aria-selected={active}
+      title={project.path || project.title}
+      onMouseEnter={() => onActivate(index)}
+      onClick={() => onSelect(project)}
+      className={`mx-1.5 flex w-[calc(100%-12px)] flex-col rounded-[var(--radius-md)] px-2.5 text-left transition-colors focus-visible:outline-none ${
+        active ? 'bg-[var(--color-surface-selected)]' : 'hover:bg-[var(--color-surface-hover)]'
+      }`}
+    >
+      <div className="flex h-9 w-full min-w-0 items-center gap-2.5">
+        <Folder size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+          {renderHighlighted(project.title, project.titleHighlights)}
+        </span>
+        {countLabel && (
+          <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
+            {countLabel}
+          </span>
+        )}
+        {project.displayPath && (
+          <span className="max-w-[42%] shrink-0 truncate text-[12px] text-[var(--color-text-tertiary)]">
+            {renderHighlighted(project.displayPath, project.pathHighlights)}
+          </span>
+        )}
+        {active && <Keycap>↵</Keycap>}
+      </div>
+    </button>
   )
 }
 
@@ -452,7 +618,7 @@ function RoleBadge({
 /** Wrap matched ranges of `snippet` in <mark> for highlighting. */
 function renderHighlighted(
   snippet: string,
-  highlights: Array<{ start: number; end: number }>,
+  highlights: HighlightRange[],
 ): ReactNode {
   if (!highlights.length) return snippet
   const parts: ReactNode[] = []
@@ -476,10 +642,9 @@ function renderHighlighted(
 }
 
 function projectLabel(row: Row): string {
-  const candidate = row.workDir || row.projectPath
+  const candidate = row.projectRoot || row.workDir || row.projectPath
   if (!candidate) return ''
-  const segments = candidate.split('/').filter(Boolean)
-  return segments[segments.length - 1] ?? candidate
+  return resolveProjectDisplayName(candidate) || projectTitle(candidate)
 }
 
 function formatRelativeTime(

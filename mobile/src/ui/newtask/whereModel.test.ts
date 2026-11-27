@@ -99,6 +99,18 @@ describe('branch section', () => {
       detail: '发送时基于 feat/qr-pair 创建独立目录',
     })
   })
+
+  test('unsupported worktree engine hides and disables worktree mode', () => {
+    const ag = model({ worktree: true, worktreeSupported: false })
+    expect(ag.worktree).toMatchObject({
+      hidden: true,
+      on: false,
+      disabled: true,
+      detail: 'Antigravity 会话暂不支持新开工作树',
+    })
+    expect(ag.follow.title).toBe('沿用电脑当前提交')
+    expect(ag.rows.find((row) => row.name === 'fix/ws-replay')).toMatchObject({ disabled: true })
+  })
 })
 
 describe('worktree switch and cancel', () => {

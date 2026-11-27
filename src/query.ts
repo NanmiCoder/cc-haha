@@ -642,6 +642,7 @@ async function* queryLoop(
       ? createDumpPromptsFetch(toolUseContext.agentId ?? config.sessionId, {
           traceSessionId: config.sessionId,
           querySource,
+          agentId: toolUseContext.agentId,
         })
       : undefined
 

@@ -216,6 +216,13 @@ describe('switching permission mode', () => {
     expect(copy).toMatchObject({ title: '启用自动模式？', confirm: '启用自动模式', destructive: false })
     expect(copy.message).toContain('不能保证绝对安全')
   })
+
+  test('Antigravity applies native auto without Claude opt-in dialog while keeping Turbo confirmation', () => {
+    expect(modeChange('auto', 'default')).toBe('confirm')
+    expect(modeChange('auto', 'default', { antigravity: true })).toBe('apply')
+    expect(modeChange('bypassPermissions', 'default', { antigravity: true })).toBe('confirm')
+    expect(modeChange('auto', 'auto', { antigravity: true })).toBe('none')
+  })
 })
 
 describe('effort slider geometry', () => {

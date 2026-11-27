@@ -9,6 +9,7 @@ import { pickChatMaterial } from './chatMaterials'
 import { Icon, Mono, Spinner, useColors } from './kit'
 import { errorText } from './theme'
 import type { RuntimeConfig } from '../core/types'
+import { isAntigravityProvider } from '../core/runtimeCatalog'
 import {
   candidateTypeLabel,
   composerTrigger,
@@ -33,6 +34,9 @@ import {
 import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { useVoiceDictation } from '../core/useVoiceDictation'
+import { isOptimizablePrompt } from '../core/promptOptimize'
+import { usePromptOptimize } from '../core/usePromptOptimize'
+import { PromptOptimizeButton, PromptOptimizeFeedback } from './compose/PromptOptimize'
 import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/VoiceInput'
 import { simulatedPhoneChrome } from './webChrome'
 import { subscribeWebKeyboard } from './webKeyboard'
@@ -179,12 +183,14 @@ function CandidateCard({
   loading,
   error,
   references,
+  antigravity = false,
   onChoose,
 }: {
   candidates: ComposerCandidate[]
   loading: boolean
   error: string
   references: ComposerReference[]
+  antigravity?: boolean
   onChoose(candidate: ComposerCandidate): void
 }) {
   const colors = useColors()
@@ -242,7 +248,9 @@ function CandidateCard({
             )
           })
         ) : (
-          <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>
+          <Text style={{ padding: 14, color: colors.ink3 }}>
+            {antigravity ? '没有匹配的斜杠命令' : '没有匹配的技能或命令'}
+          </Text>
         )}
       </ScrollView>
     </View>
@@ -327,6 +335,7 @@ export function ChatComposer({
   above,
   caption,
   onHeight,
+  newRequestId,
 }: {
   client: ApiClient | null
   sessionId?: string
@@ -339,7 +348,7 @@ export function ChatComposer({
   attachments: ComposerAttachment[]
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
-  onTeam(value: boolean): void
+  onTeam?(value: boolean): void
   /** Computer authorization; the current message's selection lives in references. */
   computer: ComputerUse
   lean: boolean
@@ -362,6 +371,8 @@ export function ChatComposer({
   caption?: ReactNode
   /** 整块（含渐隐区）的高度，页面给内容留底边距用。 */
   onHeight?(height: number): void
+  /** 为提示词优化等幂等请求生成 v4 UUID（原生端由页面注入 expo-crypto）。 */
+  newRequestId?: () => string
 }) {
   const colors = useColors()
   const inset = useBottomInset()
@@ -409,15 +420,38 @@ export function ChatComposer({
     onSubmit: onSend,
     focus: () => requestAnimationFrame(() => input.current?.focus()),
   })
+  const promptOptimize = usePromptOptimize({
+    client,
+    sessionId,
+    contextKey: `${client?.host.id ?? ''}:${sessionId ?? 'new'}`,
+    draft,
+    blocked: disabled || !!picking || voice.live,
+    onDraft: (text) => {
+      unrendered.current = null
+      sent.current = null
+      onDraft(text)
+      moveCaret(text.length)
+    },
+    focus: () => requestAnimationFrame(() => input.current?.focus()),
+    newRequestId,
+  })
+  const canOptimizePrompt =
+    Boolean(client) &&
+    Boolean(sessionId) &&
+    !disabled &&
+    !picking &&
+    !voice.live &&
+    isOptimizablePrompt(draft)
   const referenceState = useRef({ references, onReferences })
   useEffect(() => {
     referenceState.current = { references, onReferences }
   }, [references, onReferences])
-  const trigger = composerTrigger(draft, selection.start, selection.end)
-  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger
-  const needsCatalog = bringOpen || showCandidates
   const providerId = runtime?.providerId
+  const isAntigravity = isAntigravityProvider(providerId)
   const hasRuntime = !!runtime
+  const trigger = composerTrigger(draft, selection.start, selection.end)
+  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger && (!isAntigravity || trigger.kind === '/')
+  const needsCatalog = bringOpen || showCandidates
   useEffect(() => {
     if (!client || !needsCatalog) return
     const controller = new AbortController()
@@ -485,6 +519,7 @@ export function ChatComposer({
     }
     sendWhenRendered.current = false
     if (slot.kind === 'stop') return onStop?.()
+    promptOptimize.cancel()
     if (runShortcut(draft, references.length > 0 || attachments.length > 0)) {
       onDraft('')
       onOpenRun()
@@ -522,7 +557,8 @@ export function ChatComposer({
     setBringOpen(true)
   }
 
-  const chips = attachments.length > 0 || references.length > 0 || team
+  const teamActive = team && Boolean(onTeam)
+  const chips = attachments.length > 0 || references.length > 0 || teamActive
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -551,6 +587,7 @@ export function ChatComposer({
           loading={loading}
           error={catalogError}
           references={references}
+          antigravity={isAntigravity}
           onChoose={choose}
         />
       ) : null}
@@ -594,7 +631,7 @@ export function ChatComposer({
                 icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} /> : undefined}
               />
             ))}
-            {team ? (
+            {teamActive && onTeam ? (
               <Pill
                 label="团队"
                 accessibilityLabel="关闭这条消息的 Agent 团队"
@@ -612,6 +649,7 @@ export function ChatComposer({
           editable={!disabled && !voice.live}
           onChangeText={(reported) => {
             voice.edited()
+            promptOptimize.edited()
             const value = fieldText(reported)
             const cursor =
               value === reported
@@ -654,10 +692,11 @@ export function ChatComposer({
           }}
         />
         <VoiceFeedback voice={voice} blocked={disabled} onError={onError} />
+        {!voice.live ? <PromptOptimizeFeedback optimize={promptOptimize} blocked={disabled || !!picking} /> : null}
         {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="添加：技能、命令、材料"
+            accessibilityLabel={isAntigravity ? '添加：命令、材料' : '添加：技能、命令、材料'}
             accessibilityState={{ expanded: bringOpen }}
             onPress={openBring}
             style={({ pressed }) => ({
@@ -676,11 +715,15 @@ export function ChatComposer({
           <VoiceMicrophone
             blocked={!client || disabled || !!picking}
             onPress={() => {
+              promptOptimize.edited()
               input.current?.blur()
               Keyboard.dismiss()
               void voice.start()
             }}
           />
+          {sessionId ? (
+            <PromptOptimizeButton optimize={promptOptimize} canOptimize={canOptimizePrompt} />
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={slot.label}
@@ -716,6 +759,7 @@ export function ChatComposer({
         client={client}
         workDir={workDir}
         lean={lean}
+        antigravity={isAntigravity}
         candidates={candidates}
         loading={loading}
         error={catalogError}
@@ -723,7 +767,7 @@ export function ChatComposer({
         draft={draft}
         picking={picking}
         onPick={(kind) => void pick(kind)}
-        team={team}
+        team={teamActive}
         onTeam={onTeam}
         computer={computer}
         onComputerSelected={(value) => {

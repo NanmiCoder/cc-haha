@@ -2,13 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { Alert, Pressable, View } from 'react-native'
 import { Text } from '../Text'
 import { DetentSheet } from '../DetentSheet'
-import { Button, Callout, Footnote, Icon, InlineError, Segmented, Spinner, useColors } from '../kit'
+import { Button, Callout, Footnote, Icon, InlineError, Segmented, Spinner, TextButton, useColors } from '../kit'
 import { Glyph } from './glyphs'
 import { EffortSlider } from './EffortSlider'
 import type { ApiClient } from '../../core/client'
 import type { PermissionMode, RuntimeConfig } from '../../core/types'
-import { currentModelEfforts, effortUnavailableReason } from '../../core/runtimeCatalog'
-import { modes, profileDescription, profileName } from '../modes'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  currentModelEfforts,
+  effortUnavailableReason,
+} from '../../core/runtimeCatalog'
+import { antigravityModes, modes, profileDescription, profileName } from '../modes'
 import { RuntimeSheet, useRuntimeChoice, type Model } from '../RuntimePicker'
 import {
   effortSegments,
@@ -44,21 +48,23 @@ function Tag({ text, tone }: { text: string; tone: 'attn' | 'err' }) {
   )
 }
 
-function ModeRow({ id, title, description, selected, disabled, onPress }: {
+function ModeRow({ id, title, description, selected, disabled, antigravity = false, onPress }: {
   id: PermissionMode
   title: string
   description: string
   selected: boolean
   disabled?: string
+  antigravity?: boolean
   onPress(): void
 }) {
   const colors = useColors()
   const danger = id === 'bypassPermissions'
+  const needsAutoConsent = id === 'auto' && !antigravity
   const tint = danger ? colors.err : colors.run
   return (
     <Pressable
       accessibilityRole="radio"
-      accessibilityLabel={`${title}${id === 'auto' ? '，需同意' : danger ? '，有风险' : ''}，${disabled ?? description}`}
+      accessibilityLabel={`${title}${needsAutoConsent ? '，需同意' : danger ? '，有风险' : ''}，${disabled ?? description}`}
       accessibilityState={{ checked: selected, disabled: !!disabled }}
       aria-checked={selected}
       disabled={!!disabled}
@@ -91,7 +97,7 @@ function ModeRow({ id, title, description, selected, disabled, onPress }: {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           {danger ? <Glyph name="shield-alert" size={16} color={colors.err} strokeWidth={2} /> : null}
           <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '500', color: danger ? colors.err : colors.ink }}>{title}</Text>
-          {id === 'auto' ? <Tag text="需同意" tone="attn" /> : null}
+          {needsAutoConsent ? <Tag text="需同意" tone="attn" /> : null}
           {danger ? <Tag text="有风险" tone="err" /> : null}
         </View>
         <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{disabled ?? description}</Text>
@@ -118,6 +124,9 @@ export function RunSheet({
   error,
   profile,
   workDir,
+  lockedProviderId,
+  excludeProviderIds,
+  allowedModes,
 }: {
   visible: boolean
   onClose(): void
@@ -136,6 +145,12 @@ export function RunSheet({
   profile?: RunProfile
   /** 切到全权限时确认框里写明的目录。 */
   workDir?: string
+  /** 锁定会话引擎（如已建立的 Antigravity 会话），只允许在该引擎内换模型与强度。 */
+  lockedProviderId?: string | null
+  /** 隐藏不兼容的引擎（如非 Antigravity 会话隐藏 Antigravity）。 */
+  excludeProviderIds?: readonly string[]
+  /** 仅展示该引擎支持的权限模式。 */
+  allowedModes?: readonly PermissionMode[]
 }) {
   const colors = useColors()
   const [modelOpen, setModelOpen] = useState(false)
@@ -166,7 +181,7 @@ export function RunSheet({
     latest.current = { blocked: reasons.mode, onMode }
   })
   function chooseMode(next: PermissionMode) {
-    const change = modeChange(next, mode)
+    const change = modeChange(next, mode, { antigravity: isAntigravity })
     if (change === 'apply') onMode(next)
     if (change !== 'confirm') return
     const copy = modeConfirmation(next === 'auto' ? 'auto' : 'bypassPermissions', workDir)
@@ -187,17 +202,28 @@ export function RunSheet({
     initial: runtime ? { providerId: runtime.providerId, modelId: runtime.modelId } : undefined,
     active: visible,
     epoch,
+    lockedProviderId,
+    excludeProviderIds,
   })
+  const isAntigravity =
+    lockedProviderId === ANTIGRAVITY_PROVIDER_ID || choice.providerId === ANTIGRAVITY_PROVIDER_ID
+  const modeCatalog = isAntigravity ? antigravityModes : modes
+  const visibleModes = allowedModes
+    ? modeCatalog.filter((item) => allowedModes.includes(item.id))
+    : modeCatalog
   // 模型已经选定：强度档位跟着它走，读不到模型列表时也给通用档位，不让用户先去重选模型。
   const current =
     runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
   const efforts = effortSegments({
     canSetEffort: choice.canSetEffort,
-    authReady: choice.source?.auth === 'ready',
+    authReady: choice.source?.auth === 'ready' && choice.source?.runtimeStatus !== 'unchecked',
     efforts: current?.efforts,
   })
   const effortWaiting =
-    !!runtime && (choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready'))
+    !!runtime &&
+    (choice.loading ||
+      choice.refreshingAntigravity ||
+      (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready'))
   const effortValue = runtime?.effortLevel ?? current?.defaultEffort
 
   return (
@@ -217,6 +243,8 @@ export function RunSheet({
           client={client}
           initial={runtime}
           warning={warning}
+          lockedProviderId={lockedProviderId}
+          excludeProviderIds={excludeProviderIds}
           onApply={(value, model) => {
             setModelOpen(false)
             // 换了模型就以新模型的强度为准，之前滑的草稿作废。
@@ -228,7 +256,7 @@ export function RunSheet({
     >
       <Section title="权限">
         <View accessibilityRole="radiogroup" accessibilityLabel="权限" style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
-          {modes.map((item, index) => (
+          {visibleModes.map((item, index) => (
             <View key={item.id}>
               {index > 0 ? <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 48 }} /> : null}
               <ModeRow
@@ -237,6 +265,7 @@ export function RunSheet({
                 description={item.description}
                 selected={(mode ?? 'default') === item.id}
                 disabled={reasons.mode ?? (item.id === 'plan' ? reasons.plan : undefined)}
+                antigravity={isAntigravity}
                 onPress={() => chooseMode(item.id)}
               />
             </View>
@@ -289,9 +318,18 @@ export function RunSheet({
             <Spinner size={18} />
           </View>
         ) : (
-          <Footnote style={{ paddingTop: 0 }}>
-            {!runtime ? '先选定模型，再调思考强度。' : effortUnavailableReason(choice)}
-          </Footnote>
+          <View style={{ gap: 6 }}>
+            <Footnote style={{ paddingTop: 0 }}>
+              {!runtime ? '先选定模型，再调思考强度。' : effortUnavailableReason(choice)}
+            </Footnote>
+            {isAntigravity && choice.source?.auth !== 'ready' ? (
+              <TextButton
+                title={choice.refreshingAntigravity ? '正在刷新…' : '刷新 Antigravity'}
+                disabled={choice.refreshingAntigravity || !client}
+                onPress={() => { void choice.refreshAntigravity() }}
+              />
+            ) : null}
+          </View>
         )}
       </Section>
 

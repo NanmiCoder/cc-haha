@@ -58,7 +58,7 @@ import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStr
 import { anthropicToGemini, type GeminiRequest } from './transform/anthropicToGemini.js'
 import { GeminiUpstreamError, geminiErrorMessage, geminiResponseToAnthropic, geminiStreamToAnthropic } from './streaming/geminiStreamToAnthropic.js'
 import { anthropicToBedrockConverse } from './transform/anthropicToBedrockConverse.js'
-import { bedrockConverseResponseToAnthropic, bedrockConverseStreamToAnthropic } from './streaming/bedrockConverseToAnthropic.js'
+import { BedrockUpstreamError, bedrockConverseResponseToAnthropic, bedrockConverseStreamToAnthropic } from './streaming/bedrockConverseToAnthropic.js'
 import type { AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
@@ -104,6 +104,8 @@ type ProxyFetchOptions = ReturnType<typeof getProxyFetchOptions>
 type UpstreamRequestInit = RequestInit & ProxyFetchOptions & { decompress?: boolean }
 type ProxyTraceContext = {
   sessionId: string
+  querySource?: string
+  agentId?: string
   provider: TraceProviderInfo
   anthropicRequest: AnthropicRequest
   protocolTrace?: ProtocolTraceObserver
@@ -644,6 +646,8 @@ const HOP_BY_HOP_HEADERS = new Set([
 const INTERNAL_CLIENT_HEADERS = new Set([
   OUTPUT_BUDGET_SOURCE_HEADER,
   'x-claude-code-session-id',
+  'x-cc-haha-trace-agent-id',
+  'x-cc-haha-trace-query-source',
   'x-claude-remote-container-id',
   'x-claude-remote-session-id',
   'x-client-app',
@@ -2218,14 +2222,22 @@ async function handleBedrockConverse(
   } finally {
     upstreamLease.dispose()
   }
-  const anthropicResponse = bedrockConverseResponseToAnthropic(responseBody, body.model, requestId)
+  let anthropicResponse: unknown
+  let status = 200
+  try {
+    anthropicResponse = bedrockConverseResponseToAnthropic(responseBody, body.model, requestId)
+  } catch (err) {
+    if (!(err instanceof BedrockUpstreamError)) throw err
+    status = 502
+    anthropicResponse = { type: 'error', error: { type: 'api_error', message: err.message } }
+  }
   trace({
-    responseStatus: 200,
+    responseStatus: status,
     upstreamResponseBody: responseBody,
     anthropicResponseBody: anthropicResponse,
     responseHeaders: upstream.headers,
   })
-  return Response.json(anthropicResponse, { status: 200 })
+  return Response.json(anthropicResponse, { status })
 }
 
 function buildProxyTraceContext(
@@ -2235,8 +2247,12 @@ function buildProxyTraceContext(
 ): ProxyTraceContext | null {
   const sessionId = req.headers.get('x-claude-code-session-id')?.trim()
   if (!sessionId) return null
+  const agentId = req.headers.get('x-cc-haha-trace-agent-id')?.trim().slice(0, 128) || undefined
+  const querySource = req.headers.get('x-cc-haha-trace-query-source')?.trim().slice(0, 128) || undefined
   return {
     sessionId,
+    ...(querySource ? { querySource } : {}),
+    ...(agentId ? { agentId } : {}),
     provider: {
       id: config.id,
       name: config.name,
@@ -2277,6 +2293,8 @@ function startProxyTraceCall({
     id: callId,
     sessionId: context.sessionId,
     source: 'proxy',
+    ...(context.querySource ? { querySource: context.querySource } : {}),
+    ...(context.agentId ? { agentId: context.agentId } : {}),
     provider: context.provider,
     model,
     status: 'pending',
@@ -2381,6 +2399,8 @@ async function recordProxyTrace({
     ...(callId ? { id: callId } : {}),
     sessionId: context.sessionId,
     source: 'proxy',
+    ...(context.querySource ? { querySource: context.querySource } : {}),
+    ...(context.agentId ? { agentId: context.agentId } : {}),
     provider: context.provider,
     model,
     startedAt,

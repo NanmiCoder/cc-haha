@@ -69,6 +69,26 @@ test('terminal shell notifications retain the shell output reader after runtime 
   expect((await f.read()).text).toBe('server listening\n')
 })
 
+test('terminal workflow notifications keep taskType local_workflow via workflowRunId or Workflow tool', () => {
+  const rows = projectSessionBackgroundActivity(
+    'session-wf',
+    [{
+      id: 'wf-use',
+      type: 'assistant',
+      timestamp: '2026-10-24T00:00:00Z',
+      content: [{ type: 'tool_use', id: 'wf-tool-2', name: 'Workflow', input: { name: 'ship' } }],
+    }],
+    [
+      { taskId: 'wf-task-1', toolUseId: 'wf-tool-1', workflowRunId: 'wf_abc123', status: 'completed' },
+      { taskId: 'wf-task-2', toolUseId: 'wf-tool-2', status: 'failed' },
+    ],
+  )
+  expect(rows).toEqual([
+    expect.objectContaining({ taskId: 'wf-task-1', taskType: 'local_workflow', status: 'completed' }),
+    expect.objectContaining({ taskId: 'wf-task-2', taskType: 'local_workflow', status: 'failed' }),
+  ])
+})
+
 test('reads a bounded tail without breaking the leading UTF-8 code point', async () => {
   const f = await outputFixture('a'.repeat(MAX_BACKGROUND_OUTPUT_BYTES) + '中文\n')
   const result = await f.read()
