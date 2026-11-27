@@ -2354,7 +2354,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         {hasUnderCardContext && (
           <div
             data-testid="composer-context-strip"
-            className={`surface-glass relative flex min-w-0 items-center justify-between gap-2 overflow-x-clip pb-0.5 pt-2 ${
+            className={`relative flex min-w-0 items-center justify-between gap-2 overflow-x-clip pb-0.5 pt-2 ${
               useCompactControls ? 'px-2' : 'px-2.5'
             }`}
           >

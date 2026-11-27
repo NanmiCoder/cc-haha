@@ -812,6 +812,7 @@ describe('AskUserQuestion', () => {
     it('forwards attachments on expired fallback messages for both submit and chat-about-this', async () => {
       patchSession({ pendingPermission: null, pendingPermissions: {}, chatState: 'idle' })
       const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.getByRole('status').className).toContain('rounded-[var(--radius-card-inner)]')
       const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
       const img = new File(['img-bytes'], 'expired-ref.png', { type: 'image/png' })
 

@@ -82,6 +82,8 @@ describe('MobileApprovalDock', () => {
 
     const dock = screen.getByTestId('mobile-approval-dock')
     expect(dock).toHaveAttribute('data-kind', 'tool')
+    expect(dock).toHaveClass('v6c-glass-card', 'v6c-ring-waiting')
+    expect(dock.className).not.toContain('backdrop-blur-[var(--glass-blur)]')
     expect(dock).toHaveTextContent('bun run build')
 
     fireEvent.click(within(dock).getByRole('button', { name: 'Allow' }))
@@ -98,10 +100,15 @@ describe('MobileApprovalDock', () => {
     seed([bash])
     render(<MobileApprovalDock sessionId={SESSION} />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Deny and tell Claude why' }))
+    const denyWithReasonTrigger = screen.getByRole('button', { name: 'Deny and tell Claude why' })
+    expect(denyWithReasonTrigger).toHaveClass('rounded-[var(--radius-sm)]')
+    fireEvent.click(denyWithReasonTrigger)
     const field = screen.getByLabelText('Reason for denying')
     fireEvent.change(field, { target: { value: 'Run the tests first' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Deny with this reason' }))
+    const submitButton = screen.getByRole('button', { name: 'Deny with this reason' })
+    expect(submitButton).toHaveClass('bg-[var(--color-error)]', 'text-[var(--color-on-error)]')
+    expect(submitButton.className).not.toContain('v6c-send-btn')
+    fireEvent.click(submitButton)
 
     expect(respondToPermission).toHaveBeenCalledWith(SESSION, 'perm-bash', false, { denyMessage: 'Run the tests first' })
   })

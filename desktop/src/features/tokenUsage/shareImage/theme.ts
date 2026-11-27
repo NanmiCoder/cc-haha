@@ -4,13 +4,13 @@ import type { ShareTheme } from './layout'
 /** Used when the stylesheet is not loaded (tests, a failed read). Mirrors the default white palette. */
 const FALLBACK_THEME: ShareTheme = {
   bg: '#FFFFFF',
-  bd: '#E9E8E5',
-  bd2: '#D9D7D3',
-  t1: '#1F1E1C',
-  t2: '#55524D',
-  t3: '#6F6B65',
-  ac: '#A24A2E',
-  series: ['#058D85', '#86412C', '#5066A3', '#99732B', '#A8A49C'],
+  bd: '#E8E8E8',
+  bd2: '#D4D4D4',
+  t1: '#1A1C1F',
+  t2: '#4E4E4E',
+  t3: '#666666',
+  ac: '#0169CC',
+  series: ['#058D85', '#86412C', '#5066A3', '#99732B', '#A6A6A6'],
 }
 
 export type ShareThemeChoice = ThemeMode | 'current'

@@ -99,7 +99,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
       data-kind={kind}
       role="region"
       aria-label={title}
-      className="v6c-glass-card v6c-ring-waiting flex flex-col gap-2.5 rounded-[var(--radius-2xl)] p-3 backdrop-blur-[var(--glass-blur)]"
+      className="v6c-glass-card v6c-ring-waiting flex flex-col gap-2.5 rounded-[var(--radius-2xl)] p-3"
     >
       <div className="flex min-w-0 items-start gap-2.5">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
@@ -181,7 +181,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
               />
               <Button
                 type="submit"
-                variant="accent"
+                variant="danger"
                 size="lg"
                 shape="key"
                 disabled={!reason.trim()}
@@ -194,7 +194,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             <button
               type="button"
               onClick={() => setReasonOpen(true)}
-              className="min-h-9 text-center text-[12px] text-[var(--color-text-tertiary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="min-h-9 rounded-[var(--radius-sm)] text-center text-[12px] text-[var(--color-text-tertiary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               {t('mobile.approval.denyWithReasonHint')}
             </button>

@@ -156,7 +156,10 @@ it('does not request Claude quota when the nondefault account is not signed in',
 it('shows live plan usage for signed-in ChatGPT and Grok while keeping DeepSeek honest', async () => {
   render(<ProviderSettings />)
   const openaiUsage = await screen.findByTestId('official-plan-usage-openai-official')
-  expect(within(openaiUsage).getByText(/82% left/)).toBeInTheDocument()
+  expect(openaiUsage.className).toContain('rounded-[var(--radius-card-inner)]')
+  const openaiPct = within(openaiUsage).getByText(/82% left/)
+  expect(openaiPct).toBeInTheDocument()
+  expect(openaiPct.className).toContain('tabular-nums')
   const grokUsage = await screen.findByTestId('official-plan-usage-grok-official')
   expect(within(grokUsage).getByText(/75% left/)).toBeInTheDocument()
   const deepseekCard = within(await screen.findByTestId('deepseek-account-provider'))

@@ -45,7 +45,7 @@ export function toneForRemainingPercent(remainingPercent: number | null): UsageT
   if (remainingPercent === null) return 'brand'
   if (remainingPercent <= 15) return 'danger'
   if (remainingPercent <= 30) return 'warning'
-  return 'success'
+  return 'brand'
 }
 
 export function displayPercentForWindow(

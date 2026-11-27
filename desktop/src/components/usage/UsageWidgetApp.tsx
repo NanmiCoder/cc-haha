@@ -4,7 +4,14 @@ import { IconButton } from '@/components/ui/IconButton'
 import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { useTranslation } from '@/i18n'
 import { getDesktopHost } from '@/lib/desktopHost'
+import type { DesktopUsageWidgetTheme } from '@/lib/desktopHost/types'
 import { initializeDesktopServerUrl } from '@/lib/desktopRuntime'
+import {
+  FOLLOW_SYSTEM_THEME_STORAGE_KEY,
+  THEME_STORAGE_KEY,
+  getSystemAppearance,
+  subscribeSystemAppearance,
+} from '@/theme/systemAppearance'
 import {
   selectPrimaryUsageHighlight,
   useUsageSummaryStore,
@@ -18,6 +25,25 @@ import {
 } from './usageFormatting'
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000
+
+function applySyncedWidgetTheme(
+  theme: DesktopUsageWidgetTheme,
+  persistToWidgetPartition = false,
+) {
+  document.documentElement.setAttribute('data-theme', theme)
+  document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
+  if (
+    persistToWidgetPartition
+    && new URLSearchParams(window.location.search).get('usageWidgetWindow') === '1'
+  ) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+      window.localStorage.setItem(FOLLOW_SYSTEM_THEME_STORAGE_KEY, '0')
+    } catch {
+      // Storage unavailable in restricted WebViews.
+    }
+  }
+}
 
 export function UsageWidgetApp() {
   const t = useTranslation()
@@ -58,6 +84,53 @@ export function UsageWidgetApp() {
     }, REFRESH_INTERVAL_MS)
     return () => window.clearInterval(timer)
   }, [fetchSummary, ready])
+
+  useEffect(() => {
+    const host = getDesktopHost()
+    const getTheme = host.isDesktop ? host.usageWidget?.getTheme : undefined
+    const onThemeChanged = host.isDesktop ? host.usageWidget?.onThemeChanged : undefined
+    if (!getTheme && !onThemeChanged) {
+      applySyncedWidgetTheme(getSystemAppearance() === 'dark' ? 'dark' : 'white')
+      return subscribeSystemAppearance((appearance) => {
+        applySyncedWidgetTheme(appearance === 'dark' ? 'dark' : 'white')
+      })
+    }
+
+    let disposed = false
+    let receivedLiveUpdate = false
+    let unlisten: (() => void) | undefined
+
+    if (onThemeChanged) {
+      onThemeChanged((theme) => {
+        if (disposed || (theme !== 'white' && theme !== 'dark')) return
+        receivedLiveUpdate = true
+        applySyncedWidgetTheme(theme, true)
+      })
+        .then((fn) => {
+          if (disposed) fn()
+          else unlisten = fn
+        })
+        .catch(() => {})
+    }
+
+    if (getTheme) {
+      void getTheme()
+        .then((theme) => {
+          if (disposed || receivedLiveUpdate || (theme !== 'white' && theme !== 'dark')) return
+          applySyncedWidgetTheme(theme, true)
+        })
+        .catch(() => {
+          if (!disposed && !receivedLiveUpdate) {
+            applySyncedWidgetTheme(getSystemAppearance() === 'dark' ? 'dark' : 'white', true)
+          }
+        })
+    }
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
 
   useEffect(() => {
     const host = getDesktopHost()
@@ -178,7 +251,7 @@ export function UsageWidgetApp() {
     return (
       <div
         data-testid="usage-widget-compact"
-        className="flex h-screen w-screen items-center justify-between gap-2 overflow-hidden rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-2.5 shadow-[var(--shadow-overlay)] select-none"
+        className="dropdown-glass flex h-screen w-screen items-center justify-between gap-2 overflow-hidden rounded-[var(--radius-xl)] px-2.5 shadow-[var(--glass-rim)] select-none"
       >
         <div
           onPointerDown={handleDragPointerDown}
@@ -248,14 +321,14 @@ export function UsageWidgetApp() {
   return (
     <div
       data-testid="usage-widget-window"
-      className="flex h-screen w-screen flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
+      className="dropdown-glass flex h-screen w-screen flex-col overflow-hidden rounded-[var(--radius-xl)] shadow-[var(--glass-rim)]"
     >
       <div
         onPointerDown={handleDragPointerDown}
         onPointerMove={handleDragPointerMove}
         onPointerUp={handleDragPointerEnd}
         onPointerCancel={handleDragPointerEnd}
-        className="flex cursor-grab items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-2 select-none active:cursor-grabbing"
+        className="flex cursor-grab items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 select-none active:cursor-grabbing"
       >
         <div className="flex min-w-0 items-center gap-1.5">
           <GripVertical size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />

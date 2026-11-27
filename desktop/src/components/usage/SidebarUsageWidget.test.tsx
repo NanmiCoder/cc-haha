@@ -157,10 +157,19 @@ describe('SidebarUsageWidget (Version A)', () => {
 
     const trigger = await screen.findByTestId('sidebar-usage-trigger')
     expect(trigger).toHaveTextContent('62% left')
+    expect(trigger.className).toContain('rounded-[var(--radius-card-inner)]')
+    expect(trigger.className).not.toContain('--color-border-strong')
+    expect(trigger.innerHTML).not.toContain('text-[var(--color-success)]')
 
     fireEvent.click(trigger)
+    expect(trigger.className).toContain('v6c-raised')
     const popover = await screen.findByTestId('sidebar-usage-popover')
     expect(popover).toBeInTheDocument()
+    expect(popover.className).toContain('dropdown-glass')
+    expect(popover.className).toContain('rounded-[var(--radius-xl)]')
+    expect(popover.className).not.toContain('--color-border-strong')
+    expect(popover.className).not.toContain('bg-[var(--color-surface)]')
+    expect(popover.className).not.toContain('shadow-[var(--shadow-overlay)]')
     // Rendered in a portal attached directly to document.body so sidebar overflow:hidden cannot clip it.
     expect(popover.parentElement).toBe(document.body)
     expect(screen.getByTestId('sidebar-usage-widget')).not.toContainElement(popover)
@@ -228,6 +237,9 @@ describe('SidebarUsageWidget (Version A)', () => {
 
     const trigger = await screen.findByTestId('sidebar-usage-trigger')
     expect(trigger).toBeInTheDocument()
+    expect(trigger.className).toContain('rounded-[var(--radius-control)]')
+    expect(trigger.className).toContain('bg-[var(--color-error-container)]')
+    expect(trigger.className).toContain('v6c-ring-error')
     fireEvent.click(trigger)
     expect(await screen.findByTestId('sidebar-usage-popover')).toBeInTheDocument()
 

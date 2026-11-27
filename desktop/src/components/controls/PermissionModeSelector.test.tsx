@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -888,7 +888,12 @@ describe('the quiet trigger', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    const trigger = screen.getByRole('button', { name: 'Ask permissions' })
+    expect(trigger).toHaveAttribute('type', 'button')
     const menu = screen.getByRole('menu')
+    for (const item of within(menu).getAllByRole('menuitem')) {
+      expect(item).toHaveAttribute('type', 'button')
+    }
     expect(menu.textContent).not.toContain('Claude')
     expect(menu.textContent).not.toContain('Opt-in required')
     expect(screen.getByRole('menuitem', { name: /Accept edits/ })).toBeInTheDocument()
@@ -904,6 +909,7 @@ describe('the quiet trigger', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Turbo \(Bypass all\)/ }))
     const dialog = screen.getByRole('dialog')
+    expect(dialog.querySelector('code')?.parentElement).toHaveClass('rounded-[var(--radius-card-inner)]')
     expect(dialog.textContent).toContain('Antigravity')
     expect(dialog.textContent).not.toContain('Claude')
     fireEvent.click(screen.getByRole('button', { name: 'Enable bypass' }))

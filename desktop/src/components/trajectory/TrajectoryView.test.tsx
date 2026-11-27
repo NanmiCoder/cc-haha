@@ -221,7 +221,9 @@ describe('TrajectoryView', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'View subagent trajectory' }))
     expect(await screen.findByText('Subagent prompt')).toBeInTheDocument()
     expect(getPage).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ agentId: 'abc123' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Main session' }))
+    const exitSubagentBtn = screen.getByRole('button', { name: 'Main session' })
+    expect(exitSubagentBtn).toHaveClass('hover:bg-[var(--color-surface-hover)]')
+    fireEvent.click(exitSubagentBtn)
     expect(await screen.findByText('Build the console')).toBeInTheDocument()
     // The row that opened the subagent is selected again.
     await waitFor(() => expect(screen.getByRole('option', { selected: true }).dataset.rowId).toBe('t:toolu_1'))

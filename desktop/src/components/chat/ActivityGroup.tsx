@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { toolResultImagesFor, type ToolResultImageExtraction } from '@/lib/toolResultContent'
-import { Check, ChevronRight, CirclePause, CircleX, LoaderCircle } from 'lucide-react'
+import { ChevronRight, CirclePause, CircleX } from 'lucide-react'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ToolCallBlock, formatDuration } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -228,78 +228,88 @@ export const ActivityGroup = memo(function ActivityGroup({
   )
 
   if (presentation === 'sheet') {
-    const lastToolStep = [...steps].reverse().find((step) => step.kind === 'tool')
-    const liveToolCall = showsProgress && lastToolStep?.kind === 'tool' ? lastToolStep.toolCall : null
-    const mobileRingClass = awaitingCount > 0
-      ? 'v6c-ring-waiting'
-      : 'border border-[var(--color-border)]'
     return (
       <div
         data-testid="activity-group"
         data-presentation="sheet"
         data-running={isRunning ? 'true' : 'false'}
-        className={`overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-lowest)] ${mobileRingClass}`}
+        className={awaitingCount > 0 ? 'rounded-[var(--radius-md)] v6c-ring-waiting px-2 py-0.5' : undefined}
       >
         <button
           type="button"
           data-chat-disclosure="true"
           aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          title={summaryText}
           onClick={() => setSheetOpen(true)}
-          className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-[13px] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+          className="codex-work-row group/activity inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
-          <span
-            aria-hidden="true"
-            className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${
-              awaitingCount > 0
-                ? 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-                : showsProgress
-                  ? 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]'
-                  : blockingFailedCount > 0
-                    ? 'border-[var(--color-error-container)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]'
-            }`}
-          >
-            {awaitingCount > 0 ? <CirclePause size={12} strokeWidth={1.75} />
-              : showsProgress ? <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" />
-              : blockingFailedCount > 0 ? <CircleX size={12} strokeWidth={1.75} />
-              : <Check size={12} strokeWidth={1.75} />}
-          </span>
-          <span
-            data-activity-summary=""
-            className={`min-w-0 flex-1 truncate font-medium ${
-              showsProgress ? 'codex-shimmer-text' : 'text-[var(--color-text-secondary)]'
-            }`}
-          >
-            {showsProgress && liveStep
-              ? [liveStep.action, liveStep.detail].filter(Boolean).join(' ')
-              : summaryText}
-          </span>
+          {showsProgress && liveStep ? (
+            <span
+              data-activity-summary=""
+              data-activity-live-label="true"
+              className="inline-flex min-w-0 items-baseline gap-1.5 truncate"
+            >
+              <span className="codex-shimmer-text shrink-0 font-medium">{liveStep.action}</span>
+              {liveStep.detail ? (
+                <span className="min-w-0 truncate font-mono text-[12px] text-[var(--color-text-tertiary)]">
+                  {liveStep.detail}
+                </span>
+              ) : null}
+            </span>
+          ) : soleStepLabel ? (
+            <span
+              data-activity-summary=""
+              className="inline-flex min-w-0 items-baseline gap-1.5 truncate text-[var(--color-text-tertiary)] transition-colors group-hover/activity:text-[var(--color-text-primary)]"
+            >
+              <span className={`shrink-0 ${showsProgress ? 'codex-shimmer-text font-medium' : ''}`}>
+                {soleStepLabel.action}
+              </span>
+              {soleStepLabel.detail ? (
+                <span className="min-w-0 truncate font-mono text-[12px]">{soleStepLabel.detail}</span>
+              ) : null}
+            </span>
+          ) : (
+            <span
+              data-activity-summary=""
+              className={`min-w-0 truncate ${
+                showsProgress
+                  ? 'codex-shimmer-text font-medium'
+                  : 'text-[var(--color-text-tertiary)] transition-colors group-hover/activity:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {summaryText}
+            </span>
+          )}
           {blockingFailedCount > 0 && (
-            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-error)]">
+            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] tabular-nums text-[var(--color-error)]">
+              <CircleX size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('toolGroup.failedCount', { count: blockingFailedCount })}
             </span>
           )}
+          {soleToolStopped ? (
+            <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--color-text-tertiary)]">
+              {t('tool.stopped')}
+            </span>
+          ) : null}
           {awaitingCount > 0 ? (
-            <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
+            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
+              <CirclePause size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('permission.awaitingApproval')}
             </span>
           ) : durationLabel ? (
-            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationLabel}</span>
+            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+              {durationLabel}
+            </span>
           ) : null}
-          <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <ChevronRight
+            size={14}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className="shrink-0 opacity-60 transition-opacity duration-150 motion-reduce:transition-none group-hover/activity:opacity-100"
+          />
         </button>
-        {liveToolCall ? (
-          <div data-testid="activity-live-step" className="border-t border-[var(--color-border)] px-2 pb-1 pt-1">
-            <ToolTimeline>
-              <ActivityToolRow
-                toolCall={liveToolCall}
-                hasLaterStep={false}
-                {...rowBaseProps}
-              />
-            </ToolTimeline>
-          </div>
-        ) : null}
-        {!liveToolCall ? <CollapsedRunImages toolCalls={toolCalls} resultMap={resultMap} /> : null}
+        <CollapsedRunImages toolCalls={toolCalls} resultMap={resultMap} />
         <MobileBottomSheet
           open={sheetOpen}
           onClose={() => setSheetOpen(false)}

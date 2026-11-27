@@ -143,9 +143,7 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
       ? 'var(--color-error)'
       : tone === 'warning'
         ? 'var(--color-warning)'
-        : tone === 'success'
-          ? 'var(--color-success)'
-          : 'var(--color-brand)'
+        : 'var(--color-brand)'
 
   const triggerButton = (
     <button
@@ -161,25 +159,33 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
         if (next) void fetchSummary()
       }}
       className={collapsed
-        ? `flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+        ? `flex h-9 w-9 cursor-pointer items-center justify-center rounded-[var(--radius-control)] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)] ${
             isCritical
-              ? 'border-[var(--color-error)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+              ? 'border-transparent bg-[var(--color-error-container)] text-[var(--color-on-error-container)] v6c-ring-error'
               : popoverOpen
-                ? 'border-[var(--color-border-strong)] bg-[var(--color-surface)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-sidebar-item-hover)]'
+                ? 'border-[var(--color-outline)] v6c-raised'
+                : 'border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-sidebar-item-hover)]'
           }`
-        : `flex w-full flex-col gap-1.5 rounded-[var(--radius-md)] border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+        : `flex w-full cursor-pointer flex-col gap-1.5 rounded-[var(--radius-card-inner)] border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)] ${
             isCritical
-              ? 'border-[var(--color-error)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+              ? 'border-transparent bg-[var(--color-error-container)] text-[var(--color-on-error-container)] v6c-ring-error'
               : popoverOpen
-                ? 'border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]'
+                ? 'border-[var(--color-outline)] v6c-raised'
+                : 'border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-sidebar-item-hover)]'
           }`}
     >
       {collapsed ? (
         <span className="relative flex h-7 w-7 items-center justify-center">
           <svg width="26" height="26" viewBox="0 0 26 26" className="absolute inset-0 -rotate-90" aria-hidden="true">
-            <circle cx="13" cy="13" r="10.5" fill="none" stroke="var(--color-surface-container-high)" strokeWidth="2.5" />
+            <circle
+              cx="13"
+              cy="13"
+              r="10.5"
+              fill="none"
+              stroke={isCritical ? 'currentColor' : 'var(--color-surface-container-high)'}
+              strokeOpacity={isCritical ? 0.22 : undefined}
+              strokeWidth="2.5"
+            />
             <circle
               cx="13"
               cy="13"
@@ -201,11 +207,20 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
       ) : (
         <>
           <div className="flex w-full items-center justify-between gap-2 text-xs">
-            <span className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--color-text-primary)]">
+            <span
+              className={`flex min-w-0 items-center gap-1.5 font-medium ${
+                isCritical ? 'text-[var(--color-on-error-container)]' : 'text-[var(--color-text-primary)]'
+              }`}
+            >
               {highlight ? (
                 <ModelBrandIcon providerId={highlight.provider.providerId} size={13} />
               ) : (
-                <Gauge size={13} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
+                <Gauge
+                  size={13}
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                  className={isCritical ? 'text-[var(--color-on-error-container)]' : 'text-[var(--color-text-tertiary)]'}
+                />
               )}
               <span className="truncate">
                 {highlight
@@ -219,9 +234,7 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
                   ? 'text-[var(--color-on-error-container)]'
                   : tone === 'warning'
                     ? 'text-[var(--color-warning)]'
-                    : tone === 'success'
-                      ? 'text-[var(--color-success)]'
-                      : 'text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-primary)]'
               }`}
             >
               {percentText}
@@ -233,9 +246,15 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
               size="xs"
               tone={tone}
               label={`${t('usageWidget.sidebarTriggerLabel')} ${displayPct}%`}
+              className={isCritical ? 'ring-1 ring-inset ring-[var(--color-outline)]' : undefined}
+              style={isCritical ? { backgroundColor: 'var(--color-surface)' } : undefined}
             />
           ) : null}
-          <div className="flex w-full items-center justify-between gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+          <div
+            className={`flex w-full items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${
+              isCritical ? 'text-[var(--color-on-error-container)]' : 'text-[var(--color-text-tertiary)]'
+            }`}
+          >
             <span className="truncate">
               {resetCountdown
                 ? t('usageWidget.resetsInShort', { time: resetCountdown })
@@ -275,7 +294,7 @@ export function SidebarUsageWidget({ collapsed }: { collapsed: boolean }) {
               role="dialog"
               aria-label={t('usageWidget.popoverTitle')}
               data-testid="sidebar-usage-popover"
-              className="dropdown-glass popover-motion z-[var(--z-popover)] flex w-[340px] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
+              className="dropdown-glass popover-motion z-[var(--z-popover)] flex w-[340px] flex-col overflow-hidden rounded-[var(--radius-xl)]"
               style={{ ...anchored.style, maxHeight: popoverMaxHeight }}
             >
               <UsageSummaryPanel

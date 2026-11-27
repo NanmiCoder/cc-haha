@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { H5Settings } from './H5Settings'
+import { H5Settings, H5SettingsShellContext, type H5SettingsSubpage } from './H5Settings'
 import { Settings } from '../Settings'
 import { ProviderSettings } from './ProviderSettings'
 import { useUIStore } from '@/stores/uiStore'
@@ -181,4 +181,49 @@ it('keeps H5Settings and its subpages on opaque paper surfaces', async () => {
   fireEvent.click(screen.getByTestId('h5-settings-providers'))
   expect(await screen.findByTestId('h5-settings-subpage')).toHaveClass('bg-[var(--color-surface)]')
   expect(screen.getByTestId('h5-settings-subpage')).not.toHaveClass('bg-transparent')
+})
+
+it('supports Follow the system appearance in H5GeneralSettings without writing connected computer settings', () => {
+  useUIStore.setState({ theme: 'dark', followSystemTheme: false })
+  const update = vi.spyOn(settingsApi, 'updateUser')
+  render(<H5Settings />)
+  const select = screen.getByLabelText('Appearance')
+  expect(screen.getByRole('option', { name: 'Follow the system' })).toHaveValue('system')
+  expect(select).toHaveValue('dark')
+  fireEvent.change(select, { target: { value: 'system' } })
+  expect(useUIStore.getState().followSystemTheme).toBe(true)
+  expect(select).toHaveValue('system')
+  expect(update).not.toHaveBeenCalled()
+})
+
+it('applies V6C pressable and hover feedback to interactive navigation rows', () => {
+  render(<H5Settings />)
+  const activityRow = screen.getByRole('button', { name: /Token usage/ })
+  const providersRow = screen.getByTestId('h5-settings-providers')
+  for (const row of [activityRow, providersRow]) {
+    expect(row).toHaveClass('v6c-pressable', 'hover:bg-[var(--color-surface-hover)]')
+  }
+})
+
+it('suppresses the duplicate inline subpage back bar when MobileShell owns back navigation', async () => {
+  let current: H5SettingsSubpage = null
+  const setSubpage = vi.fn((next: H5SettingsSubpage) => {
+    current = next
+  })
+  const { rerender } = render(
+    <H5SettingsShellContext.Provider value={{ subpage: current, setSubpage }}>
+      <H5Settings />
+    </H5SettingsShellContext.Provider>,
+  )
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
+  expect(setSubpage).toHaveBeenCalledWith('providers')
+
+  rerender(
+    <H5SettingsShellContext.Provider value={{ subpage: 'providers', setSubpage }}>
+      <H5Settings />
+    </H5SettingsShellContext.Provider>,
+  )
+  expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
+  expect(screen.queryByTestId('h5-settings-subpage-backbar')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'All settings' })).not.toBeInTheDocument()
 })

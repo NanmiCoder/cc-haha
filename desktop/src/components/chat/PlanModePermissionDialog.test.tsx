@@ -384,8 +384,10 @@ describe('plan mode permission UI', () => {
     )
 
     // The chip shows the planning model by default and no staged badge.
-    expect(screen.getByTestId('plan-execution-model').textContent).toContain('deepseek-v4-pro')
-    expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on submit')
+    const executionModelWrapper = screen.getByTestId('plan-execution-model')
+    expect(executionModelWrapper.className).toContain('rounded-[var(--radius-control)]')
+    expect(executionModelWrapper.textContent).toContain('deepseek-v4-pro')
+    expect(executionModelWrapper.textContent).not.toContain('applies on submit')
     expect(screen.getByText('Execution model')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
@@ -445,7 +447,9 @@ describe('plan mode permission UI', () => {
       type: 'error', code, message: 'The execution model is unavailable.', permissionRequestId,
     }))
 
-    expect(screen.getByRole('alert').textContent).toContain('The execution model is unavailable.')
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('The execution model is unavailable.')
+    expect(alert.className).toContain('text-[var(--color-error)]')
     expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('permission_pending')
     expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual(previousSelection)
 

@@ -52,7 +52,6 @@ const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'components/workspace/WorkspaceDiffSurface.tsx': ['diff --git'], // the git header, read to screen readers
   'features/pets/PetSettings.tsx': ['px', 'moon-cat'], // unit, example ID
   'pages/Connectors.tsx': ['MCP', 'CLI'], // transport names
-  'components/search/GlobalSearchModal.tsx': ['esc'], // the key, as printed on its keycap
   'pages/MemorySettings.tsx': ['Markdown'], // file format
   'pages/settings/AboutSettings.tsx': [ // product, repository and author; example proxy
     'Claude Code Haha', 'GitHub', 'NanmiCoder/cc-haha', '程序员阿江-Relakkes', 'http://127.0.0.1:7890',

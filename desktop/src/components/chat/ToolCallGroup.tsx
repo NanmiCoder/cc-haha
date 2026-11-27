@@ -355,7 +355,11 @@ function ToolCallGroupContent({
         sessionId={sessionId}
         toolCalls={toolCalls}
         resultMap={resultMap}
+        errorSeverityByToolUseId={errorSeverityByToolUseId}
         isStreaming={isStreaming}
+        isLive={isLive}
+        disclosureKey={disclosureKey}
+        presentation={activityPresentation}
       />
     )
   }
@@ -396,7 +400,11 @@ function ToolCallGroupContent({
             sessionId={sessionId}
             toolCalls={segment.toolCalls}
             resultMap={resultMap}
+            errorSeverityByToolUseId={errorSeverityByToolUseId}
             isStreaming={isStreaming}
+            isLive={isLive}
+            disclosureKey={disclosureKey ? `${disclosureKey}:browser:${index}` : undefined}
+            presentation={activityPresentation}
           />
         ) : (
           <ToolCallGroupContent
@@ -407,11 +415,14 @@ function ToolCallGroupContent({
             steps={segment.steps}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
+            errorSeverityByToolUseId={errorSeverityByToolUseId}
             agentTaskNotifications={agentTaskNotifications}
             agentTaskStatuses={agentTaskStatuses}
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            isLive={isLive}
+            disclosureKey={disclosureKey ? `${disclosureKey}:regular:${index}` : undefined}
             revealToolUseId={revealToolUseId}
             activityPresentation={activityPresentation}
           />

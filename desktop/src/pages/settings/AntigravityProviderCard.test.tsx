@@ -73,7 +73,9 @@ describe('AntigravityProviderCard', () => {
     expect(screen.getByText('Local agent runtimes')).toBeInTheDocument()
     expect(screen.getByText('Antigravity')).toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeInTheDocument()
-    expect(screen.getByText('1.5.17')).toBeInTheDocument()
+    const versionBadge = screen.getByText('1.5.17')
+    expect(versionBadge).toBeInTheDocument()
+    expect(versionBadge).toHaveClass('font-mono', 'tabular-nums', 'rounded-[var(--radius-sm)]')
     expect(screen.getByText('Google AI Pro')).toBeInTheDocument()
     expect(screen.getByText('Connected · 2 models available.')).toBeInTheDocument()
 

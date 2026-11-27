@@ -54,6 +54,8 @@ export type DesktopUsageWidgetMenuBarSync = {
 
 export type DesktopUsageWidgetSettingsTab = 'general' | 'providers'
 
+export type DesktopUsageWidgetTheme = 'white' | 'dark'
+
 export type DialogFileFilter = {
   name: string
   extensions: string[]
@@ -614,8 +616,10 @@ export type DesktopHost = {
     focusMainWindow(): Promise<void>
     openSettings(tab?: DesktopUsageWidgetSettingsTab): Promise<void>
     notifyPreferencesChanged(): Promise<void>
+    getTheme?(): Promise<DesktopUsageWidgetTheme>
     onVisibilityChanged(handler: (visible: boolean) => void): Promise<DesktopHostUnlisten>
     onPreferencesChanged(handler: () => void): Promise<DesktopHostUnlisten>
+    onThemeChanged?(handler: (theme: DesktopUsageWidgetTheme) => void): Promise<DesktopHostUnlisten>
   }
   dialogs: {
     open(options?: DialogOpenOptions): Promise<string | string[] | null>

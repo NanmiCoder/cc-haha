@@ -265,6 +265,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
       )).map((item) => (
         <button
           key={item.value}
+          type="button"
           role="menuitem"
           onClick={() => {
             const actionTabId = sessionId ?? useTabStore.getState().activeTabId
@@ -330,6 +331,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
     <div ref={ref} className="relative">
       {showTrigger ? (
       <button
+        type="button"
         onClick={() => {
           const actionTabId = sessionId ?? useTabStore.getState().activeTabId
           if (open) {
@@ -419,7 +421,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
                 ),
               }}
             />
-            <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2" title={workDir}>
+            <div className="flex items-center gap-2 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2" title={workDir}>
               <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
               <code className="truncate font-mono text-xs text-[var(--color-text-primary)]">{workDir}</code>
             </div>

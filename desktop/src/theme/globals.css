@@ -82,11 +82,10 @@
 }
 
 /* Noto Serif SC – variable weight 600-900, latin only.
-   The serif headings of 「纸 · 墨 · 印」 are the "墨" half of the identity, but
-   the CJK cuts of this family run ~6MB per weight. Only the latin subset is
-   self-hosted (43KB for all three weights); Chinese glyphs fall through to the
-   platform serif named in `--font-headline`, which is what the handoff
-   prototype itself falls back to. */
+   Retained for serif/editorial typography accents (`--font-serif`); the CJK
+   cuts of this family run ~6MB per weight, so only the latin subset is
+   self-hosted (43KB for all three weights) and CJK glyphs fall through to
+   the platform serif stack. */
 @font-face {
   font-family: 'Noto Serif SC';
   font-style: normal;
@@ -288,7 +287,7 @@
   transform: translateX(-50%) scale(var(--settings-zoom-preview-scale));
   transform-origin: 50% 100%;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface-container-lowest);
   padding: 2px 8px;
   color: var(--color-text-primary);
@@ -1044,12 +1043,12 @@
      delineate an interactive control. */
   --color-border-strong: var(--cc-bd-strong);
   --color-border-separator: var(--cc-bd);
-  /* Neutral on purpose: a terracotta ring sat one hue step from the error red
-     and read as "this field is invalid". */
+  /* Neutral on purpose: keeps focus edges calm without competing with
+     semantic status colors. */
   --color-border-focus: var(--cc-t3);
   /* Tab strip outlines. The strip's trough deliberately stays the sidebar's
      own ground, so the selected tab's fill is only 1.05–1.10:1 against it in
-     all six themes — far too little for a rounded corner to be *visible*, and
+     both themes — far too little for a rounded corner to be *visible*, and
      a curve nobody can see is not a curve. These two carry the shape instead:
      `tab-edge` traces the selected tab at ~1.35:1 against the trough,
      `tab-separator` is the hairline between two neighbouring idle tabs at
@@ -1068,7 +1067,7 @@
   --color-text-tertiary: var(--cc-t3);
   --color-text-accent: var(--cc-info);
 
-  /* Terracotta seal — the brand accent */
+  /* Focused Codex blue — the interactive brand accent */
   --color-primary: var(--cc-ac);
   --color-primary-container: var(--cc-ac2);
   --color-primary-fixed: var(--cc-ac-soft);
@@ -1081,9 +1080,9 @@
      Safari 15 WebViews cannot parse (guarded in vite-config.test.ts). */
   --color-brand-soft: var(--cc-ac-soft);
   --color-brand-soft-hover: var(--cc-ac-soft-hover);
-  /* Text sitting ON `--color-brand-soft`. Not the same as `--color-brand`:
-     the two ink palettes' terracotta lands at 4.3–4.5:1 on their own soft
-     fill, so a terracotta chip label has to use this darkened pair instead. */
+  /* Text sitting ON `--color-brand-soft`. Kept separate from `--color-brand`
+     so accented chip labels always clear WCAG AA contrast on their soft fill
+     in both light and dark themes. */
   --color-on-brand-soft: var(--cc-ac-ink);
   /* Inner rule engraved on the large seal — the accent's own foreground at
      40%, so it stays a highlight rather than a hard white line. */
@@ -1148,9 +1147,9 @@
      too — the same value would vanish into the composer. */
   --color-btn-soft-bg: var(--cc-s1);
   --color-btn-soft-hover: var(--cc-bd);
-  /* Flat ink, not a gradient: the handoff's primary action is a solid ink
-     block that turns terracotta on hover. Kept as gradient-shaped tokens so
-     existing call sites keep resolving. */
+  /* Flat monochrome fill, not a gradient: primary actions stay neutral ink on
+     light and crisp white on dark, softening slightly on hover. Kept as
+     gradient-shaped tokens so existing call sites keep resolving. */
   --gradient-btn-primary: linear-gradient(var(--cc-t1), var(--cc-t1));
   --gradient-btn-primary-hover: linear-gradient(var(--color-btn-primary-hover), var(--color-btn-primary-hover));
 
@@ -1316,7 +1315,7 @@
   /* Find-in-page highlights. These paint over arbitrary page content, not
      over a brand-soft panel, so they get their own pair instead of borrowing
      the brand chip tokens: an amber wash for matches (browser convention),
-     full-strength terracotta for the active one. */
+     full-strength brand accent for the active one. */
   --color-search-highlight: var(--cc-diff-mark);
   --color-on-search-highlight: var(--cc-t1);
   --color-search-highlight-active: var(--cc-ac);
@@ -1751,8 +1750,7 @@ body > :not(#root, [role="tooltip"]) * {
   pointer-events: none;
 }
 
-/* Neutral wash behind the empty-state seal: the calm slate light, never a
-   terracotta bloom. */
+/* Subtle neutral wash behind the empty-state seal — no colored bloom. */
 .brand-seal-glow {
   background: radial-gradient(460px 300px at 50% 44%, var(--v6c-seal-wash) 0%, rgba(var(--cc-paper-rgb), 0) 72%);
 }
@@ -1760,11 +1758,11 @@ body > :not(#root, [role="tooltip"]) * {
 /* Inside `@layer components` so a caller's Tailwind utilities (a one-off
    `bg-…` or `shadow-…`) still win, exactly like `.control-bevel`. */
 @layer components {
-  /* ─── V6C Calm Liquid Glass utilities ────────────────────────────────
+  /* ─── V6C Pure Neutral surface utilities ─────────────────────────────
      Shared surfaces for the shell and feature slices. Radii stay with the
      caller (`rounded-[var(--radius-*)]`); these own fill, rim and elevation. */
 
-  /* The window's ambient wall: one faint upper-left slate light. */
+  /* The window's neutral shell wall. */
   .v6c-ambient-shell {
     background: var(--v6c-wall);
     background-color: var(--v6c-wall-base);
@@ -1815,7 +1813,7 @@ body > :not(#root, [role="tooltip"]) * {
     box-shadow: var(--glass-rim), var(--v6c-row-highlight-shadow);
   }
 
-  /* The selected item's 3px terracotta bar on its leading edge (sidebar
+  /* The selected item's 3px accent bar on its leading edge (sidebar
      rows, settings navigation). Apply only to the selected element. */
   .v6c-active-bar {
     position: relative;
@@ -1908,6 +1906,12 @@ body > :not(#root, [role="tooltip"]) * {
     box-shadow: var(--glass-rim), var(--shadow-dropdown-glass);
   }
 
+  /* Preserve inset status rings when layered onto `.dropdown-glass` overlays. */
+  .dropdown-glass.v6c-ring-running { box-shadow: var(--v6c-ring-running), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-waiting { box-shadow: var(--v6c-ring-waiting), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-success { box-shadow: var(--v6c-ring-success), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-error { box-shadow: var(--v6c-ring-error), var(--shadow-dropdown-glass), var(--glass-rim); }
+
   /* Focus inside a popover is shown on the focused control itself; ringing the
      whole sheet as well doubled the indicator. The edge sharpens one step instead. */
   .glass-panel:focus-within,
@@ -1997,14 +2001,6 @@ html[data-reduced-transparency="true"] .v6c-sidebar-glass {
 }
 
 html[data-reduced-transparency="true"] .dialog-backdrop {
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
-/* Keep the under-composer context strip flush with the canvas in both light
-   and dark modes rather than painting an elevated glass bar below the card. */
-[data-testid="composer-context-strip"].surface-glass {
-  background: transparent;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -3158,10 +3154,15 @@ html[data-touch-h5][data-touch-h5-keyboard] .app-shell-viewport {
   padding-bottom: 0px;
 }
 
-/* Agent list rows reveal their edit / delete / override buttons on hover, which
-   never fires on a touchscreen — the controls would be unreachable there. */
+/* Agent list rows and composer attachment remove buttons reveal on hover,
+   which never fires on a touchscreen — keep them reachable while leaving
+   desktop-only hover bars like MessageActionBar unaffected. */
 .app-shell--mobile [data-agent-row-actions],
-html[data-touch-h5] [data-agent-row-actions] {
+html[data-touch-h5] [data-agent-row-actions],
+.app-shell--mobile [data-touch-reveal],
+html[data-touch-h5] [data-touch-reveal],
+.app-shell--mobile [data-testid="composer-attachment-tray"] .group > button.opacity-0,
+html[data-touch-h5] [data-testid="composer-attachment-tray"] .group > button.opacity-0 {
   opacity: 1;
   pointer-events: auto;
 }
@@ -3306,12 +3307,14 @@ html[data-window-kind='usage-widget'] #root {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  background: #f1ad3b;
-  color: #352408;
+  border-color: var(--color-warning);
+  background: var(--color-warning-container);
+  color: var(--color-on-warning-container);
 }
 
 .pet-permission-badge:hover {
-  background: #f6bd5d;
+  background: var(--color-warning-container);
+  filter: brightness(0.96);
 }
 
 .pet-mascot-button[data-dragging='true'] {
@@ -3437,7 +3440,7 @@ html[data-window-kind='usage-widget'] #root {
 
 html[data-theme='dark'] .pet-activity-card {
   border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(24, 23, 30, 0.78);
+  background: rgba(24, 24, 24, 0.84);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 30px rgba(0, 0, 0, 0.24);
@@ -3614,8 +3617,8 @@ html[data-theme='dark'] .pet-session-row:hover {
 
 html[data-theme='dark'] .pet-panel-toggle {
   border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(36, 39, 45, 0.82);
-  color: rgba(239, 235, 246, 0.62);
+  background: rgba(36, 36, 36, 0.86);
+  color: rgba(235, 235, 235, 0.62);
 }
 
 html[data-theme='dark'] .pet-panel-toggle:hover {

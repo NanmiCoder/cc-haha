@@ -35,9 +35,11 @@ type FlattenedMetric = {
 function RingGauge({
   remainingPercent,
   providerId,
+  onTintedContainer = false,
 }: {
   remainingPercent: number | null
   providerId: OfficialProviderUsageSummary['providerId']
+  onTintedContainer?: boolean
 }) {
   const size = 32
   const strokeWidth = 3
@@ -51,9 +53,7 @@ function RingGauge({
       ? 'var(--color-error)'
       : tone === 'warning'
         ? 'var(--color-warning)'
-        : tone === 'success'
-          ? 'var(--color-success)'
-          : 'var(--color-brand)'
+        : 'var(--color-brand)'
 
   return (
     <span className="relative flex h-8 w-8 shrink-0 items-center justify-center">
@@ -69,7 +69,8 @@ function RingGauge({
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="var(--color-surface-container-high)"
+          stroke={onTintedContainer ? 'currentColor' : 'var(--color-surface-container-high)'}
+          strokeOpacity={onTintedContainer ? 0.22 : undefined}
           strokeWidth={strokeWidth}
         />
         <circle
@@ -93,7 +94,6 @@ function toneTextClass(remainingPercent: number | null): string {
   const tone = toneForRemainingPercent(remainingPercent)
   if (tone === 'danger') return 'text-[var(--color-error)]'
   if (tone === 'warning') return 'text-[var(--color-warning)]'
-  if (tone === 'success') return 'text-[var(--color-success)]'
   return 'text-[var(--color-text-primary)]'
 }
 
@@ -168,7 +168,10 @@ export function UsageSummaryPanel({
     return formatted ? t('usageWidget.updatedAt', { time: formatted }) : null
   }, [summary?.fetchedAt, t])
 
-  const renderPercentButton = (window: OfficialUsageWindow, onErrorContainer = false) => {
+  const renderPercentButton = (
+    window: OfficialUsageWindow,
+    containerTone?: 'warning' | 'danger',
+  ) => {
     const pct = displayPercentForWindow(window, preferences.displayMode)
     const label = window.unlimited
       ? t('usageWidget.unlimited')
@@ -182,10 +185,12 @@ export function UsageSummaryPanel({
         type="button"
         onClick={onToggleDisplayMode}
         title={t('usageWidget.toggleDisplayModeHint')}
-        className={`rounded-[var(--radius-xs)] px-1 py-0.5 text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-          onErrorContainer
-            ? 'text-[var(--color-on-error-container)] hover:underline'
-            : `hover:bg-[var(--color-surface-hover)] ${toneTextClass(window.remainingPercent)}`
+        className={`cursor-pointer rounded-[var(--radius-sm)] px-1 py-0.5 text-xs font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          containerTone === 'warning'
+            ? 'text-[var(--color-on-warning-container)] hover:underline'
+            : containerTone === 'danger'
+              ? 'text-[var(--color-on-error-container)] hover:underline'
+              : `hover:bg-[var(--color-surface-hover)] ${toneTextClass(window.remainingPercent)}`
         }`}
       >
         {label}
@@ -193,7 +198,10 @@ export function UsageSummaryPanel({
     )
   }
 
-  const renderResetButton = (window: OfficialUsageWindow, onErrorContainer = false) => {
+  const renderResetButton = (
+    window: OfficialUsageWindow,
+    containerTone?: 'warning' | 'danger',
+  ) => {
     const value = preferences.showExactResetTime
       ? formatExactResetTime(window.resetsAt)
       : formatResetCountdown(window.resetsAt)
@@ -203,10 +211,12 @@ export function UsageSummaryPanel({
         type="button"
         onClick={onToggleResetTimeFormat}
         title={t('usageWidget.toggleResetFormatHint')}
-        className={`rounded-[var(--radius-xs)] px-1 py-0.5 font-mono text-[11px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-          onErrorContainer
-            ? 'text-[var(--color-on-error-container)] hover:underline'
-            : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+        className={`cursor-pointer rounded-[var(--radius-sm)] px-1 py-0.5 font-mono text-[11px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          containerTone === 'warning'
+            ? 'text-[var(--color-on-warning-container)] hover:underline'
+            : containerTone === 'danger'
+              ? 'text-[var(--color-on-error-container)] hover:underline'
+              : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
         }`}
       >
         {value}
@@ -223,7 +233,7 @@ export function UsageSummaryPanel({
     if (signedInProviders.length === 0) {
       return (
         <div className="flex flex-col gap-2.5">
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] p-3">
+          <div className="rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-[var(--color-text-primary)]">
                 {t('usageWidget.localFiveHourTitle')}
@@ -236,7 +246,7 @@ export function UsageSummaryPanel({
               {t('usageWidget.localBreakdown', { input: localInput, cache: localCache, output: localOutput })}
             </p>
           </div>
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+          <div className="v6c-raised rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-3">
             <p className="text-xs text-[var(--color-text-secondary)]">
               {t('usageWidget.noOfficialSubscriptions')}
             </p>
@@ -253,6 +263,9 @@ export function UsageSummaryPanel({
     }
 
     const displayPinned = pinnedMetrics.length > 0 ? pinnedMetrics : allMetrics.slice(0, 2)
+    const hasCriticalRunningOut = runningOutMetrics.some(
+      ({ window }) => toneForRemainingPercent(window.remainingPercent) === 'danger',
+    )
 
     return (
       <div className="flex flex-col gap-2.5">
@@ -265,7 +278,7 @@ export function UsageSummaryPanel({
               <div
                 key={window.metricKey}
                 data-testid={`usage-priority-row-${window.metricKey}`}
-                className="flex items-center justify-between gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2"
+                className="v6c-raised flex items-center justify-between gap-2.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-2.5 py-2"
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <RingGauge
@@ -293,38 +306,52 @@ export function UsageSummaryPanel({
 
         {runningOutMetrics.length > 0 ? (
           <div className="flex flex-col gap-1.5">
-            <span className="px-0.5 text-[11px] font-medium text-[var(--color-error)]">
+            <span
+              className={`px-0.5 text-[11px] font-medium ${
+                hasCriticalRunningOut ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]'
+              }`}
+            >
               {t('usageWidget.sectionRunningOut')}
             </span>
-            {runningOutMetrics.map(({ provider, window }) => (
-              <div
-                key={window.metricKey}
-                className="flex items-center justify-between gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-error-container)] px-2.5 py-2 text-[var(--color-on-error-container)]"
-              >
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <RingGauge
-                    remainingPercent={window.remainingPercent}
-                    providerId={provider.providerId}
-                  />
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium">
-                      {t(providerTitleKey(provider.providerId))}
-                    </div>
-                    <div className="truncate text-[11px]">
-                      {t(windowLabelKey(window.kind))}
+            {runningOutMetrics.map(({ provider, window }) => {
+              const rowTone =
+                toneForRemainingPercent(window.remainingPercent) === 'warning' ? 'warning' : 'danger'
+              return (
+                <div
+                  key={window.metricKey}
+                  data-testid={`usage-running-out-row-${window.metricKey}`}
+                  className={`flex items-center justify-between gap-2.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-2.5 py-2 ${
+                    rowTone === 'warning'
+                      ? 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
+                      : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <RingGauge
+                      remainingPercent={window.remainingPercent}
+                      providerId={provider.providerId}
+                      onTintedContainer
+                    />
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">
+                        {t(providerTitleKey(provider.providerId))}
+                      </div>
+                      <div className="truncate text-[11px]">
+                        {t(windowLabelKey(window.kind))}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex shrink-0 flex-col items-end">
+                    {renderPercentButton(window, rowTone)}
+                    {renderResetButton(window, rowTone)}
+                  </div>
                 </div>
-                <div className="flex shrink-0 flex-col items-end">
-                  {renderPercentButton(window, true)}
-                  {renderResetButton(window, true)}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         ) : null}
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2.5 py-2">
+        <div className="rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-[var(--color-text-primary)]">
               {t('usageWidget.localFiveHourTitle')}
@@ -351,7 +378,7 @@ export function UsageSummaryPanel({
           <section
             key={provider.providerId}
             data-testid={`usage-provider-card-${provider.providerId}`}
-            className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5"
+            className="v6c-raised flex flex-col gap-2 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-2.5"
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -361,7 +388,7 @@ export function UsageSummaryPanel({
                 </span>
               </div>
               {provider.planLabel ? (
-                <Badge tone="neutral" size="xs">{provider.planLabel}</Badge>
+                <Badge tone="neutral" size="xs" pill={false}>{provider.planLabel}</Badge>
               ) : null}
             </div>
 
@@ -438,7 +465,7 @@ export function UsageSummaryPanel({
           </section>
         ))}
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2.5 py-2">
+        <div className="rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-[var(--color-text-primary)]">
               {t('usageWidget.localFiveHourTitle')}
@@ -511,13 +538,13 @@ export function UsageSummaryPanel({
         {tab === 'priority' ? renderPriorityView() : renderAllView()}
       </ScrollArea>
 
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
         <span className="truncate">{updatedLabel ?? t('usageWidget.cacheNotice')}</span>
         {showDetachControls && isDesktopRuntime && onSnapToTop ? (
           <button
             type="button"
             onClick={onSnapToTop}
-            className="shrink-0 font-medium text-[var(--color-brand)] transition-colors hover:text-[var(--color-brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="shrink-0 cursor-pointer rounded-[var(--radius-sm)] px-1 font-medium text-[var(--color-brand)] transition-colors hover:text-[var(--color-brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('usageWidget.snapTopButton')}
           </button>

@@ -198,18 +198,31 @@ describe('resolveShareTheme', () => {
     const style = document.createElement('style')
     style.textContent = `
       :root { --cc-bg: #111111; --cc-series-1: #aaaaaa; }
-      [data-theme="dark"] { --cc-bg: #1b1a18; --cc-t1: #edeae4; --cc-series-1: #35a69d; }`
+      [data-theme="dark"] { --cc-bg: #181818; --cc-t1: #dfdfdf; --cc-series-1: #35a69d; }`
     document.head.appendChild(style)
     try {
-      expect(resolveShareTheme('dark').bg).toBe('#1b1a18')
+      expect(resolveShareTheme('dark').bg).toBe('#181818')
       expect(resolveShareTheme('dark').series[0]).toBe('#35a69d')
       expect(resolveShareTheme('current').bg).toBe('#111111')
       expect(document.querySelectorAll('[data-theme="dark"]')).toHaveLength(0)
       // A token the stylesheet does not define falls back instead of becoming an empty color.
-      expect(resolveShareTheme('current').ac).toBe('#A24A2E')
+      expect(resolveShareTheme('current').ac).toBe('#0169CC')
     } finally {
       style.remove()
     }
+  })
+
+  it('falls back to the V6C pure-neutral light palette when no CSS tokens are loaded', () => {
+    expect(resolveShareTheme('current')).toEqual({
+      bg: '#FFFFFF',
+      bd: '#E8E8E8',
+      bd2: '#D4D4D4',
+      t1: '#1A1C1F',
+      t2: '#4E4E4E',
+      t3: '#666666',
+      ac: '#0169CC',
+      series: ['#058D85', '#86412C', '#5066A3', '#99732B', '#A6A6A6'],
+    })
   })
 })
 

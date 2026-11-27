@@ -163,10 +163,13 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       openSettings: tab => invoke(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, tab),
       notifyPreferencesChanged: () =>
         invoke(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged),
+      getTheme: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme),
       onVisibilityChanged: handler =>
         subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetVisibilityChanged, handler),
       onPreferencesChanged: handler =>
         subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged, () => handler()),
+      onThemeChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetThemeChanged, handler),
     },
     dialogs: {
       open: options => invoke(ELECTRON_IPC_CHANNELS.dialogOpen, options),

@@ -264,7 +264,7 @@ function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
   return (
     <>
       {highlightSegments(text, terms).map((segment, index) => segment.match ? (
-        <mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-warning-container)] text-inherit">{segment.text}</mark>
+        <mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-search-highlight)] text-[var(--color-on-search-highlight)]">{segment.text}</mark>
       ) : (
         <Fragment key={index}>{segment.text}</Fragment>
       ))}
@@ -562,7 +562,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
             ) : preset && preset.id !== 'custom' && (
               <Badge tone="neutral" pill={false}>{preset.name}</Badge>
             )}
-            {formatBadge && <Badge tone="warning" pill={false}>{formatBadge}</Badge>}
+            {formatBadge && <Badge tone="neutral" variant="outline" pill={false}>{formatBadge}</Badge>}
             {isActive && (
               <Badge tone="brand" pill={false}>{t('settings.providers.default')}</Badge>
             )}
@@ -2070,7 +2070,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     >
       {SPONSOR_LOGOS[preset.id] && <img src={SPONSOR_LOGOS[preset.id]} alt="" className="size-4 rounded-[var(--radius-sm)] object-contain" />}
       {presetLabel(preset)}
-      {SPONSOR_LOGOS[preset.id] && <Star size={12} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
+      {SPONSOR_LOGOS[preset.id] && <Star size={12} strokeWidth={1.75} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
       {preset.isNew && (
         <Badge tone="warning" size="xs" pill={false} className="absolute -right-1 -top-2">
           {t('settings.providers.new')}
@@ -2301,7 +2301,6 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 showTooltip={false}
                 size="2xs"
                 tone="muted"
-                shape="circle"
               />
             </Tooltip>
           </div>
@@ -2492,7 +2491,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         ) : (
           <div className="flex flex-col gap-1">
             <span className={FORM_FIELD_LABEL}>{t('settings.providers.apiFormat')}</span>
-            <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+            <div className="rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
               {selectedApiFormatLabel}
             </div>
             <p className={FORM_HINT}>{t('settings.providers.apiFormatPerModelHint')}</p>
@@ -2777,7 +2776,6 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 showTooltip={false}
                 size="2xs"
                 tone="muted"
-                shape="circle"
               />
             </Tooltip>
           </div>

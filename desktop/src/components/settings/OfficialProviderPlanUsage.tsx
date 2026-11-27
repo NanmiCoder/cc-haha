@@ -45,7 +45,7 @@ export function OfficialProviderPlanUsage({
     <section
       aria-label={t('settings.claudeOfficialLogin.usageTitle')}
       data-testid={`official-plan-usage-${providerId}`}
-      className="flex w-full flex-col gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
+      className="flex w-full flex-col gap-2.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-medium text-[var(--color-text-secondary)]">
@@ -102,7 +102,7 @@ export function OfficialProviderPlanUsage({
               <li key={window.metricKey} className="flex flex-col gap-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
                   <span className="text-[var(--color-text-primary)]">{t(windowLabelKey(window.kind))}</span>
-                  <span className="text-[var(--color-text-secondary)]">{parts.join(' · ')}</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">{parts.join(' · ')}</span>
                 </div>
                 {pct !== null ? (
                   <Progress

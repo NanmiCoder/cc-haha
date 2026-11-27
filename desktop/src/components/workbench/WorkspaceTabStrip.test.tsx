@@ -500,6 +500,33 @@ describe('WorkspaceTabStrip', () => {
     renderStrip()
     expect(screen.getByTestId('workspace-tab-strip-side').className).toContain('h-10')
   })
+
+  it('gives the Browser Use status dot an accessible name for active and takeover states', async () => {
+    const { useBrowserUseStore } = await import('@/stores/browserUseStore')
+    const { useSettingsStore } = await import('@/stores/settingsStore')
+    useSettingsStore.setState({ locale: 'en' })
+    useBrowserUseStore.getState().reset()
+    try {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: BROWSER_TAB.browserTabId,
+        state: 'active',
+      })
+      renderStrip({ tabs: [BROWSER_TAB], activeTabId: BROWSER_TAB.id })
+      expect(screen.getByRole('status', { name: 'Agent is controlling this page' })).toBeInTheDocument()
+
+      act(() => {
+        useBrowserUseStore.getState().applyHostEvent({
+          type: 'control-state',
+          tabId: BROWSER_TAB.browserTabId,
+          state: 'takeover',
+        })
+      })
+      expect(screen.getByRole('status', { name: 'Browser takeover requested' })).toBeInTheDocument()
+    } finally {
+      useBrowserUseStore.getState().reset()
+    }
+  })
 })
 
 describe('terminal tab chrome', () => {

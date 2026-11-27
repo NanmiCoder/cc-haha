@@ -76,7 +76,7 @@ export function WorkspaceChangesFallback({ sessionId, files, truncated = false }
                   aria-label={t('chat.workspaceChangesFallbackOpenFile', { path: file.path })}
                   title={file.path}
                   onClick={() => workspaceOpen.file(sessionId, file.path)}
-                  className="flex h-8 w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-8 w-full min-w-0 items-center gap-2 rounded-[var(--radius-card-inner)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   <FileTypeIcon path={file.path} size={14} />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-primary)]">{file.path}</span>

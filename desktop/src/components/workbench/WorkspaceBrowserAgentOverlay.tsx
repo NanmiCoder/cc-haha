@@ -315,6 +315,7 @@ export function WorkspaceBrowserAgentOverlay({ tabId }: WorkspaceBrowserAgentOve
           Yields pointer events during app drags (resize handles, tab reorder). */}
       {!isTakeover ? (
         <div
+          role="region"
           data-testid="browser-agent-takeover-shield"
           aria-label={t('browserUse.overlay.shieldLabel')}
           className={`absolute inset-0 cursor-pointer ${gestureActive ? 'pointer-events-none' : 'pointer-events-auto'}`}
@@ -332,14 +333,14 @@ export function WorkspaceBrowserAgentOverlay({ tabId }: WorkspaceBrowserAgentOve
         />
       ) : null}
 
-      {/* Viewport border glow: subtle info outline when active, amber border in takeover. */}
+      {/* Viewport border glow: subtle info outline when active, amber ring in takeover. */}
       <div
         aria-hidden="true"
         data-testid="browser-agent-viewport-frame"
-        className={`pointer-events-none absolute inset-0 border-2 transition-colors duration-200 ${
+        className={`pointer-events-none absolute inset-0 transition-shadow duration-200 motion-reduce:transition-none ${
           isTakeover
-            ? 'border-[var(--color-warning)]'
-            : 'border-[var(--color-info)]'
+            ? 'v6c-ring-waiting'
+            : 'v6c-ring-running'
         }`}
       />
 
@@ -380,7 +381,7 @@ export function WorkspaceBrowserAgentOverlay({ tabId }: WorkspaceBrowserAgentOve
         <div
           aria-hidden="true"
           data-testid="browser-agent-virtual-cursor"
-          className="pointer-events-none absolute left-0 top-0 transition-opacity duration-200"
+          className="pointer-events-none absolute left-0 top-0 transition-opacity duration-200 motion-reduce:transition-none"
           style={{
             transform: `translate3d(${cursorPos.x}px, ${cursorPos.y}px, 0)`,
           }}
@@ -403,20 +404,16 @@ export function WorkspaceBrowserAgentOverlay({ tabId }: WorkspaceBrowserAgentOve
         </div>
       ) : null}
 
-      {/* Bottom-center floating control pill */}
+      {/* Bottom-center floating control bar */}
       <div
         role="status"
         aria-live="polite"
         data-testid="browser-agent-control-pill"
         onPointerDown={(event) => event.stopPropagation()}
         onWheel={(event) => event.stopPropagation()}
-        className={`absolute bottom-4 left-1/2 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-full border px-3.5 py-1.5 shadow-[var(--shadow-dropdown)] backdrop-blur-md ${
+        className={`dropdown-glass absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-[var(--radius-xl)] px-3 py-1.5 text-[var(--color-text-primary)] ${
           gestureActive ? 'pointer-events-none' : 'pointer-events-auto'
-        } ${
-          isTakeover
-            ? 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-            : 'border-[var(--color-border)] bg-[var(--color-surface-glass)] text-[var(--color-text-primary)]'
-        }`}
+        } ${isTakeover ? 'v6c-ring-waiting' : ''}`}
       >
         <StatusDot tone={isTakeover ? 'warning' : 'info'} size="sm" pulse />
         <span className="min-w-0 max-w-[320px] truncate text-[12px] font-medium">

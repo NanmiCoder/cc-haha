@@ -34,7 +34,7 @@ describe('CyberRiskInstructionSettings', () => {
     const toggle = screen.getByRole('switch', { name: '第三方模型跳过安全检查提示词' })
     expect(toggle).not.toBeChecked()
     expect(screen.getByRole('status')).toHaveTextContent('已关闭')
-    expect(toggle).toHaveAccessibleDescription(/不影响 Claude 官方账号/)
+    expect(screen.getByText(/不影响 Claude 官方账号/)).toBeInTheDocument()
 
     fireEvent.click(toggle)
     expect(toggle).toBeDisabled()
@@ -49,15 +49,16 @@ describe('CyberRiskInstructionSettings', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已开启')
   })
 
-  it('associates inline error with the switch and clears it on retry', async () => {
+  it('shows inline error in the switch row and clears it on retry', async () => {
     vi.mocked(settingsApi.updateUser).mockRejectedValueOnce(new Error('offline'))
     render(<CyberRiskInstructionSettings />)
 
     const toggle = screen.getByRole('switch', { name: '第三方模型跳过安全检查提示词' })
     fireEvent.click(toggle)
-    expect(await screen.findByRole('alert')).toHaveTextContent('已保留原设置')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('已保留原设置')
+    expect(alert).toHaveTextContent(/重新切换以重试/)
     expect(toggle).not.toBeChecked()
-    expect(toggle).toHaveAccessibleDescription(/重新切换以重试/)
 
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toBeChecked())

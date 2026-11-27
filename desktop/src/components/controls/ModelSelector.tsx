@@ -1,7 +1,7 @@
 import { MODEL_SLOTS, type ModelSlot } from '@/lib/providerModelContext'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Check, ChevronDown, Loader2, Zap } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Zap } from 'lucide-react'
 import {
   COMPOSER_MENU_ITEM,
   COMPOSER_MENU_ITEM_ACTIVE,
@@ -56,6 +56,7 @@ import { Kbd } from '@/components/ui/Kbd'
 import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { SearchField } from '@/components/ui/SearchField'
+import { Spinner } from '@/components/ui/Spinner'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
@@ -982,14 +983,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             data-testid="antigravity-models-loading"
             className="flex min-h-24 items-center justify-center gap-2 px-4 text-center text-[13px] text-[var(--color-text-tertiary)]"
           >
-            <Loader2 aria-hidden="true" size={14} className="animate-spin" />
+            <Spinner size={14} />
             <span>{t('settings.providers.antigravity.loadingModels')}</span>
           </div>
         )}
         {antigravityNotice && (
           <div
             role="status"
-            className="mb-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-text-secondary)]"
+            className="mb-1.5 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-text-secondary)]"
           >
             {antigravityNotice}
           </div>
@@ -1041,6 +1042,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                     return (
                       <button
                         key={`${choice.providerId ?? 'official'}:${model.id}`}
+                        type="button"
                         onClick={() => {
                           const supportedEfforts = model.supportedReasoningEfforts
                           const explicitEffort = activeRuntimeSelection?.effortLevel
@@ -1149,6 +1151,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               return (
                 <button
                   key={model.id}
+                  type="button"
                   onClick={() => {
                     if (isControlled) {
                       onChange?.(model.id)
@@ -1342,12 +1345,12 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                 : t('model.claudeFastModeUnsupported')
             }
             onClick={() => handleClaudeFastModeChange(!fastMode)}
-            className={`mr-1 my-auto inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] text-[11px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-45 ${
-              isMobileBrowser ? 'min-h-11 px-2.5' : 'h-[20px] px-1.5'
+            className={`mr-1 my-auto inline-flex shrink-0 items-center gap-1 text-[11px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-45 ${
+              isMobileBrowser ? 'min-h-11 rounded-[var(--radius-control)] px-2.5' : 'h-[20px] rounded-[var(--radius-sm)] px-1.5'
             } ${
               claudeFastModeActive
                 ? 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-                : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-container)] hover:text-[var(--color-text-primary)]'
+                : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <Zap size={11} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />

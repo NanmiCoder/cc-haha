@@ -417,6 +417,14 @@ describe('Electron IPC capabilities', () => {
     expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
       ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
     )).toBe(true)
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForPetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, 'dark')).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'providers')).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'general')).toBe(true)

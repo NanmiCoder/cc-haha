@@ -1068,7 +1068,7 @@ export function AskUserQuestion({
             <div
               role="status"
               aria-live="polite"
-              className="mx-1 mb-3 flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]"
+              className="mx-1 mb-3 flex items-start gap-2 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]"
             >
               <Info aria-hidden="true" size={14} strokeWidth={1.75} className="mt-px shrink-0 text-[var(--color-text-tertiary)]" />
               <span>{t('question.expiredNotice')}</span>

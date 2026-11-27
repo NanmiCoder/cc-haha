@@ -131,6 +131,8 @@ describe('UsageWidgetWindowController', () => {
       compact: false,
       alwaysOnTop: true,
     })
+    expect(options.transparent).toBe(true)
+    expect(options.backgroundColor).toBe('#00000000')
     expect(options.webPreferences?.partition).toBe(USAGE_WIDGET_WINDOW_PARTITION)
 
     const fakeWin = createFakeBrowserWindow()

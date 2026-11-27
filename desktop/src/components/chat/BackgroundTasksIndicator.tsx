@@ -47,6 +47,7 @@ export function BackgroundTasksIndicator({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const closeTimerRef = useRef<number | null>(null)
+  const pointerFocusRef = useRef(false)
   const [open, setOpen] = useState(false)
 
   const runningTasks = useMemo(
@@ -153,9 +154,9 @@ export function BackgroundTasksIndicator({
       onMouseEnter={openNow}
       onMouseLeave={scheduleClose}
       style={position.style}
-      className="popover-motion z-[var(--z-dropdown)] w-[320px] max-w-[min(360px,calc(100vw-32px))] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2 shadow-[var(--shadow-overlay)]"
+      className="dropdown-glass popover-motion z-[var(--z-dropdown)] w-[320px] max-w-[min(360px,calc(100vw-32px))] rounded-[var(--radius-xl)] p-[5px]"
     >
-      <div className="px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-[var(--color-text-tertiary)]">
+      <div className="px-2 pb-0.5 pt-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
         {t('session.activity.section.backgroundTasks')}
       </div>
       <div className="max-h-[240px] space-y-0.5 overflow-y-auto">
@@ -170,7 +171,7 @@ export function BackgroundTasksIndicator({
               data-testid={`background-tasks-popover-item-${task.taskId}`}
               title={title}
               onClick={() => handleOpenTask(task, title)}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-left text-[13px] font-normal text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+              className="flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] font-normal text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
             >
               <Icon size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
               <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -192,12 +193,28 @@ export function BackgroundTasksIndicator({
         aria-controls={open ? menuId : undefined}
         onMouseEnter={openNow}
         onMouseLeave={scheduleClose}
-        onFocus={openNow}
+        onPointerDown={() => {
+          pointerFocusRef.current = true
+        }}
+        onMouseDown={() => {
+          pointerFocusRef.current = true
+        }}
+        onFocus={() => {
+          if (pointerFocusRef.current) {
+            pointerFocusRef.current = false
+            return
+          }
+          openNow()
+        }}
+        onBlur={() => {
+          pointerFocusRef.current = false
+        }}
         onClick={() => {
+          pointerFocusRef.current = false
           cancelScheduledClose()
           setOpen((current) => !current)
         }}
-        className="inline-flex items-center rounded-[var(--radius-sm)] py-0.5 text-[13px] font-normal leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        className="inline-flex items-center rounded-[var(--radius-control)] py-0.5 text-[13px] font-normal leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
       >
         {label}
       </button>

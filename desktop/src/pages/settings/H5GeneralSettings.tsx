@@ -9,10 +9,13 @@ import { SelectField, type SelectFieldProps } from '@/components/ui/SelectField'
 import type { ChatSendBehavior, ThemeMode, UserSettings, EffortLevel } from '@/types/settings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
 
+type H5AppearanceOption = 'system' | ThemeMode
+
 export function H5GeneralSettings() {
   const t = useTranslation()
   const settings = useSettingsStore()
   const theme = useUIStore((state) => state.theme)
+  const followSystemTheme = useUIStore((state) => state.followSystemTheme)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
   const save = async (patch: Partial<UserSettings>) => {
@@ -34,7 +37,9 @@ export function H5GeneralSettings() {
   const languages: { value: Locale, label: string }[] = [
     { value: 'en', label: 'English' }, { value: 'zh', label: '简体中文' }, { value: 'zh-TW', label: '繁體中文' }, { value: 'jp', label: '日本語' }, { value: 'kr', label: '한국어' },
   ]
-  const themes: { value: ThemeMode, label: string }[] = [
+  const appearanceValue: H5AppearanceOption = followSystemTheme ? 'system' : theme
+  const themes: { value: H5AppearanceOption, label: string }[] = [
+    { value: 'system', label: t('settings.general.appearance.followSystem') },
     { value: 'white', label: t('settings.general.appearance.white') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
   ]
@@ -63,7 +68,18 @@ export function H5GeneralSettings() {
     {failed && <p role="alert" className="mb-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
     <SettingsSection className="mt-0" title={t('settings.general.appearanceTitle')} description={t('h5Settings.browserOnly')}>
       <SettingsGroup>
-        {select<ThemeMode>(t('settings.general.appearanceTitle'), { value: theme, options: themes, onChange: (value) => { useUIStore.getState().setFollowSystemTheme(false); void settings.setTheme(value) } })}
+        {select<H5AppearanceOption>(t('settings.general.appearanceTitle'), {
+          value: appearanceValue,
+          options: themes,
+          onChange: (value) => {
+            if (value === 'system') {
+              useUIStore.getState().setFollowSystemTheme(true)
+              return
+            }
+            useUIStore.getState().setFollowSystemTheme(false)
+            void settings.setTheme(value)
+          },
+        })}
         {select<Locale>(t('settings.general.languageTitle'), { value: settings.locale, options: languages, onChange: settings.setLocale })}
       </SettingsGroup>
     </SettingsSection>

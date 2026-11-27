@@ -1509,7 +1509,8 @@ describe('ChatInput file mentions', () => {
     // Repository launch pill lives in the bare under-card strip cleanly below
     // the rounded composer card without overlapping its bottom corners.
     const strip = screen.getByTestId('composer-context-strip')
-    expect(strip).toHaveClass('surface-glass', 'pt-2')
+    expect(strip).toHaveClass('pt-2')
+    expect(strip).not.toHaveClass('surface-glass')
     expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const pill = await screen.findByRole('button', { name: 'Location: repo / main' })
     expect(strip).toContainElement(pill)

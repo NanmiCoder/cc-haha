@@ -33,16 +33,18 @@ export function MobileActivityPill({ sessionId }: { sessionId: string }) {
       }`}
     >
       <span
-        className={`flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 tabular-nums ${
+        className={`v6c-raised flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-surface-glass-border)] px-2.5 tabular-nums ${
           busy
-            ? 'v6c-ring-running bg-[var(--color-surface-glass)] text-[var(--color-on-info-container)]'
-            : 'v6c-raised border border-[var(--color-surface-glass-border)] text-[var(--color-text-secondary)]'
+            ? 'text-[var(--color-info)]'
+            : 'text-[var(--color-text-secondary)]'
         }`}
       >
         {busy
           ? <Spinner size={12} />
           : <ListChecks size={14} strokeWidth={1.75} aria-hidden="true" />}
-        {busy ? t('mobile.activity.inProgress', { count: summary.count }) : t('session.activity.title')}
+        {busy
+          ? <span className="codex-shimmer-text font-medium">{t('mobile.activity.inProgress', { count: summary.count })}</span>
+          : t('session.activity.title')}
       </span>
     </button>
   )

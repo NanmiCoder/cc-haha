@@ -209,7 +209,7 @@ export function TokenHeatmap({ stats, locale }: { stats: ActivityStatsResponse; 
               <div
                 id={`activity-day-tooltip-${tooltipDay.date}`}
                 role="tooltip"
-                className="popover-motion pointer-events-none absolute z-[var(--z-tooltip)] min-w-[172px] rounded-[var(--radius-md)] border border-[var(--color-activity-tooltip-border)] bg-[var(--color-activity-tooltip-surface)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-dropdown)]"
+                className="popover-motion pointer-events-none absolute z-[var(--z-tooltip)] min-w-[172px] rounded-[var(--radius-control)] border border-[var(--color-activity-tooltip-border)] bg-[var(--color-activity-tooltip-surface)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-dropdown-glass)]"
                 style={tooltipStyle}
               >
                 <div className="font-medium text-[var(--color-activity-tooltip-text)]">{cellTitle(tooltipDay, locale, t)}</div>

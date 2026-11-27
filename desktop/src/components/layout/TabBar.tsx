@@ -1,4 +1,5 @@
 import { forwardRef, useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import {
   useTabStore,
@@ -755,52 +756,66 @@ export function TabBar() {
       <WindowControls />
       </div>
 
-      {contextMenu && (
+      {contextMenu && createPortal(
         <div
           ref={contextMenuRef}
+          role="menu"
           className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
+            type="button"
+            role="menuitem"
             onClick={() => { handleClose(contextMenu.sessionId); setContextMenu(null) }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.close')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseOthers(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeOthers')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseLeft(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeLeft')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseRight(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeRight')}
           </button>
           <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
+            type="button"
+            role="menuitem"
             onClick={handleCloseAll}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeAll')}
           </button>
           <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
+            type="button"
+            role="menuitem"
             disabled={!canReopenClosedTab}
             onClick={() => { setContextMenu(null); void reopenClosedSessionTab() }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
           >
             {t('tabs.reopenClosed')}
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
 
       <ActionDialog

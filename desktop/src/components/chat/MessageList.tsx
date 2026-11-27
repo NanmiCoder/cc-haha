@@ -4402,7 +4402,7 @@ export function MessageList({
           // `dropdown-glass` sits after `.v6c-raised` in `@layer components`,
           // so its frosted rest surface wins while `@layer utilities` hover and
           // `focus-visible:ring-2` stay active on keyboard focus.
-          className="dropdown-glass popover-motion absolute bottom-4 right-5 z-20 rounded-[var(--radius-control)] text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
+          className="dropdown-glass popover-motion absolute bottom-4 right-5 z-[var(--z-sticky)] rounded-[var(--radius-control)] text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
           icon={<ArrowDown size={15} strokeWidth={1.75} aria-hidden="true" />}
         >
           {t('chat.jumpToLatest')}

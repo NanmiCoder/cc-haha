@@ -115,9 +115,7 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
                 {t(`settings.providers.antigravity.badge.${status}`)}
               </Badge>
               {antigravity.version ? (
-                <Badge tone="neutral" pill={false}>
-                  <span className="font-mono text-[11px]">{antigravity.version}</span>
-                </Badge>
+                <Badge tone="neutral" pill={false} mono>{antigravity.version}</Badge>
               ) : null}
               {antigravity.tier?.name ? (
                 <Badge tone="info" pill={false}>{antigravity.tier.name}</Badge>

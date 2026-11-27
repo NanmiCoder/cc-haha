@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { browserHost } from '@/lib/desktopHost/browserHost'
+import { clearDisclosureMemory } from '@/lib/disclosureMemory'
 import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
@@ -33,6 +34,7 @@ function makeCall(overrides: Partial<ToolCall> & { toolName: string; input: unkn
 
 describe('BrowserActivityCard', () => {
   beforeEach(() => {
+    clearDisclosureMemory()
     useSettingsStore.setState({ locale: 'en' })
     useBrowserUseStore.getState().reset()
     window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
@@ -423,5 +425,221 @@ describe('BrowserActivityCard', () => {
     )
     expect(screen.getAllByTestId('browser-activity-card')).toHaveLength(1)
     expect(screen.getByTestId('activity-group')).toBeInTheDocument()
+  })
+
+  it('uses borderless codex-work-row disclosure, shimmer while live, disclosureKey persistence, and suppresses ghost spinners', () => {
+    const calls: ToolCall[] = [
+      makeCall({ id: 'c1', toolUseId: 'tu-1', toolName: 'BrowserNavigate', input: { url: 'https://example.com' } }),
+    ]
+
+    // Unresolved call in a non-live, non-streaming historical transcript must not spin.
+    const { rerender, unmount } = render(
+      <BrowserActivityCard
+        sessionId="s1"
+        toolCalls={calls}
+        resultMap={new Map()}
+        disclosureKey="turn-1:browser"
+      />,
+    )
+    const card = screen.getByTestId('browser-activity-card')
+    expect(card).toHaveAttribute('data-running', 'false')
+    expect(card.className).not.toContain('border')
+    expect(card.querySelector('.codex-shimmer-text')).toBeNull()
+    const disclosure = card.querySelector('[data-chat-disclosure="true"]')!
+    expect(disclosure.className).toContain('codex-work-row')
+    expect(disclosure.className).toContain('rounded-[var(--radius-sm)]')
+
+    // Target badge is non-pill.
+    const badge = screen.getByText('Workspace')
+    expect(badge.className).toContain('rounded-[var(--radius-sm)]')
+    expect(badge.className).not.toContain('rounded-full')
+
+    // Live turn activates shimmer running state even when isStreaming is false.
+    rerender(
+      <BrowserActivityCard
+        sessionId="s1"
+        toolCalls={calls}
+        resultMap={new Map()}
+        isLive
+        disclosureKey="turn-1:browser"
+      />,
+    )
+    expect(screen.getByTestId('browser-activity-card')).toHaveAttribute('data-running', 'true')
+    expect(screen.getByTestId('browser-activity-card').querySelector('.codex-shimmer-text')).not.toBeNull()
+
+    // Expand and verify disclosureKey persists across unmount/remount, and can still collapse after remount.
+    fireEvent.click(screen.getByTestId('browser-activity-card').querySelector('[data-chat-disclosure="true"]')!)
+    expect(screen.getByTestId('browser-activity-steps')).toBeInTheDocument()
+    unmount()
+
+    render(
+      <BrowserActivityCard
+        sessionId="s1"
+        toolCalls={calls}
+        resultMap={new Map()}
+        disclosureKey="turn-1:browser"
+      />,
+    )
+    expect(screen.getByTestId('browser-activity-steps')).toBeInTheDocument()
+    // Clicking disclosure after remount must collapse cleanly (no React bailout against module Map).
+    const remountDisclosure = screen.getByTestId('browser-activity-card').querySelector('[data-chat-disclosure="true"]')!
+    expect(remountDisclosure).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(remountDisclosure)
+    expect(screen.queryByTestId('browser-activity-steps')).not.toBeInTheDocument()
+    expect(remountDisclosure).toHaveAttribute('aria-expanded', 'false')
+    // Header icon on dead/interrupted transcript (unresolved call with !isLive && !isStreaming) uses CircleStop, not Globe.
+    expect(remountDisclosure.querySelector('svg.lucide-circle-stop')).not.toBeNull()
+    expect(remountDisclosure.querySelector('svg.lucide-globe')).toBeNull()
+  })
+
+  it('defaults unknown tool errors in a partial errorSeverityByToolUseId map to blocking', () => {
+    const call = makeCall({
+      id: 'b-partial',
+      toolUseId: 'tu-partial-err',
+      toolName: 'BrowserNavigate',
+      input: { url: 'https://partial.example.com' },
+    })
+    const resultMap = new Map<string, ToolResult>([
+      ['tu-partial-err', { id: 'res-partial', type: 'tool_result', toolUseId: 'tu-partial-err', content: 'boom', isError: true, timestamp: 1200 }],
+    ])
+
+    render(
+      <BrowserActivityCard
+        sessionId="s1"
+        toolCalls={[call]}
+        resultMap={resultMap}
+        errorSeverityByToolUseId={new Map()}
+      />,
+    )
+    expect(screen.getByTestId('browser-activity-card').innerHTML).toContain('text-[var(--color-error)]')
+  })
+
+  it('keeps recovered errors neutral monochrome and surfaces red only for blocking errors, including across mixed ToolCallGroup splits', () => {
+    const readCall = makeCall({
+      id: 'r1',
+      toolUseId: 'tu-read-err',
+      toolName: 'Read',
+      input: { file_path: 'missing.ts' },
+    })
+    const browserErrCall = makeCall({
+      id: 'b1',
+      toolUseId: 'tu-b-err',
+      toolName: 'BrowserNavigate',
+      input: { url: 'https://retry.example.com' },
+    })
+    const browserOkCall = makeCall({
+      id: 'b2',
+      toolUseId: 'tu-b-ok',
+      toolName: 'BrowserSnapshot',
+      input: {},
+    })
+    const resultMap = new Map<string, ToolResult>([
+      ['tu-read-err', { id: 'res-r1', type: 'tool_result', toolUseId: 'tu-read-err', content: 'ENOENT', isError: true, timestamp: 1100 }],
+      ['tu-b-err', { id: 'res-b1', type: 'tool_result', toolUseId: 'tu-b-err', content: 'timeout', isError: true, timestamp: 1200 }],
+      ['tu-b-ok', { id: 'res-b2', type: 'tool_result', toolUseId: 'tu-b-ok', content: 'ok', isError: false, timestamp: 1300 }],
+    ])
+    const recoveredMap = new Map([
+      ['tu-read-err', 'recovered' as const],
+      ['tu-b-err', 'recovered' as const],
+    ])
+
+    const { rerender } = render(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[readCall, browserErrCall, browserOkCall]}
+        resultMap={resultMap}
+        childToolCallsByParent={new Map()}
+        errorSeverityByToolUseId={recoveredMap}
+        agentTaskNotifications={{}}
+      />,
+    )
+
+    // Both regular ActivityGroup and BrowserActivityCard stay calm monochrome on recovered errors.
+    expect(screen.getByTestId('activity-group')).not.toHaveTextContent(/failed/i)
+    const browserCard = screen.getByTestId('browser-activity-card')
+    expect(browserCard.innerHTML).not.toContain('text-[var(--color-error)]')
+
+    // Expand steps: neither recovered error nor completed step uses loud red or green.
+    fireEvent.click(browserCard.querySelector('[data-chat-disclosure="true"]')!)
+    const stepsList = screen.getByTestId('browser-activity-steps')
+    expect(stepsList.innerHTML).not.toContain('text-[var(--color-error)]')
+    expect(stepsList.innerHTML).not.toContain('text-[var(--color-success)]')
+
+    // Flip browser error to blocking -> red indicator appears on header and step.
+    const blockingMap = new Map([
+      ['tu-read-err', 'recovered' as const],
+      ['tu-b-err', 'blocking' as const],
+    ])
+    rerender(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[readCall, browserErrCall, browserOkCall]}
+        resultMap={resultMap}
+        childToolCallsByParent={new Map()}
+        errorSeverityByToolUseId={blockingMap}
+        agentTaskNotifications={{}}
+      />,
+    )
+    expect(screen.getByTestId('browser-activity-card').innerHTML).toContain('text-[var(--color-error)]')
+    expect(screen.getByTestId('browser-activity-steps').innerHTML).toContain('text-[var(--color-error)]')
+  })
+
+  it('forwards isLive through mixed ToolCallGroup splits to both regular ActivityGroup and BrowserActivityCard', () => {
+    const readCall = makeCall({
+      id: 'r-live',
+      toolUseId: 'tu-read-live',
+      toolName: 'Read',
+      input: { file_path: 'app.ts' },
+    })
+    const browserCall = makeCall({
+      id: 'b-live',
+      toolUseId: 'tu-b-live',
+      toolName: 'BrowserNavigate',
+      input: { url: 'https://live.example.com' },
+    })
+
+    render(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[readCall, browserCall]}
+        resultMap={new Map()}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+        isLive
+      />,
+    )
+
+    expect(screen.getByTestId('activity-group').querySelector('.codex-shimmer-text')).not.toBeNull()
+    expect(screen.getByTestId('browser-activity-card')).toHaveAttribute('data-running', 'true')
+    expect(screen.getByTestId('browser-activity-card').querySelector('.codex-shimmer-text')).not.toBeNull()
+  })
+
+  it('styles BrowserTakeoverCard and BrowserUseEnableCard with V6C frosted glass tokens', () => {
+    render(
+      <>
+        <BrowserTakeoverCard
+          sessionId="s1"
+          takeover={{
+            takeoverId: 'tk-glass',
+            tabId: 'tab-1',
+            target: 'workspace',
+            reason: 'login',
+            message: 'Sign in',
+            createdAt: 1000,
+            status: 'pending',
+          }}
+        />
+        <BrowserUseEnableCard />
+      </>,
+    )
+
+    const takeover = screen.getByTestId('browser-takeover-card')
+    expect(takeover.className).toContain('v6c-glass-card')
+    expect(takeover.className).toContain('v6c-ring-waiting')
+    expect(takeover.className).not.toContain('bg-[var(--color-warning-container)]')
+    expect(takeover.querySelector('[class*="bg-[var(--color-warning-container)]"]')).not.toBeNull()
+
+    const enableCard = screen.getByTestId('browser-use-enable-card')
+    expect(enableCard.className).toContain('v6c-glass-card')
   })
 })

@@ -10,7 +10,6 @@ import {
   FolderGit2,
   GitBranch,
   GitFork,
-  Loader2,
   Plus,
   Search,
 } from 'lucide-react'
@@ -36,6 +35,7 @@ import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
+import { Spinner } from '@/components/ui/Spinner'
 
 type Props = {
   workDir: string
@@ -938,10 +938,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // pixels taller the moment the context lands.
   const revealSkeleton = (
     <div aria-hidden="true" className="flex animate-pulse flex-col gap-1">
-      <div className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)]" />
+      <div className="h-11 rounded-[var(--radius-control)] bg-[var(--color-surface-container)]" />
       <div className="mx-1 my-1 h-px bg-[var(--color-border-separator)]" />
-      <div className="h-16 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
-      <div className="h-16 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
+      <div className="h-16 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]" />
+      <div className="h-16 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]" />
     </div>
   )
 
@@ -1108,7 +1108,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       )}
 
       {loading && workDir
-        ? <Loader2 size={14} aria-hidden="true" className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" />
+        ? <Spinner size={14} className="text-[var(--color-text-tertiary)]" />
         : <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
     </button>
   )

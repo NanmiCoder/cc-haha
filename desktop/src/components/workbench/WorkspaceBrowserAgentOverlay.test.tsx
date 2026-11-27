@@ -412,4 +412,45 @@ describe('WorkspaceBrowserAgentOverlay', () => {
     })
     vi.unstubAllGlobals()
   })
+
+  it('uses V6C glass chrome, soft status rings, reduced-motion guards, and valid shield ARIA role', () => {
+    placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    useBrowserUseStore.getState().applyHostEvent({
+      type: 'control-state',
+      tabId: 'tab-agent',
+      state: 'active',
+      actionLabel: 'Click "Submit"',
+    })
+
+    render(<WorkspaceBrowserAgentOverlay tabId="tab-agent" />)
+
+    const shield = screen.getByTestId('browser-agent-takeover-shield')
+    expect(shield).toHaveAttribute('role', 'region')
+    expect(shield).toHaveAttribute('aria-label', 'Click or press Esc to take over browser control')
+
+    const frame = screen.getByTestId('browser-agent-viewport-frame')
+    expect(frame.className).toContain('v6c-ring-running')
+    expect(frame.className).toContain('motion-reduce:transition-none')
+    expect(frame.className).not.toContain('border-2')
+
+    const pill = screen.getByTestId('browser-agent-control-pill')
+    expect(pill.className).toContain('dropdown-glass')
+    expect(pill.className).toContain('rounded-[var(--radius-xl)]')
+    expect(pill.className).toContain('z-[var(--z-sticky)]')
+    expect(pill.className).not.toContain('rounded-full')
+    expect(pill.className).not.toContain('backdrop-blur-md')
+
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: 'tab-agent',
+        state: 'takeover',
+        takeoverReason: 'Sign in',
+      })
+    })
+    expect(frame.className).toContain('v6c-ring-waiting')
+    expect(pill.className).toContain('dropdown-glass')
+    expect(pill.className).toContain('v6c-ring-waiting')
+    expect(pill.className).not.toContain('bg-[var(--color-warning-container)]')
+  })
 })

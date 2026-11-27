@@ -3994,5 +3994,44 @@ describe('TabBar', () => {
       expect(svg).toHaveAttribute('height', '12')
       expect(svg).toHaveAttribute('data-brand', 'google')
     })
+
+    it('portals the tab context menu to document.body with menu semantics and focus-visible states', async () => {
+      const { TabBar } = await import('./TabBar')
+      const { useTabStore } = await import('../../stores/tabStore')
+
+      useTabStore.setState({
+        tabs: [
+          { sessionId: 'tab-a', title: 'Session A', type: 'session', status: 'idle' },
+          { sessionId: 'tab-b', title: 'Session B', type: 'session', status: 'idle' },
+        ],
+        activeTabId: 'tab-a',
+        closedSessionTabs: [],
+      })
+
+      let container!: HTMLElement
+      await act(async () => {
+        const rendered = render(<TabBar />)
+        container = rendered.container
+      })
+
+      fireEvent.contextMenu(screen.getByText('Session A'))
+
+      const menu = screen.getByRole('menu')
+      expect(container).not.toContainElement(menu)
+      expect(document.body).toContainElement(menu)
+
+      const items = within(menu).getAllByRole('menuitem')
+      expect(items).toHaveLength(6)
+      for (const item of items) {
+        expect(item).toHaveAttribute('type', 'button')
+        expect(item).toHaveClass(
+          'focus-visible:outline-none',
+          'focus-visible:bg-[var(--color-surface-hover)]',
+          'focus-visible:ring-2',
+          'focus-visible:ring-inset',
+          'focus-visible:ring-[var(--color-border-focus)]',
+        )
+      }
+    })
   })
 })

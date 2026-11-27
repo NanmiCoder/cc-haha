@@ -7,8 +7,8 @@
  *
  * - idle: no fill, tertiary label.
  * - hover: a paper fill with the faint `--color-tab-separator` ring. Not
- *   `--color-surface-hover`: that token is tuned for hovering *on* paper, and on
- *   the two ink themes it is brighter than paper (dark #2B271F vs #201D17), so a
+ *   `--color-surface-hover`: that token is tuned for hovering *on* paper, and in
+ *   the dark theme it is brighter than paper (`#282828` vs `#181818`), so a
  *   hovered tab would outshine the selected one. The ring is needed because
  *   paper against the trough is only 1.05–1.10:1 — a fill alone has no shape.
  * - active: the same paper fill with the full `--color-tab-edge` ring, a hair

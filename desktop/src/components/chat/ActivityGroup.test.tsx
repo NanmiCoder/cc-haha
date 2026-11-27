@@ -563,7 +563,7 @@ describe('ActivityGroup on a phone', () => {
   const bash = toolCall({ id: 'use-bash', toolUseId: 'bash-1', toolName: 'Bash', input: { command: 'bun test' }, timestamp: 2_000 })
   const steps: ActivityStep[] = [{ kind: 'tool', toolCall: read }, { kind: 'tool', toolCall: bash }]
 
-  it('folds a finished run into one card and opens the whole timeline in a sheet', () => {
+  it('folds a finished run into a borderless work row and opens the whole timeline in a sheet', () => {
     render(
       <ActivityGroup
         presentation="sheet"
@@ -576,19 +576,27 @@ describe('ActivityGroup on a phone', () => {
       />,
     )
 
-    const card = screen.getByTestId('activity-group')
-    expect(card).toHaveAttribute('data-presentation', 'sheet')
-    expect(card).toHaveTextContent(formatActivitySummary(buildActivitySegments(steps, t), t))
+    const group = screen.getByTestId('activity-group')
+    expect(group).toHaveAttribute('data-presentation', 'sheet')
+    expect(group.className).not.toContain('bg-[var(--color-surface-container-lowest)]')
+    expect(group.className).not.toContain('border-[var(--color-border)]')
+    expect(group).toHaveTextContent(formatActivitySummary(buildActivitySegments(steps, t), t))
     // Nothing unfolds in place: the transcript keeps its place on a small screen.
-    expect(within(card).queryByText('bun test')).toBeNull()
+    expect(within(group).queryByText('bun test')).toBeNull()
     expect(screen.queryByTestId('activity-live-step')).toBeNull()
 
-    fireEvent.click(within(card).getByRole('button'))
+    const trigger = within(group).getByRole('button')
+    expect(trigger).toHaveClass('codex-work-row', 'min-h-11', 'rounded-[var(--radius-sm)]')
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
     const sheet = screen.getByTestId('activity-timeline-sheet')
     expect(within(sheet).getByText('bun test')).toBeTruthy()
   })
 
-  it('shows the step under way while the run is live', () => {
+  it('shows the active step inline with calm shimmer while the run is live', () => {
     render(
       <ActivityGroup
         presentation="sheet"
@@ -599,11 +607,53 @@ describe('ActivityGroup on a phone', () => {
       />,
     )
 
-    expect(screen.getByTestId('activity-group')).toHaveAttribute('data-running', 'true')
-    expect(within(screen.getByTestId('activity-live-step')).getByText('bun test')).toBeTruthy()
+    const group = screen.getByTestId('activity-group')
+    expect(group).toHaveAttribute('data-running', 'true')
+    expect(screen.queryByTestId('activity-live-step')).toBeNull()
+    expect(group.querySelector('[data-activity-live-label="true"]')).not.toBeNull()
+    expect(group.querySelector('.codex-shimmer-text')).not.toBeNull()
+    expect(within(group).getByText('bun test')).toBeTruthy()
   })
 
-  it('gives even a single call the card, so every run reads the same', () => {
+  it('keeps self-recovered failures quiet and only highlights blocking errors', () => {
+    const retryBash = toolCall({
+      id: 'use-bash-2',
+      toolUseId: 'bash-2',
+      toolName: 'Bash',
+      input: { command: 'bun test --retry' },
+      timestamp: 3_500,
+    })
+    const { rerender } = render(
+      <ActivityGroup
+        presentation="sheet"
+        steps={[{ kind: 'tool', toolCall: bash }, { kind: 'tool', toolCall: retryBash }]}
+        resultMap={resultsOf([
+          toolResult({ id: 'r-fail', toolUseId: 'bash-1', content: 'Exit code 1', isError: true, timestamp: 3_000 }),
+          toolResult({ id: 'r-ok', toolUseId: 'bash-2', content: 'ok', isError: false, timestamp: 4_000 }),
+        ])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+
+    expect(screen.queryByText(t('toolGroup.failedCount', { count: 1 }))).toBeNull()
+
+    rerender(
+      <ActivityGroup
+        presentation="sheet"
+        steps={steps}
+        resultMap={resultsOf([
+          toolResult({ id: 'r1', toolUseId: 'read-1', timestamp: 1_500 }),
+          toolResult({ id: 'r2', toolUseId: 'bash-1', content: 'Exit code 1', isError: true, timestamp: 3_000 }),
+        ])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+
+    const failedBadge = screen.getByText(t('toolGroup.failedCount', { count: 1 }))
+    expect(failedBadge).toHaveClass('text-[var(--color-error)]')
+  })
+
+  it('keeps single-step runs on the same calm sheet disclosure', () => {
     render(
       <ActivityGroup
         presentation="sheet"
@@ -612,6 +662,9 @@ describe('ActivityGroup on a phone', () => {
         childToolCallsByParent={new Map()}
       />,
     )
-    expect(screen.getByTestId('activity-group')).toHaveAttribute('data-presentation', 'sheet')
+    const group = screen.getByTestId('activity-group')
+    expect(group).toHaveAttribute('data-presentation', 'sheet')
+    expect(within(group).getByRole('button')).toHaveClass('codex-work-row', 'min-h-11')
+    expect(within(group).getByText('bun test')).toBeTruthy()
   })
 })

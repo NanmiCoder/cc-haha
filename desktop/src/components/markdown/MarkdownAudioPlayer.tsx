@@ -151,7 +151,7 @@ export function MarkdownAudioPlayer({ src, label, title }: MarkdownAudioProps) {
           // player belongs to playback only and must not navigate the link.
           event.stopPropagation()
         }}
-        className="not-prose my-2 flex max-w-md flex-col gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5"
+        className="v6c-glass-card not-prose my-2 flex max-w-md flex-col gap-1.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-3 py-2.5"
       >
         <span className="flex min-w-0 items-center gap-1.5">
           <Volume2 size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />

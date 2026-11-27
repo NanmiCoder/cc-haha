@@ -126,9 +126,8 @@ function getStoredSettingsTab(): SettingsTab {
  */
 function paintDocumentTheme(theme: ThemeMode) {
   document.documentElement.setAttribute('data-theme', theme)
-  // Two of the six palettes sit on a dark ground, so this cannot test for the
-  // literal 'dark' key — ink-blue would render native scrollbars and form
-  // controls in their light variant against a near-black page.
+  // Delegate to `isDarkTheme` so native scrollbars and form controls stay in
+  // sync with the theme system if additional dark palettes are ever added.
   document.documentElement.style.colorScheme = isDarkTheme(theme) ? 'dark' : 'light'
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_BACKGROUNDS[theme])
 }
@@ -371,7 +370,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Picking a palette while following the system does not fight the OS: it
   // becomes the preference for its own half and shows up once the OS is on
-  // that ground. So choosing ink-blue at noon is remembered for tonight.
+  // that ground (e.g. choosing dark during the day is remembered for night).
   setTheme: (theme) => {
     set((state) => {
       const lightTheme = isLightThemeMode(theme) ? theme : state.lightTheme

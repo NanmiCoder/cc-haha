@@ -82,9 +82,13 @@ describe('message actions on a phone', () => {
 
     const sheet = screen.getByTestId('message-action-sheet')
     expect(sheet).toHaveTextContent('02:35')
-    expect(within(sheet).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+    const items = within(sheet).getAllByRole('menuitem')
+    expect(items.map((item) => item.textContent)).toEqual([
       'Copy', 'Select text', 'Edit and resend', 'Branch from here',
     ])
+    for (const item of items) {
+      expect(item).toHaveClass('v6c-pressable', 'rounded-[var(--radius-control)]', 'hover:bg-[var(--color-surface-hover)]')
+    }
   })
 
   it('copies the prompt and says so', async () => {

@@ -21,8 +21,9 @@ describe('ProviderRequestCompatibilityFields', () => {
   afterEach(cleanup)
 
   it('reveals the output budget field but hides advanced compatibility controls for anthropic providers', () => {
-    render(<Harness apiFormat="anthropic" />)
+    const { container } = render(<Harness apiFormat="anthropic" />)
 
+    expect(container.querySelector('section')).toHaveClass('v6c-glass-card')
     const budget = screen.getByLabelText('Reply output budget')
     expect(budget).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Advanced compatibility' })).not.toBeInTheDocument()
