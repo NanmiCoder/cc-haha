@@ -346,16 +346,18 @@ function ToolCallGroupContent({
   }
 
   const hasBrowserUse = toolCalls.some((toolCall) => isBrowserUseToolName(toolCall.toolName))
-  const hasNonBrowserSteps = steps.some(
-    (step) => step.kind === 'thinking' || !isBrowserUseToolName(step.toolCall.toolName),
+  const hasNonBrowserToolCalls = toolCalls.some(
+    (toolCall) => !isBrowserUseToolName(toolCall.toolName),
   )
-  if (hasBrowserUse && !hasNonBrowserSteps) {
+  if (hasBrowserUse && !hasNonBrowserToolCalls) {
     return (
       <BrowserActivityCard
         sessionId={sessionId}
         toolCalls={toolCalls}
+        steps={steps}
         resultMap={resultMap}
         errorSeverityByToolUseId={errorSeverityByToolUseId}
+        activeThinkingId={activeThinkingId}
         isStreaming={isStreaming}
         isLive={isLive}
         disclosureKey={disclosureKey}
@@ -363,13 +365,15 @@ function ToolCallGroupContent({
       />
     )
   }
-  if (hasBrowserUse && hasNonBrowserSteps) {
+  if (hasBrowserUse && hasNonBrowserToolCalls) {
     const segments: Array<
-      | { kind: 'browser'; toolCalls: ToolCall[] }
+      | { kind: 'browser'; steps: ActivityStep[]; toolCalls: ToolCall[] }
       | { kind: 'regular'; steps: ActivityStep[] }
     > = []
     let regularSteps: ActivityStep[] = []
+    let browserSteps: ActivityStep[] = []
     let browserToolCalls: ToolCall[] = []
+    let pendingThinking: ActivityStep[] = []
     const flushRegular = () => {
       if (regularSteps.length === 0) return
       segments.push({ kind: 'regular', steps: regularSteps })
@@ -377,17 +381,40 @@ function ToolCallGroupContent({
     }
     const flushBrowser = () => {
       if (browserToolCalls.length === 0) return
-      segments.push({ kind: 'browser', toolCalls: browserToolCalls })
+      segments.push({ kind: 'browser', steps: browserSteps, toolCalls: browserToolCalls })
+      browserSteps = []
       browserToolCalls = []
     }
+    // Buffer thinking blocks until the next tool call arrives so reasoning
+    // interleaved between Browser* calls stays folded inside one BrowserActivityCard
+    // instead of shattering it into alternating "Thought" + "Browser action · 1 step" rows.
     for (const step of steps) {
-      if (step.kind === 'tool' && isBrowserUseToolName(step.toolCall.toolName)) {
+      if (step.kind === 'thinking') {
+        pendingThinking.push(step)
+      } else if (isBrowserUseToolName(step.toolCall.toolName)) {
         flushRegular()
+        if (pendingThinking.length > 0) {
+          browserSteps.push(...pendingThinking)
+          pendingThinking = []
+        }
+        browserSteps.push(step)
         browserToolCalls.push(step.toolCall)
       } else {
         flushBrowser()
+        if (pendingThinking.length > 0) {
+          regularSteps.push(...pendingThinking)
+          pendingThinking = []
+        }
         regularSteps.push(step)
       }
+    }
+    if (pendingThinking.length > 0) {
+      if (browserToolCalls.length > 0) {
+        browserSteps.push(...pendingThinking)
+      } else {
+        regularSteps.push(...pendingThinking)
+      }
+      pendingThinking = []
     }
     flushRegular()
     flushBrowser()
@@ -399,8 +426,10 @@ function ToolCallGroupContent({
             key={`browser-${segment.toolCalls[0]?.id ?? index}`}
             sessionId={sessionId}
             toolCalls={segment.toolCalls}
+            steps={segment.steps}
             resultMap={resultMap}
             errorSeverityByToolUseId={errorSeverityByToolUseId}
+            activeThinkingId={activeThinkingId}
             isStreaming={isStreaming && index === segments.length - 1}
             isLive={isLive && index === segments.length - 1}
             disclosureKey={disclosureKey ? `${disclosureKey}:browser:${index}` : undefined}

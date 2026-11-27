@@ -15,6 +15,8 @@ import {
   SessionBrowserTakeoverBanner,
 } from './BrowserActivityCard'
 import { ToolCallGroup } from './ToolCallGroup'
+import { buildRenderModel } from './MessageList'
+import type { ActivityStep } from './activityGroupModel'
 import { maskSensitiveBrowserValue } from './toolCallPresentation'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -680,5 +682,191 @@ describe('BrowserActivityCard', () => {
 
     const enableCard = screen.getByTestId('browser-use-enable-card')
     expect(enableCard.className).toContain('v6c-glass-card')
+  })
+
+  it('keeps interleaved thinking blocks folded inside a single BrowserActivityCard instead of splitting every step', () => {
+    const t1: Extract<UIMessage, { type: 'thinking' }> = {
+      id: 'th-1',
+      type: 'thinking',
+      content: 'Open modeldial first',
+      timestamp: 1000,
+    }
+    const b1 = makeCall({
+      id: 'b1',
+      toolUseId: 'tu-b1',
+      toolName: 'BrowserNavigate',
+      input: { url: 'https://modeldial.com' },
+      timestamp: 1010,
+    })
+    const t2: Extract<UIMessage, { type: 'thinking' }> = {
+      id: 'th-2',
+      type: 'thinking',
+      content: 'Now take a snapshot',
+      timestamp: 1020,
+    }
+    const b2 = makeCall({
+      id: 'b2',
+      toolUseId: 'tu-b2',
+      toolName: 'BrowserSnapshot',
+      input: {},
+      timestamp: 1030,
+    })
+    const t3: Extract<UIMessage, { type: 'thinking' }> = {
+      id: 'th-3',
+      type: 'thinking',
+      content: 'Click Claude tab',
+      timestamp: 1040,
+    }
+    const b3 = makeCall({
+      id: 'b3',
+      toolUseId: 'tu-b3',
+      toolName: 'BrowserAct',
+      input: { steps: [{ action: 'click', label: 'Claude' }] },
+      timestamp: 1050,
+    })
+    const t4: Extract<UIMessage, { type: 'thinking' }> = {
+      id: 'th-4',
+      type: 'thinking',
+      content: 'Ready to summarize',
+      timestamp: 1060,
+    }
+    const steps: ActivityStep[] = [
+      { kind: 'thinking', message: t1 },
+      { kind: 'tool', toolCall: b1 },
+      { kind: 'thinking', message: t2 },
+      { kind: 'tool', toolCall: b2 },
+      { kind: 'thinking', message: t3 },
+      { kind: 'tool', toolCall: b3 },
+      { kind: 'thinking', message: t4 },
+    ]
+    const resultMap = new Map<string, ToolResult>([
+      ['tu-b1', { id: 'r1', type: 'tool_result', toolUseId: 'tu-b1', content: 'ok', isError: false, timestamp: 1015 }],
+      ['tu-b2', { id: 'r2', type: 'tool_result', toolUseId: 'tu-b2', content: 'ok', isError: false, timestamp: 1035 }],
+      ['tu-b3', { id: 'r3', type: 'tool_result', toolUseId: 'tu-b3', content: 'ok', isError: false, timestamp: 1055 }],
+    ])
+
+    const { container, rerender } = render(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[b1, b2, b3]}
+        steps={steps}
+        resultMap={resultMap}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+      />,
+    )
+
+    // Collapsed: ONE BrowserActivityCard summarizing 3 browser steps, zero standalone Thought rows.
+    expect(screen.getAllByTestId('browser-activity-card')).toHaveLength(1)
+    expect(screen.getByTestId('browser-activity-card')).toHaveTextContent('Browser actions · 3 steps')
+    expect(container.querySelectorAll('[data-thinking-row="true"]')).toHaveLength(0)
+
+    // Active interleaved thinking marks the single card as running without splitting it.
+    rerender(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[b1, b2, b3]}
+        steps={steps}
+        resultMap={resultMap}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+        activeThinkingId="th-4"
+      />,
+    )
+    expect(screen.getAllByTestId('browser-activity-card')).toHaveLength(1)
+    expect(screen.getByTestId('browser-activity-card')).toHaveAttribute('data-running', 'true')
+
+    // Expanding reveals both browser actions and interleaved thinking rows in order.
+    fireEvent.click(screen.getByTestId('browser-activity-card').querySelector('[data-chat-disclosure="true"]')!)
+    const expandedList = screen.getByTestId('browser-activity-steps')
+    expect(expandedList.querySelectorAll('[data-thinking-row="true"]')).toHaveLength(4)
+    expect(expandedList).toHaveTextContent('Claude')
+  })
+
+  it('merges consecutive browser steps across thinking gaps in mixed browser + non-browser runs', () => {
+    const mkThinking = (id: string, content: string, timestamp: number): ActivityStep => ({
+      kind: 'thinking',
+      message: { id, type: 'thinking', content, timestamp },
+    })
+    const b1 = makeCall({ id: 'b1', toolUseId: 'tu-b1', toolName: 'BrowserNavigate', input: { url: 'https://modeldial.com' }, timestamp: 1010 })
+    const b2 = makeCall({ id: 'b2', toolUseId: 'tu-b2', toolName: 'BrowserSnapshot', input: {}, timestamp: 1030 })
+    const s1 = makeCall({ id: 's1', toolUseId: 'tu-s1', toolName: 'Grep', input: { pattern: 'quota' }, timestamp: 1050 })
+    const s2 = makeCall({ id: 's2', toolUseId: 'tu-s2', toolName: 'Grep', input: { pattern: 'claude' }, timestamp: 1070 })
+    const b3 = makeCall({ id: 'b3', toolUseId: 'tu-b3', toolName: 'BrowserAct', input: { steps: [{ action: 'click', label: 'Claude' }] }, timestamp: 1090 })
+    const b4 = makeCall({ id: 'b4', toolUseId: 'tu-b4', toolName: 'BrowserSnapshot', input: {}, timestamp: 1110 })
+
+    const steps: ActivityStep[] = [
+      mkThinking('t1', 'Start', 1000),
+      { kind: 'tool', toolCall: b1 },
+      mkThinking('t2', 'Inspect', 1020),
+      { kind: 'tool', toolCall: b2 },
+      mkThinking('t3', 'Search local', 1040),
+      { kind: 'tool', toolCall: s1 },
+      mkThinking('t4', 'Search again', 1060),
+      { kind: 'tool', toolCall: s2 },
+      mkThinking('t5', 'Back to browser', 1080),
+      { kind: 'tool', toolCall: b3 },
+      mkThinking('t6', 'Read updated page', 1100),
+      { kind: 'tool', toolCall: b4 },
+      mkThinking('t7', 'Summarize', 1120),
+    ]
+    const resultMap = new Map<string, ToolResult>([
+      ['tu-b1', { id: 'r1', type: 'tool_result', toolUseId: 'tu-b1', content: 'ok', isError: false, timestamp: 1015 }],
+      ['tu-b2', { id: 'r2', type: 'tool_result', toolUseId: 'tu-b2', content: 'ok', isError: false, timestamp: 1035 }],
+      ['tu-s1', { id: 'r3', type: 'tool_result', toolUseId: 'tu-s1', content: 'ok', isError: false, timestamp: 1055 }],
+      ['tu-s2', { id: 'r4', type: 'tool_result', toolUseId: 'tu-s2', content: 'ok', isError: false, timestamp: 1075 }],
+      ['tu-b3', { id: 'r5', type: 'tool_result', toolUseId: 'tu-b3', content: 'ok', isError: false, timestamp: 1095 }],
+      ['tu-b4', { id: 'r6', type: 'tool_result', toolUseId: 'tu-b4', content: 'ok', isError: false, timestamp: 1115 }],
+    ])
+
+    const { container } = render(
+      <ToolCallGroup
+        sessionId="s1"
+        toolCalls={[b1, b2, s1, s2, b3, b4]}
+        steps={steps}
+        resultMap={resultMap}
+        childToolCallsByParent={new Map()}
+        agentTaskNotifications={{}}
+      />,
+    )
+
+    const browserCards = screen.getAllByTestId('browser-activity-card')
+    expect(browserCards).toHaveLength(2)
+    expect(browserCards[0]).toHaveTextContent('Browser actions · 2 steps')
+    expect(browserCards[1]).toHaveTextContent('Browser actions · 2 steps')
+    expect(screen.getAllByTestId('activity-group')).toHaveLength(1)
+    // No orphan standalone ThinkingBlock rows outside the folded cards.
+    expect(container.querySelectorAll('[data-thinking-row="true"]')).toHaveLength(0)
+  })
+
+  it('does not split a Browser Use tool_group in buildRenderModel when BrowserSnapshot returns an image block', () => {
+    const messages: UIMessage[] = [
+      { id: 'th-1', type: 'thinking', content: 'Open page', timestamp: 1000 },
+      makeCall({ id: 'b1', toolUseId: 'tu-b1', toolName: 'BrowserNavigate', input: { url: 'https://modeldial.com' }, timestamp: 1010 }),
+      { id: 'r1', type: 'tool_result', toolUseId: 'tu-b1', content: 'ok', isError: false, timestamp: 1015 },
+      { id: 'th-2', type: 'thinking', content: 'Take screenshot snapshot', timestamp: 1020 },
+      makeCall({ id: 'b2', toolUseId: 'tu-b2', toolName: 'BrowserSnapshot', input: { screenshot: true }, timestamp: 1030 }),
+      {
+        id: 'r2',
+        type: 'tool_result',
+        toolUseId: 'tu-b2',
+        content: [
+          { type: 'text', text: '{"snapshot":"ok"}' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+        ],
+        isError: false,
+        timestamp: 1035,
+      },
+      { id: 'th-3', type: 'thinking', content: 'Click target', timestamp: 1040 },
+      makeCall({ id: 'b3', toolUseId: 'tu-b3', toolName: 'BrowserAct', input: { steps: [{ action: 'click', label: 'Claude' }] }, timestamp: 1050 }),
+      { id: 'r3', type: 'tool_result', toolUseId: 'tu-b3', content: 'ok', isError: false, timestamp: 1055 },
+    ]
+
+    const { renderItems } = buildRenderModel(messages)
+    expect(renderItems).toHaveLength(1)
+    expect(renderItems[0]).toMatchObject({ kind: 'tool_group' })
+    if (renderItems[0]?.kind === 'tool_group') {
+      expect(renderItems[0].toolCalls.map((tc) => tc.toolUseId)).toEqual(['tu-b1', 'tu-b2', 'tu-b3'])
+    }
   })
 })

@@ -7,6 +7,7 @@ import { openSideChat } from '@/lib/workspace/openSideChat'
 import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
 import { resolveConversationImages } from '@/components/chat/conversationImages'
 import { isImageGenerationToolName } from '@/components/chat/imageGenerationTools'
+import { isBrowserUseToolName } from './toolCallPresentation'
 import { hasToolResultImageBlock } from '@/lib/toolResultContent'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
@@ -863,7 +864,10 @@ export function buildRenderModel(
   const appendRootToolCall = (toolCall: ToolCall, result: ToolResult | undefined) => {
     const nextIsAgent = toolCall.toolName === 'Agent'
     // Keep returned pictures with their source row when surrounding activity folds.
+    // Browser Use cards render their own screenshot thumbnail, so a BrowserSnapshot
+    // returning an image block must not split the surrounding browser run.
     const separateImageRow = !nextIsAgent && !isImageGenerationToolName(toolCall.toolName)
+      && !isBrowserUseToolName(toolCall.toolName)
       && hasToolResultImageBlock(result?.content)
     // Agent runs render as their own dispatch cards, so they never mix with
     // ordinary steps — including the thinking that preceded the dispatch.

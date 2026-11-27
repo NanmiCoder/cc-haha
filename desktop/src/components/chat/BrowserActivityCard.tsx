@@ -25,7 +25,8 @@ import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import type { UIMessage } from '@/types/chat'
-import type { ToolErrorSeverity } from './activityGroupModel'
+import type { ActivityStep, ToolErrorSeverity } from './activityGroupModel'
+import { ThinkingBlock } from './ThinkingBlock'
 import { describeBrowserToolCall, formatTakeoverReason } from './toolCallPresentation'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -118,8 +119,14 @@ function isBlockingBrowserError(
 export type BrowserActivityCardProps = {
   sessionId?: string | null
   toolCalls: ToolCall[]
+  /**
+   * Chronological activity steps (browser tool calls plus any interleaved
+   * thinking blocks in the same browser run). Falls back to `toolCalls` when omitted.
+   */
+  steps?: ActivityStep[]
   resultMap: Map<string, ToolResult>
   errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>
+  activeThinkingId?: string | null
   isStreaming?: boolean
   /** True while this card is the tail of an active turn (bridges thinking gaps between tool calls). */
   isLive?: boolean
@@ -136,8 +143,10 @@ export type BrowserActivityCardProps = {
 export const BrowserActivityCard = memo(function BrowserActivityCard({
   sessionId,
   toolCalls,
+  steps: activitySteps,
   resultMap,
   errorSeverityByToolUseId,
+  activeThinkingId,
   isStreaming = false,
   isLive = false,
   disclosureKey,
@@ -164,8 +173,11 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
   )
   const browserUseConfig = useBrowserUseStore((state) => state.config)
 
+  const hasActiveThinking = Boolean(activeThinkingId) && Boolean(
+    activitySteps?.some((step) => step.kind === 'thinking' && step.message.id === activeThinkingId),
+  )
   const hasUnresolved = toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status !== 'stopped')
-  const showsProgress = hasUnresolved && (Boolean(isLive) || Boolean(isStreaming))
+  const showsProgress = (hasUnresolved && (Boolean(isLive) || Boolean(isStreaming))) || hasActiveThinking
   const lastToolCall = toolCalls.at(-1)
   const lastResult = lastToolCall ? resultMap.get(lastToolCall.toolUseId) : undefined
   const hasDisabledError = toolCalls.some((tc) => {
@@ -185,15 +197,39 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
     hasDisabledError
   )
 
-  const steps = useMemo(() => {
-    const list: Array<{
+  const { steps, timelineEntries } = useMemo(() => {
+    type ActionEntry = {
+      kind: 'action'
       id: string
       label: string
       status: 'running' | 'done' | 'error' | 'recovered' | 'stopped'
-    }> = []
-    for (const toolCall of toolCalls) {
+    }
+    type TimelineEntry =
+      | ActionEntry
+      | {
+          kind: 'thinking'
+          id: string
+          content: string
+          isActive: boolean
+        }
+
+    const actionList: ActionEntry[] = []
+    const entryList: TimelineEntry[] = []
+    const sourceSteps: ActivityStep[] = activitySteps ?? toolCalls.map((toolCall) => ({ kind: 'tool', toolCall }))
+
+    for (const sourceStep of sourceSteps) {
+      if (sourceStep.kind === 'thinking') {
+        entryList.push({
+          kind: 'thinking',
+          id: `thinking:${sourceStep.message.id}`,
+          content: sourceStep.message.content,
+          isActive: sourceStep.message.id === activeThinkingId,
+        })
+        continue
+      }
+      const toolCall = sourceStep.toolCall
       const result = resultMap.get(toolCall.toolUseId)
-      const status: 'running' | 'done' | 'error' | 'recovered' | 'stopped' = result
+      const status: ActionEntry['status'] = result
         ? result.isError
           ? isBlockingBrowserError(toolCall.toolUseId, result, errorSeverityByToolUseId)
             ? 'error'
@@ -204,15 +240,18 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
           : 'running'
       const described = describeBrowserToolCall(toolCall.toolName, toolCall.input, t)
       for (const entry of described) {
-        list.push({
+        const actionEntry: ActionEntry = {
+          kind: 'action',
           id: `${toolCall.id}:${entry.id}`,
           label: entry.label,
           status,
-        })
+        }
+        actionList.push(actionEntry)
+        entryList.push(actionEntry)
       }
     }
-    return list
-  }, [errorSeverityByToolUseId, resultMap, showsProgress, t, toolCalls])
+    return { steps: actionList, timelineEntries: entryList }
+  }, [activeThinkingId, activitySteps, errorSeverityByToolUseId, resultMap, showsProgress, t, toolCalls])
 
   // Only consult session-level liveActivities while THIS card is actively live
   // so completed historical cards never bleed screenshots from a later turn.
@@ -348,21 +387,25 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
             data-testid="browser-activity-steps"
             className="mt-1 divide-y divide-[var(--color-border)] rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-1"
           >
-            {steps.map((step) => (
-              <li key={step.id} className="flex items-center gap-2 py-1.5 text-xs">
-                {step.status === 'running' ? (
+            {timelineEntries.map((entry) => entry.kind === 'thinking' ? (
+              <li key={entry.id} className="py-1">
+                <ThinkingBlock content={entry.content} isActive={entry.isActive} />
+              </li>
+            ) : (
+              <li key={entry.id} className="flex items-center gap-2 py-1.5 text-xs">
+                {entry.status === 'running' ? (
                   <LoaderCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 animate-spin text-[var(--color-info)]" />
-                ) : step.status === 'error' ? (
+                ) : entry.status === 'error' ? (
                   <CircleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
-                ) : step.status === 'stopped' ? (
+                ) : entry.status === 'stopped' ? (
                   <CircleStop size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-                ) : step.status === 'recovered' ? (
+                ) : entry.status === 'recovered' ? (
                   <CircleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 ) : (
                   <Check size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 )}
                 <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-                  {step.label}
+                  {entry.label}
                 </span>
               </li>
             ))}
