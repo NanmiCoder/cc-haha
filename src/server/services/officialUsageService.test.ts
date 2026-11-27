@@ -1,10 +1,16 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { afterEach, describe, expect, it, mock } from 'bun:test'
-import { OfficialUsageService } from './officialUsageService.js'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { OfficialUsageService, officialUsageService } from './officialUsageService.js'
 import { aggregateRollingLocalTokens } from './rollingTokenUsage.js'
 import { handleApiRequest } from '../router.js'
+import { handleUsageSummaryApi } from '../api/usage-summary.js'
+import {
+  USAGE_WIDGET_ACCESS_TOKEN_ENV,
+  hasConfiguredUsageWidgetAccessToken,
+  isUsageWidgetAccessAuthorized,
+} from '../localAccessAuth.js'
 import { isUsageWidgetHttpRequestAllowed } from '../usageWidgetAccessPolicy.js'
 import { GROK_CLI_VERSION } from '../../services/grokAuth/fetch.js'
 import { OPENAI_CODEX_ORIGINATOR, OPENAI_CODEX_TOKEN_USER_AGENT } from '../../services/openaiAuth/client.js'
@@ -433,6 +439,46 @@ describe('usage-summary router remote-browser isolation', () => {
     const res = await handleApiRequest(req, new URL(req.url), { remoteBrowser: true })
     expect(res.status).toBe(403)
   })
+
+  it('rejects unknown usage-summary subpaths with 404 and non-GET methods with 405', async () => {
+    const badPath = new Request('http://127.0.0.1:3000/api/usage-summary/extra', { method: 'GET' })
+    const notFound = await handleUsageSummaryApi(badPath, new URL(badPath.url), ['api', 'usage-summary', 'extra'])
+    expect(notFound.status).toBe(404)
+
+    const postReq = new Request('http://127.0.0.1:3000/api/usage-summary', { method: 'POST' })
+    const methodNotAllowed = await handleUsageSummaryApi(postReq, new URL(postReq.url), ['api', 'usage-summary'])
+    expect(methodNotAllowed.status).toBe(405)
+
+    const summarySpy = spyOn(officialUsageService, 'getSummary').mockResolvedValue({
+      fetchedAt: '2026-11-26T18:00:00.000Z',
+      nextAutoRefreshAt: '2026-11-26T18:05:00.000Z',
+      cacheTtlMs: 300_000,
+      hasSignedInOfficial: false,
+      providers: [],
+      localWindow: {
+        windowHours: 5,
+        since: '2026-11-26T13:00:00.000Z',
+        until: '2026-11-26T18:00:00.000Z',
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        turnCount: 0,
+        sessionCount: 0,
+        byModel: [],
+      },
+    })
+    try {
+      const getReq = new Request('http://127.0.0.1:3000/api/usage-summary?force=1', { method: 'GET' })
+      const okRes = await handleUsageSummaryApi(getReq, new URL(getReq.url), ['api', 'usage-summary'])
+      expect(okRes.status).toBe(200)
+      expect(okRes.headers.get('Cache-Control')).toBe('no-store')
+      expect(summarySpy).toHaveBeenCalledWith({ force: true })
+    } finally {
+      summarySpy.mockRestore()
+    }
+  })
 })
 
 describe('usageWidgetAccessPolicy', () => {
@@ -448,6 +494,18 @@ describe('usageWidgetAccessPolicy', () => {
       expect(isUsageWidgetHttpRequestAllowed(req, new URL(rawUrl))).toBe(true)
     }
 
+    const preflightAllowed = new Request('http://127.0.0.1:3000/api/usage-summary', {
+      method: 'OPTIONS',
+      headers: { 'Access-Control-Request-Method': 'GET' },
+    })
+    expect(isUsageWidgetHttpRequestAllowed(preflightAllowed, new URL(preflightAllowed.url))).toBe(true)
+
+    const preflightDenied = new Request('http://127.0.0.1:3000/api/sessions', {
+      method: 'OPTIONS',
+      headers: { 'Access-Control-Request-Method': 'GET' },
+    })
+    expect(isUsageWidgetHttpRequestAllowed(preflightDenied, new URL(preflightDenied.url))).toBe(false)
+
     const deny = [
       ['POST', 'http://127.0.0.1:3000/api/usage-summary'],
       ['GET', 'http://127.0.0.1:3000/api/sessions'],
@@ -458,6 +516,31 @@ describe('usageWidgetAccessPolicy', () => {
     for (const [method, rawUrl] of deny) {
       const req = new Request(rawUrl, { method })
       expect(isUsageWidgetHttpRequestAllowed(req, new URL(rawUrl))).toBe(false)
+    }
+  })
+
+  it('authorizes requests matching CC_HAHA_USAGE_WIDGET_ACCESS_TOKEN only', () => {
+    const previous = process.env[USAGE_WIDGET_ACCESS_TOKEN_ENV]
+    try {
+      delete process.env[USAGE_WIDGET_ACCESS_TOKEN_ENV]
+      expect(hasConfiguredUsageWidgetAccessToken()).toBe(false)
+      expect(isUsageWidgetAccessAuthorized(new Request('http://127.0.0.1:3000/api/usage-summary'))).toBe(false)
+
+      process.env[USAGE_WIDGET_ACCESS_TOKEN_ENV] = 'widget-secret-token'
+      expect(hasConfiguredUsageWidgetAccessToken()).toBe(true)
+      expect(
+        isUsageWidgetAccessAuthorized(new Request('http://127.0.0.1:3000/api/usage-summary', {
+          headers: { Authorization: 'Bearer widget-secret-token' },
+        })),
+      ).toBe(true)
+      expect(
+        isUsageWidgetAccessAuthorized(new Request('http://127.0.0.1:3000/api/usage-summary', {
+          headers: { Authorization: 'Bearer wrong-token' },
+        })),
+      ).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env[USAGE_WIDGET_ACCESS_TOKEN_ENV]
+      else process.env[USAGE_WIDGET_ACCESS_TOKEN_ENV] = previous
     }
   })
 })

@@ -206,4 +206,35 @@ describe('SidebarUsageWidget (Version A)', () => {
     await waitFor(() => expect(getSummaryMock).toHaveBeenCalledTimes(1))
     expect(screen.queryByTestId('sidebar-usage-widget')).not.toBeInTheDocument()
   })
+
+  it('renders collapsed ring trigger, critical alert styling, and popover action buttons', async () => {
+    const criticalSummary = {
+      ...SIGNED_IN_SUMMARY,
+      providers: [
+        {
+          ...SIGNED_IN_SUMMARY.providers[0]!,
+          windows: [
+            {
+              ...SIGNED_IN_SUMMARY.providers[0]!.windows[0]!,
+              usedPercent: 90,
+              remainingPercent: 10,
+            },
+          ],
+        },
+      ],
+    }
+    getSummaryMock.mockResolvedValue(criticalSummary)
+    render(<SidebarUsageWidget collapsed />)
+
+    const trigger = await screen.findByTestId('sidebar-usage-trigger')
+    expect(trigger).toBeInTheDocument()
+    fireEvent.click(trigger)
+    expect(await screen.findByTestId('sidebar-usage-popover')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh usage' }))
+    await waitFor(() => expect(getSummaryMock).toHaveBeenCalledWith({ force: true }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Usage settings' }))
+    expect(useUsageSummaryStore.getState().popoverOpen).toBe(false)
+  })
 })
