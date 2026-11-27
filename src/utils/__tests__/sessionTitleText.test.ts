@@ -25,4 +25,10 @@ describe('sessionTitleText', () => {
       .toBe('Use the Skill tool with skill: not-json for this request.')
   })
 
+  test('strips browser-use-request XML wrapper from session title sources', () => {
+    const raw = '<browser-use-request target="workspace">\nUse Browser Use for this request.\n</browser-use-request>\n\n'
+      + '打开 modeldial.com 看下额度情况'
+    expect(cleanSessionTitleSource(raw)).toBe('打开 modeldial.com 看下额度情况')
+  })
+
 })

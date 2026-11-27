@@ -1,4 +1,6 @@
+import type { BrowserPreferredTarget } from '@/api/browserUse'
 import { stripAgentTeamRequest, withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { stripBrowserUseRequest, withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { splitSessionReferenceContext } from '@/lib/sessionReferences'
 import { parseUserMessageSegments } from '@/lib/userMessageCapabilities'
 import {
@@ -36,6 +38,8 @@ export type UserMessageEditDraft = {
   sessionReferences: Array<{ sessionId: string }>
   /** The message was sent with the composer's Agent Team switch on. */
   agentTeam?: boolean
+  /** The message was sent with the composer's Browser Use switch armed. */
+  browserUse?: BrowserPreferredTarget
   /** Skill/plugin pills shown as `@label` in `text`, in the shape the composer keeps them. */
   mentions?: ComposerMention[]
 }
@@ -165,11 +169,14 @@ export function createUserMessageEditDraft(
   const body = capabilities.text
   const text = attachments.length > 0 && ATTACHMENT_ONLY_PLACEHOLDERS.has(body) ? '' : body
 
+  const browserRequest = stripBrowserUseRequest(source)
+
   return {
     text,
     attachments,
     sessionReferences: message.sessionReferences ?? referenceContext.sessionReferences,
     ...(stripAgentTeamRequest(source).requested ? { agentTeam: true } : {}),
+    ...(browserRequest.requested ? { browserUse: browserRequest.target ?? 'auto' } : {}),
     ...(capabilities.mentions.length > 0 ? { mentions: capabilities.mentions } : {}),
   }
 }
@@ -271,8 +278,9 @@ export function buildUserMessageResendPayload(
       .map(toWorkspaceReference),
   )
   const joined = [referencePrompt, expandCapabilityPills(text, draft.mentions ?? [])].filter(Boolean).join('\n\n')
-  // Same order as the composer: the team block wraps everything else.
-  const content = draft.agentTeam ? withAgentTeamRequest(joined) : joined
+  // Same order as the composer: Browser Use wraps the body, then Agent Team wraps everything.
+  const withBrowser = draft.browserUse ? withBrowserUseRequest(joined, draft.browserUse) : joined
+  const content = draft.agentTeam ? withAgentTeamRequest(withBrowser) : withBrowser
 
   const attachments: AttachmentRef[] = sendable.map((attachment) =>
     attachment.type === 'image'

@@ -73,7 +73,7 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { tab: 'plugins', icon: Puzzle, label: 'settings.tab.plugins', keywords: ['plugin', 'extension', 'hook', '插件', '扩展'] },
   { tab: 'pets', icon: PawPrint, label: 'settings.tab.pets', keywords: ['pet', 'desktop', 'mascot', '桌宠', '宠物'] },
   { tab: 'browserUse', icon: Globe, label: 'settings.tab.browserUse', keywords: ['browser', 'chrome', 'edge', 'brave', 'cdp', 'web', 'automation', '浏览器', '网页', '操控'] },
-  { tab: 'computerUse', icon: MousePointer2, label: 'settings.tab.computerUse', keywords: ['screen', 'accessibility', 'mouse', 'keyboard', 'control', '电脑', '操控', '权限'] },
+  { tab: 'computerUse', icon: MousePointer2, label: 'settings.tab.computerUse', keywords: ['computer use', 'screen', 'accessibility', 'mouse', 'keyboard', 'control', '操作', '电脑', '操控', '权限'] },
   { tab: 'activity', icon: ChartNoAxesColumn, label: 'settings.tab.activity', keywords: ['token', 'usage', 'cost', 'heatmap', 'stats', 'chart', '用量', '统计', '账单'] },
   { tab: 'diagnostics', icon: HeartPulse, label: 'settings.tab.diagnostics', keywords: ['log', 'doctor', 'health', 'debug', 'repair', '诊断', '日志', '修复'] },
 ]

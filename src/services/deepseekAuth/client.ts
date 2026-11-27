@@ -16,6 +16,7 @@ import { z } from 'zod'
 import type {
   DeepSeekAuthExchange,
   DeepSeekAuthInit,
+  DeepSeekBalanceSummary,
   DeepSeekClientIdentity,
 } from './types.js'
 
@@ -191,6 +192,16 @@ const userSchema = z.object({
     .object({ name: z.string().nullable().optional() })
     .nullish(),
 })
+// Platform balances arrive as decimal strings (including scientific notation like 0E-16).
+const balanceDecimalPattern = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i
+const walletSchema = z.object({
+  currency: z.enum(['CNY', 'USD']),
+  balance: z.string().regex(balanceDecimalPattern),
+})
+const userSummarySchema = z.object({
+  normal_wallets: z.array(walletSchema),
+  bonus_wallets: z.array(walletSchema),
+})
 
 export function projectDeepSeekUser(value: unknown): {
   name: string | null
@@ -329,6 +340,29 @@ export async function fetchDeepSeekProfile(
     input,
   )
   return projectDeepSeekUser(payload)
+}
+
+export async function fetchDeepSeekBalance(
+  token: string,
+  input: { identity: DeepSeekClientIdentity } & DeepSeekRequestOptions,
+): Promise<DeepSeekBalanceSummary> {
+  const payload = await requestPlatform(
+    `${getDeepSeekPlatformOrigin()}/api/v0/users/get_user_summary`,
+    {
+      method: 'GET',
+      headers: {
+        ...buildDeepSeekClientHeaders(input.identity),
+        [DEEPSEEK_AUTH_HEADER]: token,
+      },
+    },
+    input,
+  )
+  const parsed = userSummarySchema.safeParse(payload)
+  if (!parsed.success) throw new DeepSeekAuthError('protocol')
+  return {
+    normalWallets: parsed.data.normal_wallets,
+    bonusWallets: parsed.data.bonus_wallets,
+  }
 }
 
 function postPlatform(

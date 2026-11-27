@@ -21,6 +21,7 @@ import {
   displayPercentForWindow,
   formatCompactTokenCount,
   formatResetCountdown,
+  formatWalletAmount,
   toneForRemainingPercent,
 } from './usageFormatting'
 
@@ -240,6 +241,18 @@ export function UsageWidgetApp() {
     }))
   }, [summary])
 
+  const compactBalance = useMemo(() => {
+    const provider = (summary?.providers ?? []).find(
+      (item) => item.signedIn && (item.balance?.normalWallets[0] || item.balance?.bonusWallets[0]),
+    )
+    const wallet = provider?.balance?.normalWallets[0] ?? provider?.balance?.bonusWallets[0]
+    if (!provider || !wallet) return null
+    return {
+      provider,
+      amount: formatWalletAmount(wallet.currency, wallet.balance),
+    }
+  }, [summary])
+
   const primaryHighlight = useMemo(
     () => selectPrimaryUsageHighlight(summary, preferences.pinnedMetricKeys),
     [summary, preferences.pinnedMetricKeys],
@@ -288,6 +301,13 @@ export function UsageWidgetApp() {
                 </span>
               )
             })
+          ) : compactBalance ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-xs">
+              <ModelBrandIcon providerId={compactBalance.provider.providerId} size={13} />
+              <span className="font-mono text-xs tabular-nums text-[var(--color-text-primary)]">
+                {compactBalance.amount}
+              </span>
+            </span>
           ) : (
             <span className="truncate font-mono text-xs tabular-nums text-[var(--color-text-primary)]">
               {t('usageWidget.fiveHourTokensShort', { amount: localTokensText })}

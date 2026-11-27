@@ -1570,6 +1570,16 @@ app.on('before-quit', event => {
         }
         browserUseBridge = null
       }
+      if (typeof workspaceBrowserSessionConfigured !== 'undefined' && workspaceBrowserSessionConfigured) {
+        try {
+          await Promise.race([
+            workspaceBrowserSession().cookies.flushStore(),
+            new Promise(resolve => setTimeout(resolve, 1_500)),
+          ])
+        } catch {
+          console.error('[desktop] workspace browser cookie flush failed during quit')
+        }
+      }
       await getServerRuntime().stopAllAndWait()
     } catch (error) {
       console.error('[desktop] graceful server shutdown failed', error)

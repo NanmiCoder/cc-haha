@@ -7,6 +7,7 @@ vi.mock('../../lib/openPreviewLink', () => ({ openPreviewLink }))
 
 import { UserMessage, type UserMessageEditAction } from './UserMessage'
 import { withAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { withBrowserUseRequest } from '../../lib/browserUseRequest'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -330,6 +331,22 @@ describe('UserMessage capability pills', () => {
     expect(chip.textContent).toBe('Agent Teams')
     expect(bubbleOf(container).contains(chip)).toBe(false)
     expect(screen.queryByRole('button', { name: 'Remove Agent Teams' })).toBeNull()
+  })
+
+  it('shows Browser Use as a read-only target pill above the bubble alongside other capabilities', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const modelContent = withAgentTeamRequest(withBrowserUseRequest(`${SKILL} 打开 modeldial.com`, 'workspace'))
+    const { container } = render(<UserMessage content="@frontend-design 打开 modeldial.com" modelContent={modelContent} />)
+
+    const browserPill = screen.getByTestId('browser-use-target-pill')
+    expect(browserPill.textContent).toContain('Browser')
+    expect(browserPill.textContent).toContain('Workspace')
+    expect(bubbleOf(container).contains(browserPill)).toBe(false)
+    expect(browserPill.querySelector('button')).toBeNull()
+    expect(screen.getByTestId('agent-team-chip').textContent).toBe('Agent Teams')
+    expect(pills(container)).toEqual(['skill:@frontend-design'])
+    expect(bubbleOf(container).textContent).toBe('@frontend-design 打开 modeldial.com')
+    expect(bubbleOf(container).textContent).not.toContain('browser-use-request')
   })
 
   it('renders a live pill and its reloaded copy the same way', () => {

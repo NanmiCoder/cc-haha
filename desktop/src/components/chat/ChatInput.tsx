@@ -47,6 +47,7 @@ import {
   ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
   ANTIGRAVITY_ACP_PERMISSION_MODES,
   ANTIGRAVITY_ACP_PROVIDER_ID,
+  ANTIGRAVITY_DRAFT_SLASH_COMMANDS,
   ANTIGRAVITY_HOST_UI_SLASH_COMMANDS,
 } from '@/constants/antigravityAcp'
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
@@ -65,6 +66,7 @@ import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEn
 import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import { useCapabilityCatalogStore } from '@/stores/capabilityCatalogStore'
@@ -908,9 +910,23 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (isAntigravity) {
       // Antigravity sessions use the ACP-reported `slashCommands` authoritatively,
       // plus host UI commands (`/model`, `/config`, `/clear`) without Claude fallbacks.
-      const hostFallbacks = getLocalizedFallbackCommands(t).filter((cmd) =>
+      // Before ACP reports its command list (e.g. cold-start or reopened history
+      // sessions where `/slash-commands` returns disk-scanned AGY skills or `[]`),
+      // merge Antigravity's built-in draft commands with those AGY skills.
+      const localized = getLocalizedFallbackCommands(t)
+      const localizedByName = new Map(localized.map((cmd) => [cmd.name, cmd.description]))
+      const hostFallbacks = localized.filter((cmd) =>
         ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(cmd.name.toLowerCase()),
       )
+      const hasAuthoritativeAcpCommands = slashCommands.some((cmd) => cmd.kind !== 'skill')
+      if (!hasAuthoritativeAcpCommands) {
+        const draftBuiltIns: SlashCommandOption[] = ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd) => ({
+          name: cmd.name,
+          description: localizedByName.get(cmd.name) ?? cmd.description,
+          kind: 'command',
+        }))
+        return mergeSlashCommands(draftBuiltIns, slashCommands)
+      }
       return mergeSlashCommands(slashCommands, hostFallbacks)
     }
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommands, getLocalizedFallbackCommands(t)), agentSlashCommands)
@@ -1037,7 +1053,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
-    const reference = (option?.kind === 'skill' || option?.kind === 'plugin')
+    const reference = !isAntigravity && (option?.kind === 'skill' || option?.kind === 'plugin')
       ? composerReferences.find(item => item.kind === option.kind && (item.id === command || item.name === command))
       : undefined
     if (reference) {
@@ -1056,7 +1072,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       composerRef.current?.focus()
       composerRef.current?.setSelectionOffsets(nextCursor)
     })
-  }, [input, mentions, allSlashCommands, composerReferences, promptHistory.resetHistory, setComposerInput])
+  }, [input, mentions, allSlashCommands, composerReferences, isAntigravity, promptHistory.resetHistory, setComposerInput])
 
   const replaceEmptySession = useCallback(async (
     workDir: string,
@@ -1235,12 +1251,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     const sessionReferences = getSessionReferences(input, mentions)
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     const joinedContent = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
-    // Agent Team armed in the + menu: the model gets the team instruction, the
-    // bubble keeps what the user typed.
+    // Agent Team / Browser Use armed in the + menu: the model gets the
+    // instruction block, the bubble keeps what the user typed plus the chip.
+    const sendAsBrowserUse = capabilityMenu.browserUse.armed && !isMemberSession
     const sendAsTeam = capabilityMenu.agentTeamArmed && !isMemberSession
-    const contentForModel = sendAsTeam
-      ? (isAntigravity ? withAntigravitySwarmRequest(joinedContent) : withAgentTeamRequest(joinedContent))
+    const contentWithBrowser = sendAsBrowserUse
+      ? withBrowserUseRequest(joinedContent, capabilityMenu.browserUse.preferredTarget)
       : joinedContent
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(contentWithBrowser) : withAgentTeamRequest(contentWithBrowser))
+      : contentWithBrowser
     const displayContent = text || (
       workspaceReferences.length > 0
         ? t('chat.contextReferencesOnly', { count: workspaceReferences.length })
@@ -1401,6 +1421,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
+    if (sendAsBrowserUse) capabilityMenu.browserUse.disarm()
     // The send can wait for the launch branch to be read again. If the user moved
     // to another chat meanwhile, the editor holds that chat's draft now, not what
     // was just sent: leave it alone. (The sent chat's saved draft is cleared below.)
@@ -1477,7 +1498,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           exactSlashCommand &&
-          !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
+          (isAntigravity || !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name))) &&
           selected?.name.toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           slashFilter.trim().toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           shouldSubmitOnEnter(event, chatSendBehavior)
@@ -2055,7 +2076,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               ref={slashMenuRef}
               id={slashMenuId}
               groups={filteredCommandGroups}
-              references={composerReferences}
+              references={isAntigravity ? EMPTY_COMPOSER_REFERENCES : composerReferences}
               selectedIndex={slashSelectedIndex}
               itemRefs={slashItemRefs}
               onSelect={selectSlashCommand}
@@ -2226,11 +2247,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
                   ) : null}
 
-                  {capabilityMenu.browserUse.enabled && !isMemberSession ? (
+                  {capabilityMenu.browserUse.armed && !isMemberSession ? (
                     <BrowserUseTargetPill
                       target={capabilityMenu.browserUse.preferredTarget}
                       onChange={capabilityMenu.browserUse.setPreferredTarget}
-                      onDisable={capabilityMenu.browserUse.disable}
+                      onRemove={capabilityMenu.browserUse.disarm}
                       touch={isMobileComposer}
                     />
                   ) : null}

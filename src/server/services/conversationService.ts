@@ -1243,6 +1243,7 @@ export class ConversationService {
     }
     const ownsSession = () => this.sessions.get(sessionId) === session
     const current = () => ownsSession() && !session.controlRevoked
+    this.sessions.set(sessionId, session)
     session.antigravity = new AntigravityConversation(
       acp,
       message => {
@@ -1277,7 +1278,6 @@ export class ConversationService {
         },
       },
     )
-    this.sessions.set(sessionId, session)
     rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
     void acp.proc.exited.then(async () => {
       await session.antigravity!.waitForExit()

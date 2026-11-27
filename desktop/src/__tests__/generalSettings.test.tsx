@@ -113,8 +113,13 @@ vi.mock('qrcode', () => ({
 }))
 
 vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
-  ClaudeOfficialLogin: ({ usageOnly }: { usageOnly?: boolean }) => (
-    <div data-testid={usageOnly ? 'claude-official-usage' : 'claude-official-login'} />
+  ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
+}))
+
+vi.mock('../components/settings/OfficialProviderPlanUsage', () => ({
+  OfficialUsageToolbar: () => <div data-testid="official-usage-toolbar" />,
+  OfficialProviderPlanUsage: ({ providerId }: { providerId: string }) => (
+    <div data-testid={`official-plan-usage-${providerId}`} />
   ),
 }))
 
@@ -2529,7 +2534,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
 
     expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
-    expect(screen.queryByTestId('claude-official-usage')).not.toBeInTheDocument()
+    expect(screen.getByTestId('official-usage-toolbar')).toBeInTheDocument()
   })
 
   it('shows ChatGPT Official as the active built-in provider', () => {
@@ -2544,7 +2549,7 @@ describe('Settings > Providers tab', () => {
     expect(within(openAIProvider).getByText('Default')).toBeInTheDocument()
     expect(screen.getByTestId('chatgpt-official-login')).toBeInTheDocument()
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
-    expect(within(screen.getByTestId('claude-official-provider')).getByTestId('claude-official-usage')).toBeInTheDocument()
+    expect(within(screen.getByTestId('claude-official-provider')).getByTestId('official-plan-usage-claude-official')).toBeInTheDocument()
   })
 
   it('shows Grok Official as the active built-in provider', () => {

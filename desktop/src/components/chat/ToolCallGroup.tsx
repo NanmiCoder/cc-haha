@@ -396,13 +396,13 @@ function ToolCallGroupContent({
       <div className="space-y-2">
         {segments.map((segment, index) => segment.kind === 'browser' ? (
           <BrowserActivityCard
-            key={segment.toolCalls.map((toolCall) => toolCall.id).join(':')}
+            key={`browser-${segment.toolCalls[0]?.id ?? index}`}
             sessionId={sessionId}
             toolCalls={segment.toolCalls}
             resultMap={resultMap}
             errorSeverityByToolUseId={errorSeverityByToolUseId}
-            isStreaming={isStreaming}
-            isLive={isLive}
+            isStreaming={isStreaming && index === segments.length - 1}
+            isLive={isLive && index === segments.length - 1}
             disclosureKey={disclosureKey ? `${disclosureKey}:browser:${index}` : undefined}
             presentation={activityPresentation}
           />

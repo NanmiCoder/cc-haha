@@ -186,6 +186,23 @@ describe('UserMessageEditor', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ agentTeam: false }))
   })
 
+  it('lets the user cycle or remove the Browser Use pill on an edited message', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const { onDraftChange, onSubmit } = renderEditor({ initialDraft: { ...DRAFT, browserUse: 'auto' } })
+    expect(screen.getByTestId('browser-use-target-pill').textContent).toContain('Auto')
+
+    fireEvent.click(screen.getByRole('button', { name: /Browser target: Auto/i }))
+    expect(screen.getByTestId('browser-use-target-pill').textContent).toContain('Workspace')
+    expect(onDraftChange).toHaveBeenLastCalledWith(expect.objectContaining({ browserUse: 'workspace' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Browser Use' }))
+    expect(screen.queryByTestId('browser-use-target-pill')).toBeNull()
+    expect(onDraftChange).toHaveBeenLastCalledWith(expect.objectContaining({ browserUse: undefined }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ browserUse: undefined }))
+  })
+
   describe('slash commands and skills', () => {
     function seedSession() {
       useChatStore.setState({

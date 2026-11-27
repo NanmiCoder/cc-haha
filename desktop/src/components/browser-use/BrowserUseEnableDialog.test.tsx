@@ -34,14 +34,14 @@ describe('BrowserUseTargetPill', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
-  it('cycles Auto -> Workspace -> Chrome and supports one-click disable with brand-soft V6C styling', () => {
+  it('cycles Auto -> Workspace -> Chrome and supports one-click disarm with brand-soft V6C styling', () => {
     const onChange = vi.fn()
-    const onDisable = vi.fn()
+    const onRemove = vi.fn()
     const { rerender } = render(
       <BrowserUseTargetPill
         target="auto"
         onChange={onChange}
-        onDisable={onDisable}
+        onRemove={onRemove}
       />,
     )
 
@@ -51,32 +51,41 @@ describe('BrowserUseTargetPill', () => {
     expect(pill.className).toContain('text-[var(--color-on-brand-soft)]')
 
     const cycleBtn = screen.getByRole('button', { name: /Browser target: Auto/i })
-    const disableBtn = screen.getByRole('button', { name: 'Disable Browser Use' })
+    const removeBtn = screen.getByRole('button', { name: 'Remove Browser Use' })
     expect(pill.className).toContain('h-6')
     expect(cycleBtn.className).toContain('cursor-pointer')
     expect(cycleBtn.className).toContain('h-full')
     expect(cycleBtn.className).not.toContain('h-6')
     expect(cycleBtn.className).toContain('hover:bg-[var(--color-brand-soft-hover)]')
-    expect(disableBtn.className).toContain('h-full')
-    expect(disableBtn.className).not.toContain('h-6')
-    expect(disableBtn.className).toContain('hover:bg-[var(--color-brand-soft-hover)]')
+    expect(removeBtn.className).toContain('h-full')
+    expect(removeBtn.className).not.toContain('h-6')
+    expect(removeBtn.className).toContain('hover:bg-[var(--color-brand-soft-hover)]')
 
     fireEvent.click(cycleBtn)
     expect(onChange).toHaveBeenCalledWith('workspace')
 
-    fireEvent.click(disableBtn)
-    expect(onDisable).toHaveBeenCalledTimes(1)
+    fireEvent.click(removeBtn)
+    expect(onRemove).toHaveBeenCalledTimes(1)
 
     rerender(
       <BrowserUseTargetPill
         target="auto"
         onChange={onChange}
-        onDisable={onDisable}
+        onRemove={onRemove}
         touch
       />,
     )
     expect(screen.getByTestId('browser-use-target-pill').className).toContain('h-9')
     expect(screen.getByRole('button', { name: /Browser target: Auto/i }).className).toContain('h-full')
-    expect(screen.getByRole('button', { name: 'Disable Browser Use' }).className).toContain('w-9')
+    expect(screen.getByRole('button', { name: 'Remove Browser Use' }).className).toContain('w-9')
+  })
+
+  it('renders a read-only chip without interactive buttons when used on a sent message', () => {
+    render(<BrowserUseTargetPill target="workspace" />)
+
+    const pill = screen.getByTestId('browser-use-target-pill')
+    expect(pill).toHaveTextContent('Browser')
+    expect(pill).toHaveTextContent('Workspace')
+    expect(screen.queryByRole('button')).toBeNull()
   })
 })

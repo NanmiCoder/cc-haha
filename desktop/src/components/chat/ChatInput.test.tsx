@@ -9,6 +9,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { COMPUTER_USE_ENABLE_REQUEST } from '@/lib/computerUseEnable'
 import { AGENT_TEAMS_NOTICE_STORAGE_KEY, dismissAgentTeamsNotice } from '@/lib/agentTeamsNotice'
 import { readRecentSkills, RECENT_SKILLS_STORAGE_KEY } from '@/lib/recentSkills'
@@ -174,6 +175,8 @@ import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextS
 import { useWorkflowStore } from '../../stores/workflowStore'
 import { workflowsApi } from '../../api/workflows'
 import { computerUseApi } from '../../api/computerUse'
+import { browserUseApi } from '../../api/browserUse'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { settingsApi } from '../../api/settings'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
@@ -3045,6 +3048,83 @@ describe('ChatInput file mentions', () => {
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, { type: 'user_message', content: 'Just me', attachments: [] })
   })
 
+  it('sends one message with Browser Use armed, clears the pill from the composer, and keeps global config enabled', async () => {
+    const previousHost = window.desktopHost
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    useBrowserUseStore.getState().reset()
+    let configState = {
+      enabled: false,
+      preferredTarget: 'auto' as 'auto' | 'workspace' | 'chrome',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    }
+    vi.spyOn(browserUseApi, 'getConfig').mockImplementation(async () => ({ ...configState }))
+    const updateConfig = vi.spyOn(browserUseApi, 'updateConfig').mockImplementation(async (patch) => {
+      configState = { ...configState, ...patch }
+      return { ...configState }
+    })
+
+    try {
+      render(<ChatInput compact />)
+      setComposerText('Open modeldial.com', 18)
+
+      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      const row = await screen.findByRole('option', { name: /Browser Use/ })
+      await waitFor(() => expect(row.querySelector('input[type="checkbox"]')).not.toBeNull())
+      fireEvent.click(row.querySelector('input[type="checkbox"]')!)
+
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable Browser Use' }))
+
+      const pill = await screen.findByTestId('browser-use-target-pill')
+      expect(pill).toHaveTextContent('Browser')
+      expect(pill).toHaveTextContent('Auto')
+
+      // Switch target from Auto -> Workspace on the composer pill before sending.
+      fireEvent.click(within(pill).getByRole('button', { name: /Browser target: Auto/i }))
+      await waitFor(() => expect(screen.getByTestId('browser-use-target-pill')).toHaveTextContent('Workspace'))
+
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+      expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+        type: 'user_message',
+        content: withBrowserUseRequest('Open modeldial.com', 'workspace'),
+        attachments: [],
+      })
+      const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+      expect(messages[messages.length - 1]).toMatchObject({
+        type: 'user_text',
+        content: 'Open modeldial.com',
+        modelContent: withBrowserUseRequest('Open modeldial.com', 'workspace'),
+      })
+      // Pill follows the sent message out and leaves the composer clean.
+      expect(screen.queryByTestId('browser-use-target-pill')).not.toBeInTheDocument()
+      // Global config stays enabled so the running browser turn can call Browser* tools.
+      expect(useBrowserUseStore.getState().config?.enabled).toBe(true)
+
+      // Next message goes out plain unless Browser Use is armed again.
+      act(() => {
+        useChatStore.setState(state => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'idle' } } }))
+      })
+      setComposerText('Follow-up', 9)
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+      expect(mocks.wsSend).toHaveBeenLastCalledWith(sessionId, { type: 'user_message', content: 'Follow-up', attachments: [] })
+
+      // Re-arming now skips the consent dialog and clicking remove disarms without disabling global config.
+      updateConfig.mockClear()
+      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      const rowAgain = await screen.findByRole('option', { name: /Browser Use/ })
+      fireEvent.click(rowAgain.querySelector('input[type="checkbox"]')!)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      fireEvent.click(within(await screen.findByTestId('browser-use-target-pill')).getByRole('button', { name: 'Remove Browser Use' }))
+      expect(screen.queryByTestId('browser-use-target-pill')).not.toBeInTheDocument()
+      expect(updateConfig).not.toHaveBeenCalled()
+    } finally {
+      window.desktopHost = previousHost
+      useBrowserUseStore.getState().reset()
+    }
+  })
+
   it('lists a skill under Recently used after it was sent', async () => {
     const design = {
       kind: 'skill' as const, id: 'design', name: 'design', displayName: 'Design',
@@ -4530,6 +4610,63 @@ describe('ChatInput file mentions', () => {
     })
     expect(screen.queryByText('/btw')).not.toBeInTheDocument()
     expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+  })
+
+  it('merges Antigravity built-in commands with cold-start AGY skills and inserts plain /skill text instead of Claude mentions', async () => {
+    mocks.listReferences.mockResolvedValue({
+      skills: [{
+        kind: 'skill',
+        id: 'skill-vetter',
+        name: 'skill-vetter',
+        displayName: 'Skill Vetter',
+        description: 'Claude mention version',
+        source: 'user',
+        modelText: 'Use the Skill tool with skill: "skill-vetter" for this request.',
+      }],
+      plugins: [],
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Cold Start',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          slashCommands: [
+            { name: 'skill-vetter', description: 'Vet skills for AGY', kind: 'skill', source: 'user' },
+          ],
+        },
+      },
+    })
+
+    render(<ChatInput sessionId={sessionId} />)
+
+    setComposerText('/skill', 6)
+    const option = await screen.findByRole('option', { name: 'skill-vetter' })
+    expect(option).toBeInTheDocument()
+    fireEvent.click(option)
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('/skill-vetter ')
+    })
+    expect(document.querySelector('.composer-mention')).toBeNull()
   })
 
   it('passes modelId and effortLevel from sessionRuntimeStore to createSession when replacing an empty Antigravity session', async () => {

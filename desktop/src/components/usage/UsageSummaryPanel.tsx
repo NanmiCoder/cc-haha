@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ExternalLink, Pin, PinOff, RefreshCw, Settings, TriangleAlert } from 'lucide-react'
+import { ExternalLink, Pin, PinOff, RefreshCw, Settings, TriangleAlert, Wallet } from 'lucide-react'
 import type {
   OfficialProviderUsageSummary,
   OfficialUsageWindow,
@@ -17,9 +17,13 @@ import { useTranslation } from '@/i18n'
 import {
   computePaceMarkerPercent,
   displayPercentForWindow,
+  formatCentsAsDollars,
   formatCompactTokenCount,
   formatExactResetTime,
   formatResetCountdown,
+  formatWalletList,
+  hasNonZeroWallet,
+  hasUsableBalance,
   providerTitleKey,
   toneForRemainingPercent,
   windowLabelKey,
@@ -150,6 +154,11 @@ export function UsageSummaryPanel({
   const pinnedMetrics = useMemo(
     () => allMetrics.filter((item) => pinnedSet.has(item.window.metricKey)),
     [allMetrics, pinnedSet],
+  )
+
+  const balanceProviders = useMemo(
+    () => signedInProviders.filter((provider) => hasUsableBalance(provider.balance)),
+    [signedInProviders],
   )
 
   const runningOutMetrics = useMemo(
@@ -351,6 +360,52 @@ export function UsageSummaryPanel({
           </div>
         ) : null}
 
+        {balanceProviders.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="px-0.5 text-[11px] font-medium text-[var(--color-text-tertiary)]">
+              {t('usageWidget.balanceTitle')}
+            </span>
+            {balanceProviders.map((provider) => {
+              const balance = provider.balance!
+              const showBonus = hasNonZeroWallet(balance.bonusWallets)
+              return (
+                <div
+                  key={provider.providerId}
+                  data-testid={`usage-priority-balance-${provider.providerId}`}
+                  className="v6c-raised flex items-center justify-between gap-2.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-2.5 py-2"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-container)]">
+                      <ModelBrandIcon providerId={provider.providerId} size={14} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-[var(--color-text-primary)]">
+                        {t(providerTitleKey(provider.providerId))}
+                      </div>
+                      <div className="truncate text-[11px] text-[var(--color-text-tertiary)]">
+                        {t('usageWidget.rechargeBalance')}
+                        {showBonus ? ` · ${t('usageWidget.bonusBalance')}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end">
+                    <span className="font-mono text-xs tabular-nums text-[var(--color-text-primary)]">
+                      {balance.normalWallets.length > 0
+                        ? formatWalletList(balance.normalWallets)
+                        : t('usageWidget.valueUnavailable')}
+                    </span>
+                    {showBonus ? (
+                      <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                        +{formatWalletList(balance.bonusWallets)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
+
         <div className="rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-[var(--color-text-primary)]">
@@ -401,14 +456,46 @@ export function UsageSummaryPanel({
               <p className="text-[11px] text-[var(--color-text-secondary)]">
                 {t('settings.claudeOfficialLogin.usageMissingScope')}
               </p>
+            ) : provider.noticeCode === 'grok_team_no_personal_quota' ? (
+              <p className="text-[11px] text-[var(--color-text-tertiary)]">
+                {t('usageWidget.grokTeamNoPersonalQuota')}
+              </p>
             ) : provider.status === 'local_only' ? (
               <p className="text-[11px] text-[var(--color-text-tertiary)]">
                 {t('usageWidget.statusLocalOnly')}
               </p>
-            ) : provider.status === 'unavailable' && provider.windows.length === 0 ? (
+            ) : provider.status === 'unavailable' && provider.windows.length === 0 && !hasUsableBalance(provider.balance) ? (
               <p className="text-[11px] text-[var(--color-text-tertiary)]">
-                {t('usageWidget.statusUnavailable')}
+                {provider.httpStatus === 401
+                  ? t('usageWidget.statusAuthExpired')
+                  : t('usageWidget.statusUnavailable')}
               </p>
+            ) : null}
+
+            {hasUsableBalance(provider.balance) && provider.balance ? (
+              <div className="flex flex-col gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-low)] px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
+                    <Wallet size={11} strokeWidth={1.75} aria-hidden="true" />
+                    {t('usageWidget.rechargeBalance')}
+                  </span>
+                  <span className="font-mono text-xs tabular-nums text-[var(--color-text-primary)]">
+                    {provider.balance.normalWallets.length > 0
+                      ? formatWalletList(provider.balance.normalWallets)
+                      : t('usageWidget.valueUnavailable')}
+                  </span>
+                </div>
+                {hasNonZeroWallet(provider.balance.bonusWallets) ? (
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="text-[var(--color-text-tertiary)]">
+                      {t('usageWidget.bonusBalance')}
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--color-text-secondary)]">
+                      {formatWalletList(provider.balance.bonusWallets)}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
 
             {provider.windows.length > 0 ? (
@@ -461,6 +548,15 @@ export function UsageSummaryPanel({
                   )
                 })}
               </ul>
+            ) : null}
+
+            {provider.onDemandCapCents && provider.onDemandCapCents > 0 ? (
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-tertiary)]">
+                <span>{t('usageWidget.payAsYouGoLabel')}</span>
+                <Badge tone="neutral" size="xs" pill={false}>
+                  {t('usageWidget.payAsYouGoCap', { amount: formatCentsAsDollars(provider.onDemandCapCents) })}
+                </Badge>
+              </div>
             ) : null}
           </section>
         ))}

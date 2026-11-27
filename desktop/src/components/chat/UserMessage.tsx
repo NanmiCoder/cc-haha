@@ -6,11 +6,13 @@ import { Box, Puzzle, SquareSlash, UsersRound } from 'lucide-react'
 import type { UIAttachment } from '../../types/chat'
 import { useTranslation } from '../../i18n'
 import { isAntigravitySwarmRequest, stripAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { stripBrowserUseRequest } from '../../lib/browserUseRequest'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { splitTextByUrls } from '../../lib/urlBoundary'
 import { hasCapabilitySentence, parseUserMessageSegments } from '../../lib/userMessageCapabilities'
 import { capabilityKey, useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { extractRestoredUserDisplay } from '../../stores/chatStore'
+import { BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MessageActionBar, type MessageBranchAction, type MessageEditAction } from './MessageActionBar'
@@ -102,11 +104,13 @@ export const UserMessage = memo(function UserMessage({
     const agentTeam = modelContent
       ? (stripAgentTeamRequest(modelContent).requested || (isAntigravitySwarmRequest(modelContent) && !isAntigravitySwarmRequest(content)))
       : false
+    const browserRequest = modelContent ? stripBrowserUseRequest(modelContent) : null
+    const browserUse = browserRequest?.requested ? (browserRequest.target ?? 'auto') : null
     // A live bubble shows the composer's `@Label` projection; the model text
     // carries the capability itself, so read pills from it when it has them.
     const restored = modelContent ? extractRestoredUserDisplay(modelContent).content.trim() : ''
     const text = restored && hasCapabilitySentence(restored) ? restored : content
-    return { agentTeam, segments: parseUserMessageSegments(text) }
+    return { agentTeam, browserUse, segments: parseUserMessageSegments(text) }
   }, [content, modelContent])
   const catalog = useCapabilityCatalogStore((state) => state.entries)
 
@@ -278,7 +282,12 @@ export const UserMessage = memo(function UserMessage({
           {sessionReferences?.length ? <div className="flex max-w-full flex-wrap gap-1" aria-label={t('chat.referenceSessions')}>
             {sessionReferences.map(reference => <Button key={reference.sessionId} size="sm" variant="ghost" onClick={() => openSessionSource(reference.sessionId)}>{t('chat.openReferencedSession', { id: sessionSourceTitle(reference.sessionId) })}</Button>)}
           </div> : null}
-          {display.agentTeam ? <AgentTeamChip /> : null}
+          {(display.agentTeam || display.browserUse) ? (
+            <div className="flex max-w-full flex-wrap justify-end gap-1.5">
+              {display.agentTeam ? <AgentTeamChip /> : null}
+              {display.browserUse ? <BrowserUseTargetPill target={display.browserUse} /> : null}
+            </div>
+          ) : null}
           {attachments && attachments.length > 0 && (
             <AttachmentGallery attachments={attachments} variant="message" />
           )}
