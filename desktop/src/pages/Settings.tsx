@@ -6,6 +6,7 @@ import {
   Bot,
   Box,
   ChartNoAxesColumn,
+  Globe,
   HeartPulse,
   Info,
   MessageSquare,
@@ -31,6 +32,7 @@ import { SkillDetail } from '../components/skills/SkillDetail'
 import { usePluginStore } from '../stores/pluginStore'
 import { PluginList } from '../components/plugins/PluginList'
 import { PluginDetail } from '../components/plugins/PluginDetail'
+import { BrowserUseSettings } from './BrowserUseSettings'
 import { ComputerUseSettings } from './ComputerUseSettings'
 import { McpSettings } from './McpSettings'
 import { TerminalSettings } from './TerminalSettings'
@@ -70,6 +72,7 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { tab: 'memory', icon: BookOpen, label: 'settings.tab.memory', keywords: ['claude.md', 'memory', 'context', '记忆'] },
   { tab: 'plugins', icon: Puzzle, label: 'settings.tab.plugins', keywords: ['plugin', 'extension', 'hook', '插件', '扩展'] },
   { tab: 'pets', icon: PawPrint, label: 'settings.tab.pets', keywords: ['pet', 'desktop', 'mascot', '桌宠', '宠物'] },
+  { tab: 'browserUse', icon: Globe, label: 'settings.tab.browserUse', keywords: ['browser', 'chrome', 'edge', 'brave', 'cdp', 'web', 'automation', '浏览器', '网页', '操控'] },
   { tab: 'computerUse', icon: MousePointer2, label: 'settings.tab.computerUse', keywords: ['screen', 'accessibility', 'mouse', 'keyboard', 'control', '电脑', '操控', '权限'] },
   { tab: 'activity', icon: ChartNoAxesColumn, label: 'settings.tab.activity', keywords: ['token', 'usage', 'cost', 'heatmap', 'stats', 'chart', '用量', '统计', '账单'] },
   { tab: 'diagnostics', icon: HeartPulse, label: 'settings.tab.diagnostics', keywords: ['log', 'doctor', 'health', 'debug', 'repair', '诊断', '日志', '修复'] },
@@ -262,6 +265,7 @@ export function DesktopSettings() {
             {activeTab === 'memory' && <MemorySettings />}
             {activeTab === 'plugins' && <PluginSettings />}
             {activeTab === 'pets' && <PetSettings />}
+            {activeTab === 'browserUse' && <BrowserUseSettings />}
             {activeTab === 'computerUse' && <ComputerUseSettings />}
             {activeTab === 'diagnostics' && <DiagnosticsSettings />}
             {activeTab === 'about' && <AboutSettings />}

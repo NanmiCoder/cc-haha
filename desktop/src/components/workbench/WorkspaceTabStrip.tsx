@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { MessageCircle, FolderClosed, Globe, Ellipsis, Plus, SquareTerminal, SquareSplitVertical, X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
+import { StatusDot } from '@/components/ui/Badge'
 import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { getTerminalRuntime, subscribeTerminalRuntime } from '@/lib/terminalRuntime'
@@ -59,6 +61,7 @@ export function WorkspaceTabStrip({
   onAdd,
 }: WorkspaceTabStripProps) {
   const t = useTranslation()
+  const browserAgentStates = useBrowserUseStore((state) => state.tabStates)
   const [, refreshTerminalState] = useState(0)
   useEffect(() => {
     const unsubscribers = tabs.filter((tab) => tab.kind === 'terminal').map((tab) =>
@@ -319,6 +322,13 @@ export function WorkspaceTabStrip({
                   {tab.kind === 'file' && tab.path ? <WorkspaceFileIcon path={tab.path} /> : (
                     <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
                   )}
+                  {tab.kind === 'browser' && browserAgentStates[tab.browserTabId]?.controlState && browserAgentStates[tab.browserTabId]?.controlState !== 'idle' ? (
+                    <StatusDot
+                      tone={browserAgentStates[tab.browserTabId]?.controlState === 'takeover' ? 'warning' : 'info'}
+                      size="sm"
+                      pulse
+                    />
+                  ) : null}
                   {/*
                     A preview tab is quieter and nothing else: it never takes the
                     active weight. A badge or a dotted border would make the

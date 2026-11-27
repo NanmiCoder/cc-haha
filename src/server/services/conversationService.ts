@@ -2958,6 +2958,8 @@ export class ConversationService {
         !cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS
     }
     delete cleanEnv.CC_HAHA_SESSION_COLLABORATION_TOKEN
+    delete cleanEnv.CC_HAHA_BROWSER_BRIDGE_TOKEN
+    delete cleanEnv.CC_HAHA_BROWSER_BRIDGE_URL
     delete cleanEnv.CC_HAHA_SESSION_ID
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
     delete cleanEnv.CLAUDE_CODE_ACCOUNT_UUID

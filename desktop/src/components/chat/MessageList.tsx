@@ -39,6 +39,7 @@ import {
   type OpenAgentRunPayload,
   type ResolveAgentActivityTarget,
 } from './ToolCallGroup'
+import { SessionBrowserTakeoverBanner } from './BrowserActivityCard'
 import {
   classifyTurnToolErrors,
   type ActivityStep,
@@ -4366,6 +4367,8 @@ export function MessageList({
               {turnChangeLoadError}
             </div>
           )}
+
+          <SessionBrowserTakeoverBanner sessionId={resolvedSessionId} />
 
           {workspaceChangesFallback ? (
               <WorkspaceChangesFallback

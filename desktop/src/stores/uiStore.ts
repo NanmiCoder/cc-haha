@@ -57,6 +57,7 @@ const SETTINGS_TABS = [
   'memory',
   'plugins',
   'pets',
+  'browserUse',
   'computerUse',
   'diagnostics',
   'about',
@@ -257,6 +258,7 @@ export type SettingsTab =
   | 'memory'
   | 'plugins'
   | 'pets'
+  | 'browserUse'
   | 'computerUse'
   | 'diagnostics'
   | 'about'

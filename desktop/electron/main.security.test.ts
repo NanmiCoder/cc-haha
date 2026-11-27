@@ -333,4 +333,17 @@ describe('Electron preview security boundary', () => {
     }, remoteCallback)
     expect(remoteCallback).toHaveBeenCalledWith({ requestHeaders: { Accept: '*/*' } })
   })
+
+  it('restricts browser-use IPC to the main desktop frame and never exposes the bridge token to renderers', () => {
+    expect(mainSource).toContain("channel.startsWith('desktop:browser-use:')")
+    expect(mainSource).toContain('event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame')
+    // Bridge initialization must stay outside getWorkspaceBrowserService() and never attach tokens to the guest partition.
+    expect(workspaceBrowserServiceSource).not.toContain('ElectronBrowserBridge')
+    expect(workspaceBrowserServiceSource).not.toContain('getBrowserBridgeToken')
+    const preloadSource = readFileSync(path.join(desktopRoot, 'electron', 'preload.ts'), 'utf8')
+    const channelsSource = readFileSync(path.join(desktopRoot, 'electron', 'ipc', 'channels.ts'), 'utf8')
+    expect(preloadSource).not.toContain('browserBridgeToken')
+    expect(channelsSource).not.toContain('browserBridgeToken')
+    expect(channelsSource).not.toContain('BrowserBridgeToken')
+  })
 })

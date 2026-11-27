@@ -62,6 +62,7 @@ import { useCapabilityMenu } from './useCapabilityMenu'
 import { AgentProfileChip } from './AgentProfileChip'
 import { AgentTeamChip } from './AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
@@ -2217,11 +2218,21 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       />
                     )}
                     <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                    <BrowserUseEnableDialog {...capabilityMenu.browserUseConsent} />
                     <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                   </div>
 
                   {capabilityMenu.agentTeamArmed && !isMemberSession ? (
                     <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                  ) : null}
+
+                  {capabilityMenu.browserUse.enabled && !isMemberSession ? (
+                    <BrowserUseTargetPill
+                      target={capabilityMenu.browserUse.preferredTarget}
+                      onChange={capabilityMenu.browserUse.setPreferredTarget}
+                      onDisable={capabilityMenu.browserUse.disable}
+                      touch={isMobileComposer}
+                    />
                   ) : null}
 
                   {isLean && !isMobileComposer ? <AgentProfileChip /> : null}

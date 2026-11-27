@@ -4,6 +4,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 import { releaseWorkspaceBrowserTab } from '../lib/workspace/browserHost'
 import { useWorkspaceBrowserStore } from './workspaceBrowserStore'
+import { useBrowserUseStore } from './browserUseStore'
 import { clampWorkspaceSideWidth, WORKSPACE_SIDE_DEFAULT_WIDTH } from '../lib/workspace/sidePanelSize'
 import {
   DEFAULT_REVIEW_SOURCE,
@@ -212,6 +213,7 @@ function releaseTabResources(tab: WorkspaceTab) {
     // it. Releasing one without the other leaves a visit log and a nav state
     // for a page that no longer exists, for the life of the process.
     useWorkspaceBrowserStore.getState().forgetTab(tab.browserTabId)
+    useBrowserUseStore.getState().clearTabState(tab.browserTabId)
   }
 }
 

@@ -375,6 +375,11 @@ import { asSessionId } from 'src/types/ids.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { skillChangeDetector } from '../utils/skills/skillChangeDetector.js'
 import { invalidateComputerUseSkillGate } from '../utils/computerUse/skillGate.js'
+import {
+  invalidateBrowserUseConfigCache,
+  isBrowserUseEnabled,
+} from '../services/browserUse/config.js'
+import { isBrowserUseToolName } from '../tools/BrowserUseTool/index.js'
 import { getCommands, clearCommandsCache } from '../commands.js'
 import { filterCommandsForHeadlessMode } from '../commands/headless.js'
 import {
@@ -2006,17 +2011,23 @@ function runHeadlessStreaming(
     onError: error => logForDebugging(`[Computer Use MCP] Refresh failed: ${errorMessage(error)}`),
   })
 
+  let browserUseWasEnabled = isBrowserUseEnabled({ bypassCache: true })
+
   // Shared tool assembly for ask() and the get_context_usage control request.
   // Closes over the mutable sdkTools/dynamicMcpState bindings so both call
   // sites see late-connecting servers.
   const buildAllTools = (appState: AppState): Tools => {
+    invalidateBrowserUseConfigCache()
     const assembledTools = assembleToolPool(
       appState.toolPermissionContext,
       [...appState.mcp.tools.filter(tool => !isComputerUseRuntimeTool(tool)), ...computerUseMcp.tools()],
     )
     let allTools = uniqBy(
       mergeAndFilterTools(
-        [...tools, ...sdkTools, ...dynamicMcpState.tools].filter(tool => !isComputerUseRuntimeTool(tool)),
+        [...tools, ...sdkTools, ...dynamicMcpState.tools].filter(
+          tool =>
+            !isComputerUseRuntimeTool(tool) && !isBrowserUseToolName(tool.name),
+        ),
         assembledTools,
         appState.toolPermissionContext.mode,
       ),
@@ -2562,10 +2573,18 @@ function runHeadlessStreaming(
           // config file did not exist when the CLI started watching skills.
           const computerUseWasAvailable = computerUseMcp.tools().length > 0
           await computerUseMcp.sync()
-          if (computerUseWasAvailable !== (computerUseMcp.tools().length > 0)) {
+          const computerUseChanged =
+            computerUseWasAvailable !== (computerUseMcp.tools().length > 0)
+          invalidateBrowserUseConfigCache()
+          const browserUseNowEnabled = isBrowserUseEnabled({ bypassCache: true })
+          const browserUseChanged = browserUseWasEnabled !== browserUseNowEnabled
+          browserUseWasEnabled = browserUseNowEnabled
+          if (computerUseChanged || browserUseChanged) {
             // The config may have been created after skill watchers started;
             // make both explicit Skill calls and the menu fresh in this turn.
-            invalidateComputerUseSkillGate()
+            if (computerUseChanged) {
+              invalidateComputerUseSkillGate()
+            }
             clearCommandsCache()
             currentCommands = filterCommandsForHeadlessMode(await getCommands(cwd()))
           }

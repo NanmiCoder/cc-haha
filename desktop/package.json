@@ -114,7 +114,7 @@
     "test:windows-storage-recovery": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./build/recover-legacy-install-data.ps1 -SelfTest",
     "build:linux-x64": "bash ./scripts/build-linux.sh",
     "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
-    "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",
+    "electron:dev": "bun run build:preview-agent && bun run build:electron && bun run ./scripts/electron-dev.ts",
     "electron:build": "bun run build:sidecars && bun run build && bun run build:electron",
     "electron:package": "bun run prepare:cloudflared && bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
     "electron:package:dir": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",

@@ -1,4 +1,8 @@
 import type { ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
+import type {
+  BrowserTakeoverState,
+  BrowserUseActivityEvent,
+} from '../../services/browserUse/types.js'
 /**
  * WebSocket event type definitions
  *
@@ -162,6 +166,8 @@ export type ServerMessage =
   | { type: 'session_title_updated'; sessionId: string; title: string }
   /** Predicted next user prompt for the composer; sent after a turn ends. */
   | { type: 'prompt_suggestion'; suggestion: string }
+  | { type: 'browser_use_activity'; activity: BrowserUseActivityEvent }
+  | { type: 'browser_use_takeover'; takeover: BrowserTakeoverState }
 
 export type AgentRunStreamMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }

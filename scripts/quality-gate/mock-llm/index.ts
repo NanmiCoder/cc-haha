@@ -26,6 +26,7 @@ import { runTeamReviewScenario } from './teamReview'
 import { runTeamRuntimeControlsScenario } from './teamRuntimeControls'
 import { runProviderMediaScenario } from './providerMedia'
 import { runComputerUseRefreshScenario } from './computerUseRefresh'
+import { runBrowserUseRefreshScenario } from './browserUseRefresh'
 import { runComputerUseAgentDesktopScenario } from './computerUseAgentDesktop'
 import { runConnectorProxyScenario } from './connectorProxy'
 import { runContextUsageScenario } from './contextUsage'
@@ -41,6 +42,7 @@ const MODEL_ROUTING_SCENARIO = 'mock-agent-model-routing'
 const PROVIDER_ROUTING_SCENARIO = 'mock-agent-provider-routing'
 const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 const COMPUTER_USE_SCENARIO = 'mock-computer-use-hot-enable'
+const BROWSER_USE_SCENARIO = 'mock-browser-use-hot-enable'
 const AGENT_DESKTOP_SCENARIO = 'mock-computer-use-agent-desktop'
 const CONNECTOR_PROXY_SCENARIO = 'mock-connector-proxy'
 const TEAM_REVIEW_SCENARIO = 'mock-team-review'
@@ -70,6 +72,7 @@ async function main() {
     console.log(`  ${PROVIDER_ROUTING_SCENARIO.padEnd(32)} Agent pinned to another saved provider, direct and proxied, with its effort`)
     console.log(`  ${PROVIDER_MEDIA_SCENARIO.padEnd(32)} DeepSeek request size, image upload, tool pairing and cached file reuse`)
     console.log(`  ${COMPUTER_USE_SCENARIO.padEnd(32)} Existing CLI refreshes authorized Computer Use tools at the next turn`)
+    console.log(`  ${BROWSER_USE_SCENARIO.padEnd(32)} Existing CLI hot-toggles Browser Use tools/skill, runs snapshot/takeover, and keeps 0 tokens when off`)
     console.log(`  ${AGENT_DESKTOP_SCENARIO.padEnd(32)} Native desktop ref actions, errors, interruption and cursor cleanup through the real CLI`)
     console.log(`  ${TEAM_REVIEW_SCENARIO.padEnd(32)} Initial team and running-team additions wait for human review before workers start`)
     console.log(`  ${TEAM_RUNTIME_SCENARIO.padEnd(32)} Main Stop, paused runtime edits and explicit Resume Team survive a real application server restart`)
@@ -86,6 +89,7 @@ async function main() {
   const runProviderRouting = only.length === 0 || only.includes(PROVIDER_ROUTING_SCENARIO)
   const runProviderMedia = only.length === 0 || only.includes(PROVIDER_MEDIA_SCENARIO)
   const runComputerUse = only.length === 0 || only.includes(COMPUTER_USE_SCENARIO)
+  const runBrowserUse = only.length === 0 || only.includes(BROWSER_USE_SCENARIO)
   const runAgentDesktop = only.length === 0 || only.includes(AGENT_DESKTOP_SCENARIO)
   const runConnectorProxy = only.length === 0 || only.includes(CONNECTOR_PROXY_SCENARIO)
   const runTeamReview = only.length === 0 || only.includes(TEAM_REVIEW_SCENARIO)
@@ -94,7 +98,7 @@ async function main() {
   const runOutputTokens = only.length === 0 || only.includes(OUTPUT_TOKENS_SCENARIO)
   const runBackgroundNotifications = only.length === 0 || only.includes(BACKGROUND_NOTIFICATIONS_SCENARIO)
   const runPlanModeModelSwitch = only.length === 0 || only.includes(PLAN_MODE_MODEL_SWITCH_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runConnectorProxy && !runTeamReview && !runTeamRuntime && !runContextSummary && !runOutputTokens && !runBackgroundNotifications && !runPlanModeModelSwitch) {
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runBrowserUse && !runAgentDesktop && !runConnectorProxy && !runTeamReview && !runTeamRuntime && !runContextSummary && !runOutputTokens && !runBackgroundNotifications && !runPlanModeModelSwitch) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
@@ -138,6 +142,10 @@ async function main() {
     console.log(
       `[agent-e2e] ${status === 'passed' ? 'PASS' : 'SKIP'} ${COMPUTER_USE_SCENARIO}${status === 'skipped' ? ' (platform has no Computer Use engine)' : ''}`,
     )
+  }
+  if (runBrowserUse) {
+    await runBrowserUseRefreshScenario(rootDir, join(artifactDir, 'browser-use-refresh'))
+    console.log(`[agent-e2e] PASS ${BROWSER_USE_SCENARIO}`)
   }
   if (runProviderMedia) {
     await runProviderMediaScenario(rootDir, join(artifactDir, 'provider-media'))

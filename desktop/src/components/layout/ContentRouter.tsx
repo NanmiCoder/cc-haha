@@ -10,6 +10,7 @@ import { TerminalSettings } from '../../pages/TerminalSettings'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
 import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLayer'
+import { useBrowserUseEventBridge } from '../workbench/WorkspaceSurface'
 
 type ContentRouterProps = {
   /**
@@ -20,6 +21,7 @@ type ContentRouterProps = {
 }
 
 export function ContentRouter({ homePage }: ContentRouterProps = {}) {
+  useBrowserUseEventBridge()
   const newSessionDraft = useUIStore(s => s.newSessionDraft)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)

@@ -279,4 +279,46 @@ describe('workspace browser guests', () => {
     document.body.dispatchEvent(move)
     expect(slot.style.pointerEvents).toBe('auto')
   })
+
+  it('mounts overlay host INSIDE record.slot as a sibling AFTER <webview> and keeps non-zero layout when hidden under active agent control', async () => {
+    registry.setWorkspaceBrowserGuestLayer(layer)
+    const stage = document.createElement('div')
+    document.body.appendChild(stage)
+    rect(stage, { left: 100, top: 50, width: 640, height: 480 })
+    const ready = registry.ensureWorkspaceBrowserGuest('tab-agent', async () => {})
+    await settle()
+    const webview = webviews()[0]!
+    attach(webview)
+    await ready
+
+    const slot = webview.parentElement!
+    const overlayHost = registry.getWorkspaceBrowserOverlayHost('tab-agent')
+    expect(overlayHost).not.toBeNull()
+    expect(Array.from(slot.children)).toEqual([webview, overlayHost])
+    expect(overlayHost!.style.position).toBe('absolute')
+    expect(overlayHost!.style.zIndex).toBe('1')
+
+    const release = registry.placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    registry.setWorkspaceBrowserAgentActive('tab-agent', true)
+
+    // Switching away to a code file tab releases placement; slot must stay non-zero while hidden.
+    release()
+    expect(slot.style.visibility).toBe('hidden')
+    expect(slot.style.pointerEvents).toBe('none')
+    expect(slot.style.width).toBe('640px')
+    expect(slot.style.height).toBe('480px')
+
+    // Even if stage collapses to 0x0, active agent control preserves last valid non-zero size.
+    rect(stage, { left: 100, top: 50, width: 0, height: 0 })
+    registry.placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    expect(slot.style.width).toBe('640px')
+    expect(slot.style.height).toBe('480px')
+    expect(slot.dataset.shown).toBe('false')
+
+    // Pointer events starting inside the in-slot overlay must not trigger app-drag gesture suppression.
+    rect(stage, { left: 100, top: 50, width: 640, height: 480 })
+    registry.placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    overlayHost!.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    expect(slot.style.pointerEvents).toBe('auto')
+  })
 })

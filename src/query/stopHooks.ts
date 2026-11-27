@@ -225,6 +225,21 @@ export async function* handleStopHooks(
     }
   }
 
+  // Browser Use: turn-end cleanup scoped by (sessionId, agentId).
+  // Zero-syscall fast path on non-browser turns; preserves pause state when
+  // currently waiting on human BrowserTakeover.
+  try {
+    const { cleanupBrowserUseAfterTurn } = await import(
+      '../tools/BrowserUseTool/bridge.js'
+    )
+    await cleanupBrowserUseAfterTurn({
+      sessionId: getSessionId(),
+      agentId: toolUseContext.agentId,
+    })
+  } catch {
+    // Best-effort turn-end cleanup
+  }
+
   try {
     const blockingErrors = []
     const appState = toolUseContext.getAppState()

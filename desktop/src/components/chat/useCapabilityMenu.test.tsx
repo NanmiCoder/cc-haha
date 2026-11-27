@@ -2,6 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedSkill } from '@/types/market'
 import { AGENT_TEAMS_NOTICE_STORAGE_KEY, dismissAgentTeamsNotice, isAgentTeamsNoticeDismissed } from '@/lib/agentTeamsNotice'
+import { browserHost } from '@/lib/desktopHost/browserHost'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useMarketStore } from '@/stores/marketStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { MARKET_TAB_ID, useTabStore } from '@/stores/tabStore'
@@ -11,12 +13,20 @@ import { pickPopularSkills, resetPopularSkillsCache, useCapabilityMenu, type Cap
 const mocks = vi.hoisted(() => ({
   marketList: vi.fn(),
   marketInstall: vi.fn(),
+  browserUseGetConfig: vi.fn(),
+  browserUseUpdateConfig: vi.fn(),
 }))
 
 vi.mock('@/api/agents', () => ({ agentsApi: { list: vi.fn().mockResolvedValue({ activeAgents: [], allAgents: [] }) } }))
 vi.mock('@/api/connectors', () => ({ connectorsApi: { list: vi.fn().mockResolvedValue({ items: [] }) } }))
 vi.mock('@/api/workflows', () => ({ workflowsApi: { list: vi.fn().mockResolvedValue({ workflows: [] }) } }))
 vi.mock('@/api/computerUse', () => ({ computerUseApi: { getStatus: vi.fn().mockRejectedValue(new Error('off')), getAuthorizedApps: vi.fn() } }))
+vi.mock('@/api/browserUse', () => ({
+  browserUseApi: {
+    getConfig: mocks.browserUseGetConfig,
+    updateConfig: mocks.browserUseUpdateConfig,
+  },
+}))
 vi.mock('@/api/market', () => ({ marketApi: { list: mocks.marketList, install: mocks.marketInstall } }))
 vi.mock('@/stores/skillStore', () => ({ useSkillStore: { getState: () => ({ fetchSkills: vi.fn().mockResolvedValue(undefined) }) } }))
 
@@ -62,6 +72,22 @@ beforeEach(() => {
   resetPopularSkillsCache()
   mocks.marketList.mockReset().mockResolvedValue({ items: [marketSkill('excalidraw'), marketSkill('pptx')], nextCursor: null, sources: {} })
   mocks.marketInstall.mockReset()
+  mocks.browserUseGetConfig.mockReset().mockResolvedValue({
+    enabled: false,
+    preferredTarget: 'auto',
+    showCursorOverlay: true,
+    autoOpenWorkspacePanel: true,
+    managedChromeHeadless: false,
+  })
+  mocks.browserUseUpdateConfig.mockReset().mockImplementation(async (patch: Record<string, unknown>) => ({
+    enabled: false,
+    preferredTarget: 'auto',
+    showCursorOverlay: true,
+    autoOpenWorkspacePanel: true,
+    managedChromeHeadless: false,
+    ...patch,
+  }))
+  useBrowserUseStore.getState().reset()
   useMarketStore.setState({ installingIds: new Set(), installError: null })
   useSettingsStore.setState({ agentTeamsEnabled: true, locale: 'en' })
   useUIStore.setState({ pendingMarketTarget: null, toasts: [] })
@@ -69,6 +95,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  Reflect.deleteProperty(window, 'desktopHost')
   vi.clearAllMocks()
 })
 
@@ -188,6 +215,126 @@ describe('useCapabilityMenu', () => {
     rerender()
     expect(result.current.agentTeamArmed).toBe(false)
     expect(result.current.sections[1]!.items[0]!.action).toEqual({ type: 'settings', tab: 'general' })
+  })
+
+  it('toggles Browser Use through consent dialog and syncs preferred target on desktop', async () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    const { result, composer } = renderMenu()
+    await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalled())
+    await waitFor(() => {
+      const runSection = result.current.sections.find(section => section.id === 'run')!
+      const browserRow = runSection.items.find(item => item.key === 'browser-use')!
+      expect(browserRow.switch).toEqual({ checked: false, disabled: false })
+    })
+
+    const runSection = result.current.sections.find(section => section.id === 'run')!
+    const browserRow = runSection.items.find(item => item.key === 'browser-use')!
+    expect(browserRow.action).toEqual({ type: 'toggleBrowserUse' })
+
+    act(() => result.current.onAction({ type: 'toggleBrowserUse' }))
+    expect(result.current.browserUseConsent.open).toBe(true)
+    expect(composer.onClose).toHaveBeenCalled()
+
+    await act(async () => {
+      await result.current.browserUseConsent.onConfirm()
+    })
+    expect(result.current.browserUseConsent.open).toBe(false)
+    expect(result.current.browserUse.enabled).toBe(true)
+    expect(mocks.browserUseUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
+
+    await act(async () => {
+      result.current.browserUse.setPreferredTarget('chrome')
+      await Promise.resolve()
+    })
+    expect(result.current.browserUse.preferredTarget).toBe('chrome')
+
+    await act(async () => {
+      result.current.onAction({ type: 'toggleBrowserUse' })
+      await Promise.resolve()
+    })
+    expect(result.current.browserUse.enabled).toBe(false)
+  })
+
+  it('hides the Browser Use switch on non-desktop H5 and avoids retry loops on 403', async () => {
+    window.desktopHost = { ...browserHost, kind: 'browser', isDesktop: false }
+    const h5Menu = renderMenu()
+    const runSection = h5Menu.result.current.sections.find(section => section.id === 'run')!
+    const browserRow = runSection.items.find(item => item.key === 'browser-use')!
+    expect(browserRow.switch).toBeUndefined()
+    expect(browserRow.action).toEqual({ type: 'settings', tab: 'browserUse' })
+    expect(mocks.browserUseGetConfig).not.toHaveBeenCalled()
+    h5Menu.unmount()
+
+    // Even on desktop, a 403/error degrades to settings navigation and stops re-fetching.
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    mocks.browserUseGetConfig.mockRejectedValue(new Error('403 Desktop-only'))
+    const desktopMenu = renderHook(
+      ({ open }) => useCapabilityMenu({ open, cwd: '/repo', references: [], handlers: handlers() }),
+      { initialProps: { open: true } },
+    )
+    await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      const degradedRow = desktopMenu.result.current.sections.find(section => section.id === 'run')!.items.find(item => item.key === 'browser-use')!
+      expect(degradedRow.switch).toBeUndefined()
+      expect(degradedRow.action).toEqual({ type: 'settings', tab: 'browserUse' })
+    })
+    desktopMenu.rerender({ open: false })
+    desktopMenu.rerender({ open: true })
+    await Promise.resolve()
+    expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('hydrates Browser Use config before opening + menu and surfaces toasts on save failures', async () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    mocks.browserUseGetConfig.mockResolvedValue({
+      enabled: true,
+      preferredTarget: 'workspace',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    })
+
+    // Closed initially: hydration effect still fetches config once on desktop.
+    const hook = renderHook(() => useCapabilityMenu({ open: false, cwd: '/repo', references: [], handlers: handlers() }))
+    await waitFor(() => expect(hook.result.current.browserUse.enabled).toBe(true))
+    expect(hook.result.current.browserUse.preferredTarget).toBe('workspace')
+
+    // Action setBrowserUseTarget & toggleBrowserUse (disable) failures surface error toasts
+    mocks.browserUseUpdateConfig.mockRejectedValue(new Error('write denied'))
+    await act(async () => {
+      hook.result.current.onAction({ type: 'setBrowserUseTarget', target: 'chrome' })
+      hook.result.current.onAction({ type: 'toggleBrowserUse' })
+      await Promise.resolve()
+    })
+    expect(useUIStore.getState().toasts.at(-1)?.type).toBe('error')
+
+    // Direct disable / setPreferredTarget failure toasts
+    await act(async () => {
+      hook.result.current.browserUse.disable()
+      hook.result.current.browserUse.setPreferredTarget('auto')
+      await Promise.resolve()
+    })
+    expect(useUIStore.getState().toasts.filter(t => t.type === 'error').length).toBeGreaterThanOrEqual(2)
+
+    // Consent dialog confirm failure keeps dialog open and toasts; onClose closes it
+    useBrowserUseStore.setState({
+      config: {
+        enabled: false,
+        preferredTarget: 'auto',
+        showCursorOverlay: true,
+        autoOpenWorkspacePanel: true,
+        managedChromeHeadless: false,
+      },
+      loaded: true,
+    })
+    act(() => hook.result.current.onAction({ type: 'toggleBrowserUse' }))
+    expect(hook.result.current.browserUseConsent.open).toBe(true)
+    await act(async () => {
+      await hook.result.current.browserUseConsent.onConfirm()
+    })
+    expect(hook.result.current.browserUseConsent.open).toBe(true)
+    act(() => hook.result.current.browserUseConsent.onClose())
+    expect(hook.result.current.browserUseConsent.open).toBe(false)
   })
 })
 

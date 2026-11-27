@@ -297,6 +297,30 @@ const workspaceBrowserMessage: Validator = value =>
   && hasOnlyKeys(value, ['tabId', 'payload'])
   && isWorkspaceBrowserId(value.tabId)
 
+const browserUseTabReady: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['requestId', 'tabId', 'ok', 'error'])
+  && isWorkspaceBrowserId(value.requestId)
+  && typeof value.ok === 'boolean'
+  && (value.ok
+    ? isWorkspaceBrowserId(value.tabId)
+    : (value.tabId === undefined || value.tabId === '' || isWorkspaceBrowserId(value.tabId)))
+  && (value.error === undefined || (typeof value.error === 'string' && value.error.length <= 1_000))
+
+const browserUseCursorArrived: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['moveId', 'tabId', 'skipped'])
+  && isWorkspaceBrowserId(value.moveId)
+  && isWorkspaceBrowserId(value.tabId)
+  && (value.skipped === undefined || typeof value.skipped === 'boolean')
+
+const browserUseUserAction: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['tabId', 'action', 'reason'])
+  && isWorkspaceBrowserId(value.tabId)
+  && (value.action === 'takeover' || value.action === 'resume' || value.action === 'stop' || value.action === 'cancel')
+  && (value.reason === undefined || (typeof value.reason === 'string' && value.reason.length <= 500))
+
 // The colors reach BrowserWindow.setBackgroundColor, so they are pinned to a
 // literal 6-digit #RRGGBB. This is load-bearing, not tidiness: that API also
 // accepts #AARRGGBB, so an 8-digit value would let a compromised renderer make
@@ -446,6 +470,9 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.workspaceBrowserMessage]: workspaceBrowserMessage,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserClose]: workspaceBrowserTab,
+  [ELECTRON_IPC_CHANNELS.browserUseTabReady]: browserUseTabReady,
+  [ELECTRON_IPC_CHANNELS.browserUseCursorArrived]: browserUseCursorArrived,
+  [ELECTRON_IPC_CHANNELS.browserUseUserAction]: browserUseUserAction,
   [ELECTRON_IPC_CHANNELS.appModeGet]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeSet]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,

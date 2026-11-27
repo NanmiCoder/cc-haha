@@ -21,6 +21,7 @@ import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
 import { useUIStore } from './uiStore'
+import { useBrowserUseStore } from './browserUseStore'
 import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
@@ -6699,6 +6700,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         update(() => ({ promptSuggestion: msg.suggestion }))
         break
       }
+      case 'browser_use_activity':
+        useBrowserUseStore.getState().applyActivityEvent(sessionId, msg.activity)
+        break
+      case 'browser_use_takeover':
+        useBrowserUseStore.getState().applyTakeoverEvent(sessionId, msg.takeover)
+        break
       case 'session_title_updated':
         useSessionStore.getState().updateSessionTitle(msg.sessionId, msg.title)
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)

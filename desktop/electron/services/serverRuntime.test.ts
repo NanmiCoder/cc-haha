@@ -55,6 +55,7 @@ function createRuntime(options: {
   env?: NodeJS.ProcessEnv
   now?: () => number
   resolveSystemProxy?: (url: string) => Promise<string>
+  resolveBrowserBridgeUrl?: () => Promise<string | null>
   sleep?: (delayMs: number) => Promise<void>
   proxyBridge?: SystemProxyBridgeLike
   fetch?: typeof fetch
@@ -65,6 +66,7 @@ function createRuntime(options: {
     diagnosticsFile: options.diagnosticsFile,
     env: { CLAUDE_CONFIG_DIR: isolatedConfigDir, ...options.env },
     resolveSystemProxy: options.resolveSystemProxy,
+    resolveBrowserBridgeUrl: options.resolveBrowserBridgeUrl,
     deps: {
       ...(options.fetch ? { fetch: options.fetch } : {}),
       appendHostDiagnostic: sidecarMocks.appendHostDiagnostic,
@@ -966,5 +968,38 @@ describe('ElectronServerRuntime', () => {
       expect(logs).toContain('EAI_AGAIN')
       expect(logs).not.toContain('fixture-private-pac')
     } finally { runtime.stopAll() }
+  })
+
+  it('passes CC_HAHA_BROWSER_BRIDGE_URL and CC_HAHA_BROWSER_BRIDGE_TOKEN only to the server sidecar and never to adapters', async () => {
+    const runtime = createRuntime({
+      env: {
+        CC_HAHA_BROWSER_BRIDGE_URL: 'http://127.0.0.1:9999',
+        CC_HAHA_BROWSER_BRIDGE_TOKEN: 'leaked-parent-env-token',
+      },
+      resolveBrowserBridgeUrl: async () => 'http://127.0.0.1:54321',
+    })
+    try {
+      await runtime.startServer()
+      const bridgeToken = runtime.getBrowserBridgeToken()
+      expect(bridgeToken.length).toBeGreaterThanOrEqual(40)
+      expect(bridgeToken).not.toBe(runtime.getLocalAccessToken())
+      expect(bridgeToken).not.toBe(runtime.getPetAccessToken())
+      expect(bridgeToken).not.toBe(runtime.getP2PEndpointToken())
+
+      const serverPlan = sidecarMocks.serverPlans.at(-1)!
+      expect(serverPlan.env.CC_HAHA_BROWSER_BRIDGE_URL).toBe('http://127.0.0.1:54321')
+      expect(serverPlan.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBe(bridgeToken)
+
+      const adapterPlans = sidecarMocks.spawnSidecar.mock.calls
+        .map(call => call[0] as SidecarPlan)
+        .filter(plan => plan.args[0] !== 'server')
+      expect(adapterPlans).toHaveLength(ADAPTER_COUNT)
+      for (const adapterPlan of adapterPlans) {
+        expect(adapterPlan.env.CC_HAHA_BROWSER_BRIDGE_URL).toBeUndefined()
+        expect(adapterPlan.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBeUndefined()
+      }
+    } finally {
+      runtime.stopAll()
+    }
   })
 })

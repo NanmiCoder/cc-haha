@@ -250,6 +250,12 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       close: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserClose, { tabId }),
       onEvent: handler => subscribe(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, handler),
     },
+    browserUse: {
+      reportTabReady: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseTabReady, payload),
+      reportCursorArrived: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, payload),
+      sendUserAction: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseUserAction, payload),
+      onEvent: handler => subscribe(ELECTRON_EVENT_CHANNELS.browserUseEvent, handler),
+    },
     appMode: {
       get: () => invoke(ELECTRON_IPC_CHANNELS.appModeGet),
       set: config => invoke(ELECTRON_IPC_CHANNELS.appModeSet, config),

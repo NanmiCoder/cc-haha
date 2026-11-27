@@ -1,4 +1,5 @@
 import { useActivityPanelStore } from '../../stores/activityPanelStore'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { useWorkspaceReviewStore } from '../../stores/workspaceReviewStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -16,5 +17,6 @@ export function releaseWorkspaceSession(sessionId: string): void {
   useWorkspaceStore.getState().clearSession(sessionId)
   useWorkspaceContentStore.getState().clearSession(sessionId)
   useWorkspaceReviewStore.getState().clearSession(sessionId)
+  useBrowserUseStore.getState().clearSession(sessionId)
   useActivityPanelStore.getState().close(sessionId)
 }

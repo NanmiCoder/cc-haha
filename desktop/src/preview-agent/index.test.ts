@@ -78,6 +78,7 @@ beforeEach(() => {
   for (const host of [...document.documentElement.querySelectorAll('div')]) {
     if (host.shadowRoot || host.dataset.previewSelectionAnnotationRoot) host.remove()
   }
+  sendFromHost({ type: 'agent-control-state', active: false })
   sendFromHost('exit-picker')   // 复位上一个用例可能残留的 picker 态
   sendFromHost('clear-selection-draft')
   posted.length = 0
@@ -322,5 +323,53 @@ describe('picker command ownership', () => {
     pick(document.getElementById('t')!)
     expect(() => bubbleButton('confirm')).toThrow()
     expect(posted.find(message => message.type === 'picker-exited')?.generation).toBe(21)
+  })
+})
+
+describe('agent-control-state hygiene', () => {
+  it('exits picker, hides zoom controls with display:none + inert, preserves queued selection draft, and restores on release', () => {
+    const chrome = showZoomControls()
+    const target = document.getElementById('t')!
+
+    // Queue a selection draft first.
+    sendFromHost({ type: 'enter-picker', persistent: true, mode: 'batch', label: 1 })
+    pick(target)
+    const root = bubbleButton('queue').getRootNode() as ShadowRoot
+    const textInput = root.querySelector<HTMLInputElement>('[data-field="text"]')!
+    textInput.value = 'Drafted'
+    textInput.dispatchEvent(new Event('input'))
+    bubbleButton('queue').click()
+    const queuedItemId = posted.find(message => message.type === 'selection')?.payload?.draftItemId
+    expect(queuedItemId).toBeTruthy()
+    expect(target.textContent).toBe('Drafted')
+
+    // Re-enter picker and then activate agent control.
+    sendFromHost({ type: 'enter-picker', persistent: true, mode: 'batch', label: 2 })
+    posted.length = 0
+    sendFromHost({ type: 'agent-control-state', active: true })
+
+    expect(chrome.style.display).toBe('none')
+    expect(chrome.hasAttribute('inert')).toBe(true)
+    expect(types()).toContain('picker-exited')
+
+    // Capturing click listener is suppressed so clicks reach the page untouched.
+    const pageClicks: number[] = []
+    const onPageClick = () => pageClicks.push(1)
+    target.addEventListener('click', onPageClick)
+    pick(target)
+    target.removeEventListener('click', onPageClick)
+    expect(pageClicks).toHaveLength(1)
+    expect(() => bubbleButton('confirm')).toThrow()
+
+    // Queued draft is preserved and still undoable!
+    expect(target.textContent).toBe('Drafted')
+    sendFromHost({ type: 'undo-selection', itemId: queuedItemId! })
+    expect(target.textContent).toBe('Old')
+
+    // Releasing agent control restores zoom controls cleanly.
+    sendFromHost({ type: 'agent-control-state', active: false })
+    expect(chrome.style.display).toBe('')
+    expect(chrome.hasAttribute('inert')).toBe(false)
+    expect(chrome.style.visibility).toBe('visible')
   })
 })

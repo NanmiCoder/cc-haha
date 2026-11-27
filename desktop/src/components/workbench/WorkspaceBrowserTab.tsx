@@ -15,7 +15,9 @@ import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { WorkspaceBrowserAddressBar } from '@/components/workbench/WorkspaceBrowserAddressBar'
+import { WorkspaceBrowserAgentOverlay } from '@/components/workbench/WorkspaceBrowserAgentOverlay'
 import { WorkspaceBrowserSelectionBar } from '@/components/workbench/WorkspaceBrowserSelectionBar'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -122,6 +124,8 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
 
   const currentAddress = page?.url || tab.url || ''
   const annotationActive = page?.annotationActive ?? false
+  const agentControlState = useBrowserUseStore((state) => state.tabStates[browserTabId]?.controlState ?? 'idle')
+  const agentControlling = agentControlState === 'active'
 
   useLayoutEffect(() => {
     const request = initialAddressFocusRef.current
@@ -496,7 +500,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
           }}
           size="sm"
           tone="muted"
-          disabled={!ready || !tab.url || !!tab.loadError}
+          disabled={!ready || !tab.url || !!tab.loadError || agentControlling}
           data-testid="workspace-browser-annotate"
           onClick={pickElement}
         />
@@ -616,6 +620,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         ) : null}
       </div>
 
+      <WorkspaceBrowserAgentOverlay tabId={browserTabId} />
       <WorkspaceBrowserSelectionBar sessionId={sessionId} browserTabId={browserTabId} />
       <ConfirmDialog
         open={pendingNavigation !== null}

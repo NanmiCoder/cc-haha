@@ -124,7 +124,7 @@ describe('buildCapabilitySections', () => {
     ])
     expect(keys(sections[0]!.items)).toEqual(['skills', 'connectors', 'add-files'])
     expect(sections[0]!.items[2]!.action).toEqual({ type: 'attachment' })
-    expect(keys(sections[1]!.items)).toEqual(['agent-team', 'computer-use'])
+    expect(keys(sections[1]!.items)).toEqual(['agent-team', 'browser-use', 'computer-use'])
     // Agents, workflows and slash commands sit on the root, not behind a More row.
     expect(keys(sections[2]!.items)).toEqual(['agents', 'workflows', 'slash-commands'])
     expect(sections[2]!.items[2]!.action).toEqual({ type: 'slashTrigger' })
@@ -341,12 +341,12 @@ describe('the Agent mode row', () => {
   const runKeys = (input: CapabilityMenuInput) => keys(buildCapabilitySections(input)[1]!.items)
 
   it('is absent while there is nothing to pick or to say', () => {
-    expect(runKeys(buildInput())).toEqual(['agent-team', 'computer-use'])
+    expect(runKeys(buildInput())).toEqual(['agent-team', 'browser-use', 'computer-use'])
   })
 
   it('leads the run group on a draft, offering both modes with Standard explained', () => {
     const input = buildInput({ agentProfile: { value: 'standard', locked: false } })
-    expect(runKeys(input)).toEqual(['agent-profile', 'agent-team', 'computer-use'])
+    expect(runKeys(input)).toEqual(['agent-profile', 'agent-team', 'browser-use', 'computer-use'])
     const row = rootItem(input, 'agent-profile')
     expect(row.choice).toMatchObject({ value: 'standard', locked: false })
     expect(row.choice!.options.map(option => [option.value, option.label, option.action])).toEqual([
@@ -376,6 +376,18 @@ describe('the Agent mode row', () => {
     ])
     const standard = rootItem(buildInput({ agentProfile: { value: 'standard', locked: true } }), 'agent-profile')
     expect(standard.detail).toEqual([{ text: 'agentProfile.locked' }])
+  })
+})
+
+describe('the Browser Use row', () => {
+  it('renders a live toggle switch when browserUse config is loaded, and falls back to settings otherwise', () => {
+    const loaded = rootItem(buildInput({ browserUse: { enabled: true, preferredTarget: 'chrome' } }), 'browser-use')
+    expect(loaded.switch).toEqual({ checked: true, disabled: false })
+    expect(loaded.action).toEqual({ type: 'toggleBrowserUse' })
+
+    const fallback = rootItem(buildInput({ browserUse: null }), 'browser-use')
+    expect(fallback.switch).toBeUndefined()
+    expect(fallback.action).toEqual({ type: 'settings', tab: 'browserUse' })
   })
 })
 

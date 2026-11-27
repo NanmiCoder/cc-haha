@@ -21,6 +21,7 @@ import { handlePluginsApi } from './api/plugins.js'
 import { handleSkillsApi } from './api/skills.js'
 import { handleMarketApi } from './api/market.js'
 import { handleComputerUseApi } from './api/computer-use.js'
+import { handleBrowserUseUiApi } from './api/browser-use.js'
 import { handleHahaOAuthApi } from './api/haha-oauth.js'
 import { handleHahaOpenAIOAuthApi } from './api/haha-openai-oauth.js'
 import { handleHahaGrokOAuthApi } from './api/haha-grok-oauth.js'
@@ -59,7 +60,7 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
   if (mobileParts[1] === 'sessions' && mobileParts[2] === 'mobile-push') return handleMobilePushApi(req, mobileParts, context)
   if (!context.remoteBrowser) return routeApiRequest(req, url)
   const parts = url.pathname.split('/').filter(Boolean)
-  if (parts[1] === 'usage-summary') {
+  if (parts[1] === 'browser-use' || parts[1] === 'usage-summary') {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
   const isProvider = parts[1] === 'providers'
@@ -198,6 +199,9 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
 
     case 'computer-use':
       return handleComputerUseApi(req, url, segments)
+
+    case 'browser-use':
+      return handleBrowserUseUiApi(req, url, segments)
 
     case 'diagnostics':
       return handleDiagnosticsApi(req, url, segments)

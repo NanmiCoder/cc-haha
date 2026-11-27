@@ -25,6 +25,7 @@ export type HostMessage =
   | { type: 'clear-selection-draft' }
   | { type: 'commit-selection-draft' }
   | { type: 'capture'; kind: 'full' | 'viewport' | 'element' }
+  | { type: 'agent-control-state'; active: boolean }
 
 const MAX_COPY_LENGTH = 80
 
@@ -89,6 +90,11 @@ export function parseHostMessage(raw: string): HostMessage | null {
     if (obj.type === 'capture') {
       return obj.kind === 'full' || obj.kind === 'viewport' || obj.kind === 'element'
         ? { type: 'capture', kind: obj.kind }
+        : null
+    }
+    if (obj.type === 'agent-control-state') {
+      return typeof obj.active === 'boolean'
+        ? { type: 'agent-control-state', active: obj.active }
         : null
     }
     return null

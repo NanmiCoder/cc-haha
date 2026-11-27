@@ -28,6 +28,7 @@ const DESKTOP_ONLY_SETTINGS: TranslationKey[] = [
   'settings.tab.agents',
   'settings.tab.memory',
   'settings.tab.adapters',
+  'settings.tab.browserUse',
   'settings.tab.computerUse',
   'settings.tab.voice',
 ]
