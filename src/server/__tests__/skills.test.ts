@@ -1450,4 +1450,66 @@ describe('Skills API', () => {
       }
     })
   })
+
+  it('lists Antigravity skills from AGY project and user roots without leaking Claude skills or built-ins', async () => {
+    const cwd = path.join(tmpHome, 'agy-workspace')
+    await fs.mkdir(path.join(cwd, '.git'), { recursive: true })
+    // Claude-only skill must NOT appear under providerId=antigravity-acp
+    await writeSkill(path.join(cwd, '.claude', 'skills'), 'claude-only-skill', '---\ndescription: Claude only\n---\nClaude')
+    await writeSkill(path.join(tmpHome, '.claude', 'skills'), 'user-claude-only', '---\ndescription: User Claude only\n---\nClaude')
+    // Project AGY skills (.agents/skills + .agent/skills)
+    await writeSkill(path.join(cwd, '.agents', 'skills'), 'project-ship', '---\ndescription: Project ship workflow\n---\nShip it.')
+    await writeSkill(path.join(cwd, '.agent', 'skills'), 'shared-skill', '---\ndescription: Project override\n---\nProject version.')
+    // User AGY skills across antigravity-cli, .gemini/config, and .agents
+    await writeSkill(path.join(tmpHome, '.gemini', 'antigravity-cli', 'skills'), 'shared-skill', '---\ndescription: User fallback\n---\nUser version.')
+    await writeSkill(path.join(tmpHome, '.gemini', 'antigravity-cli', 'skills'), 'taste-skill', '---\nname: design-taste-frontend\ndescription: Frontend taste rules\n---\nBody.')
+    await writeSkill(path.join(tmpHome, '.gemini', 'config', 'skills'), 'config-skill', '---\ndescription: From gemini config\n---\nBody.')
+    // Lowercase skill.md + disable-slash-command filter
+    const lowerDir = path.join(tmpHome, '.agents', 'skills', 'lowercase-skill')
+    await fs.mkdir(lowerDir, { recursive: true })
+    await fs.writeFile(path.join(lowerDir, 'skill.md'), '---\ndescription: Lowercase entry\n---\nBody.', 'utf-8')
+    await writeSkill(path.join(tmpHome, '.agents', 'skills'), 'hidden-agy-skill', '---\ndescription: Hidden\ndisable-slash-command: true\n---\nHidden')
+
+    const req = makeRequest(`/api/skills/commands?cwd=${encodeURIComponent(cwd)}&providerId=antigravity-acp`)
+    const res = await handleSkillsApi(req.req, req.url, req.segments)
+    expect(res.status).toBe(200)
+    const { commands } = (await res.json()) as { commands: SkillSlashCommand[] }
+
+    expect(commands).toContainEqual({
+      name: 'project-ship',
+      description: 'Project ship workflow',
+      kind: 'skill',
+      source: 'project',
+    })
+    expect(commands).toContainEqual({
+      name: 'shared-skill',
+      description: 'Project override',
+      kind: 'skill',
+      source: 'project',
+    })
+    expect(commands).toContainEqual({
+      name: 'design-taste-frontend',
+      description: 'Frontend taste rules',
+      kind: 'skill',
+      source: 'user',
+    })
+    expect(commands).toContainEqual({
+      name: 'config-skill',
+      description: 'From gemini config',
+      kind: 'skill',
+      source: 'user',
+    })
+    expect(commands).toContainEqual({
+      name: 'lowercase-skill',
+      description: 'Lowercase entry',
+      kind: 'skill',
+      source: 'user',
+    })
+    const names = commands.map((c) => c.name)
+    expect(names).not.toContain('claude-only-skill')
+    expect(names).not.toContain('user-claude-only')
+    expect(names).not.toContain('hidden-agy-skill')
+    expect(names).not.toContain('debug')
+    expect(names).not.toContain('simplify')
+  })
 })

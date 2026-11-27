@@ -4531,6 +4531,63 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
   })
 
+  it('merges Antigravity built-in commands with cold-start AGY skills and inserts plain /skill text instead of Claude mentions', async () => {
+    mocks.listReferences.mockResolvedValue({
+      skills: [{
+        kind: 'skill',
+        id: 'skill-vetter',
+        name: 'skill-vetter',
+        displayName: 'Skill Vetter',
+        description: 'Claude mention version',
+        source: 'user',
+        modelText: 'Use the Skill tool with skill: "skill-vetter" for this request.',
+      }],
+      plugins: [],
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Cold Start',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          slashCommands: [
+            { name: 'skill-vetter', description: 'Vet skills for AGY', kind: 'skill', source: 'user' },
+          ],
+        },
+      },
+    })
+
+    render(<ChatInput sessionId={sessionId} />)
+
+    setComposerText('/skill', 6)
+    const option = await screen.findByRole('option', { name: 'skill-vetter' })
+    expect(option).toBeInTheDocument()
+    fireEvent.click(option)
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('/skill-vetter ')
+    })
+    expect(document.querySelector('.composer-mention')).toBeNull()
+  })
+
   it('passes modelId and effortLevel from sessionRuntimeStore to createSession when replacing an empty Antigravity session', async () => {
     installElectronFileHost()
     mocks.dialogOpen.mockResolvedValueOnce('/other')

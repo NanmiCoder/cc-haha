@@ -317,10 +317,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const [slashCommandState, setSlashCommandState] = useState<{
     cwd: string | null
+    providerId: string | null
     commands: SlashCommandOption[]
-  }>({ cwd: null, commands: [] })
+  }>({ cwd: null, providerId: null, commands: [] })
   const slashCommands = slashCommandState.commands
   const slashCommandsCwd = slashCommandState.cwd
+  const slashCommandsProviderId = slashCommandState.providerId
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
   const materializingRef = useRef<{
@@ -540,6 +542,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     },
   })
 
+  const antigravityDiscoveryStatus = isAntigravity ? (antigravity?.status ?? null) : null
+
   useEffect(() => {
     let cancelled = false
 
@@ -579,37 +583,47 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         }
       })
 
+    const providerId = isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : null
     const loadFromSkillsFallback = () =>
       skillsApi.list(cwd).then(({ skills }) => mapSkillsToSlashCommands(skills))
 
     const loadPromise =
       typeof skillsApi.commands === 'function'
-        ? skillsApi.commands(cwd).then(
+        ? (isAntigravity
+            ? skillsApi.commands(cwd, undefined, ANTIGRAVITY_ACP_PROVIDER_ID)
+            : skillsApi.commands(cwd)
+          ).then(
             ({ commands }) => sanitizeSlashCommands(commands),
             (error) => {
-              if (error instanceof ApiError && error.status === 400) {
+              if (!isAntigravity && error instanceof ApiError && error.status === 400) {
                 return loadFromSkillsFallback()
               }
               throw error
             },
           )
-        : loadFromSkillsFallback()
+        : isAntigravity
+          ? Promise.resolve([])
+          : loadFromSkillsFallback()
 
     loadPromise
       .then((commands) => {
         if (cancelled) return
-        setSlashCommandState({ cwd: workDir, commands })
+        setSlashCommandState({ cwd: workDir, providerId, commands })
       })
       .catch(() => {
         if (!cancelled) {
-          setSlashCommandState((prev) => (prev.cwd === workDir ? prev : { cwd: workDir, commands: [] }))
+          setSlashCommandState((prev) =>
+            prev.cwd === workDir && prev.providerId === providerId
+              ? prev
+              : { cwd: workDir, providerId, commands: [] },
+          )
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [workDir, lastPluginReloadSummary, referencesVersion])
+  }, [workDir, isAntigravity, antigravityDiscoveryStatus, lastPluginReloadSummary, referencesVersion])
 
   useEffect(() => {
     let cancelled = false
@@ -646,20 +660,39 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     return names
   }, [composerReferences, referenceCurrent?.loading])
   const listedLeanNames = useMemo(() => new Set([
-    ...(slashCommandsCwd === workDir ? slashCommands : []).filter(command => command.leanCompatible !== false).map(command => command.name),
+    ...(slashCommandsCwd === workDir && slashCommandsProviderId === null ? slashCommands : []).filter(command => command.leanCompatible !== false).map(command => command.name),
     ...referenceNames,
-  ]), [slashCommands, slashCommandsCwd, workDir, referenceNames])
+  ]), [slashCommands, slashCommandsCwd, slashCommandsProviderId, workDir, referenceNames])
 
   const allSlashCommands = useMemo(() => {
     if (isAntigravity) {
       const localized = new Map(getLocalizedFallbackCommands(t).map((cmd) => [cmd.name, cmd.description]))
-      return ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd): SlashCommandOption => ({
+      const draftBuiltIns: SlashCommandOption[] = ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd) => ({
         name: cmd.name,
         description: localized.get(cmd.name) ?? cmd.description,
         kind: 'command',
       }))
+      const agySkills =
+        slashCommandsCwd === workDir && slashCommandsProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
+          ? slashCommands
+          : []
+      const seen = new Set(draftBuiltIns.map((cmd) => cmd.name.toLowerCase()))
+      const merged = [...draftBuiltIns]
+      for (const skill of agySkills) {
+        const key = skill.name.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        merged.push({ ...skill, kind: skill.kind ?? 'skill' })
+      }
+      return merged
     }
-    const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommandsCwd === workDir ? slashCommands : [], getLocalizedFallbackCommands(t)), agentSlashCommands)
+    const commands = appendAgentSlashCommands(
+      mergeSlashCommands(
+        slashCommandsCwd === workDir && slashCommandsProviderId === null ? slashCommands : [],
+        getLocalizedFallbackCommands(t),
+      ),
+      agentSlashCommands,
+    )
     const names = new Set(commands.map(command => command.name.toLowerCase()))
     for (const reference of composerReferences) {
       const name = reference.kind === 'plugin' ? reference.id : reference.name
@@ -668,7 +701,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedLeanNames)))
-  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, listedLeanNames, isLean, isAntigravity, t])
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, slashCommandsProviderId, workDir, composerReferences, listedLeanNames, isLean, isAntigravity, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
     applyWorkDir(newWorkDir)
@@ -1257,7 +1290,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         if (
           event.key === 'Enter' &&
           exactSlashCommand &&
-          !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
+          (isAntigravity || !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name))) &&
           selected?.name.toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           slashFilter.trim().toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           shouldSubmitOnEnter(event, chatSendBehavior)
@@ -1387,7 +1420,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
-    const reference = (option?.kind === 'skill' || option?.kind === 'plugin')
+    const reference = !isAntigravity && (option?.kind === 'skill' || option?.kind === 'plugin')
       ? composerReferences.find(item => item.kind === option.kind && (item.id === command || item.name === command))
       : undefined
     if (reference) {
@@ -1703,7 +1736,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                 id={slashMenuId}
                 groups={filteredCommandGroups}
                 isSearching={Boolean(slashFilter.trim())}
-                references={composerReferences}
+                references={isAntigravity ? EMPTY_COMPOSER_REFERENCES : composerReferences}
                 selectedIndex={slashSelectedIndex}
                 itemRefs={slashItemRefs}
                 onSelect={selectSlashCommand}

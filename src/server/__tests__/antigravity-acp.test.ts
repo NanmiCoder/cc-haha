@@ -10,10 +10,12 @@ import {
   acpModeToCcHahaPermissionMode,
   ccHahaPermissionModeToAcpMode,
   discoverAntigravity,
+  getAntigravityDiscoveredCommands,
   getAntigravityStatus,
   openAntigravityAcp,
   resetAntigravityStatusForTests,
 } from '../services/antigravityAcp.js'
+import { listAntigravitySkillSlashCommands } from '../api/skills.js'
 import {
   AntigravityConversation,
   parseSubagentToolCallPrefix,
@@ -181,7 +183,9 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         send({ id: rpc.id, error: { code: -32603, message: 'Backend exploded' } })
         break
       }
-      update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
+      if (mode !== 'late-commands') {
+        update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
+      }
       reply(rpc.id, { sessionId, configOptions: buildConfigOptions(), tier })
       break
     case 'session/resume':
@@ -193,6 +197,15 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       if (rpc.params.configId === 'thought_level' && mode === 'effort-fail' && rpc.params.value === 'xhigh') {
         send({ id: rpc.id, error: { code: -32602, message: 'Effort not supported for model' } })
         break
+      }
+      if (mode === 'late-commands') {
+        update(sessionId, 'available_commands_update', {
+          availableCommands: [
+            ...initialCommands,
+            { name: 'agy-customizations', description: 'AGY built-in customization guide' },
+            { name: 'skill-vetter', description: 'Security vetter skill' },
+          ],
+        })
       }
       if (rpc.params.configId === 'model') currentModel = rpc.params.value
       if (rpc.params.configId === 'thought_level') currentEffort = rpc.params.value
@@ -2208,6 +2221,83 @@ describe('Antigravity ACP server core & integration', () => {
     expect(conv.cancel()).toBe(true)
     await conv.pendingTurnCompletion
     expect(conv.isResponding).toBe(false)
+  })
+
+  test('retains late available_commands_update arriving after session/new during model setup and caches discovered AGY skills for draft/cold-start slash menus', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'late-commands')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-late-commands')
+    await mkdir(join(workDir, '.git'), { recursive: true })
+    await mkdir(join(workDir, '.agents', 'skills', 'repo-local-skill'), { recursive: true })
+    await writeFile(
+      join(workDir, '.agents', 'skills', 'repo-local-skill', 'SKILL.md'),
+      '---\ndescription: Repo AGY skill\n---\nBody',
+      'utf8',
+    )
+
+    // 1. openAntigravityAcp with explicit model triggers set_config_option after session/new.
+    // Late available_commands_update during that window must NOT be dropped.
+    const acp = await openAntigravityAcp(workDir, { modelId: 'gemini-3.8-flash' })
+    try {
+      expect(acp.initialAvailableCommands.map(c => c.name)).toEqual([
+        'swarm',
+        'plan',
+        'boost',
+        'agy-customizations',
+        'skill-vetter',
+      ])
+    } finally {
+      acp.close()
+      await acp.proc.exited
+    }
+
+    // 2. discoverAntigravity captures global/builtin commands during model effort probing
+    // so draft /api/skills/commands?providerId=antigravity-acp exposes both disk & discovered skills.
+    const status = await discoverAntigravity()
+    expect(status.status).toBe('ready')
+    expect(getAntigravityDiscoveredCommands().map(c => c.name)).toContain('agy-customizations')
+
+    const draftSkills = await listAntigravitySkillSlashCommands(workDir)
+    expect(draftSkills).toContainEqual({
+      name: 'repo-local-skill',
+      description: 'Repo AGY skill',
+      kind: 'skill',
+      source: 'project',
+    })
+    expect(draftSkills).toContainEqual({
+      name: 'agy-customizations',
+      description: 'AGY built-in customization guide',
+      kind: 'skill',
+      source: 'user',
+    })
+    // Built-in AGY commands stay separate from skill entries
+    expect(draftSkills.map(c => c.name)).not.toContain('swarm')
+
+    // 3. Cold-start Antigravity session slash-commands endpoint falls back to AGY skills before ACP starts.
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          title: 'Cold Start AGY',
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-3.8-pro',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const coldSlashRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+      expect(coldSlashRes.status).toBe(200)
+      const coldSlashBody = await coldSlashRes.json() as { commands: Array<{ name: string; kind?: string }> }
+      expect(coldSlashBody.commands.map(c => c.name)).toContain('repo-local-skill')
+      expect(coldSlashBody.commands.map(c => c.name)).toContain('agy-customizations')
+    } finally {
+      server.stop(true)
+    }
   })
 })
 

@@ -55,7 +55,11 @@ import {
   assertSessionCanArchive,
   runSessionRewind,
 } from '../ws/handler.js'
-import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
+import {
+  listAntigravitySkillSlashCommands,
+  listSkillSlashCommands,
+  type SkillSlashCommand,
+} from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
 import { ReviewService, type ReviewSource } from '../services/reviewService.js'
 import {
@@ -1460,7 +1464,10 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
   const liveProviderId = conversationService.getSessionRuntimeSelection(sessionId)?.providerId
   if (liveProviderId === ANTIGRAVITY_PROVIDER_ID || launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
-    return Response.json({ commands: cachedCommands })
+    if (cachedCommands.length > 0) {
+      return Response.json({ commands: cachedCommands })
+    }
+    return Response.json({ commands: await listAntigravitySkillSlashCommands(workDir) })
   }
 
   const lean = launchInfo?.agentProfile === 'lean'
