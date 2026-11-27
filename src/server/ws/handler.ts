@@ -1245,8 +1245,50 @@ async function handleUserMessage(
   const existingTurn = activeUserTurns.get(sessionId)
   if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID &&
     ((existingTurn?.messageSent && !existingTurn.cancelled) || conversationService.isAntigravityResponding(sessionId))) {
-    sendError(ws, 'Antigravity is still responding. Stop or wait for the current response before sending another message.', 'ANTIGRAVITY_TURN_BUSY')
-    return
+    if (delivery) {
+      sendError(ws, 'Antigravity is still responding. Stop or wait for the current response before sending another message.', 'ANTIGRAVITY_TURN_BUSY')
+      return
+    }
+    const steerContent = await resolveSessionReferenceContext(
+      message.content,
+      message.sessionReferences,
+      async id => Boolean(await sessionService.getSessionSummary(id)),
+    )
+    let steerResult: 'steered' | 'busy' | 'not_responding'
+    try {
+      steerResult = await conversationService.steerAntigravityMessage(
+        sessionId,
+        steerContent,
+        message.attachments,
+        { messageUuid: crypto.randomUUID() },
+      )
+    } catch (err) {
+      releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
+      const isAntigravityError = err instanceof AntigravityError
+      sendMessage(ws, {
+        type: 'error',
+        message: isAntigravityError ? err.message : 'The request could not be sent to Antigravity.',
+        code: isAntigravityError ? err.code : 'ANTIGRAVITY_TURN_BUSY',
+        retryable: false,
+      })
+      return
+    }
+    if (steerResult === 'steered') {
+      releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
+      mobileActivityClock.progress(sessionId)
+      return
+    }
+    if (steerResult === 'busy') {
+      releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
+      sendError(ws, 'Antigravity cannot accept a mid-turn guide right now. Resolve the active prompt or wait for the current response to finish.', 'ANTIGRAVITY_TURN_BUSY')
+      return
+    }
+    const latestTurn = activeUserTurns.get(sessionId)
+    if (latestTurn?.messageSent && !latestTurn.cancelled) {
+      releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
+      sendError(ws, 'Antigravity is still responding. Stop or wait for the current response before sending another message.', 'ANTIGRAVITY_TURN_BUSY')
+      return
+    }
   }
 
   // Keep a stopped-turn fence until the replacement replay proves that later

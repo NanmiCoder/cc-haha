@@ -34,6 +34,53 @@ type PromptQuestion = {
   buffered: string
 }
 
+type AccumulatedUsage = {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
+function createEmptyUsage(): AccumulatedUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  }
+}
+
+function readPromptUsage(rawUsage: unknown): AccumulatedUsage {
+  const usage = acpObject(rawUsage)
+  const inputTokens = typeof usage?.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0
+  const rawOutputTokens = typeof usage?.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0
+  const thoughtTokens = typeof usage?.thoughtTokens === 'number' && Number.isFinite(usage.thoughtTokens) ? usage.thoughtTokens : 0
+  const outputTokens = rawOutputTokens + thoughtTokens
+  const cacheReadTokens = typeof usage?.cachedReadTokens === 'number' && Number.isFinite(usage.cachedReadTokens)
+    ? usage.cachedReadTokens
+    : typeof usage?.cacheReadTokens === 'number' && Number.isFinite(usage.cacheReadTokens)
+      ? usage.cacheReadTokens
+      : 0
+  const cacheCreationTokens = typeof usage?.cachedWriteTokens === 'number' && Number.isFinite(usage.cachedWriteTokens)
+    ? usage.cachedWriteTokens
+    : typeof usage?.cacheCreationTokens === 'number' && Number.isFinite(usage.cacheCreationTokens)
+      ? usage.cacheCreationTokens
+      : 0
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  }
+}
+
+function addAccumulatedUsage(target: AccumulatedUsage, delta: AccumulatedUsage): void {
+  target.inputTokens += delta.inputTokens
+  target.outputTokens += delta.outputTokens
+  target.cacheReadTokens += delta.cacheReadTokens
+  target.cacheCreationTokens += delta.cacheCreationTokens
+}
+
 type Turn = {
   entries: Frame[]
   permissions: Map<string, PendingPermission>
@@ -53,6 +100,8 @@ type Turn = {
   compactCommandXml?: string
   userUuid?: string
   detached: boolean
+  promptSeq: number
+  accumulatedUsage: AccumulatedUsage
   nativeEnd?: { result: Frame; error?: AntigravityError }
   replyOpen: boolean
   finishing: boolean
@@ -555,8 +604,7 @@ export class AntigravityConversation {
     return this.turnDone
   }
 
-  send(userContent: Frame[], uuid: string): boolean {
-    if (this.turn || !this.acp.isOpen) return false
+  private buildPromptBlocks(userContent: Frame[]): Frame[] {
     const prompt = userContent.flatMap((block): Frame[] => {
       if (block.type === 'text' && typeof block.text === 'string') return [block]
       const source = acpObject(block.source)
@@ -568,6 +616,19 @@ export class AntigravityConversation {
     if (prompt.length !== userContent.length) {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'The selected Antigravity CLI cannot receive these attachments.')
     }
+    return prompt
+  }
+
+  private canSteerTurn(turn: Turn, userContent: Frame[]): boolean {
+    if (!this.acp.isOpen || turn.cancelled || turn.finishing) return false
+    if (turn.isCompact || parseManualCompactPrompt(userContent)) return false
+    if (turn.permissions.size > 0 || turn.promptQuestion) return false
+    return true
+  }
+
+  send(userContent: Frame[], uuid: string): boolean {
+    if (this.turn || !this.acp.isOpen) return false
+    const prompt = this.buildPromptBlocks(userContent)
     this.computerUseBridge?.resetTurnAbort()
     for (const [id, tool] of this.tools) {
       if (!tool) {
@@ -587,13 +648,38 @@ export class AntigravityConversation {
       turn.compactCommandXml = formatCompactLocalCommandXml(compactCommand.args)
       turn.userUuid = uuid
     }
+    const seq = ++turn.promptSeq
     void this.run(
       turn,
+      seq,
       prompt,
       compactCommand
         ? undefined
         : { type: 'user', uuid, timestamp: new Date().toISOString(), message: { role: 'user', content: userContent } },
     )
+    return true
+  }
+
+  steer(userContent: Frame[], uuid: string): boolean {
+    const turn = this.turn
+    if (!turn) return false
+    const prompt = this.buildPromptBlocks(userContent)
+    if (!this.canSteerTurn(turn, userContent)) return false
+    this.flushChunk(turn)
+    const user: Frame = {
+      type: 'user',
+      uuid,
+      timestamp: new Date().toISOString(),
+      message: { role: 'user', content: userContent },
+    }
+    const entriesToPersist = [...turn.entries.splice(0), user]
+    // Taking ownership with a newer promptSeq prevents the superseded prompt RPC
+    // (which agy acp immediately resolves with stopReason: 'end_turn') from
+    // prematurely settling this turn.
+    turn.nativeEnd = undefined
+    turn.replyOpen = false
+    const seq = ++turn.promptSeq
+    void this.run(turn, seq, prompt, user, entriesToPersist)
     return true
   }
 
@@ -647,7 +733,7 @@ export class AntigravityConversation {
       // AGY 在原请求返回 end_turn 后，才会从下一次 prompt 读取选项编号。
       turn.nativeEnd = undefined
       turn.replyOpen = false
-      void this.run(turn, [{ type: 'text', text: choice.optionId }])
+      void this.run(turn, ++turn.promptSeq, [{ type: 'text', text: choice.optionId }])
       return true
     }
     if (!this.replyPermission(pending.id, choice)) return false
@@ -947,6 +1033,8 @@ export class AntigravityConversation {
       entries: [], permissions: new Map(), nextIndex: 0, started: Date.now(),
       apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
       detached,
+      promptSeq: 0,
+      accumulatedUsage: createEmptyUsage(),
       nativeEnd: detached ? { result: {} } : undefined,
       replyOpen: false, finishing: false, cancelled: false, resolve,
     }
@@ -1030,11 +1118,18 @@ export class AntigravityConversation {
     return next
   }
 
-  private async run(turn: Turn, prompt: Frame[], user?: Frame): Promise<void> {
+  private async run(
+    turn: Turn,
+    seq: number,
+    prompt: Frame[],
+    user?: Frame,
+    entriesToPersist?: Frame[],
+  ): Promise<void> {
     let error: AntigravityError | undefined
     let result: Frame = {}
     try {
-      if (user) await this.enqueueAppend([user])
+      if (entriesToPersist) await this.enqueueAppend(entriesToPersist)
+      else if (user) await this.enqueueAppend([user])
       else if (turn.isCompact) await this.appendChain.catch(() => undefined)
       if (!turn.cancelled) {
         if (turn.isCompact) {
@@ -1058,7 +1153,13 @@ export class AntigravityConversation {
     } catch (cause) {
       error = cause instanceof AntigravityError ? cause : new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Could not save the Antigravity conversation.')
     } finally {
-      this.pauseModelPhase(turn)
+      if (seq === turn.promptSeq) {
+        this.pauseModelPhase(turn)
+      }
+    }
+    if (seq !== turn.promptSeq) {
+      addAccumulatedUsage(turn.accumulatedUsage, readPromptUsage(result.usage))
+      return
     }
     clearTimeout(turn.cancelTimer)
     this.finishPromptQuestion(turn, result.stopReason === 'end_turn' && !turn.cancelled && !error)
@@ -1153,21 +1254,11 @@ export class AntigravityConversation {
       }
     }
     if (failed) this.emit({ type: 'assistant', error: failed.code, isApiErrorMessage: true, message: { content: [{ type: 'text', text: failed.message }] } })
-    const usage = acpObject(end.result.usage)
-    const inputTokens = typeof usage?.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0
-    const rawOutputTokens = typeof usage?.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0
-    const thoughtTokens = typeof usage?.thoughtTokens === 'number' && Number.isFinite(usage.thoughtTokens) ? usage.thoughtTokens : 0
-    const outputTokens = rawOutputTokens + thoughtTokens
-    const cacheReadTokens = typeof usage?.cachedReadTokens === 'number' && Number.isFinite(usage.cachedReadTokens)
-      ? usage.cachedReadTokens
-      : typeof usage?.cacheReadTokens === 'number' && Number.isFinite(usage.cacheReadTokens)
-        ? usage.cacheReadTokens
-        : 0
-    const cacheCreationTokens = typeof usage?.cachedWriteTokens === 'number' && Number.isFinite(usage.cachedWriteTokens)
-      ? usage.cachedWriteTokens
-      : typeof usage?.cacheCreationTokens === 'number' && Number.isFinite(usage.cacheCreationTokens)
-        ? usage.cacheCreationTokens
-        : 0
+    const finalUsage = readPromptUsage(end.result.usage)
+    const inputTokens = turn.accumulatedUsage.inputTokens + finalUsage.inputTokens
+    const outputTokens = turn.accumulatedUsage.outputTokens + finalUsage.outputTokens
+    const cacheReadTokens = turn.accumulatedUsage.cacheReadTokens + finalUsage.cacheReadTokens
+    const cacheCreationTokens = turn.accumulatedUsage.cacheCreationTokens + finalUsage.cacheCreationTokens
     const observedPromptTokens = inputTokens + cacheReadTokens + cacheCreationTokens
     if (!turn.isCompact && observedPromptTokens > 0) {
       this.captureFirstTurnBaseline(observedPromptTokens)

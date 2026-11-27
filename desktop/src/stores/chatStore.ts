@@ -516,6 +516,13 @@ const pendingAttachmentPermissionStash = new Map<
   { permission: PendingPermission; restoreIdleAfterPermissions: boolean }
 >()
 
+// Rollback stash for optimistically appended mid-turn guided messages so a
+// non-fatal busy/unsupported rejection does not orphan bubbles or kill the turn.
+const pendingGuidedMessageStash = new Map<
+  string,
+  Array<{ messageId: string; queued: QueuedUserMessage }>
+>()
+
 type ChatStore = {
   applyBoundedUpdate: (update: (state: ChatStore) => Partial<ChatStore>) => void
   /** Test-only: register fixture rows as durable so eviction can exercise them. */
@@ -5103,14 +5110,23 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     if (rejectOversizedMessage(sessionId, outgoing)) return
 
     const now = Date.now()
+    const optimisticMessageId = nextId()
+    let appendedOptimistic = false
     set((state) => ({
       sessions: updateSessionIn(state.sessions, sessionId, (currentSession) => {
         const pendingText = `${currentSession.streamingText}${consumePendingDelta(sessionId)}`
         const baseMessages = pendingText.trim()
           ? appendAssistantTextMessage(currentSession.messages, pendingText, now)
           : currentSession.messages
+        const nextMessages = appendOptimisticQueuedUserMessage(
+          baseMessages,
+          queuedMessage,
+          now,
+          optimisticMessageId,
+        )
+        appendedOptimistic = nextMessages.length > baseMessages.length
         return {
-          messages: appendOptimisticQueuedUserMessage(baseMessages, queuedMessage, now),
+          messages: nextMessages,
           queuedUserMessages: (currentSession.queuedUserMessages ?? [])
             .filter((message) => message.id !== messageId),
           ...(pendingText.trim() ? { streamingText: '' } : {}),
@@ -5119,6 +5135,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
       }),
     }))
+    if (appendedOptimistic) {
+      const stash = pendingGuidedMessageStash.get(sessionId) ?? []
+      stash.push({ messageId: optimisticMessageId, queued: queuedMessage })
+      pendingGuidedMessageStash.set(sessionId, stash)
+    }
 
     wsManager.send(sessionId, outgoing)
   },
@@ -5133,6 +5154,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     pendingAgentRunEvents.delete(sessionId)
     activeAgentStreamIdBySession.delete(sessionId)
     retiredAgentStreamIdsBySession.delete(sessionId)
+    pendingGuidedMessageStash.delete(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
       scheduledTaskTurn: undefined,
@@ -6222,6 +6244,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           : null
         const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        pendingGuidedMessageStash.delete(sessionId)
         set(state => ({
           unreadCompletions: marker ? new Map(state.unreadCompletions).set(sessionId, marker) : state.unreadCompletions,
           sessions: updateSessionIn(state.sessions, sessionId, current => ({
@@ -6276,10 +6299,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const baseMessages = pendingText.trim()
             ? appendAssistantTextMessage(withoutNotice, pendingText, Date.now())
             : withoutNotice
+          const nextMessages = appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask)
+          const stash = pendingGuidedMessageStash.get(sessionId)
+          if (stash?.length) {
+            const stillOptimisticIds = new Set(
+              nextMessages
+                .filter((message) => message.type === 'user_text' && message.optimisticQueued)
+                .map((message) => message.id),
+            )
+            const remaining = stash.filter((entry) => stillOptimisticIds.has(entry.messageId))
+            if (remaining.length > 0) pendingGuidedMessageStash.set(sessionId, remaining)
+            else pendingGuidedMessageStash.delete(sessionId)
+          }
           return {
             pendingBackgroundContinue: [],
             backgroundContinueNoticeId: undefined,
-            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask),
+            messages: nextMessages,
             // A consumed human guide belongs to the existing scheduled turn;
             // only a new ordinary turn restores ordinary reply notifications.
             scheduledTaskTurn: validScheduledTaskTrigger(msg.scheduledTask) ||
@@ -6392,6 +6427,33 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // Validation rejects the selection before changing the runtime. It
           // neither ends the active turn nor invalidates an in-flight history load.
           update((s) => ({ messages: [...s.messages, errorMessage] }))
+          break
+        }
+        const guidedStash = pendingGuidedMessageStash.get(sessionId)
+        const isNonFatalMidTurnGuideRejection =
+          (msg.code === 'ANTIGRAVITY_TURN_BUSY' && session && session.chatState !== 'idle') ||
+          (msg.code === 'ANTIGRAVITY_UNSUPPORTED' && Boolean(guidedStash?.length) && session && session.chatState !== 'idle')
+        if (isNonFatalMidTurnGuideRejection) {
+          const rejectedGuide = guidedStash?.shift()
+          if (guidedStash && guidedStash.length === 0) {
+            pendingGuidedMessageStash.delete(sessionId)
+          }
+          if (rejectedGuide) {
+            update((s) => {
+              const filteredMessages = s.messages.filter((message) => message.id !== rejectedGuide.messageId)
+              const existingQueue = s.queuedUserMessages ?? []
+              const shouldRequeue =
+                msg.code === 'ANTIGRAVITY_TURN_BUSY' &&
+                !existingQueue.some((entry) => entry.id === rejectedGuide.queued.id)
+              return {
+                messages: filteredMessages,
+                ...(shouldRequeue ? { queuedUserMessages: [rejectedGuide.queued, ...existingQueue] } : {}),
+              }
+            })
+            useUIStore?.getState().addToast({ type: 'error', message: msg.message })
+          } else {
+            update((s) => ({ messages: [...s.messages, errorMessage] }))
+          }
           break
         }
         update((s) => {
@@ -8549,6 +8611,7 @@ function appendOptimisticQueuedUserMessage(
   messages: UIMessage[],
   message: QueuedUserMessage,
   timestamp: number,
+  id = nextId(),
 ): UIMessage[] {
   const displayContent = message.displayContent.trim()
   const modelContent = message.content.trim()
@@ -8558,7 +8621,7 @@ function appendOptimisticQueuedUserMessage(
   return [
     ...messages,
     {
-      id: nextId(),
+      id,
       type: 'user_text',
       content: displayContent,
       ...(message.sessionReferences?.length ? { sessionReferences: message.sessionReferences } : {}),

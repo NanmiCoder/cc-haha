@@ -1392,6 +1392,25 @@ export class ConversationService {
     return true
   }
 
+  async steerAntigravityMessage(
+    sessionId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+    options?: { messageUuid?: string },
+  ): Promise<'steered' | 'busy' | 'not_responding'> {
+    if (migrationMaintenance.isActive) return 'busy'
+    const userContent = await this.buildUserContent(content, sessionId, attachments)
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked || migrationMaintenance.isActive) {
+      return 'not_responding'
+    }
+    if (!session.antigravity.isResponding) {
+      return 'not_responding'
+    }
+    const steered = session.antigravity.steer(userContent, options?.messageUuid ?? crypto.randomUUID())
+    return steered ? 'steered' : 'busy'
+  }
+
   async steerAntigravitySwarmMember(
     payload: AntigravitySwarmSteerPayload,
   ): Promise<AntigravitySwarmSteerResult> {
@@ -1411,7 +1430,18 @@ export class ConversationService {
       return { routed: false, reason: 'unavailable' }
     }
     if (session.antigravity.isResponding) {
-      return { routed: false, reason: 'busy' }
+      const steerOutcome = await this.steerAntigravityMessage(targetSessionId, payload.formattedPrompt)
+      if (steerOutcome === 'steered') {
+        return {
+          routed: true,
+          delivery: 'steering',
+          formattedPrompt: payload.formattedPrompt,
+        }
+      }
+      if (steerOutcome === 'busy') {
+        return { routed: false, reason: 'busy' }
+      }
+      // The active turn settled while preparing the steer; fall through to start a fresh turn.
     }
     const sent = await this.sendMessage(targetSessionId, payload.formattedPrompt)
     if (!sent) {
