@@ -239,4 +239,101 @@ describe('chatStore Antigravity runtime preservation & permission classification
       modelId: 'orchestrator-neon',
     })
   })
+
+  it('keeps an active Antigravity turn running and restores the queued message when ANTIGRAVITY_TURN_BUSY rejects a mid-turn guide', () => {
+    useTabStore.setState({
+      tabs: [{ sessionId: SESSION_ID, title: 'AG Session', type: 'session', status: 'running' }],
+      activeTabId: SESSION_ID,
+    })
+    useChatStore.setState({
+      sessions: {
+        [SESSION_ID]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          chatState: 'streaming',
+          streamingText: 'Still working on it',
+          messages: [
+            { id: 'u-1', type: 'user_text', content: 'Deploy release', timestamp: 1000 },
+          ],
+        },
+      },
+    })
+
+    const queuedId = useChatStore.getState().queueUserMessage(SESSION_ID, {
+      content: '怎么样了',
+      displayContent: '怎么样了',
+    })
+    useChatStore.getState().sendQueuedUserMessage(SESSION_ID, queuedId)
+
+    expect(sendMock).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({ type: 'user_message', content: '怎么样了' }),
+    )
+    expect(useChatStore.getState().sessions[SESSION_ID]?.queuedUserMessages).toHaveLength(0)
+    expect(useChatStore.getState().sessions[SESSION_ID]?.messages.some(m => m.type === 'user_text' && m.content === '怎么样了')).toBe(true)
+
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'error',
+      code: 'ANTIGRAVITY_TURN_BUSY',
+      message: 'Antigravity cannot accept a mid-turn guide right now.',
+    })
+
+    const session = useChatStore.getState().sessions[SESSION_ID]!
+    expect(session.chatState).toBe('streaming')
+    expect(useTabStore.getState().tabs[0]?.status).toBe('running')
+    expect(session.messages.some(m => m.type === 'user_text' && m.content === '怎么样了')).toBe(false)
+    expect(session.queuedUserMessages).toHaveLength(1)
+    expect(session.queuedUserMessages?.[0]?.id).toBe(queuedId)
+    expect(session.queuedUserMessages?.[0]?.content).toBe('怎么样了')
+  })
+
+  it('removes the optimistic bubble without killing the running turn on mid-turn ANTIGRAVITY_UNSUPPORTED, while idle ANTIGRAVITY_UNSUPPORTED still surfaces an error', () => {
+    useTabStore.setState({
+      tabs: [{ sessionId: SESSION_ID, title: 'AG Session', type: 'session', status: 'running' }],
+      activeTabId: SESSION_ID,
+    })
+    useChatStore.setState({
+      sessions: {
+        [SESSION_ID]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          chatState: 'thinking',
+        },
+      },
+    })
+
+    const queuedId = useChatStore.getState().queueUserMessage(SESSION_ID, {
+      content: 'Look at this image',
+      displayContent: 'Look at this image',
+    })
+    useChatStore.getState().sendQueuedUserMessage(SESSION_ID, queuedId)
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'error',
+      code: 'ANTIGRAVITY_UNSUPPORTED',
+      message: 'The selected Antigravity CLI cannot receive these attachments.',
+    })
+
+    const activeSession = useChatStore.getState().sessions[SESSION_ID]!
+    expect(activeSession.chatState).toBe('thinking')
+    expect(useTabStore.getState().tabs[0]?.status).toBe('running')
+    expect(activeSession.messages.some(m => m.type === 'user_text' && m.content === 'Look at this image')).toBe(false)
+    expect(activeSession.queuedUserMessages).toHaveLength(0)
+
+    // Confirmed guide via user_message_replay clears the stash so later errors terminate normally
+    const secondQueuedId = useChatStore.getState().queueUserMessage(SESSION_ID, {
+      content: 'Status check',
+      displayContent: 'Status check',
+    })
+    useChatStore.getState().sendQueuedUserMessage(SESSION_ID, secondQueuedId)
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'user_message_replay',
+      content: 'Status check',
+    })
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'error',
+      code: 'ANTIGRAVITY_TURN_FAILED',
+      message: 'Turn failed',
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.chatState).toBe('idle')
+  })
 })
