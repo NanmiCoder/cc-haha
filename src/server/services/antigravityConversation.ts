@@ -2,6 +2,10 @@ import { closeSync, openSync, readdirSync, readFileSync, readSync } from 'node:f
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
+  ASK_USER_QUESTION_CLARIFY_MESSAGE,
+  ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
+} from '../../constants/messages.js'
+import {
   acpModeToCcHahaPermissionMode,
   acpObject,
   AntigravityError,
@@ -19,19 +23,48 @@ import {
 const CANCEL_TIMEOUT_MS = 3_000
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,256}$/
+const ELICITATION_SELECT_KEY_RE = /^q([1-9]\d*)$/
+const ELICITATION_OTHER_KEY_RE = /^q([1-9]\d*)_other$/
+const ELICITATION_OTHER_DESC_PREFIX = 'Optional free-form answer to: '
 
 type Frame = Record<string, unknown>
 type Option = { optionId: string; name: string; kind?: unknown }
-type PendingPermission = { options: Option[]; toolUseId?: string } & (
-  | { id: number | string; question?: string }
-  | { promptToolUseId: string; question: string }
-)
+type ElicitationOption = { constValue: string; title: string }
+type ElicitationQuestion = {
+  index: number
+  selectKey?: string
+  otherKey?: string
+  question: string
+  multiSelect: boolean
+  options: ElicitationOption[]
+}
+type ElicitationPending = {
+  id: number | string
+  kind: 'elicitation'
+  toolUseId: string
+  questions: ElicitationQuestion[]
+  allowFreeText: boolean
+  hasNativeToolCall: boolean
+}
+type PendingPermission =
+  | ({ options: Option[]; toolUseId?: string } & (
+      | { id: number | string; question?: string }
+      | { promptToolUseId: string; question: string }
+    ))
+  | ElicitationPending
 type PromptQuestion = {
   tool: Frame
   question: string
   options: Option[]
   echo: string
   buffered: string
+}
+type ResolvedQuestionResult = {
+  questions: Frame[]
+  answers?: Record<string, string>
+  annotations?: Record<string, { notes: string }>
+  handedOff?: boolean
+  handoffMessage?: string
 }
 
 type AccumulatedUsage = {
@@ -84,6 +117,8 @@ function addAccumulatedUsage(target: AccumulatedUsage, delta: AccumulatedUsage):
 type Turn = {
   entries: Frame[]
   permissions: Map<string, PendingPermission>
+  pendingAskTools: Map<string, Frame>
+  resolvedQuestions: Map<string, ResolvedQuestionResult>
   promptQuestion?: PromptQuestion
   promptAnswer?: { toolUseId: string; question: string; label: string }
   chunk?: { kind: 'text' | 'thinking'; text: string; index: number }
@@ -337,6 +372,246 @@ function questionInput(question: string, options: Option[]): Frame {
     allowFreeText: false,
     questions: [{ question, header: 'Antigravity', multiSelect: false, options: options.map(option => ({ label: option.name })) }],
   }
+}
+
+function parseElicitationOptions(raw: unknown): ElicitationOption[] {
+  if (!Array.isArray(raw)) return []
+  const options: ElicitationOption[] = []
+  for (const item of raw) {
+    const entry = acpObject(item)
+    if (entry && typeof entry.const === 'string' && entry.const.length > 0 && typeof entry.title === 'string' && entry.title.trim()) {
+      options.push({ constValue: entry.const, title: entry.title })
+    }
+  }
+  return options
+}
+
+function parseStringEnumOptions(raw: unknown): ElicitationOption[] {
+  if (!Array.isArray(raw)) return []
+  const options: ElicitationOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim()) {
+      options.push({ constValue: item, title: item })
+    }
+  }
+  return options
+}
+
+function parseElicitationForm(params: Frame): { questions: ElicitationQuestion[]; allowFreeText: boolean } | undefined {
+  if (params.mode !== 'form') return undefined
+  const schema = acpObject(params.requestedSchema)
+  const properties = acpObject(schema?.properties)
+  if (!properties) return undefined
+
+  type DraftEntry = {
+    selectKey?: string
+    selectProp?: Frame
+    otherKey?: string
+    otherProp?: Frame
+  }
+  const byIndex = new Map<number, DraftEntry>()
+  for (const [key, value] of Object.entries(properties)) {
+    const prop = acpObject(value)
+    if (!prop) return undefined
+    const selectMatch = key.match(ELICITATION_SELECT_KEY_RE)
+    if (selectMatch) {
+      const index = Number(selectMatch[1])
+      const draft = byIndex.get(index) ?? {}
+      draft.selectKey = key
+      draft.selectProp = prop
+      byIndex.set(index, draft)
+      continue
+    }
+    const otherMatch = key.match(ELICITATION_OTHER_KEY_RE)
+    if (otherMatch) {
+      const index = Number(otherMatch[1])
+      const draft = byIndex.get(index) ?? {}
+      draft.otherKey = key
+      draft.otherProp = prop
+      byIndex.set(index, draft)
+      continue
+    }
+    // Unrecognized form field: let AGY fall back cleanly rather than misrendering an unknown form.
+    return undefined
+  }
+
+  const sortedIndices = [...byIndex.keys()].sort((a, b) => a - b)
+  if (sortedIndices.length === 0) return undefined
+
+  const fallbackMessage = typeof params.message === 'string' ? params.message.trim() : ''
+  const seenQuestions = new Set<string>()
+  const questions: ElicitationQuestion[] = []
+
+  for (const index of sortedIndices) {
+    const entry = byIndex.get(index)!
+    let multiSelect = false
+    let options: ElicitationOption[] = []
+
+    if (entry.selectProp) {
+      if (entry.selectProp.type === 'array') {
+        multiSelect = true
+        const items = acpObject(entry.selectProp.items)
+        options = parseElicitationOptions(items?.anyOf)
+        if (options.length === 0) options = parseStringEnumOptions(items?.enum)
+      } else if (entry.selectProp.type === 'string') {
+        multiSelect = false
+        options = parseElicitationOptions(entry.selectProp.oneOf)
+        if (options.length === 0) options = parseStringEnumOptions(entry.selectProp.enum)
+      } else {
+        return undefined
+      }
+      if (options.length === 0) return undefined
+    }
+
+    if (entry.otherProp && entry.otherProp.type !== 'string') {
+      return undefined
+    }
+
+    if (options.length === 0 && !entry.otherKey) {
+      return undefined
+    }
+
+    const selectTitle = typeof entry.selectProp?.title === 'string' ? entry.selectProp.title.trim() : ''
+    const selectDesc = typeof entry.selectProp?.description === 'string' ? entry.selectProp.description.trim() : ''
+    const otherTitleRaw = typeof entry.otherProp?.title === 'string' ? entry.otherProp.title.trim() : ''
+    const otherTitle = otherTitleRaw && otherTitleRaw.toLowerCase() !== 'other' ? otherTitleRaw : ''
+    const otherDescRaw = typeof entry.otherProp?.description === 'string' ? entry.otherProp.description.trim() : ''
+    const otherDesc = otherDescRaw.startsWith(ELICITATION_OTHER_DESC_PREFIX)
+      ? otherDescRaw.slice(ELICITATION_OTHER_DESC_PREFIX.length).trim()
+      : ''
+
+    const baseQuestion =
+      selectTitle ||
+      otherTitle ||
+      otherDesc ||
+      selectDesc ||
+      (sortedIndices.length === 1 && fallbackMessage ? fallbackMessage : '') ||
+      `Question ${index}`
+    const question = seenQuestions.has(baseQuestion) ? `${baseQuestion} (${index})` : baseQuestion
+    seenQuestions.add(question)
+
+    questions.push({
+      index,
+      ...(entry.selectKey ? { selectKey: entry.selectKey } : {}),
+      ...(entry.otherKey ? { otherKey: entry.otherKey } : {}),
+      question,
+      multiSelect,
+      options,
+    })
+  }
+
+  return {
+    questions,
+    allowFreeText: questions.some(q => Boolean(q.otherKey)),
+  }
+}
+
+function buildElicitationQuestionInput(questions: ElicitationQuestion[], allowFreeText: boolean): Frame {
+  return {
+    allowFreeText,
+    allowImages: false,
+    questions: questions.map((q, idx) => ({
+      question: q.question,
+      header: questions.length > 1 ? `Q${idx + 1}` : 'Antigravity',
+      multiSelect: q.multiSelect,
+      ...(q.options.length > 0 ? { options: q.options.map(option => ({ label: option.title })) } : {}),
+    })),
+  }
+}
+
+function matchMultiSelectOptions(answer: string, options: ElicitationOption[]): string[] | null {
+  if (!answer || options.length === 0) return null
+  const exact = options.find(option => option.title === answer)
+  if (exact) return [exact.constValue]
+
+  const byLongestTitle = [...options].sort((a, b) => b.title.length - a.title.length)
+  const matched: string[] = []
+  let remaining = answer
+  while (remaining.length > 0) {
+    const hit = byLongestTitle.find(
+      option => remaining === option.title || remaining.startsWith(`${option.title}, `),
+    )
+    if (!hit) return null
+    if (!matched.includes(hit.constValue)) {
+      matched.push(hit.constValue)
+    }
+    remaining = remaining.length === hit.title.length ? '' : remaining.slice(hit.title.length + 2)
+  }
+  return matched.length > 0 ? matched : null
+}
+
+function buildElicitationResponse(
+  pending: ElicitationPending,
+  updatedInput?: Frame,
+): {
+  content: Record<string, string | string[]>
+  answers: Record<string, string>
+  annotations: Record<string, { notes: string }>
+} | null {
+  const rawAnswers = acpObject(updatedInput?.answers) ?? {}
+  const rawAnnotations = acpObject(updatedInput?.annotations) ?? {}
+  const content: Record<string, string | string[]> = {}
+  const answers: Record<string, string> = {}
+  const annotations: Record<string, { notes: string }> = {}
+
+  for (const q of pending.questions) {
+    const rawAnswer = typeof rawAnswers[q.question] === 'string' ? (rawAnswers[q.question] as string).trim() : ''
+    const noteEntry = acpObject(rawAnnotations[q.question])
+    const rawNotes = typeof noteEntry?.notes === 'string' ? noteEntry.notes.trim() : ''
+
+    if (q.options.length === 0) {
+      const writeIn = rawAnswer || rawNotes
+      if (writeIn) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = writeIn
+        answers[q.question] = rawAnswer || rawNotes
+      }
+      continue
+    }
+
+    if (q.multiSelect) {
+      const selectedIds = rawAnswer ? matchMultiSelectOptions(rawAnswer, q.options) : null
+      if (selectedIds && q.selectKey) {
+        content[q.selectKey] = selectedIds
+        answers[q.question] = rawAnswer
+        if (rawNotes) {
+          if (q.otherKey) content[q.otherKey] = rawNotes
+          annotations[q.question] = { notes: rawNotes }
+        }
+      } else if (rawAnswer) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes ? `${rawAnswer}\n${rawNotes}` : rawAnswer
+        answers[q.question] = rawAnswer
+        if (rawNotes) annotations[q.question] = { notes: rawNotes }
+      } else if (rawNotes) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes
+        answers[q.question] = rawNotes
+      }
+    } else {
+      const exact = rawAnswer ? q.options.find(option => option.title === rawAnswer) : undefined
+      if (exact && q.selectKey) {
+        content[q.selectKey] = exact.constValue
+        answers[q.question] = rawAnswer
+        if (rawNotes) {
+          if (q.otherKey) content[q.otherKey] = rawNotes
+          annotations[q.question] = { notes: rawNotes }
+        }
+      } else if (rawAnswer) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes ? `${rawAnswer}\n${rawNotes}` : rawAnswer
+        answers[q.question] = rawAnswer
+        if (rawNotes) annotations[q.question] = { notes: rawNotes }
+      } else if (rawNotes) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes
+        answers[q.question] = rawNotes
+      }
+    }
+  }
+
+  if (Object.keys(content).length === 0) return null
+  return { content, answers, annotations }
 }
 
 function resolveDefaultAppDataDir(): string {
@@ -622,7 +897,7 @@ export class AntigravityConversation {
   private canSteerTurn(turn: Turn, userContent: Frame[]): boolean {
     if (!this.acp.isOpen || turn.cancelled || turn.finishing) return false
     if (turn.isCompact || parseManualCompactPrompt(userContent)) return false
-    if (turn.permissions.size > 0 || turn.promptQuestion) return false
+    if (turn.permissions.size > 0 || turn.promptQuestion || turn.pendingAskTools.size > 0) return false
     return true
   }
 
@@ -705,10 +980,55 @@ export class AntigravityConversation {
     return sent
   }
 
-  respond(requestId: string, allowed: boolean, updatedInput?: Frame, rule?: string): boolean {
+  respond(requestId: string, allowed: boolean, updatedInput?: Frame, rule?: string, denyMessage?: string): boolean {
     const turn = this.turn
     const pending = turn?.permissions.get(requestId)
     if (!turn || turn.cancelled || !pending) return false
+    if ('kind' in pending && pending.kind === 'elicitation') {
+      const questionPayload = buildElicitationQuestionInput(pending.questions, pending.allowFreeText)
+      const projectedQuestions = questionPayload.questions as Frame[]
+      if (allowed) {
+        const built = buildElicitationResponse(pending, updatedInput)
+        if (!built) return false
+        if (!this.acp.reply(pending.id, { action: 'accept', content: built.content })) return false
+        turn.resolvedQuestions.set(pending.toolUseId, {
+          questions: projectedQuestions,
+          answers: built.answers,
+          ...(Object.keys(built.annotations).length > 0 ? { annotations: built.annotations } : {}),
+        })
+      } else {
+        const feedback = denyMessage?.trim()
+        const firstOtherKey = pending.questions.find(q => q.otherKey)?.otherKey
+        if (feedback && firstOtherKey) {
+          const clarifyMessage = `${ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX}${feedback}`
+          if (!this.acp.reply(pending.id, { action: 'accept', content: { [firstOtherKey]: clarifyMessage } })) return false
+          turn.resolvedQuestions.set(pending.toolUseId, {
+            questions: projectedQuestions,
+            handedOff: true,
+            handoffMessage: clarifyMessage,
+          })
+        } else {
+          if (!this.acp.reply(pending.id, { action: 'decline' })) return false
+          if (denyMessage !== undefined) {
+            turn.resolvedQuestions.set(pending.toolUseId, {
+              questions: projectedQuestions,
+              handedOff: true,
+              handoffMessage: ASK_USER_QUESTION_CLARIFY_MESSAGE,
+            })
+          }
+        }
+      }
+      turn.permissions.delete(requestId)
+      if (!pending.hasNativeToolCall) {
+        this.projectToolState(turn, pending.toolUseId, {
+          toolCallId: pending.toolUseId,
+          status: allowed || Boolean(denyMessage?.trim()) ? 'completed' : 'failed',
+        })
+      }
+      this.maybeResumeModelPhase(turn)
+      this.maybeFinish(turn)
+      return true
+    }
     let choice: Option | undefined
     if (pending.question) {
       const answer = acpObject(updatedInput?.answers)?.[pending.question]
@@ -1030,7 +1350,8 @@ export class AntigravityConversation {
   private beginTurn(detached: boolean): Turn {
     const { promise, resolve } = Promise.withResolvers<void>()
     const turn: Turn = {
-      entries: [], permissions: new Map(), nextIndex: 0, started: Date.now(),
+      entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
+      nextIndex: 0, started: Date.now(),
       apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
       detached,
       promptSeq: 0,
@@ -1103,7 +1424,11 @@ export class AntigravityConversation {
 
   private cancelPermissions(turn: Turn): void {
     for (const [requestId, pending] of turn.permissions) {
-      if ('id' in pending) this.replyPermission(pending.id)
+      if ('kind' in pending && pending.kind === 'elicitation') {
+        this.acp.reply(pending.id, { action: 'cancel' })
+      } else if ('id' in pending) {
+        this.replyPermission(pending.id)
+      }
       this.emit({ type: 'control_cancel_request', request_id: requestId })
     }
     turn.permissions.clear()
@@ -1169,17 +1494,28 @@ export class AntigravityConversation {
 
   private finishPromptQuestion(turn: Turn, canAsk: boolean): void {
     const pending = turn.promptQuestion
-    if (!pending) return
-    turn.promptQuestion = undefined
-    const { tool, question, options, echo, buffered } = pending
-    const toolUseId = tool.toolCallId as string
-    const ask = canAsk && tool.status === 'pending'
-    // 只隐藏 AGY 自己生成、与结构化字段完全一致的编号列表，保留普通正文。
-    if (buffered && (!ask || buffered !== echo)) this.chunk(turn, 'text', buffered)
-    if (ask) {
-      this.publishPermission(turn, tool, { promptToolUseId: toolUseId, question, options })
-    } else if (!turn.cancelled) {
-      this.toolCall(turn, tool)
+    if (pending) {
+      turn.promptQuestion = undefined
+      const { tool, question, options, echo, buffered } = pending
+      const toolUseId = tool.toolCallId as string
+      turn.pendingAskTools.delete(toolUseId)
+      const ask = canAsk && tool.status === 'pending'
+      // 只隐藏 AGY 自己生成、与结构化字段完全一致的编号列表，保留普通正文。
+      if (buffered && (!ask || buffered !== echo)) this.chunk(turn, 'text', buffered)
+      if (ask) {
+        this.publishPermission(turn, tool, { promptToolUseId: toolUseId, question, options })
+      } else if (!turn.cancelled) {
+        this.toolCall(turn, tool)
+      }
+    }
+    if (turn.pendingAskTools.size > 0) {
+      const remaining = [...turn.pendingAskTools.values()]
+      turn.pendingAskTools.clear()
+      if (!turn.cancelled) {
+        for (const tool of remaining) {
+          this.toolCall(turn, tool)
+        }
+      }
     }
   }
 
@@ -1358,10 +1694,20 @@ export class AntigravityConversation {
     this.toolStartedAt.delete(id)
     const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
     this.flushChunk(turn)
+    const resolvedQuestion = turn.resolvedQuestions.get(id)
+    if (resolvedQuestion) turn.resolvedQuestions.delete(id)
     const answer = turn.promptAnswer?.toolUseId === id ? turn.promptAnswer : undefined
     if (answer) turn.promptAnswer = undefined
     let content: unknown
-    if (answer && tool.status === 'completed') {
+    if (resolvedQuestion && (tool.status === 'completed' || resolvedQuestion.handedOff)) {
+      content = resolvedQuestion.handedOff
+        ? { handedOff: true, message: resolvedQuestion.handoffMessage ?? ASK_USER_QUESTION_CLARIFY_MESSAGE }
+        : {
+            questions: resolvedQuestion.questions,
+            answers: resolvedQuestion.answers ?? {},
+            ...(resolvedQuestion.annotations ? { annotations: resolvedQuestion.annotations } : {}),
+          }
+    } else if (answer && tool.status === 'completed') {
       content = { answers: { [answer.question]: answer.label } }
     } else if (tool.name === 'invoke_subagent') {
       const childId = this.resolveChildConversationIdForInvoke(tool)
@@ -1394,6 +1740,48 @@ export class AntigravityConversation {
       }
       const turn = this.turn ?? this.beginTurn(true)
       this.requestPermission(turn, tool, params.options, rpcId)
+      this.maybeFinish(turn)
+      return
+    }
+    if (method === 'elicitation/create' && rpcId !== undefined) {
+      if (!matches) {
+        this.acp.reply(rpcId, { action: 'cancel' })
+        return
+      }
+      const parsed = parseElicitationForm(params)
+      if (!parsed) {
+        this.acp.reply(rpcId, undefined, -32602)
+        return
+      }
+      const turn = this.turn ?? this.beginTurn(true)
+      const rawToolCallId = typeof params.toolCallId === 'string' && params.toolCallId.trim()
+        ? params.toolCallId.trim()
+        : undefined
+      const toolUseId = rawToolCallId ?? `elicitation_${String(rpcId)}`
+      const heldTool = rawToolCallId ? turn.pendingAskTools.get(rawToolCallId) : undefined
+      if (rawToolCallId) turn.pendingAskTools.delete(rawToolCallId)
+      if (turn.promptQuestion && (!rawToolCallId || turn.promptQuestion.tool.toolCallId === rawToolCallId)) {
+        const { buffered, echo } = turn.promptQuestion
+        turn.promptQuestion = undefined
+        if (buffered && buffered !== echo) this.chunk(turn, 'text', buffered)
+      }
+      const toolFrame: Frame = heldTool
+        ? { ...heldTool, toolCallId: toolUseId, status: 'pending' }
+        : {
+            toolCallId: toolUseId,
+            name: 'ask_question',
+            title: typeof params.message === 'string' && params.message.trim() ? params.message.trim() : 'Ask question',
+            status: 'pending',
+          }
+      if (turn.nativeEnd) turn.replyOpen = true
+      this.publishPermission(turn, toolFrame, {
+        id: rpcId,
+        kind: 'elicitation',
+        toolUseId,
+        questions: parsed.questions,
+        allowFreeText: parsed.allowFreeText,
+        hasNativeToolCall: Boolean(rawToolCallId),
+      })
       this.maybeFinish(turn)
       return
     }
@@ -1456,14 +1844,15 @@ export class AntigravityConversation {
         break
       }
       case 'tool_call': {
-        // interaction_* 等权限 RPC；终端式 ask_question 等 pending 与 end_turn。
+        // interaction_* 等权限 RPC；ask_question 等 elicitation/create 或旧版终端回退。
         if (typeof update.toolCallId !== 'string' || update.toolCallId.startsWith('interaction_') || this.tools.has(update.toolCallId)) return
         turn ??= this.beginTurn(true)
-        if (turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
-        const question = !turn.nativeEnd && !turn.promptQuestion && readPromptQuestion(update)
-        if (question) {
+        if (turn.pendingAskTools.has(update.toolCallId) || turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
+        if (update.name === 'ask_question' && !toolHasFinished(update) && !turn.nativeEnd) {
           this.flushChunk(turn)
-          turn.promptQuestion = question
+          turn.pendingAskTools.set(update.toolCallId, update)
+          const question = !turn.promptQuestion && readPromptQuestion(update)
+          if (question) turn.promptQuestion = question
         } else {
           this.toolCall(turn, update)
         }
@@ -1472,6 +1861,24 @@ export class AntigravityConversation {
       case 'tool_call_update': {
         const id = update.toolCallId
         if (typeof id !== 'string') return
+        const heldAskTool = turn?.pendingAskTools.get(id)
+        if (turn && heldAskTool) {
+          const merged = { ...heldAskTool, ...update }
+          if (turn.promptQuestion?.tool.toolCallId === id) {
+            turn.promptQuestion.tool = merged
+          }
+          if (toolHasFinished(merged)) {
+            turn.pendingAskTools.delete(id)
+            if (turn.promptQuestion?.tool.toolCallId === id) {
+              this.finishPromptQuestion(turn, false)
+            } else if (!turn.cancelled) {
+              this.toolCall(turn, merged)
+            }
+          } else {
+            turn.pendingAskTools.set(id, merged)
+          }
+          break
+        }
         const question = turn?.promptQuestion
         if (turn && question?.tool.toolCallId === id) {
           question.tool = { ...question.tool, ...update }
@@ -1554,9 +1961,15 @@ export class AntigravityConversation {
 
   private publishPermission(turn: Turn, tool: Frame, pending: PendingPermission): void {
     const projected = this.projectTool(tool)
-    const name = pending.question ? 'AskUserQuestion' : projected.name
-    const input = pending.question ? questionInput(pending.question, pending.options) : projected.input
-    const supportsAllowAlways = !pending.question && pending.options.some(option => option.kind === 'allow_always')
+    const isElicitation = 'kind' in pending && pending.kind === 'elicitation'
+    const isQuestion = isElicitation || Boolean(pending.question)
+    const name = isQuestion ? 'AskUserQuestion' : projected.name
+    const input = isElicitation
+      ? buildElicitationQuestionInput(pending.questions, pending.allowFreeText)
+      : pending.question
+        ? questionInput(pending.question, pending.options)
+        : projected.input
+    const supportsAllowAlways = !isQuestion && pending.options.some(option => option.kind === 'allow_always')
     const permissionDescription = projected.description ?? projected.displayName
     const requestId = crypto.randomUUID()
     this.toolCall(turn, tool, name, input)
@@ -1570,12 +1983,12 @@ export class AntigravityConversation {
         tool_name: name,
         tool_use_id: tool.toolCallId,
         input,
-        ...(!pending.question && permissionDescription ? { description: permissionDescription } : {}),
-        ...(!pending.question ? { display_name: 'Antigravity' } : {}),
-        ...(!pending.question && projected.antigravityToolName ? { antigravity_tool_name: projected.antigravityToolName } : {}),
+        ...(!isQuestion && permissionDescription ? { description: permissionDescription } : {}),
+        ...(!isQuestion ? { display_name: 'Antigravity' } : {}),
+        ...(!isQuestion && projected.antigravityToolName ? { antigravity_tool_name: projected.antigravityToolName } : {}),
         ...(projected.subagentName ? { subagent_name: projected.subagentName } : {}),
         ...(projected.subagentId ? { agent_id: projected.subagentId } : {}),
-        ...(!pending.question ? { supports_allow_always: supportsAllowAlways } : {}),
+        ...(!isQuestion ? { supports_allow_always: supportsAllowAlways } : {}),
       },
     })
   }

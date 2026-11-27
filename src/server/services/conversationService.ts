@@ -1657,7 +1657,8 @@ export class ConversationService {
     if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
     if (session?.antigravity) {
-      if (session.controlRevoked || !session.antigravity.respond(requestId, allowed, updatedInput, rule)) return false
+      if (session.controlRevoked || !session.antigravity.respond(requestId, allowed, updatedInput, rule, denyMessage)) return false
+      this.clearAutoAnswerWait(pendingRequest)
       if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
       return true
     }
