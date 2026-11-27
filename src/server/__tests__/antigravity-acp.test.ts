@@ -136,6 +136,20 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     pendingPermission = null
     if (p.kind === 'sequence' && p.next) {
       p.next(rpc.result)
+    } else if (p.kind === 'elicitation') {
+      const action = rpc.result?.action ?? (rpc.error ? 'error:' + rpc.error.code : 'unknown')
+      const content = rpc.result?.content ?? null
+      update(sessionId, 'tool_call_update', {
+        toolCallId: p.toolCallId,
+        name: 'ask_question',
+        status: action === 'accept' ? 'completed' : 'failed',
+        rawOutput: { action, content },
+      })
+      update(sessionId, 'agent_message_chunk', {
+        content: { type: 'text', text: 'Elicited:' + action + ':' + JSON.stringify(content) },
+      })
+      update(sessionId, 'usage_update', { used: 14000, size: 200000 })
+      reply(p.promptId, { stopReason: 'end_turn', usage: { inputTokens: 130, outputTokens: 50 } })
     } else {
       const outcome = rpc.result?.outcome?.outcome
       const optionId = rpc.result?.outcome?.optionId ?? ''
@@ -551,6 +565,89 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         activeSlowPrompt = { id: rpc.id, timer }
         break
       }
+      if (mode === 'elicitation-multi' || promptText.includes('[elicitation-multi]')) {
+        const askTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_elicit_multi',
+          name: 'ask_question',
+          title: 'Run ask_question',
+          kind: 'other',
+          status: 'in_progress',
+          rawInput: {
+            questions: [
+              { question: 'Choose implementation plan', is_multi_select: false, options: ['(Recommended) Plan A', 'Plan B'] },
+              { question: 'Enable extra features', is_multi_select: true, options: ['Strict TypeScript', 'Lint, format, and checks', 'Unit tests'] },
+              { question: 'How to verify?', is_multi_select: false, options: ['Run locally', 'Skip tests'] },
+              { question: 'Any extra notes?', is_multi_select: false, options: [] },
+            ],
+          },
+        }
+        update(sessionId, 'tool_call', askTool)
+        update(sessionId, 'tool_call_update', { toolCallId: askTool.toolCallId, status: 'pending' })
+        pendingPermission = { rpcId: 'elicit-multi-1', promptId: rpc.id, toolCallId: askTool.toolCallId, kind: 'elicitation' }
+        send({
+          id: 'elicit-multi-1',
+          method: 'elicitation/create',
+          params: {
+            sessionId,
+            toolCallId: askTool.toolCallId,
+            mode: 'form',
+            message: 'The agent has 4 questions.',
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                q1: {
+                  type: 'string',
+                  title: 'Choose implementation plan',
+                  oneOf: [
+                    { const: 'opt_plan_a', title: '(Recommended) Plan A' },
+                    { const: 'opt_plan_b', title: 'Plan B' },
+                  ],
+                },
+                q1_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: Choose implementation plan',
+                },
+                q2: {
+                  type: 'array',
+                  title: 'Enable extra features',
+                  items: {
+                    anyOf: [
+                      { const: 'opt_ts', title: 'Strict TypeScript' },
+                      { const: 'opt_lint', title: 'Lint, format, and checks' },
+                      { const: 'opt_tests', title: 'Unit tests' },
+                    ],
+                  },
+                },
+                q2_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: Enable extra features',
+                },
+                q3: {
+                  type: 'string',
+                  title: 'How to verify?',
+                  oneOf: [
+                    { const: 'opt_local', title: 'Run locally' },
+                    { const: 'opt_skip', title: 'Skip tests' },
+                  ],
+                },
+                q3_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: How to verify?',
+                },
+                q4_other: {
+                  type: 'string',
+                  title: 'Any extra notes?',
+                },
+              },
+            },
+          },
+        })
+        break
+      }
       if (mode === 'fixed-options') {
         const qTool = {
           sessionUpdate: 'tool_call',
@@ -728,6 +825,7 @@ describe('Antigravity ACP server core & integration', () => {
     expect(spawnRecord?.hasAnthropicApiKey).toBe(false)
     const initRecord = wire.find(w => w.method === 'initialize')
     expect(initRecord?.params?.clientInfo).toEqual(ANTIGRAVITY_CLIENT_INFO)
+    expect(initRecord?.params?.clientCapabilities).toEqual({ elicitation: { form: {} } })
 
     // Login required mode transitions status to login_required and auth-status reports hasAuth: false
     await writeFile(fake.modeFile, 'login', 'utf8')
@@ -1093,6 +1191,293 @@ describe('Antigravity ACP server core & integration', () => {
       await acp.proc.exited
     }
   })
+
+  test('ACP elicitation/create projects multi-question single/multi-select + write-in to native AskUserQuestion over WS and supports Chat about this, decline, cancel, subagent attribution, and invalid-schema fallback', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'elicitation-multi')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-elicit')
+    await mkdir(workDir, { recursive: true })
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    let ws: WebSocket | undefined
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: ANTIGRAVITY_DEFAULT_MODEL,
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws!.onopen = () => resolve()
+        ws!.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws!.send(JSON.stringify(msg))
+
+      // Turn 1: multi-question mixed single-select, multi-select (with comma in label), custom write-in, and free-text-only
+      send({ type: 'user_message', content: 'Ask multiple questions [elicitation-multi]' })
+      await waitUntil(() => received.some(m => m.type === 'permission_request'))
+
+      const permReq = received.find(m => m.type === 'permission_request') as Extract<ServerMessage, { type: 'permission_request' }>
+      expect(permReq.toolName).toBe('AskUserQuestion')
+      expect(permReq.toolUseId).toBe('call_elicit_multi')
+      expect(permReq.input).toEqual({
+        allowFreeText: true,
+        allowImages: false,
+        questions: [
+          {
+            question: 'Choose implementation plan',
+            header: 'Q1',
+            multiSelect: false,
+            options: [{ label: '(Recommended) Plan A' }, { label: 'Plan B' }],
+          },
+          {
+            question: 'Enable extra features',
+            header: 'Q2',
+            multiSelect: true,
+            options: [{ label: 'Strict TypeScript' }, { label: 'Lint, format, and checks' }, { label: 'Unit tests' }],
+          },
+          {
+            question: 'How to verify?',
+            header: 'Q3',
+            multiSelect: false,
+            options: [{ label: 'Run locally' }, { label: 'Skip tests' }],
+          },
+          {
+            question: 'Any extra notes?',
+            header: 'Q4',
+            multiSelect: false,
+          },
+        ],
+      })
+
+      // Held ask_question must NOT have emitted a duplicate raw "Antigravity: Run ask_question" tool_use
+      const toolUses = received.filter(m => m.type === 'tool_use_complete') as Array<Extract<ServerMessage, { type: 'tool_use_complete' }>>
+      expect(toolUses.map(t => t.toolName)).toEqual(['AskUserQuestion'])
+
+      // Submitting empty answers is rejected cleanly with PERMISSION_RESPONSE_INVALID
+      const errCountBeforeEmpty = received.filter(m => m.type === 'error').length
+      send({ type: 'permission_response', requestId: permReq.requestId, allowed: true, updatedInput: { answers: {} } })
+      await waitUntil(() => received.filter(m => m.type === 'error').length > errCountBeforeEmpty)
+      expect((received.filter(m => m.type === 'error').at(-1) as Extract<ServerMessage, { type: 'error' }>).code).toBe('PERMISSION_RESPONSE_INVALID')
+
+      // Submit mixed answers: Q1 option + additional note, Q2 multi-select (with comma in option label), Q3 pure free text, Q4 free-text-only
+      send({
+        type: 'permission_response',
+        requestId: permReq.requestId,
+        allowed: true,
+        updatedInput: {
+          answers: {
+            'Choose implementation plan': '(Recommended) Plan A',
+            'Enable extra features': 'Strict TypeScript, Lint, format, and checks',
+            'How to verify?': 'Run CI smoke only',
+            'Any extra notes?': 'Keep diff small',
+          },
+          annotations: {
+            'Choose implementation plan': { notes: 'Prefer zero new deps' },
+          },
+        },
+      })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      const wire = await fake.readWire()
+      const elicitReply = wire.find(w => w.id === 'elicit-multi-1')
+      expect(elicitReply?.result).toEqual({
+        action: 'accept',
+        content: {
+          q1: 'opt_plan_a',
+          q1_other: 'Prefer zero new deps',
+          q2: ['opt_ts', 'opt_lint'],
+          q3_other: 'Run CI smoke only',
+          q4_other: 'Keep diff small',
+        },
+      })
+
+      // Reloaded session transcript preserves structured AskUserQuestion answers + annotations
+      const detailRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`)
+      expect(detailRes.status).toBe(200)
+      const detail = await detailRes.json() as { messages?: Array<{ type: string; content: unknown }> }
+      const toolResultEntry = (detail.messages ?? []).find(m =>
+        (m.type === 'user' || m.type === 'tool_result') &&
+        Array.isArray(m.content) &&
+        m.content.some((b: Record<string, unknown>) => b.type === 'tool_result' && b.tool_use_id === 'call_elicit_multi'),
+      )
+      const resultBlock = ((toolResultEntry?.content as Array<Record<string, unknown>> | undefined) ?? [])
+        .find(b => b.type === 'tool_result' && b.tool_use_id === 'call_elicit_multi')
+      expect(resultBlock?.content).toMatchObject({
+        answers: {
+          'Choose implementation plan': '(Recommended) Plan A',
+          'Enable extra features': 'Strict TypeScript, Lint, format, and checks',
+          'How to verify?': 'Run CI smoke only',
+          'Any extra notes?': 'Keep diff small',
+        },
+        annotations: {
+          'Choose implementation plan': { notes: 'Prefer zero new deps' },
+        },
+      })
+
+      // Turn 2: "Chat about this" (allowed: false + denyMessage) forwards clarify prompt via q1_other and persists handedOff result
+      const permsBeforeChat = received.filter(m => m.type === 'permission_request').length
+      const completesBeforeChat = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Ask again [elicitation-multi]' })
+      await waitUntil(() => received.filter(m => m.type === 'permission_request').length > permsBeforeChat)
+      const permReq2 = received.filter(m => m.type === 'permission_request').at(-1) as Extract<ServerMessage, { type: 'permission_request' }>
+      send({
+        type: 'permission_response',
+        requestId: permReq2.requestId,
+        allowed: false,
+        denyMessage: '- "Choose implementation plan"\n  Answer: (Recommended) Plan A',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completesBeforeChat)
+
+      const wireAfterChat = await fake.readWire()
+      const chatReply = wireAfterChat.filter(w => w.id === 'elicit-multi-1').at(-1)
+      const chatResult = chatReply?.result as { action?: string; content?: { q1_other?: string } } | undefined
+      expect(chatResult?.action).toBe('accept')
+      expect(typeof chatResult?.content?.q1_other).toBe('string')
+      expect(chatResult?.content?.q1_other).toContain('The user wants to clarify these questions.')
+      expect(chatResult?.content?.q1_other).toContain('Answer: (Recommended) Plan A')
+      const handedOffResult = received
+        .filter(m => m.type === 'tool_result' && m.toolUseId === 'call_elicit_multi')
+        .at(-1) as Extract<ServerMessage, { type: 'tool_result' }>
+      expect(handedOffResult?.content).toMatchObject({ handedOff: true })
+
+      ws.close()
+    } finally {
+      ws?.close()
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+
+    // Direct unit checks: generic decline (no denyMessage), turn cancel -> { action: 'cancel' }, unsupported mode -> -32602, subagent attribution
+    const replies: Array<{ id: number | string; result?: Record<string, unknown>; errorCode?: number }> = []
+    const emitted: Array<Record<string, unknown>> = []
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt!: (value: Record<string, unknown>) => void
+
+    const appDataDir = join(sandboxDir, 'elicit-sub-appdata')
+    const subagentsDir = join(appDataDir, 'brain', 'native-elicit-unit', '.system_generated', 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+    await writeFile(join(subagentsDir, 'child-elicit-1234.json'), JSON.stringify({
+      conversationId: 'child-elicit-1234',
+      subagentDescriptor: { typeName: 'research', role: 'Planner Helper' },
+      state: 'SUBAGENT_STATE_ALIVE',
+      spawnStepIndex: 1,
+    }), 'utf8')
+
+    const unitAcp = {
+      sessionId: 'native-elicit-unit',
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: typeof onMessage) { onMessage = fn },
+      get onMessage() { return onMessage },
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvePrompt = resolve }),
+      reply: (id: number | string, result?: Record<string, unknown>, errorCode?: number) => {
+        replies.push({ id, result, errorCode })
+        return true
+      },
+      cancel: () => {
+        setTimeout(() => resolvePrompt({ stopReason: 'cancelled' }), 5)
+        return true
+      },
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      unitAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      msg => emitted.push(msg),
+      async () => {},
+      { antigravityAppDataDir: appDataDir },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'start' }], 'u-elicit-unit')).toBe(true)
+    await waitUntil(() => typeof resolvePrompt === 'function')
+
+    // 1. Non-form elicitation (e.g. mode: 'url') returns JSON-RPC -32602 so AGY can fall back safely
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      mode: 'url',
+      message: 'Open URL',
+      url: 'https://example.invalid',
+    }, 'elicit-url')
+    expect(replies.at(-1)).toEqual({ id: 'elicit-url', result: undefined, errorCode: -32602 })
+
+    // 2. Unrecognized non-question form schema also returns -32602
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      mode: 'form',
+      message: 'Enter API token',
+      requestedSchema: {
+        type: 'object',
+        properties: { apiToken: { type: 'string', title: 'API Token' } },
+      },
+    }, 'elicit-unknown-field')
+    expect(replies.at(-1)).toEqual({ id: 'elicit-unknown-field', result: undefined, errorCode: -32602 })
+
+    // 3. Subagent elicitation carries subagent_name + agent_id, and generic decline (no denyMessage) replies { action: 'decline' }
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      toolCallId: 'child-elicit-1234:call_7',
+      mode: 'form',
+      message: 'The agent has a question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: { type: 'string', title: 'Target branch?', oneOf: [{ const: 'main', title: 'main' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    }, 'elicit-sub-decline')
+    const subReq = emitted.filter(m => m.type === 'control_request').at(-1) as { request_id: string; request: Record<string, unknown> }
+    expect(subReq.request.tool_name).toBe('AskUserQuestion')
+    expect(subReq.request.subagent_name).toBe('Planner Helper')
+    expect(subReq.request.agent_id).toBe('child-elicit-1234')
+    expect(conv.respond(subReq.request_id, false)).toBe(true)
+    expect(replies.at(-1)).toEqual({ id: 'elicit-sub-decline', result: { action: 'decline' }, errorCode: undefined })
+
+    // 4. Turn cancel replies { action: 'cancel' } to pending elicitation
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      toolCallId: 'call_cancel_elicit',
+      mode: 'form',
+      message: 'The agent has a question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: { type: 'string', title: 'Proceed?', oneOf: [{ const: 'yes', title: 'Yes' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    }, 'elicit-cancel-1')
+    expect(conv.cancel()).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(replies.find(r => r.id === 'elicit-cancel-1')).toEqual({
+      id: 'elicit-cancel-1',
+      result: { action: 'cancel' },
+      errorCode: undefined,
+    })
+  }, 20_000)
 
   test('auth-status hasAuth is true ONLY on ready (false on unchecked/error/login_required) and discoverAntigravity enforces bounded SIGKILL exit timeout', async () => {
     const fake = await installFakeAgy(sandboxDir, 'error-discover')

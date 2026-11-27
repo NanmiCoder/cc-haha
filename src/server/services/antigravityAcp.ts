@@ -293,7 +293,12 @@ class AntigravityRpc {
   }
 
   reply(id: RpcId, result?: RpcObject, errorCode?: number): boolean {
-    return this.send({ id, ...(errorCode ? { error: { code: errorCode, message: 'Unsupported ACP request' } } : { result }) })
+    return this.send({
+      id,
+      ...(errorCode
+        ? { error: { code: errorCode, message: errorCode === -32602 ? 'Invalid ACP params' : 'Unsupported ACP request' } }
+        : { result }),
+    })
   }
 
   get isOpen(): boolean { return !this.failed && this.proc.exitCode === null }
@@ -657,7 +662,11 @@ export async function openAntigravityAcp(
     const init = await rpc.request('initialize', {
       protocolVersion: 1,
       clientInfo: ANTIGRAVITY_CLIENT_INFO,
-      clientCapabilities: {},
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
     })
     if (init.protocolVersion !== 1) {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This version of Antigravity CLI did not negotiate ACP version 1. Update the CLI and retry.')
