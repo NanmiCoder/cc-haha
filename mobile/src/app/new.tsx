@@ -37,10 +37,12 @@ import {
   ANTIGRAVITY_LOGIN_GUIDANCE,
   ANTIGRAVITY_PERMISSION_MODES,
   ANTIGRAVITY_PROVIDER_ID,
+  antigravityNeedsDiscovery,
   antigravityStatusLabel,
   defaultAntigravitySelection,
   discoverAntigravity,
   parseAntigravityStatus,
+  resolveAntigravityRuntimeAfterDiscover,
   runtimeProviderIdentity,
   runtimeSelection,
   type AntigravityStatus,
@@ -82,6 +84,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [profile, setProfile] = useState<'standard' | 'lean'>('standard')
   const [engine, setEngine] = useState<'cc-haha' | 'antigravity'>('cc-haha')
+  const engineRef = useRef<'cc-haha' | 'antigravity'>('cc-haha')
   const [antigravity, setAntigravity] = useState<AntigravityStatus | null>(null)
   const [refreshingAntigravity, setRefreshingAntigravity] = useState(false)
   const [mode, setMode] = useState<PermissionMode>('default')
@@ -215,16 +218,21 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     try {
       const fresh = await discoverAntigravity(client)
       setAntigravity(fresh)
-      if (engine === 'antigravity') {
-        if (!fresh || fresh.status === 'not_installed') {
+      if (!fresh || fresh.status === 'not_installed') {
+        antigravityRuntime.current = undefined
+        if (engineRef.current === 'antigravity') {
+          engineRef.current = 'cc-haha'
           setEngine('cc-haha')
           if (standardRuntime.current) setRuntime(standardRuntime.current)
-        } else {
-          const next = defaultAntigravitySelection(fresh)
-          antigravityRuntime.current = next
-          setRuntime(next)
         }
+        return
       }
+      const next = resolveAntigravityRuntimeAfterDiscover(
+        antigravityRuntime.current,
+        fresh
+      )
+      antigravityRuntime.current = next
+      if (engineRef.current === 'antigravity') setRuntime(next)
     } catch (e) {
       setError(errorText(e))
     } finally {
@@ -234,13 +242,19 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   function changeEngine(next: 'cc-haha' | 'antigravity') {
     if (next === engine) return
     setError('')
+    engineRef.current = next
     setEngine(next)
     touchedRuntime.current = true
     if (next === 'antigravity') {
       if (runtime && runtime.config.providerId !== ANTIGRAVITY_PROVIDER_ID)
         standardRuntime.current = runtime
+      const cached = antigravityRuntime.current
       const chosen =
-        antigravityRuntime.current ?? defaultAntigravitySelection(antigravity)
+        cached &&
+        (cached.config.modelId !== ANTIGRAVITY_DEFAULT_MODEL ||
+          !antigravity?.models.length)
+          ? cached
+          : defaultAntigravitySelection(antigravity)
       antigravityRuntime.current = chosen
       setRuntime(chosen)
       setReferences((previous) => previous.filter(isComputerUseReference))
@@ -250,7 +264,8 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         setWorktree(false)
       }
       if (!ANTIGRAVITY_PERMISSION_MODES.includes(mode)) changeMode('default')
-      if (antigravity?.status === 'unchecked') void refreshAntigravityStatus()
+      if (antigravityNeedsDiscovery(antigravity, { includeError: true }))
+        void refreshAntigravityStatus()
       return
     }
     if (runtime?.config.providerId === ANTIGRAVITY_PROVIDER_ID)
@@ -453,7 +468,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
                     ? ANTIGRAVITY_LOGIN_GUIDANCE
                     : antigravity.status === 'error'
                       ? (antigravity.error || '无法读取 Antigravity 状态，请点击刷新重试。')
-                      : antigravity.status === 'unchecked'
+                      : antigravity.status === 'unchecked' || refreshingAntigravity
                         ? '正在检测电脑端 Antigravity 状态与可用模型…'
                         : `Antigravity ${antigravityStatusLabel(antigravity)}${antigravity.tier?.name ? ` · ${antigravity.tier.name}` : ''}${antigravity.version ? ` · v${antigravity.version}` : ''}（不支持新开工作树）`}
                 </Text>

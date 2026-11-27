@@ -67,6 +67,33 @@ describe('SystemProxyBridge', () => {
       error: expect.objectContaining({ message: 'SOCKS5 proxy rejected no-authentication mode' }) }))
   })
 
+  it('tunnels CONNECT traffic through a SOCKS5 proxy whose reply arrives in a single TCP chunk', async () => {
+    const proxy = net.createServer(socket => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      let stage: 'greeting' | 'request' | 'tunnel' = 'greeting'
+      socket.on('data', chunk => {
+        if (stage === 'greeting') {
+          stage = 'request'
+          socket.write(Buffer.from([0x05, 0x00]))
+          return
+        }
+        if (stage === 'request') {
+          stage = 'tunnel'
+          // Single-chunk IPv4 SOCKS5 reply + immediate tunnel data must not stall or drop bytes.
+          socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50]))
+          return
+        }
+        socket.write(chunk)
+      })
+    })
+    servers.push(proxy)
+    const port = await listen(proxy)
+    const bridge = await startBridge(async () => `SOCKS5 127.0.0.1:${port}`)
+
+    expect(await connectAndEcho(bridge, 'api.example.com:443', 'hello-socks5')).toBe('hello-socks5')
+  })
+
   it('preserves Chromium proxy fallback order and supported rule types', () => {
     expect(parseSystemProxyRules(
       'HTTPS secure.example:8443; PROXY plain.example:8080; SOCKS4 old.example:1080; SOCKS5 socks.example:1081; DIRECT',

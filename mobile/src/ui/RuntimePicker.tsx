@@ -5,6 +5,7 @@ import type { ApiClient } from '../core/client'
 import {
   ANTIGRAVITY_LOGIN_GUIDANCE,
   ANTIGRAVITY_PROVIDER_ID,
+  antigravityNeedsDiscovery,
   antigravitySourceDetail,
   canSetRuntimeEffort,
   discoverAntigravity,
@@ -98,6 +99,7 @@ export function useRuntimeChoice({
     directory?: RuntimeDirectory
     error?: string
   } | null>(null)
+  const [autoDiscoveredFor, setAutoDiscoveredFor] = useState<typeof request | null>(null)
   useEffect(() => {
     const target = request.client
     if (!active || !target) return
@@ -145,22 +147,17 @@ export function useRuntimeChoice({
       directory &&
       client &&
       effectiveProviderId === ANTIGRAVITY_PROVIDER_ID &&
-      directory.antigravity?.status === 'unchecked' &&
+      antigravityNeedsDiscovery(directory.antigravity, { includeError: true }) &&
+      autoDiscoveredFor !== request &&
       !error
   )
   useEffect(() => {
-    if (
-      !active ||
-      !directory ||
-      !client ||
-      effectiveProviderId !== ANTIGRAVITY_PROVIDER_ID ||
-      directory.antigravity?.status !== 'unchecked'
-    )
-      return
+    if (!autoDiscoveringAntigravity || !directory || !client) return
     const controller = new AbortController()
     discoverAntigravity(client, controller.signal)
       .then((fresh) => {
         if (controller.signal.aborted) return
+        setAutoDiscoveredFor(request)
         setLoaded((current) =>
           current?.directory === directory
             ? { ...current, directory: withAntigravityStatus(directory, fresh) }
@@ -168,24 +165,29 @@ export function useRuntimeChoice({
         )
       })
       .catch((e) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
+          setAutoDiscoveredFor(request)
           setModelError({
             directory,
             id: ANTIGRAVITY_PROVIDER_ID,
             message: errorText(e),
           })
+        }
       })
     return () => controller.abort()
-  }, [active, client, directory, effectiveProviderId])
+  }, [autoDiscoveringAntigravity, client, directory, request])
   useEffect(() => {
-    if (!directory || !client) return
+    if (!active || !directory || !client) return
     if (
-      effectiveProviderId === ANTIGRAVITY_PROVIDER_ID &&
-      directory.antigravity?.status === 'unchecked'
+      autoDiscoveringAntigravity ||
+      (effectiveProviderId === ANTIGRAVITY_PROVIDER_ID &&
+        directory.antigravity?.status === 'unchecked')
     )
       return
     const controller = new AbortController()
-    loadRuntimeModels(client, directory, effectiveProviderId, controller.signal)
+    loadRuntimeModels(client, directory, effectiveProviderId, controller.signal, {
+      skipEmptyAntigravityDiscover: autoDiscoveredFor === request,
+    })
       .then((models) => {
         if (!controller.signal.aborted)
           setCatalog({ directory, id: effectiveProviderId, models })
@@ -199,7 +201,16 @@ export function useRuntimeChoice({
           })
       })
     return () => controller.abort()
-  }, [client, directory, effectiveProviderId, catalogRevision])
+  }, [
+    active,
+    autoDiscoveredFor,
+    autoDiscoveringAntigravity,
+    client,
+    directory,
+    effectiveProviderId,
+    catalogRevision,
+    request,
+  ])
   const catalogReady = Boolean(
     directory &&
       catalog?.directory === directory &&
@@ -212,6 +223,7 @@ export function useRuntimeChoice({
     manualRefreshingAntigravity || autoDiscoveringAntigravity
   async function refreshAntigravity() {
     if (!client || !directory || refreshingAntigravity) return
+    setAutoDiscoveredFor(request)
     setManualRefreshingAntigravity(true)
     setModelError(null)
     try {
@@ -308,7 +320,7 @@ export function RuntimeChoiceView({
   const antigravityPending =
     isAntigravity &&
     (choice.refreshingAntigravity ||
-      choice.source?.runtimeStatus === 'unchecked')
+      (choice.source?.runtimeStatus === 'unchecked' && !choice.error))
   const refreshDisabled =
     busy || choice.loading || Boolean(choice.refreshingAntigravity)
   return (

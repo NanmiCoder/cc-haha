@@ -10,6 +10,11 @@ import type { PermissionMode, RuntimeConfig } from './types'
 
 export const ANTIGRAVITY_PROVIDER_ID = 'antigravity-acp' as const
 export const ANTIGRAVITY_DEFAULT_MODEL = 'agent-default' as const
+/**
+ * Discovery spawns `agy acp`, creates a session, and probes each model's
+ * reasoning efforts sequentially — allow more than the 15s default API timeout.
+ */
+export const ANTIGRAVITY_DISCOVER_TIMEOUT_MS = 90_000
 export const ANTIGRAVITY_LOGIN_GUIDANCE =
   '请先在电脑终端运行 agy acp --login 完成登录，然后回到这里刷新。'
 export const ANTIGRAVITY_PERMISSION_MODES: readonly PermissionMode[] = [
@@ -306,6 +311,51 @@ export function defaultAntigravitySelection(
   }
 }
 
+/**
+ * Whether Antigravity still lacks a discovered model catalog and should run
+ * discovery (aligned with desktop ModelSelector).
+ */
+export function antigravityNeedsDiscovery(
+  antigravity: AntigravityStatus | null | undefined,
+  options?: { includeError?: boolean }
+): boolean {
+  if (!antigravity) return false
+  if (antigravity.status === 'unchecked') return true
+  if (antigravity.status === 'ready' && antigravity.models.length === 0) return true
+  if (options?.includeError && antigravity.status === 'error') return true
+  return false
+}
+
+/**
+ * Pick the Antigravity runtime after discovery completes: preserve an explicit
+ * model choice if it still exists in the fresh catalog, otherwise upgrade from
+ * `agent-default` to the discovered default model.
+ */
+export function resolveAntigravityRuntimeAfterDiscover(
+  current: { config: RuntimeConfig; name: string } | undefined,
+  fresh: AntigravityStatus | null | undefined
+): { config: RuntimeConfig; name: string } {
+  const models = antigravityModels(fresh)
+  const existing =
+    current &&
+    current.config.providerId === ANTIGRAVITY_PROVIDER_ID &&
+    current.config.modelId !== ANTIGRAVITY_DEFAULT_MODEL
+      ? models.find((model) => model.id === current.config.modelId)
+      : undefined
+  if (existing) {
+    return {
+      config: runtimeModelSelection(
+        ANTIGRAVITY_PROVIDER_ID,
+        existing,
+        current!.config,
+        false
+      ),
+      name: existing.name,
+    }
+  }
+  return defaultAntigravitySelection(fresh)
+}
+
 export function withAntigravityStatus(
   directory: RuntimeDirectory,
   antigravity: AntigravityStatus | null
@@ -330,7 +380,10 @@ export async function discoverAntigravity(
   const response = await client.post<{ antigravity?: unknown }>(
     `/api/providers/${ANTIGRAVITY_PROVIDER_ID}/discover`,
     {},
-    signal ? { signal } : undefined
+    {
+      ...(signal ? { signal } : {}),
+      timeoutMs: ANTIGRAVITY_DISCOVER_TIMEOUT_MS,
+    }
   )
   return parseAntigravityStatus(response?.antigravity)
 }
@@ -463,13 +516,18 @@ export async function loadRuntimeModels(
   client: ApiClient,
   directory: RuntimeDirectory,
   providerId: string | null,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options?: { skipEmptyAntigravityDiscover?: boolean }
 ): Promise<Model[]> {
   if (providerId === ANTIGRAVITY_PROVIDER_ID) {
     const status = directory.antigravity
     if (!status || status.status === 'not_installed' || status.status === 'login_required' || status.status === 'error')
       return []
-    if (status.status === 'ready') return antigravityModels(status)
+    if (
+      status.status === 'ready' &&
+      (status.models.length > 0 || options?.skipEmptyAntigravityDiscover)
+    )
+      return antigravityModels(status)
     const discovered = await discoverAntigravity(client, signal)
     return antigravityModels(discovered)
   }
