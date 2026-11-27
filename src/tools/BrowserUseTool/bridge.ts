@@ -39,6 +39,23 @@ interface StandaloneRuntime {
 let standaloneRuntime: StandaloneRuntime | null = null
 let standaloneConnectPromise: Promise<StandaloneRuntime> | null = null
 let standaloneShutdownRegistered = false
+let standaloneChromeManagerFactoryForTests:
+  | ((options: {
+      customExecutablePath?: string
+      customUserDataDir?: string
+    }) => ChromeConnectionManager)
+  | null = null
+
+export function setStandaloneChromeManagerFactoryForTests(
+  factory:
+    | ((options: {
+        customExecutablePath?: string
+        customUserDataDir?: string
+      }) => ChromeConnectionManager)
+    | null,
+): void {
+  standaloneChromeManagerFactoryForTests = factory
+}
 
 function registerStandaloneShutdownHook(): void {
   if (standaloneShutdownRegistered) return
@@ -94,6 +111,7 @@ export function isBrowserUseBridgeDesktopMode(): boolean {
 export function resetBrowserUseBridgeStateForTests(): void {
   activeBrowserScopes.clear()
   pendingTakeoverScopes.clear()
+  standaloneChromeManagerFactoryForTests = null
   if (standaloneRuntime) {
     standaloneRuntime.engine.dispose()
     void standaloneRuntime.chromeManager.disconnect().catch(() => {})
@@ -159,10 +177,15 @@ async function ensureStandaloneRuntime(): Promise<StandaloneRuntime> {
 
   standaloneConnectPromise = (async () => {
     const config = loadBrowserUseConfig({ bypassCache: true })
-    const chromeManager = new ChromeConnectionManager({
-      customExecutablePath: config.chromeBinaryPath,
-      customUserDataDir: config.chromeUserDataDir,
-    })
+    const chromeManager = standaloneChromeManagerFactoryForTests
+      ? standaloneChromeManagerFactoryForTests({
+          customExecutablePath: config.chromeBinaryPath,
+          customUserDataDir: config.chromeUserDataDir,
+        })
+      : new ChromeConnectionManager({
+          customExecutablePath: config.chromeBinaryPath,
+          customUserDataDir: config.chromeUserDataDir,
+        })
 
     let state = await chromeManager.connectLiveAttach({ timeoutMs: 15_000 })
     if (state.mode === 'awaiting_approval') {

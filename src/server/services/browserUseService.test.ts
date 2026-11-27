@@ -14,6 +14,9 @@ import type { ServerMessage } from '../ws/events.js'
 import {
   BrowserUseService,
   ElectronBridgeRpcClient,
+  configureBrowserUseHost,
+  getBrowserUseService,
+  resetBrowserUseServiceForTests,
   resolveElectronBridgeConfig,
   type BridgeWebSocketLike,
 } from './browserUseService.js'
@@ -623,6 +626,269 @@ describe('BrowserUseService', () => {
       })
       expect(stopRes.stopped).toBe(true)
       expect(stoppedSessions).toEqual(['sess-multi'])
+    } finally {
+      await service.dispose()
+    }
+  })
+
+  test('executes full Chrome target operations (tabs/navigate/snapshot/act/inspect/takeover/cleanup) and target resolution errors', async () => {
+    const env = createEnv()
+    saveBrowserUseConfig({ enabled: false, preferredTarget: 'auto' }, { env })
+
+    let connected = false
+    let targetSeq = 1
+    const fakeTransport: CdpTransport = {
+      kind: 'chrome',
+      async send(method, params) {
+        if (method === 'Browser.getVersion') return { product: 'Chrome/144.0.0.0' } as never
+        if (method === 'Target.getTargets') {
+          return {
+            targetInfos: [
+              { targetId: 'chrome-t-1', type: 'page', title: 'Chrome App', url: 'https://chrome.example' },
+            ],
+          } as never
+        }
+        if (method === 'Target.createTarget') {
+          return { targetId: `chrome-t-${targetSeq++}` } as never
+        }
+        if (method === 'Target.attachToTarget') {
+          return { sessionId: `chrome-sess-${String(params?.targetId)}` } as never
+        }
+        if (method === 'Page.getFrameTree') {
+          return {
+            frameTree: {
+              frame: { id: 'f1', loaderId: 'l1', url: 'https://chrome.example' },
+            },
+          } as never
+        }
+        if (method === 'Page.navigate') return { frameId: 'f1', loaderId: 'l2' } as never
+        if (method === 'Accessibility.getFullAXTree') {
+          return {
+            nodes: [
+              { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Chrome App' }, childIds: [] },
+            ],
+          } as never
+        }
+        if (method === 'Runtime.evaluate') {
+          const expr = String(params?.expression ?? '')
+          if (expr.includes('document.title')) return { result: { value: 'Chrome App' } } as never
+          if (expr.includes('location.href')) return { result: { value: 'https://chrome.example' } } as never
+          return { result: { value: 'Chrome text' } } as never
+        }
+        return {} as never
+      },
+      onEvent: () => () => {},
+      isConnected: () => connected,
+      async close() {
+        connected = false
+      },
+    }
+
+    const fakeChromeManager = new ChromeConnectionManager({
+      platform: 'darwin',
+      env,
+      fs: {
+        existsSync: p => p.includes('Google Chrome') || p.endsWith('DevToolsActivePort'),
+        readFileSync: () => '9222\n/devtools/browser/test\n',
+        unlinkSync: () => {},
+        mkdirSync: () => {},
+      },
+      transportFactory: async () => {
+        connected = true
+        return fakeTransport
+      },
+    })
+
+    const service = new BrowserUseService({
+      env,
+      bridgeClient: null,
+      chromeManager: fakeChromeManager,
+      broadcastToSession: () => true,
+    })
+
+    try {
+      // Disabled error
+      await expect(service.executeSnapshot({ sessionId: 's1' })).rejects.toThrow(/Browser Use is disabled/)
+
+      // Enable, test unavailable targets
+      service.updateConfig({ enabled: true, preferredTarget: 'chrome' })
+      await expect(service.executeSnapshot({ sessionId: 's1' })).rejects.toThrow(/System Chrome is not connected/)
+
+      service.updateConfig({ preferredTarget: 'workspace' })
+      await expect(service.executeSnapshot({ sessionId: 's1' })).rejects.toThrow(/Workspace Browser bridge is unavailable/)
+
+      service.updateConfig({ preferredTarget: 'auto' })
+      await expect(service.executeSnapshot({ sessionId: 's1' })).rejects.toThrow(/No Browser Use target is ready/)
+
+      // Connect Chrome and exercise all Chrome operations
+      await service.connectChrome({ browserId: 'chrome' })
+      const openRes = await service.executeTabs({
+        sessionId: 's1',
+        action: 'open',
+        url: 'https://chrome.example',
+        target: 'chrome',
+      })
+      const tabId = (openRes.tab as { tabId: string }).tabId
+
+      const listRes = await service.executeTabs({ sessionId: 's1', action: 'list', target: 'chrome' })
+      expect(Array.isArray(listRes.tabs)).toBe(true)
+
+      const focusRes = await service.executeTabs({ sessionId: 's1', action: 'focus', tabId, target: 'chrome' })
+      expect(focusRes.ok).toBe(true)
+
+      const nav = await service.executeNavigate({
+        sessionId: 's1',
+        tabId,
+        url: 'https://chrome.example/next',
+        waitUntil: 'none',
+        target: 'chrome',
+      })
+      expect(nav.target).toBe('chrome')
+
+      const snap = await service.executeSnapshot({ sessionId: 's1', tabId, target: 'chrome' })
+      expect(snap.target).toBe('chrome')
+
+      const act = await service.executeAct({
+        sessionId: 's1',
+        tabId,
+        target: 'chrome',
+        steps: [{ action: 'wait', ms: 1 }],
+      })
+      expect(act.completedSteps).toBe(1)
+
+      const inspect = await service.executeInspect({
+        sessionId: 's1',
+        tabId,
+        target: 'chrome',
+        kind: 'text',
+      })
+      expect(inspect.target).toBe('chrome')
+
+      // Hot-update config applies overlay/ports cleanly
+      service.updateConfig({ showCursorOverlay: false, blockedLoopbackPorts: [8888] })
+      await service.cleanupAfterTurn({ sessionId: 's1' })
+
+      const tk = await service.executeTakeover({
+        sessionId: 's1',
+        tabId,
+        target: 'chrome',
+        reason: 'payment',
+        message: 'Confirm order',
+      })
+      expect(tk.status).toBe('pending')
+
+      const status = await service.getStatus()
+      expect(status.controlState).toBe('takeover')
+
+      await service.abortTakeover({ sessionId: 's1', takeoverId: tk.takeoverId })
+      const closeRes = await service.executeTabs({ sessionId: 's1', action: 'close', tabId, target: 'chrome' })
+      expect(closeRes.ok).toBe(true)
+    } finally {
+      await service.dispose()
+    }
+  })
+
+  test('covers ElectronBridgeRpcClient HTTP fallback, WS errors/close, workspace tabs focus/close, tab.closed, and bridge resume/cancel', async () => {
+    const env = createEnv()
+    saveBrowserUseConfig({ enabled: true, preferredTarget: 'workspace', showCursorOverlay: false }, { env })
+
+    const fakeBridge = new FakeBridgeServer()
+    const client = new ElectronBridgeRpcClient({
+      config: resolveElectronBridgeConfig(env)!,
+      fetchFn: fakeBridge.createFetch(),
+      webSocketFactory: fakeBridge.createWebSocketFactory(),
+    })
+
+    const resumedTurns: string[] = []
+    const service = new BrowserUseService({
+      env,
+      serverHost: '127.0.0.1',
+      serverPort: 3456,
+      bridgeClient: client,
+      broadcastToSession: () => true,
+      submitResumeTurn: async (_s, msg) => {
+        resumedTurns.push(msg)
+      },
+      stopSession: () => {},
+    })
+
+    try {
+      const listRes = await service.executeTabs({ sessionId: 's-ws', action: 'list' })
+      expect(Array.isArray(listRes.tabs)).toBe(true)
+
+      const focusRes = await service.executeTabs({
+        sessionId: 's-ws',
+        action: 'focus',
+        tabId: 'ws-tab-1',
+      })
+      expect(focusRes.ok).toBe(true)
+
+      // Execute snapshot, then trigger bridge push resume + cancel + tab.closed
+      await service.executeSnapshot({ sessionId: 's-ws', tabId: 'ws-tab-1' })
+      await service.executeAct({
+        sessionId: 's-ws',
+        tabId: 'ws-tab-1',
+        steps: [{ action: 'wait', ms: 1 }],
+      })
+      await service.executeInspect({
+        sessionId: 's-ws',
+        tabId: 'ws-tab-1',
+        kind: 'console',
+      })
+      await service.executeTakeover({
+        sessionId: 's-ws',
+        tabId: 'ws-tab-1',
+        reason: 'login',
+        message: 'Sign in',
+      })
+      fakeBridge.emitPush('ui.takeover', { tabId: 'ws-tab-1', action: 'resume' })
+      await Bun.sleep(15)
+      expect(resumedTurns).toHaveLength(1)
+
+      await service.executeTakeover({
+        sessionId: 's-ws',
+        tabId: 'ws-tab-1',
+        reason: 'captcha',
+        message: 'Captcha',
+      })
+      fakeBridge.emitPush('ui.takeover', { tabId: 'ws-tab-1', action: 'cancel' })
+      await Bun.sleep(15)
+
+      fakeBridge.emitPush('cdp.event', {
+        tabId: 'ws-tab-1',
+        method: 'Inspector.detached',
+        params: { reason: 'target_closed' },
+      })
+      fakeBridge.emitPush('tab.closed', { tabId: 'ws-tab-1', reason: 'closed' })
+
+      const closeRes = await service.executeTabs({
+        sessionId: 's-ws',
+        action: 'close',
+        tabId: 'ws-tab-1',
+      })
+      expect(closeRes.ok).toBe(true)
+
+      // Test HTTP fallback when WS is unavailable (readyState = 3)
+      const fallbackClient = new ElectronBridgeRpcClient({
+        config: resolveElectronBridgeConfig(env)!,
+        fetchFn: fakeBridge.createFetch(),
+        webSocketFactory: () => ({
+          readyState: 3,
+          send() {},
+          close() {},
+          addEventListener() {},
+        }),
+      })
+      const httpAcquire = await fallbackClient.rpcOverWs('cdp.acquire', { tabId: 'ws-tab-2' })
+      expect(httpAcquire.leaseId).toBe('lease-ws-tab-2')
+      await fallbackClient.close()
+      await expect(fallbackClient.rpc('tabs.list')).rejects.toThrow(/closed/)
+
+      // Exercise host singleton lifecycle helpers
+      const disposeHost = configureBrowserUseHost('127.0.0.1', 3456)
+      expect(getBrowserUseService()).toBeDefined()
+      disposeHost()
+      resetBrowserUseServiceForTests()
     } finally {
       await service.dispose()
     }

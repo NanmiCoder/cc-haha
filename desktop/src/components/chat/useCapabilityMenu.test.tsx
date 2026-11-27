@@ -283,6 +283,59 @@ describe('useCapabilityMenu', () => {
     await Promise.resolve()
     expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1)
   })
+
+  it('hydrates Browser Use config before opening + menu and surfaces toasts on save failures', async () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    mocks.browserUseGetConfig.mockResolvedValue({
+      enabled: true,
+      preferredTarget: 'workspace',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    })
+
+    // Closed initially: hydration effect still fetches config once on desktop.
+    const hook = renderHook(() => useCapabilityMenu({ open: false, cwd: '/repo', references: [], handlers: handlers() }))
+    await waitFor(() => expect(hook.result.current.browserUse.enabled).toBe(true))
+    expect(hook.result.current.browserUse.preferredTarget).toBe('workspace')
+
+    // Action setBrowserUseTarget & toggleBrowserUse (disable) failures surface error toasts
+    mocks.browserUseUpdateConfig.mockRejectedValue(new Error('write denied'))
+    await act(async () => {
+      hook.result.current.onAction({ type: 'setBrowserUseTarget', target: 'chrome' })
+      hook.result.current.onAction({ type: 'toggleBrowserUse' })
+      await Promise.resolve()
+    })
+    expect(useUIStore.getState().toasts.at(-1)?.type).toBe('error')
+
+    // Direct disable / setPreferredTarget failure toasts
+    await act(async () => {
+      hook.result.current.browserUse.disable()
+      hook.result.current.browserUse.setPreferredTarget('auto')
+      await Promise.resolve()
+    })
+    expect(useUIStore.getState().toasts.filter(t => t.type === 'error').length).toBeGreaterThanOrEqual(2)
+
+    // Consent dialog confirm failure keeps dialog open and toasts; onClose closes it
+    useBrowserUseStore.setState({
+      config: {
+        enabled: false,
+        preferredTarget: 'auto',
+        showCursorOverlay: true,
+        autoOpenWorkspacePanel: true,
+        managedChromeHeadless: false,
+      },
+      loaded: true,
+    })
+    act(() => hook.result.current.onAction({ type: 'toggleBrowserUse' }))
+    expect(hook.result.current.browserUseConsent.open).toBe(true)
+    await act(async () => {
+      await hook.result.current.browserUseConsent.onConfirm()
+    })
+    expect(hook.result.current.browserUseConsent.open).toBe(true)
+    act(() => hook.result.current.browserUseConsent.onClose())
+    expect(hook.result.current.browserUseConsent.open).toBe(false)
+  })
 })
 
 it('lean exposes only file attachment and local commands, including after a standard menu', async () => {

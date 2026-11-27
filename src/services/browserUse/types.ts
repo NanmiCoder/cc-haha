@@ -1,31 +1,47 @@
-export type BrowserTargetKind = 'workspace' | 'chrome'
+export const BROWSER_USE_TARGET_KINDS = ['workspace', 'chrome'] as const
 
-export type BrowserPreferredTarget = 'auto' | BrowserTargetKind
+export type BrowserTargetKind = (typeof BROWSER_USE_TARGET_KINDS)[number]
+
+export const BROWSER_USE_PREFERRED_TARGETS = [
+  'auto',
+  'workspace',
+  'chrome',
+] as const
+
+export type BrowserPreferredTarget =
+  (typeof BROWSER_USE_PREFERRED_TARGETS)[number]
 
 export type BrowserControlState = 'idle' | 'active' | 'takeover'
 
-export type BrowserTakeoverReason =
-  | 'captcha'
-  | 'login'
-  | 'two_factor'
-  | 'payment'
-  | 'destructive'
-  | 'permission'
-  | 'user_requested'
-  | 'manual'
-  | 'other'
+export const BROWSER_USE_TAKEOVER_REASONS = [
+  'captcha',
+  'login',
+  'two_factor',
+  'payment',
+  'destructive',
+  'permission',
+  'user_requested',
+  'manual',
+  'other',
+] as const
 
-export type BrowserActionKind =
-  | 'click'
-  | 'dblclick'
-  | 'fill'
-  | 'type'
-  | 'press'
-  | 'select'
-  | 'hover'
-  | 'scroll'
-  | 'wait'
-  | 'dialog'
+export type BrowserTakeoverReason =
+  (typeof BROWSER_USE_TAKEOVER_REASONS)[number]
+
+export const BROWSER_USE_ACTION_KINDS = [
+  'click',
+  'dblclick',
+  'fill',
+  'type',
+  'press',
+  'select',
+  'hover',
+  'scroll',
+  'wait',
+  'dialog',
+] as const
+
+export type BrowserActionKind = (typeof BROWSER_USE_ACTION_KINDS)[number]
 
 export type BrowserModifierKey = 'Alt' | 'Control' | 'Meta' | 'Shift'
 

@@ -18,6 +18,12 @@ import {
   loadBrowserUseConfig,
   saveBrowserUseConfig,
 } from '../config'
+import {
+  BROWSER_USE_ACTION_KINDS,
+  BROWSER_USE_PREFERRED_TARGETS,
+  BROWSER_USE_TAKEOVER_REASONS,
+  BROWSER_USE_TARGET_KINDS,
+} from '../types'
 
 describe('browserUse/config', () => {
   let tempRoot: string
@@ -131,5 +137,18 @@ describe('browserUse/config', () => {
     // Invalidating cache immediately reflects disk state
     invalidateBrowserUseConfigCache()
     expect(isBrowserUseEnabled({ env })).toBe(false)
+  })
+
+  it('exports runtime target, action, and takeover constants from types.ts', () => {
+    expect(BROWSER_USE_TARGET_KINDS).toEqual(['workspace', 'chrome'])
+    expect(BROWSER_USE_PREFERRED_TARGETS).toEqual([
+      'auto',
+      'workspace',
+      'chrome',
+    ])
+    expect(BROWSER_USE_ACTION_KINDS).toContain('click')
+    expect(BROWSER_USE_ACTION_KINDS).toContain('dialog')
+    expect(BROWSER_USE_TAKEOVER_REASONS).toContain('captcha')
+    expect(BROWSER_USE_TAKEOVER_REASONS).toContain('user_requested')
   })
 })

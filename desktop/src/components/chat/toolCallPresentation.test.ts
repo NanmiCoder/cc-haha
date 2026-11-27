@@ -6,6 +6,7 @@ import {
   describeBrowserToolCall,
   formatTakeoverReason,
   hasToolVerb,
+  isBrowserUseToolName,
   parseSearchResult,
   parseShellExitCode,
   parseTodos,
@@ -130,8 +131,80 @@ describe('Browser Use presentation helpers', () => {
 
   it('maps raw takeover reason codes to localized copy instead of showing raw codes', () => {
     expect(formatTakeoverReason('user_requested', 'user_requested', en)).toBe('You took over browser control')
+    expect(formatTakeoverReason('login', undefined, en)).toBe('Sign in to continue')
+    expect(formatTakeoverReason('2fa', undefined, en)).toBe('Complete two-factor verification')
+    expect(formatTakeoverReason('two_factor', undefined, en)).toBe('Complete two-factor verification')
     expect(formatTakeoverReason('captcha', undefined, en)).toBe('Complete the verification challenge (CAPTCHA)')
+    expect(formatTakeoverReason('payment', undefined, en)).toBe('Review and confirm payment details')
+    expect(formatTakeoverReason('destructive', undefined, en)).toBe('Confirm this sensitive action in the browser')
     expect(formatTakeoverReason('sensitive_confirm', 'sensitive_confirm', en)).toBe('Confirm this sensitive action in the browser')
+    expect(formatTakeoverReason('permission', undefined, en)).toBe('Review and grant the browser permission prompt')
+    expect(formatTakeoverReason('manual_help', undefined, en)).toBe('Complete this manual step in the browser')
+    expect(formatTakeoverReason('unknown_code', undefined, en)).toBe('Please complete this step in the browser')
     expect(formatTakeoverReason('manual', 'Finish checkout form', en)).toBe('Finish checkout form')
+  })
+
+  it('describes all Browser Use tools and BrowserAct action variants cleanly', () => {
+    expect(isBrowserUseToolName('BrowserAct')).toBe(true)
+    expect(isBrowserUseToolName('Bash')).toBe(false)
+
+    expect(describeBrowserToolCall('BrowserNavigate', { action: 'back' }, en)[0]?.label).toBe('Go back')
+    expect(describeBrowserToolCall('BrowserNavigate', { action: 'forward' }, en)[0]?.label).toBe('Go forward')
+    expect(describeBrowserToolCall('BrowserNavigate', { action: 'reload' }, en)[0]?.label).toBe('Reload page')
+    expect(describeBrowserToolCall('BrowserNavigate', { url: 'https://a.test' }, en)[0]?.label).toBe('Open https://a.test')
+    expect(describeBrowserToolCall('BrowserNavigate', {}, en)[0]?.label).toBe('Navigate to page')
+
+    expect(describeBrowserToolCall('BrowserSnapshot', { screenshot: true }, en)[0]?.label).toBe('Read page structure and screenshot')
+    expect(describeBrowserToolCall('BrowserSnapshot', {}, en)[0]?.label).toBe('Read page structure')
+
+    expect(describeBrowserToolCall('BrowserTabs', { action: 'close' }, en)[0]?.label).toBe('Close browser tab')
+    expect(describeBrowserToolCall('BrowserTabs', { action: 'focus' }, en)[0]?.label).toBe('Switch browser tab')
+    expect(describeBrowserToolCall('BrowserTabs', { action: 'list' }, en)[0]?.label).toBe('List browser tabs')
+
+    expect(describeBrowserToolCall('BrowserInspect', { kind: 'console' }, en)[0]?.label).toBe('Inspect console logs')
+    expect(describeBrowserToolCall('BrowserInspect', { kind: 'network' }, en)[0]?.label).toBe('Inspect network requests')
+    expect(describeBrowserToolCall('BrowserInspect', { kind: 'eval' }, en)[0]?.label).toBe('Inspect page state')
+    expect(describeBrowserToolCall('BrowserInspect', { kind: 'text' }, en)[0]?.label).toBe('Read page content')
+
+    expect(describeBrowserToolCall('BrowserTakeover', { reason: 'captcha' }, en)[0]?.label).toContain('CAPTCHA')
+    expect(describeBrowserToolCall('UnknownTool', {}, en)[0]?.label).toBe('UnknownTool')
+
+    expect(describeBrowserToolCall('BrowserAct', { steps: [] }, en)[0]?.label).toBe('Interact with page')
+    const steps = describeBrowserToolCall('BrowserAct', {
+      steps: [
+        { action: 'click', label: '@e12' },
+        { action: 'dblclick', label: 'Row 1' },
+        { action: 'dblclick' },
+        { action: 'fill', label: 'Password', text: 's3cr3t', sensitive: true },
+        { action: 'type', text: 'plain' },
+        { action: 'press', key: 'Enter' },
+        { action: 'select', label: 'Country', value: 'US' },
+        { action: 'select', value: 'UK' },
+        { action: 'hover', label: 'Menu' },
+        { action: 'hover' },
+        { action: 'scroll' },
+        { action: 'wait' },
+        { action: 'dialog', accept: true },
+        { action: 'dialog', accept: false },
+        { action: 'other' },
+      ],
+    }, en)
+    expect(steps.map((s) => s.label)).toEqual([
+      'Click element',
+      'Double-click "Row 1"',
+      'Double-click element',
+      'Enter "••••••" in "Password"',
+      'Type "plain"',
+      'Press Enter',
+      'Select "US" in "Country"',
+      'Select "UK"',
+      'Hover over "Menu"',
+      'Hover over element',
+      'Scroll page',
+      'Wait for page update',
+      'Accept browser dialog',
+      'Dismiss browser dialog',
+      'Interact with page',
+    ])
   })
 })

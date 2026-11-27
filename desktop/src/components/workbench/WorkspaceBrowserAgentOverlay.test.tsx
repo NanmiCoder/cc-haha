@@ -237,4 +237,179 @@ describe('WorkspaceBrowserAgentOverlay', () => {
     const longMid = interpolateCursorPosition({ x: 0, y: 0 }, { x: 400, y: 0 }, 0.5)
     expect(longMid.y).not.toBe(0) // curved bezier arc for > 196px
   })
+
+  it('animates cursor with rAF, shows target highlight + click ripple, fades on idle, and supports fallback timer & buttons', () => {
+    vi.useFakeTimers()
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+
+    placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    useBrowserUseStore.getState().applyHostEvent({
+      type: 'control-state',
+      tabId: 'tab-agent',
+      state: 'active',
+      actionLabel: 'Click "Pay"',
+    })
+
+    render(<WorkspaceBrowserAgentOverlay tabId="tab-agent" />)
+
+    // Wheel on shield triggers takeover
+    fireEvent.wheel(screen.getByTestId('browser-agent-takeover-shield'))
+    expect(sendUserAction).toHaveBeenCalledWith({
+      tabId: 'tab-agent',
+      action: 'takeover',
+      reason: 'user_requested',
+    })
+
+    // Pill Takeover and Stop buttons
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(sendUserAction).toHaveBeenCalledWith({ tabId: 'tab-agent', action: 'stop' })
+
+    // Move cursor with targetRect -> animated via rAF -> target highlight + idle fade
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'move-cursor',
+        tabId: 'tab-agent',
+        moveId: 'move-anim-1',
+        x: 240,
+        y: 160,
+        durationMs: 200,
+        targetRect: { x: 220, y: 140, width: 40, height: 40 },
+      })
+    })
+
+    // Intermediate frame sets cursorPos & renders cursor, then completion frame settles move
+    act(() => {
+      const start = performance.now()
+      rafCallbacks.shift()?.(start + 100)
+    })
+    expect(screen.getByTestId('browser-agent-virtual-cursor')).toBeInTheDocument()
+
+    act(() => {
+      const start = performance.now()
+      rafCallbacks.shift()?.(start + 250)
+    })
+    expect(reportCursorArrived).toHaveBeenCalledWith({
+      moveId: 'move-anim-1',
+      tabId: 'tab-agent',
+      skipped: false,
+    })
+    expect(screen.getByTestId('browser-agent-target-highlight')).toBeInTheDocument()
+
+    // Highlight clears after 80ms; cursor fades after 2000ms
+    act(() => { vi.advanceTimersByTime(90) })
+    expect(screen.queryByTestId('browser-agent-target-highlight')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(screen.queryByTestId('browser-agent-virtual-cursor')).not.toBeInTheDocument()
+
+    // Safety fallback timer settles move even if rAF never fires
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'move-cursor',
+        tabId: 'tab-agent',
+        moveId: 'move-fallback-1',
+        x: 400,
+        y: 300,
+        durationMs: 180,
+      })
+    })
+    act(() => { vi.advanceTimersByTime(300) })
+    expect(reportCursorArrived).toHaveBeenCalledWith({
+      moveId: 'move-fallback-1',
+      tabId: 'tab-agent',
+      skipped: false,
+    })
+
+    // Click ripple renders and clears after 420ms
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'click-ripple',
+        tabId: 'tab-agent',
+        x: 400,
+        y: 300,
+        button: 'left',
+      })
+    })
+    expect(screen.getByTestId('browser-agent-click-ripple')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(450) })
+    expect(screen.queryByTestId('browser-agent-click-ripple')).not.toBeInTheDocument()
+
+    // Takeover Cancel without sessionId falls back to IPC
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: 'tab-agent',
+        state: 'takeover',
+      })
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(sendUserAction).toHaveBeenCalledWith({ tabId: 'tab-agent', action: 'cancel' })
+
+    // Returning to idle unmounts overlay cleanly
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: 'tab-agent',
+        state: 'idle',
+      })
+    })
+    expect(screen.queryByTestId('workspace-browser-agent-overlay')).not.toBeInTheDocument()
+  })
+
+  it('skips cursor animation synchronously when showOverlay is false or prefers-reduced-motion is set', () => {
+    placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    useBrowserUseStore.getState().applyHostEvent({
+      type: 'control-state',
+      tabId: 'tab-agent',
+      state: 'active',
+      showOverlay: false,
+    })
+    render(<WorkspaceBrowserAgentOverlay tabId="tab-agent" />)
+
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'move-cursor',
+        tabId: 'tab-agent',
+        moveId: 'move-no-overlay',
+        x: 100,
+        y: 100,
+        durationMs: 200,
+      })
+    })
+    expect(reportCursorArrived).toHaveBeenCalledWith({
+      moveId: 'move-no-overlay',
+      tabId: 'tab-agent',
+      skipped: true,
+    })
+
+    // Enable overlay again, but mock prefers-reduced-motion: reduce
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: 'tab-agent',
+        state: 'active',
+        showOverlay: true,
+      })
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'move-cursor',
+        tabId: 'tab-agent',
+        moveId: 'move-reduced',
+        x: 150,
+        y: 150,
+        durationMs: 200,
+      })
+    })
+    expect(reportCursorArrived).toHaveBeenCalledWith({
+      moveId: 'move-reduced',
+      tabId: 'tab-agent',
+      skipped: true,
+    })
+    vi.unstubAllGlobals()
+  })
 })

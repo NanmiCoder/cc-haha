@@ -10,7 +10,11 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { BrowserPreferredTarget, BrowserUseConfig } from './types'
+import {
+  BROWSER_USE_PREFERRED_TARGETS,
+  type BrowserPreferredTarget,
+  type BrowserUseConfig,
+} from './types'
 
 const CONFIG_FILENAME = 'browser-use-config.json'
 const CONFIG_TTL_MS = 1_500
@@ -63,8 +67,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizePreferredTarget(value: unknown): BrowserPreferredTarget {
-  if (value === 'workspace' || value === 'chrome' || value === 'auto') {
-    return value
+  if (
+    typeof value === 'string' &&
+    (BROWSER_USE_PREFERRED_TARGETS as readonly string[]).includes(value)
+  ) {
+    return value as BrowserPreferredTarget
   }
   return DEFAULT_BROWSER_USE_CONFIG.preferredTarget
 }

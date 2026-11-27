@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserUseApi, type BrowserUseConfig, type BrowserUseStatus } from '@/api/browserUse'
+import { useUIStore } from './uiStore'
 import { useBrowserUseStore } from './browserUseStore'
 
 vi.mock('@/api/browserUse', () => ({
@@ -174,5 +175,112 @@ describe('useBrowserUseStore', () => {
     expect(list).toHaveLength(1)
     expect(list?.[0]?.status).toBe('completed')
     expect(list?.[0]?.screenshotDataUrl).toBe('data:image/png;base64,AAA')
+  })
+
+  it('fetches status & config with race protection, handles takeover API success/error toasts, and clears tab/session state', async () => {
+    useUIStore.setState({ toasts: [] })
+
+    // fetchStatus success and error
+    mockApi.getStatus.mockResolvedValueOnce({ ...baseStatus, enabled: true, config: { ...baseConfig, enabled: true } })
+    const fetched = await useBrowserUseStore.getState().fetchStatus()
+    expect(fetched?.enabled).toBe(true)
+    expect(useBrowserUseStore.getState().config?.enabled).toBe(true)
+
+    mockApi.getStatus.mockRejectedValueOnce(new Error('offline'))
+    expect(await useBrowserUseStore.getState().fetchStatus()).toBeNull()
+    expect(useBrowserUseStore.getState().error).toBe('offline')
+
+    // fetchConfig success and failure
+    mockApi.getConfig.mockResolvedValueOnce({ ...baseConfig, preferredTarget: 'chrome' })
+    const cfg = await useBrowserUseStore.getState().fetchConfig()
+    expect(cfg?.preferredTarget).toBe('chrome')
+    expect(useBrowserUseStore.getState().status?.preferredTarget).toBe('chrome')
+
+    mockApi.getConfig.mockRejectedValueOnce(new Error('403'))
+    expect(await useBrowserUseStore.getState().fetchConfig()).toBeNull()
+
+    // updateConfig success updates both config and status
+    mockApi.updateConfig.mockResolvedValueOnce({ ...baseConfig, enabled: true, preferredTarget: 'workspace' })
+    const updated = await useBrowserUseStore.getState().updateConfig({ enabled: true, preferredTarget: 'workspace' })
+    expect(updated?.preferredTarget).toBe('workspace')
+    expect(useBrowserUseStore.getState().status?.preferredTarget).toBe('workspace')
+
+    // resumeTakeover & abortTakeover success (with and without takeover payload) + error toasts
+    mockApi.resumeTakeover.mockResolvedValueOnce({ ok: true, resumed: true })
+    expect(await useBrowserUseStore.getState().resumeTakeover('sess-1', 'tk-1')).toBe(true)
+
+    mockApi.resumeTakeover.mockResolvedValueOnce({
+      ok: true,
+      resumed: true,
+      takeover: {
+        takeoverId: 'tk-2',
+        tabId: 'tab-1',
+        target: 'workspace',
+        sessionId: 'sess-1',
+        reason: 'login',
+        message: 'Sign in',
+        createdAt: 100,
+        status: 'resumed',
+      },
+    })
+    expect(await useBrowserUseStore.getState().resumeTakeover('sess-1', 'tk-2')).toBe(true)
+
+    mockApi.resumeTakeover.mockRejectedValueOnce(new Error('resume failed'))
+    expect(await useBrowserUseStore.getState().resumeTakeover('sess-1')).toBe(false)
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({ type: 'error', message: 'resume failed' })
+
+    mockApi.abortTakeover.mockResolvedValueOnce({ ok: true })
+    expect(await useBrowserUseStore.getState().abortTakeover('sess-1', 'tk-1', 'cancelled')).toBe(true)
+
+    mockApi.abortTakeover.mockResolvedValueOnce({
+      ok: true,
+      takeover: {
+        takeoverId: 'tk-3',
+        tabId: 'tab-1',
+        target: 'workspace',
+        sessionId: 'sess-1',
+        reason: 'login',
+        message: 'Sign in',
+        createdAt: 100,
+        status: 'aborted',
+      },
+    })
+    expect(await useBrowserUseStore.getState().abortTakeover('sess-1', 'tk-3')).toBe(true)
+
+    mockApi.abortTakeover.mockRejectedValueOnce(new Error('abort failed'))
+    expect(await useBrowserUseStore.getState().abortTakeover('sess-1')).toBe(false)
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({ type: 'error', message: 'abort failed' })
+
+    // activity with embedded takeover + clearTabState / close-tab / clearSession
+    useBrowserUseStore.getState().applyActivityEvent('sess-1', {
+      id: 'act-tk',
+      timestamp: 300,
+      sessionId: 'sess-1',
+      tabId: 'tab-2',
+      target: 'workspace',
+      kind: 'takeover',
+      humanLabel: 'Need login',
+      status: 'paused',
+      takeover: {
+        takeoverId: 'tk-4',
+        tabId: 'tab-2',
+        target: 'workspace',
+        sessionId: 'sess-1',
+        reason: 'login',
+        message: 'Sign in',
+        createdAt: 300,
+        status: 'pending',
+      },
+    })
+    expect(useBrowserUseStore.getState().takeoverBySession['sess-1']?.takeoverId).toBe('tk-4')
+
+    useBrowserUseStore.getState().applyHostEvent({ type: 'control-state', tabId: 'tab-2', state: 'active' })
+    useBrowserUseStore.getState().applyHostEvent({ type: 'close-tab', tabId: 'tab-2' })
+    expect(useBrowserUseStore.getState().tabStates['tab-2']).toBeUndefined()
+
+    useBrowserUseStore.getState().clearTabState('non-existent')
+    useBrowserUseStore.getState().clearSession('sess-1')
+    expect(useBrowserUseStore.getState().activitiesBySession['sess-1']).toBeUndefined()
+    expect(useBrowserUseStore.getState().takeoverBySession['sess-1']).toBeUndefined()
   })
 })

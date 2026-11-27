@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   isWorkspaceBrowserAvailable: vi.fn(() => false),
   workspaceBrowserHost: {
     create: vi.fn(async () => ({ ok: true })),
+    navigate: vi.fn(async () => ({ ok: true })),
     setVisible: vi.fn(async () => ({ ok: true })),
     close: vi.fn(async () => ({ ok: true })),
     message: vi.fn(async () => ({ ok: true })),
@@ -59,6 +60,7 @@ vi.mock('../../api/review', () => ({
 }))
 
 import { useTabStore } from '../../stores/tabStore'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { WorkspaceSurface, useBrowserUseEventBridge, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
@@ -710,6 +712,116 @@ describe('useBrowserUseEventBridge', () => {
       const browserTabs = useWorkspaceStore.getState().getTabs(SESSION, 'side').filter((t) => t.kind === 'browser')
       expect(browserTabs).toHaveLength(2)
       expect(browserTabs.some((t) => t.url === 'https://second.test/')).toBe(true)
+    } finally {
+      Reflect.deleteProperty(window, 'desktopHost')
+    }
+  })
+
+  it('handles reuse+navigate, missing session error, focus-tab, control-state, move-cursor, click-ripple, and close-tab', async () => {
+    let listener: ((event: BrowserUseHostEvent) => void) | null = null
+    const reportTabReady = vi.fn().mockResolvedValue(undefined)
+    const reportCursorArrived = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      browserUse: {
+        ...browserHost.browserUse,
+        reportTabReady,
+        reportCursorArrived,
+        onEvent: async (handler) => {
+          listener = handler
+          return () => { listener = null }
+        },
+      },
+    }
+    try {
+      useBrowserUseStore.getState().reset()
+      useTabStore.setState({ tabs: [], activeTabId: null })
+      useWorkspaceStore.setState({ bySession: {} })
+
+      renderHook(() => useBrowserUseEventBridge())
+      await act(async () => { await Promise.resolve() })
+
+      // 1. Missing session reports ok: false
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-no-sess', url: 'https://a.test/' })
+      })
+      expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+        requestId: 'req-no-sess',
+        ok: false,
+      }))
+
+      // 2. Existing tab registration + reuse with new URL
+      useTabStore.setState({
+        tabs: [{ sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' }],
+        activeTabId: SESSION,
+      })
+      const openedId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://one.test/' })!
+      const browserTabId = (useWorkspaceStore.getState().getTab(SESSION, openedId) as WorkspaceBrowserTab).browserTabId
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-first', sessionId: SESSION, tabId: browserTabId, url: 'https://one.test/' })
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-first',
+          tabId: browserTabId,
+          ok: true,
+        }))
+      })
+
+      // Reuse already-registered tab with a different URL
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-reuse', sessionId: SESSION, tabId: browserTabId, url: 'https://two.test/' })
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-reuse',
+          tabId: browserTabId,
+          ok: true,
+        }))
+      })
+      expect(mocks.workspaceBrowserHost.navigate).toHaveBeenCalledWith(browserTabId, 'https://two.test/')
+
+      // 3. focus-tab expands hidden panel
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+      act(() => {
+        listener!({ type: 'focus-tab', tabId: browserTabId, revealWorkbench: true })
+      })
+      expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('split')
+
+      // 4. control-state auto-reveals hidden panel
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+      act(() => {
+        listener!({ type: 'control-state', tabId: browserTabId, state: 'active', actionLabel: 'Click', autoReveal: true })
+      })
+      expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('split')
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]?.controlState).toBe('active')
+
+      // 5. move-cursor on hidden slot ACKs synchronously in 0ms
+      act(() => {
+        listener!({ type: 'move-cursor', tabId: browserTabId, moveId: 'mv-hidden', x: 50, y: 60, durationMs: 200 })
+      })
+      expect(reportCursorArrived).toHaveBeenCalledWith({
+        moveId: 'mv-hidden',
+        tabId: browserTabId,
+        skipped: true,
+      })
+
+      // 6. click-ripple updates store
+      act(() => {
+        listener!({ type: 'click-ripple', tabId: browserTabId, x: 50, y: 60, button: 'left' })
+      })
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]?.ripple).toMatchObject({ x: 50, y: 60 })
+
+      // 7. close-tab removes tab and clears overlay state
+      act(() => {
+        listener!({ type: 'close-tab', tabId: browserTabId })
+      })
+      expect(useWorkspaceStore.getState().findBrowserTabOwner(browserTabId)).toBeNull()
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]).toBeUndefined()
     } finally {
       Reflect.deleteProperty(window, 'desktopHost')
     }

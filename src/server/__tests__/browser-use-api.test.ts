@@ -377,9 +377,168 @@ describe('Browser Use API routing and security boundaries', () => {
           ? { headers: { 'Content-Type': 'application/json' }, body: '{}' }
           : {}),
       })
-      const res = await handleApiRequest(req, url, { remoteBrowser: true })
+    const res = await handleApiRequest(req, url, { remoteBrowser: true })
       expect(res.status).toBe(403)
       expect(await res.json()).toEqual({ error: 'Desktop-only capability' })
     }
+  })
+
+  test('covers all internal CLI tool actions, schema rejections, 405, invalid agentId, and invalid JSON', async () => {
+    const { service, calls } = createMockService()
+    const post = (action: string, body: string) =>
+      handleBrowserUseToolApi(
+        new Request(`http://127.0.0.1/api/browser-use/${action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        }),
+        action as never,
+        'sess-all',
+        service,
+      )
+
+    // 405 Method Not Allowed
+    const getRes = await handleBrowserUseToolApi(
+      new Request('http://127.0.0.1/api/browser-use/tabs', { method: 'GET' }),
+      'tabs',
+      'sess-all',
+      service,
+    )
+    expect(getRes.status).toBe(405)
+
+    // Empty / invalid JSON / non-object JSON / bad agentId
+    expect((await post('tabs', '')).status).toBe(400)
+    expect((await post('tabs', '{bad')).status).toBe(400)
+    expect((await post('tabs', '[]')).status).toBe(400)
+    expect((await post('tabs', JSON.stringify({ action: 'list', agentId: '' }))).status).toBe(400)
+
+    // Invalid schema per action
+    expect((await post('tabs', JSON.stringify({ action: 'bogus' }))).status).toBe(400)
+    expect((await post('navigate', JSON.stringify({ action: 'bogus' }))).status).toBe(400)
+    expect((await post('snapshot', JSON.stringify({ maxNodes: 1 }))).status).toBe(400)
+    expect((await post('inspect', JSON.stringify({ kind: 'bogus' }))).status).toBe(400)
+    expect((await post('takeover', JSON.stringify({ reason: 'login', message: '' }))).status).toBe(400)
+
+    // Valid calls for every internal action
+    expect((await post('tabs', JSON.stringify({ action: 'list' }))).status).toBe(200)
+    expect((await post('navigate', JSON.stringify({ url: 'https://example.com' }))).status).toBe(200)
+    expect((await post('snapshot', JSON.stringify({ diff: true }))).status).toBe(200)
+    expect((await post('inspect', JSON.stringify({ kind: 'console', limit: 10 }))).status).toBe(200)
+    expect(
+      (await post('takeover', JSON.stringify({ reason: 'login', message: 'Sign in' }))).status,
+    ).toBe(200)
+    expect((await post('cleanup', '')).status).toBe(200)
+
+    expect(calls.map(c => c.method)).toEqual([
+      'executeTabs',
+      'executeNavigate',
+      'executeSnapshot',
+      'executeInspect',
+      'executeTakeover',
+      'cleanupAfterTurn',
+    ])
+  })
+
+  test('covers remaining UI REST validation, config patch fields, errors, and 404 routes', async () => {
+    const { service } = createMockService({
+      connectChrome: (async () => ({
+        chrome: { mode: 'error', error: 'Attach failed', detectedBrowsers: [] },
+        status: {} as BrowserUseStatus,
+      })) as never,
+      launchManagedChrome: (async () => ({
+        chrome: { mode: 'error', error: 'Spawn failed', detectedBrowsers: [] },
+        status: {} as BrowserUseStatus,
+      })) as never,
+    })
+
+    // GET /config
+    const getCfg = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/config', { method: 'GET' }),
+      new URL('http://127.0.0.1/api/browser-use/config'),
+      ['api', 'browser-use', 'config'],
+      service,
+    )
+    expect(getCfg.status).toBe(200)
+
+    // connect & launch-managed error propagation
+    const connErr = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/chrome/connect', {
+        method: 'POST',
+        body: '',
+      }),
+      new URL('http://127.0.0.1/api/browser-use/chrome/connect'),
+      ['api', 'browser-use', 'chrome', 'connect'],
+      service,
+    )
+    expect(await connErr.json()).toMatchObject({ ok: false, error: 'Attach failed' })
+
+    const launchErr = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/chrome/launch-managed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ browserId: 'edge', headless: true }),
+      }),
+      new URL('http://127.0.0.1/api/browser-use/chrome/launch-managed'),
+      ['api', 'browser-use', 'chrome', 'launch-managed'],
+      service,
+    )
+    expect(await launchErr.json()).toMatchObject({ ok: false, error: 'Spawn failed' })
+
+    // takeover resume/abort missing sessionId -> 400
+    const badResume = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/takeover/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: '' }),
+      }),
+      new URL('http://127.0.0.1/api/browser-use/takeover/resume'),
+      ['api', 'browser-use', 'takeover', 'resume'],
+      service,
+    )
+    expect(badResume.status).toBe(400)
+
+    const badAbort = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/takeover/abort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: '' }),
+      }),
+      new URL('http://127.0.0.1/api/browser-use/takeover/abort'),
+      ['api', 'browser-use', 'takeover', 'abort'],
+      service,
+    )
+    expect(badAbort.status).toBe(400)
+
+    // Unknown UI route -> 404
+    const notFound = await handleBrowserUseUiApi(
+      new Request('http://127.0.0.1/api/browser-use/unknown', { method: 'GET' }),
+      new URL('http://127.0.0.1/api/browser-use/unknown'),
+      ['api', 'browser-use', 'unknown'],
+      service,
+    )
+    expect(notFound.status).toBe(404)
+
+    // parseBrowserUseConfigPatch edge validation
+    expect(parseBrowserUseConfigPatch(null)).toBeNull()
+    expect(parseBrowserUseConfigPatch({ preferredTarget: 'invalid' })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ showCursorOverlay: 'yes' })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ autoOpenWorkspacePanel: 1 })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ managedChromeHeadless: 1 })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ chromeBinaryPath: 123 })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ chromeUserDataDir: 123 })).toBeNull()
+    expect(parseBrowserUseConfigPatch({ consentAcceptedAt: 123 })).toBeNull()
+    expect(
+      parseBrowserUseConfigPatch({
+        autoOpenWorkspacePanel: false,
+        managedChromeHeadless: true,
+        chromeUserDataDir: '  /tmp/profile  ',
+        consentAcceptedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toEqual({
+      autoOpenWorkspacePanel: false,
+      managedChromeHeadless: true,
+      chromeUserDataDir: '/tmp/profile',
+      consentAcceptedAt: '2026-01-01T00:00:00Z',
+    })
   })
 })

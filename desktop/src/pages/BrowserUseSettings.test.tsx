@@ -176,4 +176,77 @@ describe('BrowserUseSettings', () => {
       expect(apiMock.disconnectChrome).toHaveBeenCalledTimes(1)
     })
   })
+
+  it('handles loading/config errors, settings toggles, target changes, awaiting_approval, and Chrome errors', async () => {
+    // Status load failure + retry
+    apiMock.getStatus.mockRejectedValueOnce(new Error('network'))
+    const first = render(<BrowserUseSettings />)
+    expect(await screen.findByText('Failed to check Browser Use status.')).toBeInTheDocument()
+    apiMock.getStatus.mockResolvedValueOnce({
+      ...baseStatus,
+      workspaceAvailable: false,
+      chrome: {
+        mode: 'awaiting_approval',
+        detectedBrowsers: [
+          ...baseStatus.chrome.detectedBrowsers,
+          {
+            id: 'edge',
+            name: 'Microsoft Edge',
+            executablePath: '/Applications/Edge.app',
+            userDataDir: '/tmp/edge',
+            devToolsActivePortPath: '/tmp/edge/DevToolsActivePort',
+            hasDevToolsActivePort: true,
+            platform: 'darwin',
+          },
+        ],
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await screen.findByText('Desktop app required')
+    expect(screen.getByText(/waiting for you to click Allow/i)).toBeInTheDocument()
+
+    // Select second detected browser + change preferred target + toggle cursor/auto-open switches
+    fireEvent.click(screen.getByTestId('detected-browser-edge'))
+    fireEvent.click(screen.getByRole('radio', { name: 'Chrome' }))
+    await waitFor(() => {
+      expect(apiMock.updateConfig).toHaveBeenCalledWith({ preferredTarget: 'chrome' })
+    })
+
+    fireEvent.click(screen.getByLabelText('Show virtual cursor and action effects'))
+    await waitFor(() => {
+      expect(apiMock.updateConfig).toHaveBeenCalledWith({ showCursorOverlay: false })
+    })
+
+    fireEvent.click(screen.getByLabelText('Auto-expand right workspace during browser control'))
+    await waitFor(() => {
+      expect(apiMock.updateConfig).toHaveBeenCalledWith({ autoOpenWorkspacePanel: false })
+    })
+
+    // Config save failure rolls back and shows error banner
+    apiMock.updateConfig.mockRejectedValueOnce(new Error('save failed'))
+    fireEvent.click(screen.getByLabelText('Show virtual cursor and action effects'))
+    expect(await screen.findByText('Failed to save Browser Use settings.')).toBeInTheDocument()
+
+    // Chrome connect / launch / disconnect errors surface notice
+    fireEvent.click(screen.getByRole('button', { name: '2-step setup guide' }))
+    apiMock.connectChrome.mockRejectedValueOnce(new Error('connect boom'))
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByText('connect boom')).toBeInTheDocument()
+
+    apiMock.launchManagedChrome.mockRejectedValueOnce(new Error('launch boom'))
+    fireEvent.click(screen.getByRole('button', { name: 'Launch managed browser' }))
+    expect(await screen.findByText('launch boom')).toBeInTheDocument()
+
+    // Refresh button triggers status re-fetch
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(apiMock.getStatus).toHaveBeenCalledTimes(3))
+    first.unmount()
+
+    // Config load error state + retry
+    apiMock.getStatus.mockResolvedValueOnce(baseStatus)
+    apiMock.getConfig.mockRejectedValueOnce(new Error('cfg fail'))
+    render(<BrowserUseSettings />)
+    expect(await screen.findByText('Failed to load Browser Use settings.')).toBeInTheDocument()
+  })
 })
