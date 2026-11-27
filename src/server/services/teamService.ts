@@ -1891,7 +1891,7 @@ export class TeamService {
     teamName: string,
     agentId: string,
     content: string,
-    options?: { leadSessionId?: string },
+    options?: { leadSessionId?: string; startLeader?: (sessionId: string) => Promise<void> },
   ): Promise<SendAntigravitySwarmMessageResponse | void> {
     if (isAntigravitySwarmTeamName(teamName)) {
       this.pendingMemberMessages += 1
@@ -1900,6 +1900,7 @@ export class TeamService {
         return await sendAntigravitySwarmMemberMessage(teamName, agentId, content, {
           appDataDir: this.antigravityAppDataDir,
           leadSessionId: options?.leadSessionId,
+          ...(options?.startLeader ? { startLeader: options.startLeader } : {}),
           ...(this.antigravitySteerHandler !== undefined
             ? { steerHandler: this.antigravitySteerHandler }
             : {}),

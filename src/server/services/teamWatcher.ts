@@ -24,6 +24,7 @@ import {
   type TeamService,
 } from './teamService.js'
 import {
+  addAntigravitySwarmChangeListener,
   listRememberedAntigravitySwarmSessions,
   readAntigravitySwarmSnapshot,
 } from './antigravitySwarmAdapter.js'
@@ -53,6 +54,7 @@ export class TeamWatcher {
   private lastLeadSessionIds = new Map<string, string>()
   private lastTeamIdentities = new Map<string, WatchedTeamIdentity>()
   private lastAntigravitySwarms = new Map<string, { version: string; identity: WatchedTeamIdentity }>()
+  private disposeAntigravitySwarmListener: (() => void) | null = null
 
   constructor(
     private readonly emit: (message: ServerMessage, leadSessionId?: string) => void = (message, leadSessionId) => {
@@ -74,6 +76,9 @@ export class TeamWatcher {
     // Run an initial check immediately, then start the interval
     void this.scheduleCheck()
     this.intervalId = setInterval(() => void this.scheduleCheck(), intervalMs)
+    this.disposeAntigravitySwarmListener ??= addAntigravitySwarmChangeListener(() => {
+      void this.scheduleCheck()
+    })
   }
 
   /** Stop polling. */
@@ -82,6 +87,8 @@ export class TeamWatcher {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
+    this.disposeAntigravitySwarmListener?.()
+    this.disposeAntigravitySwarmListener = null
   }
 
   async stopAndWait(): Promise<void> {

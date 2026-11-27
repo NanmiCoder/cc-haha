@@ -57,8 +57,15 @@ import {
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
 import {
+  beginAntigravitySwarmPause,
+  completeAntigravitySwarmPause,
+  hasAntigravitySwarmOnDiskSync,
+  readAntigravitySwarmBoardMaxSeq,
+  registerAntigravitySwarmResumeHandler,
+  registerAntigravitySwarmRuntimeProbe,
   registerAntigravitySwarmSteerHandler,
   rememberAntigravitySwarmSessionMapping,
+  type AntigravitySwarmResumePayload,
   type AntigravitySwarmSteerPayload,
   type AntigravitySwarmSteerResult,
 } from './antigravitySwarmAdapter.js'
@@ -318,6 +325,7 @@ type SessionProcess = {
   antigravity?: AntigravityConversation
   antigravityBridge?: AntigravityComputerUseBridge | null
   antigravityHistoryDraining?: boolean
+  antigravitySwarmPausePending?: boolean
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
@@ -1336,12 +1344,29 @@ export class ConversationService {
   }
 
   async waitForAntigravityCancellation(sessionId: string): Promise<void> {
+    const pendingSwarmStop = this.teamStopOperations.get(sessionId)
+    if (pendingSwarmStop) {
+      await pendingSwarmStop
+    }
     const session = this.sessions.get(sessionId)
     if (!session?.antigravity || session.controlRevoked) return
     await session.antigravity.waitForCancelledTurn()
     if (this.sessions.get(sessionId) === session && !session.controlRevoked && !session.antigravity.acp.isOpen) {
       await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
     }
+  }
+
+  hasActiveAntigravitySwarmRuntime(nativeSessionId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (
+        !session.controlRevoked
+        && session.antigravity?.acp.sessionId === nativeSessionId
+        && session.antigravity.acp.isOpen
+      ) {
+        return true
+      }
+    }
+    return false
   }
 
   async setAntigravityConfig(
@@ -1474,6 +1499,53 @@ export class ConversationService {
       delivery: 'steering',
       formattedPrompt: payload.formattedPrompt,
     }
+  }
+
+  async resumeAntigravitySwarmSession(
+    payload: AntigravitySwarmResumePayload,
+  ): Promise<{ routed: boolean; error?: string }> {
+    let targetSessionId = payload.sessionId
+    let session = targetSessionId ? this.sessions.get(targetSessionId) : undefined
+    if (!session || session.antigravity?.acp.sessionId !== payload.nativeSessionId) {
+      session = undefined
+      for (const [id, candidate] of this.sessions.entries()) {
+        if (candidate.antigravity?.acp.sessionId === payload.nativeSessionId) {
+          targetSessionId = id
+          session = candidate
+          break
+        }
+      }
+    }
+    if (!targetSessionId || !session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) {
+      return { routed: false, error: 'Antigravity session is not running. Retry resuming the swarm.' }
+    }
+    if (session.antigravity.isResponding) {
+      return { routed: false, error: 'Antigravity is already processing a turn. Wait for it to settle and retry.' }
+    }
+    const sent = await this.sendMessage(targetSessionId, payload.prompt)
+    if (!sent) {
+      return { routed: false, error: 'Could not deliver the swarm resume prompt to Antigravity.' }
+    }
+    const currentTargetId = targetSessionId
+    const currentSession = session
+    if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+      this.handleSdkPayload(
+        currentTargetId,
+        JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'running' }),
+      )
+      const completion = currentSession.antigravity.pendingTurnCompletion
+      if (completion) {
+        void completion.finally(() => {
+          if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+            this.handleSdkPayload(
+              currentTargetId,
+              JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }),
+            )
+          }
+        })
+      }
+    }
+    return { routed: true }
   }
 
   async sendMessage(
@@ -1942,9 +2014,46 @@ export class ConversationService {
     return pausedTeam
   }
 
+  private pauseAntigravitySwarmOnInterrupt(
+    sessionId: string,
+    session: SessionProcess,
+    nativeSessionId: string,
+  ): void {
+    if (session.antigravitySwarmPausePending) return
+    if (!hasAntigravitySwarmOnDiskSync(nativeSessionId)) return
+    session.antigravitySwarmPausePending = true
+    const pauseToken = beginAntigravitySwarmPause(nativeSessionId)
+    const stop = (this.teamStopOperations.get(sessionId) ?? Promise.resolve()).then(async () => {
+      try {
+        await session.antigravity?.waitForCancelledTurn()
+        if (this.sessions.get(sessionId) === session) {
+          await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        }
+        const boardMaxSeq = await readAntigravitySwarmBoardMaxSeq(nativeSessionId)
+        completeAntigravitySwarmPause(nativeSessionId, pauseToken, { boardMaxSeq })
+      } catch (error) {
+        const message = `Could not confirm Antigravity swarm stop: ${error instanceof Error ? error.message : String(error)}. Pause again before resuming.`
+        completeAntigravitySwarmPause(nativeSessionId, pauseToken, { error: message })
+      } finally {
+        session.antigravitySwarmPausePending = false
+      }
+    }).finally(() => {
+      if (this.teamStopOperations.get(sessionId) === stop) {
+        this.teamStopOperations.delete(sessionId)
+      }
+    })
+    this.teamStopOperations.set(sessionId, stop)
+  }
+
   sendInterrupt(sessionId: string): boolean {
     const session = this.sessions.get(sessionId)
-    if (session?.antigravity) return !session.controlRevoked && session.antigravity.cancel()
+    if (session?.antigravity) {
+      if (session.controlRevoked) return false
+      const nativeSessionId = session.antigravity.acp.sessionId
+      const cancelled = session.antigravity.cancel()
+      this.pauseAntigravitySwarmOnInterrupt(sessionId, session, nativeSessionId)
+      return cancelled
+    }
     const pausedTeam = this.pauseTeamWorkers(sessionId)
     // A paused team's lead also holds the mail its members sent before the
     // Stop until the user speaks again; acting on it would start lead turns,
@@ -3983,3 +4092,5 @@ function normalizeSessionPermissionUpdates(
 
 export const conversationService = new ConversationService()
 registerAntigravitySwarmSteerHandler((payload) => conversationService.steerAntigravitySwarmMember(payload))
+registerAntigravitySwarmRuntimeProbe((nativeSessionId) => conversationService.hasActiveAntigravitySwarmRuntime(nativeSessionId))
+registerAntigravitySwarmResumeHandler((payload) => conversationService.resumeAntigravitySwarmSession(payload))

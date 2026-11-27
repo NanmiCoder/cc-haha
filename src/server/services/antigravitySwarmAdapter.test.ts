@@ -4,26 +4,36 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   antigravitySwarmTeamName,
+  beginAntigravitySwarmPause,
+  completeAntigravitySwarmPause,
   deriveSwarmMemberState,
   extractBoardMentions,
   forgetAntigravitySwarmSessionMapping,
   forgetAntigravitySwarmSessionMappingsForSession,
   formatAntigravitySwarmSteerPrompt,
+  getAntigravitySwarmRuntimeControlView,
   isAntigravitySwarmTeamName,
   listRememberedAntigravitySwarmSessions,
   nativeSessionIdFromSwarmTeamName,
   readAntigravitySwarmMemberTranscriptPage,
   readAntigravitySwarmSnapshot,
   readAntigravitySwarmTimeline,
+  registerAntigravitySwarmResumeHandler,
+  registerAntigravitySwarmRuntimeProbe,
   registerAntigravitySwarmSteerHandler,
   rememberAntigravitySwarmSessionMapping,
+  resetAntigravitySwarmControlStateForTests,
+  resumeAntigravitySwarm,
   sendAntigravitySwarmMemberMessage,
+  type AntigravitySwarmResumePayload,
   type AntigravitySwarmSteerPayload,
 } from './antigravitySwarmAdapter.js'
 import { TeamWatcher } from './teamWatcher.js'
 
 const tempDirs: string[] = []
 let disposeHandler: (() => void) | null = null
+let disposeResumeHandler: (() => void) | null = null
+let disposeRuntimeProbe: (() => void) | null = null
 
 async function makeTempAppDataDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-swarm-adapter-test-'))
@@ -46,7 +56,11 @@ async function writeBrainFile(
 afterEach(async () => {
   disposeHandler?.()
   disposeHandler = null
-  registerAntigravitySwarmSteerHandler(null)
+  disposeResumeHandler?.()
+  disposeResumeHandler = null
+  disposeRuntimeProbe?.()
+  disposeRuntimeProbe = null
+  resetAntigravitySwarmControlStateForTests()
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!
     await fs.rm(dir, { recursive: true, force: true })
@@ -252,6 +266,8 @@ describe('antigravitySwarmAdapter', () => {
       .toEqual({ status: 'running', activity: 'active' })
     expect(deriveSwarmMemberState({ phase: 'RUNNING', wake_mode: 'mentions', killed: false }))
       .toEqual({ status: 'idle', activity: 'idle' })
+    expect(deriveSwarmMemberState({ phase: 'RUNNING', wake_mode: 'anything', killed: false }))
+      .toEqual({ status: 'idle', activity: 'idle' })
     expect(deriveSwarmMemberState({ phase: 'WAITING', killed: false }))
       .toEqual({ status: 'idle', activity: 'idle' })
     expect(deriveSwarmMemberState({ phase: 'STOPPED', killed: false }))
@@ -448,9 +464,14 @@ describe('antigravitySwarmAdapter', () => {
     await readAntigravitySwarmTimeline('cc-session-steer', nativeSessionId, { appDataDir })
 
     // Without handler -> 503 actionable error
-    await expect(
-      sendAntigravitySwarmMemberMessage(teamName, `reader@${teamName}`, 'double check line 2', { appDataDir }),
-    ).rejects.toMatchObject({ statusCode: 503, code: 'ANTIGRAVITY_SWARM_STEERING_UNAVAILABLE' })
+    const unhook = registerAntigravitySwarmSteerHandler(null)
+    try {
+      await expect(
+        sendAntigravitySwarmMemberMessage(teamName, `reader@${teamName}`, 'double check line 2', { appDataDir }),
+      ).rejects.toMatchObject({ statusCode: 503, code: 'ANTIGRAVITY_SWARM_STEERING_UNAVAILABLE' })
+    } finally {
+      unhook()
+    }
 
     // With registered handler -> forwards formatted @mention prompt
     const received: AntigravitySwarmSteerPayload[] = []
@@ -671,6 +692,229 @@ describe('antigravitySwarmAdapter', () => {
       await watcher.checkNow()
       expect(events).toHaveLength(2)
     } finally {
+      watcher.reset()
+      forgetAntigravitySwarmSessionMapping(nativeSessionId)
+      if (prevEnv === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevEnv
+    }
+  })
+
+  it('projects paused/stopped state without mutating disk files and supports explicit resume with CAS, idempotency, and partial retry', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const nativeSessionId = 'pause-resume-1111-2222-333333333333'
+    const teamName = antigravitySwarmTeamName(nativeSessionId)
+    const swarmDir = path.join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+    await fs.mkdir(swarmDir, { recursive: true })
+    await fs.writeFile(
+      path.join(swarmDir, 'swarm.json'),
+      JSON.stringify({ version: 1, backend: 'local', swarm_id: nativeSessionId, created_at: '2026-11-27T01:00:00Z' }),
+      'utf8',
+    )
+    const membersPayload = JSON.stringify({
+      title: 'Audit pipeline',
+      members: {
+        coordinator: { conversation_id: nativeSessionId, role: 'coordinator', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+        worker1: { conversation_id: 'w1-conv', role: 'worker', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+        monitor: { conversation_id: 'mon-conv', role: 'worker', phase: 'RUNNING', wake_mode: 'anything', killed: false, model: 'gemini-4-neon' },
+        doneWorker: { conversation_id: 'done-conv', role: 'worker', phase: 'KILLED', wake_mode: 'mentions', killed: true, model: 'gemini-4-neon' },
+      },
+    })
+    await fs.writeFile(path.join(swarmDir, 'members.json'), membersPayload, 'utf8')
+    await fs.writeFile(
+      path.join(swarmDir, 'board.jsonl'),
+      `${JSON.stringify({ seq: 1, agent: 'coordinator', kind: 'brief', time: '2026-11-27 01:00:01', text: '@worker1 Audit modules' })}\n`,
+      'utf8',
+    )
+
+    let runtimeAlive = true
+    disposeRuntimeProbe = registerAntigravitySwarmRuntimeProbe(() => runtimeAlive)
+    rememberAntigravitySwarmSessionMapping(nativeSessionId, 'cc-pause-lead')
+
+    // 1. Live runtime -> running control view + worker1 active, monitor idle
+    const runningSnap = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'cc-pause-lead' })
+    expect(runningSnap).not.toBeNull()
+    expect(runningSnap!.team.members.find(m => m.name === 'worker1')).toMatchObject({ status: 'running', activity: 'active' })
+    expect(runningSnap!.team.members.find(m => m.name === 'monitor')).toMatchObject({ status: 'idle', activity: 'idle' })
+    expect(runningSnap!.team.members.find(m => m.name === 'doneWorker')).toMatchObject({ status: 'completed', activity: 'exited' })
+
+    const runningControl = await getAntigravitySwarmRuntimeControlView(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+    }, { appDataDir })
+    expect(runningControl).not.toBeNull()
+    expect(runningControl!.status).toBe('running')
+    expect(runningControl!.resumeEligibleCount).toBe(0)
+
+    // Mismatched incarnation throws TeamPlanError
+    await expect(getAntigravitySwarmRuntimeControlView(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: 'wrong-incarnation',
+    }, { appDataDir })).rejects.toMatchObject({ status: 409 })
+
+    // 2. Begin + complete pause -> unfinished workers become stopped without touching members.json on disk
+    const pauseToken = beginAntigravitySwarmPause(nativeSessionId)
+    const pausingView = await getAntigravitySwarmRuntimeControlView(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+    }, { appDataDir })
+    expect(pausingView!.status).toBe('pausing')
+
+    runtimeAlive = false
+    completeAntigravitySwarmPause(nativeSessionId, pauseToken, { boardMaxSeq: 1 })
+    const pausedSnap = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'cc-pause-lead' })
+    expect(pausedSnap!.team.members.find(m => m.name === 'worker1')).toMatchObject({ status: 'idle', activity: 'stopped' })
+    expect(pausedSnap!.team.members.find(m => m.name === 'monitor')).toMatchObject({ status: 'idle', activity: 'stopped' })
+    expect(pausedSnap!.team.members.find(m => m.name === 'doneWorker')).toMatchObject({ status: 'completed', activity: 'exited' })
+    expect(pausedSnap!.team.members.find(m => m.name === 'coordinator')).toMatchObject({ status: 'idle', activity: 'idle' })
+    // Disk file remains untouched (read-only invariant)
+    expect(await fs.readFile(path.join(swarmDir, 'members.json'), 'utf8')).toBe(membersPayload)
+
+    const pausedControl = await getAntigravitySwarmRuntimeControlView(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+    }, { appDataDir })
+    expect(pausedControl!.status).toBe('paused')
+    expect(pausedControl!.resumeEligibleCount).toBe(1)
+
+    // 3. Stale revision conflict rejects with 409
+    await expect(resumeAntigravitySwarm(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+      expectedRevision: pausedControl!.revision - 1,
+      requestId: 'req-stale',
+    }, async () => {}, { appDataDir })).rejects.toMatchObject({ status: 409 })
+
+    // 4. Resume failure records partial status, then retry with same requestId succeeds
+    const receivedResumes: AntigravitySwarmResumePayload[] = []
+    let failFirst = true
+    let startLeaderCalls = 0
+    disposeResumeHandler = registerAntigravitySwarmResumeHandler(async (payload) => {
+      receivedResumes.push(payload)
+      if (failFirst) {
+        failFirst = false
+        return { routed: false, error: 'temporary acp boot failure' }
+      }
+      runtimeAlive = true
+      return { routed: true }
+    })
+
+    const partialRes = await resumeAntigravitySwarm(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+      expectedRevision: pausedControl!.revision,
+      requestId: 'req-resume-1',
+    }, async () => { startLeaderCalls += 1 }, { appDataDir })
+    expect(partialRes.status).toBe('partial')
+    expect(partialRes.error).toBe('temporary acp boot failure')
+    expect(startLeaderCalls).toBe(1)
+
+    const resumed = await resumeAntigravitySwarm(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+      expectedRevision: partialRes.revision,
+      requestId: 'req-resume-1',
+    }, async () => { startLeaderCalls += 1 }, { appDataDir })
+    expect(resumed.status).toBe('running')
+    expect(receivedResumes.at(-1)!.prompt).toContain('@worker1')
+    expect(receivedResumes.at(-1)!.prompt).toContain('@monitor resume')
+
+    // Idempotent replay with same requestId does not re-dispatch
+    const replayed = await resumeAntigravitySwarm(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+      expectedRevision: partialRes.revision,
+      requestId: 'req-resume-1',
+    }, async () => { startLeaderCalls += 1 }, { appDataDir })
+    expect(replayed.status).toBe('running')
+    expect(receivedResumes).toHaveLength(2)
+
+    // 5. Auto-clears paused overlay if new board.jsonl activity arrives on a live runtime
+    const pauseToken2 = beginAntigravitySwarmPause(nativeSessionId)
+    completeAntigravitySwarmPause(nativeSessionId, pauseToken2, { boardMaxSeq: 1 })
+    runtimeAlive = true
+    await fs.appendFile(
+      path.join(swarmDir, 'board.jsonl'),
+      `${JSON.stringify({ seq: 2, agent: 'worker1', time: '2026-11-27 01:02:00', text: '@coordinator resumed progress' })}\n`,
+      'utf8',
+    )
+    const recoveredControl = await getAntigravitySwarmRuntimeControlView(teamName, {
+      leadSessionId: 'cc-pause-lead',
+      incarnationId: runningSnap!.team.incarnationId,
+    }, { appDataDir })
+    expect(recoveredControl!.status).toBe('running')
+
+    forgetAntigravitySwarmSessionMapping(nativeSessionId)
+  })
+
+  it('sendAntigravitySwarmMemberMessage starts a paused leader and clears paused state on delivery', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const { nativeSessionId, teamName } = await seedPhase0SwarmFixture(appDataDir, {
+      nativeSessionId: 'revive-steer-1111-2222-333333333333',
+      readerKilled: false,
+    })
+    rememberAntigravitySwarmSessionMapping(nativeSessionId, 'cc-revive-steer')
+    let runtimeAlive = false
+    disposeRuntimeProbe = registerAntigravitySwarmRuntimeProbe(() => runtimeAlive)
+    const pauseToken = beginAntigravitySwarmPause(nativeSessionId)
+    completeAntigravitySwarmPause(nativeSessionId, pauseToken, { boardMaxSeq: 2 })
+
+    let startedLeaders: string[] = []
+    disposeHandler = registerAntigravitySwarmSteerHandler(async () => {
+      if (!runtimeAlive) return { routed: false, reason: 'unavailable' }
+      return { routed: true, delivery: 'steering' }
+    })
+
+    const res = await sendAntigravitySwarmMemberMessage(teamName, `reader@${teamName}`, 'continue checking', {
+      appDataDir,
+      startLeader: async (sessionId) => {
+        startedLeaders.push(sessionId)
+        runtimeAlive = true
+      },
+    })
+    expect(startedLeaders).toEqual(['cc-revive-steer'])
+    expect(res).toMatchObject({ ok: true, routed: true, target: 'reader', formattedPrompt: '@reader continue checking' })
+
+    const snap = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'cc-revive-steer' })
+    expect(snap!.team.members.find(m => m.name === 'reader')).toMatchObject({ status: 'running', activity: 'active' })
+    forgetAntigravitySwarmSessionMapping(nativeSessionId)
+  })
+
+  it('TeamWatcher emits immediate team_workbench_updated when an Antigravity Swarm pauses', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const nativeSessionId = 'watcher-pause-1111-2222-333333333333'
+    const prevEnv = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = appDataDir
+    rememberAntigravitySwarmSessionMapping(nativeSessionId, 'cc-watcher-pause')
+    let runtimeAlive = true
+    disposeRuntimeProbe = registerAntigravitySwarmRuntimeProbe(() => runtimeAlive)
+
+    const events: Array<{ type: string; teamName?: string }> = []
+    const watcher = new TeamWatcher((msg) => {
+      events.push({ type: msg.type, teamName: 'teamName' in msg ? msg.teamName : undefined })
+    })
+    try {
+      await seedPhase0SwarmFixture(appDataDir, { nativeSessionId, readerKilled: false })
+      watcher.start()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      await watcher.checkNow()
+      const countBeforePause = events.length
+
+      const pauseToken = beginAntigravitySwarmPause(nativeSessionId)
+      runtimeAlive = false
+      completeAntigravitySwarmPause(nativeSessionId, pauseToken, { boardMaxSeq: 2 })
+
+      // Debounced immediate notification (well below 3000ms poll interval)
+      const deadline = Date.now() + 1_000
+      while (events.length <= countBeforePause && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect(events.length).toBeGreaterThan(countBeforePause)
+      expect(events.at(-1)).toEqual({
+        type: 'team_workbench_updated',
+        teamName: antigravitySwarmTeamName(nativeSessionId),
+      })
+    } finally {
+      watcher.stop()
       watcher.reset()
       forgetAntigravitySwarmSessionMapping(nativeSessionId)
       if (prevEnv === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR

@@ -9,6 +9,7 @@ import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
 import { getBundledPresetReasoningProviderKind } from '@/config/providerPresets'
 import { useTranslation, type TranslationKey } from '@/i18n'
 import { getProviderModelCapabilityOverride } from '@/lib/runtimeSelection'
+import { isAntigravitySwarmTeamName } from '@/lib/teamRunning'
 import { useChatStore } from '@/stores/chatStore'
 import { useProviderStore } from '@/stores/providerStore'
 import { useTeamStore, memberSessionId } from '@/stores/teamStore'
@@ -84,12 +85,13 @@ export function AgentTeamsRuntimeControls({ team, readOnly = false }: { team: Te
     </div>
   }
 
+  const isAntigravitySwarm = isAntigravitySwarmTeamName(teamName)
   const status = entry.pauseRequested ? 'pausing' : entry.operation === 'resume' ? 'resuming' : control.status
-  const editableMembers = control.members.flatMap(identity => {
+  const editableMembers = isAntigravitySwarm ? [] : control.members.flatMap(identity => {
     const member = team.members.find(candidate => candidate.agentId === identity.agentId && candidate.sessionId === identity.sessionId)
     return member && member.agentId !== team.leadAgentId && runtimeOf(member) ? [member] : []
   })
-  const canEdit = control.status === 'paused' && !entry.busy && !entry.pauseRequested && !entry.error
+  const canEdit = !isAntigravitySwarm && control.status === 'paused' && !entry.busy && !entry.pauseRequested && !entry.error
   const canResume = (control.status === 'paused' || control.status === 'partial') && !entry.busy && !entry.pauseRequested && !entry.error
   const canPause = !entry.pauseRequested && status !== 'pausing' && status !== 'paused'
   const errors = [...new Set([
@@ -152,7 +154,9 @@ export function AgentTeamsRuntimeControls({ team, readOnly = false }: { team: Te
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       <Badge tone={STATE_TONES[status]} size="sm"><span role="status">{t(STATE_LABELS[status])}</span></Badge>
       <span className="min-w-0 flex-1 text-xs text-[var(--color-text-secondary)]">{t('agentTeams.runtime.eligible', { count: control.resumeEligibleCount })}</span>
-      <Button size="sm" variant="secondary" disabled={!canEdit || editableMembers.length === 0} icon={<SlidersHorizontal size={13} strokeWidth={1.75} aria-hidden="true" />} onClick={openEditor}>{t('agentTeams.runtime.edit')}</Button>
+      {!isAntigravitySwarm && (
+        <Button size="sm" variant="secondary" disabled={!canEdit || editableMembers.length === 0} icon={<SlidersHorizontal size={13} strokeWidth={1.75} aria-hidden="true" />} onClick={openEditor}>{t('agentTeams.runtime.edit')}</Button>
+      )}
       <Button size="sm" variant="secondary" disabled={!canPause} icon={<Pause size={13} strokeWidth={1.75} aria-hidden="true" />} onClick={() => {
         useTeamRuntimeControlStore.getState().markPauseRequested(scope)
         useChatStore.getState().stopGeneration(scope.leadSessionId)
@@ -163,7 +167,7 @@ export function AgentTeamsRuntimeControls({ team, readOnly = false }: { team: Te
     </div>
     <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">{t('agentTeams.runtime.memberMessageHint')}</p>
     {errors.length > 0 && <p id={errorId} role="alert" className="mt-1.5 whitespace-pre-wrap text-xs text-[var(--color-error)]">{errors.join('\n')}</p>}
-    <Modal open={editorOpen} onClose={() => { if (!saving) setEditorOpen(false) }} title={t('agentTeams.runtime.edit')} typography="interface" width={860} footer={<div className="flex w-full flex-wrap items-center justify-end gap-2">
+    {!isAntigravitySwarm && <Modal open={editorOpen} onClose={() => { if (!saving) setEditorOpen(false) }} title={t('agentTeams.runtime.edit')} typography="interface" width={860} footer={<div className="flex w-full flex-wrap items-center justify-end gap-2">
       <Button variant="ghost" disabled={saving} onClick={() => setEditorOpen(false)}>{t('common.close')}</Button>
       <Button disabled={!canEdit || changedMembers.length === 0} loading={saving} aria-describedby={saveError ? editorErrorId : undefined} onClick={() => void save()}>{t('agentTeams.runtime.save')}</Button>
     </div>}>
@@ -185,6 +189,6 @@ export function AgentTeamsRuntimeControls({ team, readOnly = false }: { team: Te
         </div>)}
       </div>
       {saveError && <p id={editorErrorId} role="alert" className="mt-3 whitespace-pre-wrap text-sm text-[var(--color-error)]">{saveError}</p>}
-    </Modal>
+    </Modal>}
   </section>
 }

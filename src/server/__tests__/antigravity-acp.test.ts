@@ -2913,12 +2913,163 @@ describe('Antigravity ACP server core & integration', () => {
     })
     expect(exclusive.usage.output_tokens).toBe(300)
   })
+
+  test('stop_generation pauses an Antigravity Swarm by cancelling and shutting down agy acp, then runtime-control resume restarts it via session/resume', async () => {
+    const {
+      antigravitySwarmTeamName,
+      forgetAntigravitySwarmSessionMapping,
+      resetAntigravitySwarmControlStateForTests,
+    } = await import('../services/antigravitySwarmAdapter.js')
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-swarm-stop-resume')
+    const appDataDir = join(sandboxDir, 'agy-appdata-swarm-stop')
+    await mkdir(workDir, { recursive: true })
+    const prevAppData = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = appDataDir
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+    const nativeSessionId = 'native-session-1'
+    const teamName = antigravitySwarmTeamName(nativeSessionId)
+
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: ANTIGRAVITY_DEFAULT_MODEL,
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws.send(JSON.stringify(msg))
+
+      // Turn 1 establishes nativeSessionId = 'native-session-1'
+      send({ type: 'user_message', content: 'Start swarm' })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      // Seed Antigravity Swarm on disk for native-session-1
+      const swarmDir = join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+      await mkdir(swarmDir, { recursive: true })
+      await writeFile(
+        join(swarmDir, 'swarm.json'),
+        JSON.stringify({ version: 1, backend: 'local', swarm_id: nativeSessionId, created_at: '2026-11-27T02:00:00Z' }),
+        'utf8',
+      )
+      await writeFile(
+        join(swarmDir, 'members.json'),
+        JSON.stringify({
+          title: 'Stop Resume Swarm',
+          members: {
+            coordinator: { conversation_id: nativeSessionId, role: 'coordinator', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+            reader: { conversation_id: 'worker-reader-1', role: 'worker', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+            monitor: { conversation_id: 'worker-monitor-1', role: 'worker', phase: 'RUNNING', wake_mode: 'anything', killed: false, model: 'gemini-4-neon' },
+          },
+        }),
+        'utf8',
+      )
+      await writeFile(
+        join(swarmDir, 'board.jsonl'),
+        `${JSON.stringify({ seq: 1, agent: 'coordinator', kind: 'brief', time: '2026-11-27 02:00:01', text: '@reader Inspect repo' })}\n`,
+        'utf8',
+      )
+
+      const wbBefore = await (await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(sessionId)}/workbench`)).json() as {
+        snapshots: Array<{ team: { incarnationId: string; members: Array<{ name?: string; activity?: string }> } }>
+      }
+      const incarnationId = wbBefore.snapshots[0]!.team.incarnationId
+      expect(wbBefore.snapshots[0]!.team.members.find(m => m.name === 'reader')?.activity).toBe('active')
+
+      // Start an active turn and click Stop (stop_generation)
+      send({ type: 'user_message', content: 'Run swarm task [slow-turn]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      send({ type: 'stop_generation' })
+
+      // Must cancel AND physically stop the agy acp process so background workers/monitors cannot keep running
+      await waitUntil(() => !conversationService.hasSession(sessionId))
+      const wireAfterStop = await fake.readWire()
+      expect(wireAfterStop.some(w => w.method === 'session/cancel')).toBe(true)
+
+      // Runtime control reports paused, and workbench snapshot projects unfinished workers as stopped
+      await waitUntil(async () => {
+        const res = await fetch(`${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(sessionId)}&incarnationId=${encodeURIComponent(incarnationId)}`)
+        if (res.status !== 200) return false
+        const body = await res.json() as { control: { status: string } | null }
+        return body.control?.status === 'paused'
+      })
+      const pausedControlRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(sessionId)}&incarnationId=${encodeURIComponent(incarnationId)}`,
+      )
+      const pausedControlBody = await pausedControlRes.json() as {
+        control: { status: string; revision: number; resumeEligibleCount: number }
+      }
+      expect(pausedControlBody.control).toMatchObject({
+        status: 'paused',
+        resumeEligibleCount: 1,
+      })
+
+      const wbPaused = await (await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(sessionId)}/workbench`)).json() as {
+        snapshots: Array<{ team: { members: Array<{ name?: string; activity?: string }> } }>
+      }
+      expect(wbPaused.snapshots[0]!.team.members.find(m => m.name === 'reader')?.activity).toBe('stopped')
+      expect(wbPaused.snapshots[0]!.team.members.find(m => m.name === 'monitor')?.activity).toBe('stopped')
+
+      // Resume via runtime-control API -> restarts agy acp with session/resume and sends coordinator resume prompt
+      const resumeRes = await fetch(`${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadSessionId: sessionId,
+          incarnationId,
+          expectedRevision: pausedControlBody.control.revision,
+          requestId: 'req-e2e-swarm-resume-1',
+        }),
+      })
+      expect(resumeRes.status).toBe(200)
+      const resumeBody = await resumeRes.json() as { control: { status: string } }
+      expect(resumeBody.control.status).toBe('running')
+
+      // Verify a fresh agy acp process resumed native-session-1 and received the resume prompt naming @reader and @monitor resume
+      await waitUntil(() => conversationService.hasSession(sessionId) && !conversationService.isAntigravityResponding(sessionId))
+      const wireAfterResume = await fake.readWire()
+      expect(wireAfterResume.filter(w => w.method === 'session/resume').at(-1)?.params?.sessionId).toBe(nativeSessionId)
+      const lastPrompt = wireAfterResume.filter(w => w.method === 'session/prompt').at(-1)
+      const promptBlocks = (lastPrompt?.params?.prompt ?? []) as Array<{ text?: string }>
+      const promptText = promptBlocks.map(b => b.text ?? '').join('\n')
+      expect(promptText).toContain('@reader')
+      expect(promptText).toContain('@monitor resume')
+
+      ws.close()
+    } finally {
+      server.stop(true)
+      forgetAntigravitySwarmSessionMapping(nativeSessionId)
+      resetAntigravitySwarmControlStateForTests()
+      if (prevAppData === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
+    }
+  }, 20_000)
 })
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
+async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise(resolve => setTimeout(resolve, 15))
   }
   throw new Error('Timed out waiting for condition')

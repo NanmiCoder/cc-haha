@@ -1,5 +1,5 @@
 import { hasRunningSubagentTasks } from '../lib/backgroundTasks'
-import { areTeamMembersAllStopped, isTeamPlanActive } from '../lib/teamRunning'
+import { areTeamMembersAllStopped, isAntigravitySwarmRunning, isTeamPlanActive } from '../lib/teamRunning'
 import { useChatStore } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
@@ -32,8 +32,12 @@ export function useSessionStopOffer(sessionId: string | null | undefined): Sessi
   // would keep offering Stop after every member is already stopped.
   const teamMembersAllStopped = useTeamStore((state) =>
     areTeamMembersAllStopped(sessionId ? state.workbenchesBySession[sessionId]?.snapshots.at(-1)?.team : undefined))
+  // Antigravity native Swarms run without a Claude TeamPlan; offer Stop while
+  // any swarm worker is actively running, and drop it once paused.
+  const antigravitySwarmRunning = useTeamStore((state) =>
+    isAntigravitySwarmRunning(sessionId ? state.workbenchesBySession[sessionId]?.snapshots.at(-1) : undefined))
   if (!sessionId || isMemberSession || isSubagentTab) return null
   if (turnRunning) return 'turn'
-  if (hasRunningSubagents || (teamPlanRunning && !teamMembersAllStopped)) return 'background'
+  if (hasRunningSubagents || (teamPlanRunning && !teamMembersAllStopped) || antigravitySwarmRunning) return 'background'
   return null
 }

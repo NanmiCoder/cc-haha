@@ -53,7 +53,8 @@ import {
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
 import { WorkspaceSurface } from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
-import { endedBeforeAnyMemberJoined, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { endedBeforeAnyMemberJoined, getWorkbenchPhase, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { isAntigravitySwarmPaused } from '../lib/teamRunning'
 import {
   SessionActivityPanel,
   type OpenSubagentPayload,
@@ -1020,7 +1021,17 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     <AgentTeamsStrip
                       snapshot={agentTeamsSnapshot}
                       compact={showRightPanel}
-                      phaseOverride={!agentTeamsSnapshot.deletedAt && interruptedTeamName === agentTeamsSnapshot.team.name ? 'interrupted' : undefined}
+                      phaseOverride={
+                        !agentTeamsSnapshot.deletedAt && (
+                          interruptedTeamName === agentTeamsSnapshot.team.name ||
+                          (isAntigravitySwarmPaused(agentTeamsSnapshot) && (
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'running' ||
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'forming'
+                          ))
+                        )
+                          ? 'interrupted'
+                          : undefined
+                      }
                       onOpen={() => useTabStore.getState().openTeamWorkbenchTab(
                         activeTabId,
                         agentTeamsSnapshot.team.name.startsWith('agy-swarm-') && agentTeamsSnapshot.team.description
