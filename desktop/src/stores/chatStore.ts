@@ -6181,7 +6181,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           cooldownScope: 'permission-prompt',
           requestAttention: true,
           title: 'Claude Code Haha 需要你的确认',
-          body: msg.request.reason || 'Computer Use 正在等待允许。',
+          body: msg.request.reason || '操作电脑正在等待允许。',
           target: { type: 'session', sessionId },
         })
         update((session) => {

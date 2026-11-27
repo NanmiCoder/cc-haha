@@ -141,4 +141,20 @@ describe('useTranslation', () => {
       expect(resurrected, `${name} still defines the removed context-usage caption`).toEqual([])
     }
   })
+
+  it('uses 操作电脑 / 操作電腦 consistently for Computer Use across Chinese locales', () => {
+    expect(translate('zh', 'settings.tab.computerUse')).toBe('操作电脑')
+    expect(translate('zh', 'settings.computerUse.title')).toBe('操作电脑')
+    expect(translate('zh', 'settings.computerUse.controlTitle')).toBe('操作电脑')
+    expect(translate('zh', 'settings.computerUse.enableRiskTitle')).toBe('开启操作电脑？')
+    expect(translate('zh', 'settings.providers.antigravity.openComputerUseSettings')).toBe('前往操作电脑设置')
+    expect(translate('zh', 'settings.browserUse.divisionNotice')).toContain('操作电脑')
+
+    expect(translate('zh-TW', 'settings.tab.computerUse')).toBe('操作電腦')
+    expect(translate('zh-TW', 'settings.computerUse.title')).toBe('操作電腦')
+    expect(translate('zh-TW', 'settings.computerUse.controlTitle')).toBe('操作電腦')
+    expect(translate('zh-TW', 'settings.computerUse.enableRiskTitle')).toBe('開啟操作電腦？')
+    expect(translate('zh-TW', 'settings.providers.antigravity.openComputerUseSettings')).toBe('前往操作電腦設定')
+    expect(translate('zh-TW', 'settings.browserUse.divisionNotice')).toContain('操作電腦')
+  })
 })

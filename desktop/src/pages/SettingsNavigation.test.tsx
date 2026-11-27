@@ -226,4 +226,18 @@ describe('Settings section navigation', () => {
       nestedDialog.remove()
     }
   })
+
+  it('shows 操作电脑 in Chinese settings navigation and keeps it searchable by Chinese and English terms', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    render(<Settings />)
+
+    expect(screen.getByRole('button', { name: '操作电脑' })).toBeInTheDocument()
+
+    const search = screen.getByTestId('settings-nav-search')
+    fireEvent.change(search, { target: { value: '操作电脑' } })
+    expect(screen.getByRole('button', { name: '操作电脑' })).toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'computer use' } })
+    expect(screen.getByRole('button', { name: '操作电脑' })).toBeInTheDocument()
+  })
 })
