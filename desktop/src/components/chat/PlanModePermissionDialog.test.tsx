@@ -291,9 +291,11 @@ describe('plan mode permission UI', () => {
     )
 
     expect(container.textContent).toContain('Plan approved')
+    expect(container.textContent).toContain('/tmp/claude-plan.md')
+    // Settled ExitPlanMode cards default collapsed until the reader expands them.
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
     expect(container.textContent).toContain('Release checklist')
     expect(container.textContent).toContain('Update the desktop plan modal.')
-    expect(container.textContent).toContain('/tmp/claude-plan.md')
     expect(container.textContent).not.toContain('Tool Output')
   })
 
@@ -310,6 +312,7 @@ describe('plan mode permission UI', () => {
     )
 
     expect(container.textContent).toContain('Plan rejected')
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
     expect(container.textContent).toContain('Tool permission request failed: AbortError')
     expect(container.textContent).not.toContain("Claude's plan")
     expect(container.textContent).not.toContain('No plan content available.')

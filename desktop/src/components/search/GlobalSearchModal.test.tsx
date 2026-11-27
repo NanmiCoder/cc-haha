@@ -573,4 +573,20 @@ describe('GlobalSearchModal', () => {
     expect(startNewSessionDraft).toHaveBeenCalledWith('/Users/dev/code/archived-standalone')
     expect(onClose).toHaveBeenCalledTimes(2)
   })
+
+  it('uses V6C dialog-panel, recessed search field, and lifted row highlight', () => {
+    useSessionStore.setState({ sessions: [makeSession('s1', 'Recent One'), makeSession('s2', 'Recent Two')] })
+    render(<GlobalSearchModal open onClose={() => {}} />)
+
+    const dialog = screen.getByRole('dialog', { name: /search projects and chats/i })
+    expect(dialog).toHaveClass('dialog-panel', 'rounded-[var(--radius-xl)]')
+
+    const input = screen.getByPlaceholderText(/search projects and chats/i)
+    expect(input.parentElement).toHaveClass('v6c-field', 'rounded-[var(--radius-card-inner)]')
+
+    const options = screen.getAllByRole('option')
+    expect(options[0]).toHaveClass('rounded-[var(--radius-control)]', 'v6c-row-highlight')
+    expect(options[1]).toHaveClass('rounded-[var(--radius-control)]')
+    expect(options[1]).not.toHaveClass('v6c-row-highlight')
+  })
 })

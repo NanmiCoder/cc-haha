@@ -104,7 +104,7 @@ export function SettingsHelp({ title, entries, closeLabel }: SettingsHelpProps) 
           aria-labelledby={titleId}
           tabIndex={-1}
           style={{ ...style, zIndex: 'var(--z-popover)' }}
-          className="w-[340px] max-w-[calc(100vw-16px)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 pb-3.5 pt-3 text-left shadow-[var(--shadow-dropdown)] outline-none animate-overlay-in"
+          className="dropdown-glass w-[340px] max-w-[calc(100vw-16px)] rounded-[var(--radius-xl)] px-4 pb-3.5 pt-3 text-left outline-none animate-overlay-in"
         >
           <div className="flex items-start justify-between gap-3">
             <p id={titleId} className="min-w-0 text-[13px] font-semibold leading-5 text-[var(--color-text-primary)]">

@@ -779,9 +779,9 @@ describe('ModelSelector', () => {
       .getAllByRole('button', { name: /deepseek-v4-pro/i })
       .find((button) => button.textContent?.includes('Sonnet Model'))
     expect(configuredOption).toBeDefined()
-    // 「素」 menu selection: the hover fill at rest plus the terracotta check.
+    // V6C menu selection: raised glass row highlight plus the terracotta check.
     expect(configuredOption).toHaveAttribute('aria-current', 'true')
-    expect(configuredOption?.className).toContain('bg-[var(--color-surface-hover)]')
+    expect(configuredOption?.className).toContain('v6c-row-highlight')
     expect(configuredOption?.querySelector('svg.lucide-check')).toHaveClass('text-[var(--color-brand)]')
   })
 
@@ -810,8 +810,8 @@ describe('ModelSelector', () => {
     // The ring traces `border-radius`. Each half is rounded on one side only,
     // so without this the focused half drew a box that was round down one edge
     // and square down the other.
-    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
-    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
+    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-control)]', 'focus-visible:rounded-[var(--radius-control)]')
+    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-control)]', 'focus-visible:rounded-[var(--radius-control)]')
   })
 
   // On the phone composer this control sits between two 44px buttons and opens
@@ -1911,7 +1911,7 @@ describe('controlled runtime pickers outside the composer', () => {
     expect(onRuntimeSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ providerId: '__session__', modelId: 'opus' }))
   })
 
-  it('docks effort controls and permissions shortcut inside the frosted-glass model dropdown', async () => {
+  it('keeps the frosted-glass model dropdown focused on model selection while effort stays in its standalone popover', async () => {
     useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
     useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
     useSessionRuntimeStore.getState().setSelection('session-docked', {
@@ -1919,36 +1919,22 @@ describe('controlled runtime pickers outside the composer', () => {
       modelId: 'claude-opus-4-8',
       effortLevel: 'high',
     })
-    const onOpenPermissions = vi.fn()
-    render(
-      <ModelSelector
-        runtimeKey="session-docked"
-        permissionModeLabel="Ask permissions"
-        onOpenPermissions={onOpenPermissions}
-      />,
-    )
+    render(<ModelSelector runtimeKey="session-docked" />)
 
     await clickByRole('Opus 4.8, Claude Official')
     const dropdown = screen.getByTestId('model-selector-dropdown')
-    expect(dropdown).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-lg)]')
+    expect(dropdown).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-xl)]')
+    expect(within(dropdown).queryByTestId('model-selector-docked-controls')).not.toBeInTheDocument()
+    expect(within(dropdown).queryByTestId('model-selector-permissions-shortcut')).not.toBeInTheDocument()
 
-    const docked = within(dropdown).getByTestId('model-selector-docked-controls')
-    const maxEffort = within(docked).getByRole('radio', { name: 'Max' })
-    fireEvent.click(maxEffort)
-    // Inline effort switch updates selection without dismissing the dropdown.
-    expect(useSessionRuntimeStore.getState().selections['session-docked']?.effortLevel).toBe('max')
-    expect(screen.getByTestId('model-selector-dropdown')).toBeInTheDocument()
-
-    const permShortcut = within(docked).getByTestId('model-selector-permissions-shortcut')
-    expect(permShortcut.tagName).toBe('BUTTON')
-    expect(permShortcut).toHaveAttribute('type', 'button')
-    expect(permShortcut).not.toHaveAttribute('role', 'menuitem')
-    expect(permShortcut).toHaveTextContent('Ask permissions')
-    fireEvent.click(permShortcut)
-    await waitFor(() => {
-      expect(onOpenPermissions).toHaveBeenCalledTimes(1)
-    })
+    // Effort adjustment lives exclusively in the standalone ReasoningEffortPopover.
+    await clickByRole('Effort: High')
     expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
+    const popover = screen.getByTestId('reasoning-effort-popover')
+    expect(popover).toBeInTheDocument()
+    const slider = within(popover).getByRole('slider')
+    fireEvent.keyDown(slider, { key: 'End' })
+    expect(useSessionRuntimeStore.getState().selections['session-docked']?.effortLevel).toBe('max')
   })
 
   it('isolates Antigravity models and thinking levels when locked to antigravity-acp and never mixes them into cc-haha', async () => {
@@ -2008,10 +1994,12 @@ describe('controlled runtime pickers outside the composer', () => {
     expect(dropdown.getByRole('button', { name: /Gemini 3\.8 Flash/ })).toBeInTheDocument()
     expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Claude Official')
 
-    // Thinking level radio is enabled even though lockedProviderId is set.
-    const xhighRadio = dropdown.getByRole('radio', { name: 'X-High' })
-    expect(xhighRadio).toBeEnabled()
-    fireEvent.click(xhighRadio)
+    // Thinking level popover is enabled even though lockedProviderId is set.
+    await clickByRole(/High/)
+    const effortPopover = screen.getByTestId('reasoning-effort-popover')
+    const stops = within(effortPopover).getAllByTestId('reasoning-effort-stop')
+    expect(stops.map((el) => el.textContent)).toEqual(['Low', 'Medium', 'High', 'X-High'])
+    fireEvent.keyDown(within(effortPopover).getByRole('slider'), { key: 'End' })
     expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
       providerId: 'antigravity-acp',
       modelId: 'gemini-3.8-pro',
@@ -2019,7 +2007,8 @@ describe('controlled runtime pickers outside the composer', () => {
     })
 
     // Switching model stays inside Antigravity.
-    fireEvent.click(dropdown.getByRole('button', { name: /Gemini 3\.8 Flash/ }))
+    await clickByRole('Gemini 3.8 Pro, Antigravity')
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /Gemini 3\.8 Flash/ }))
     expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
       providerId: 'antigravity-acp',
       modelId: 'gemini-3.8-flash',
@@ -2104,12 +2093,16 @@ describe('controlled runtime pickers outside the composer', () => {
       />,
     )
 
-    // On Gemini 4 Neon, X-High is available
-    await clickByRole('Gemini 4 Neon, Antigravity')
-    let dropdown = within(screen.getByTestId('model-selector-dropdown'))
-    expect(dropdown.getByRole('radio', { name: 'X-High' })).toBeInTheDocument()
+    // On Gemini 4 Neon, X-High is available in the standalone effort popover
+    await clickByRole(/X-High/)
+    let effortPopover = within(screen.getByTestId('reasoning-effort-popover'))
+    expect(effortPopover.getAllByTestId('reasoning-effort-stop').map((el) => el.textContent)).toEqual([
+      'Low', 'Medium', 'High', 'X-High',
+    ])
 
     // Switching from Neon (xhigh) to Carbon (3 levels) clamps effort to Carbon's default (high)
+    await clickByRole('Gemini 4 Neon, Antigravity')
+    let dropdown = within(screen.getByTestId('model-selector-dropdown'))
     fireEvent.click(dropdown.getByRole('button', { name: /Gemini 4 Carbon/ }))
     expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
       providerId: 'antigravity-acp',
@@ -2117,24 +2110,22 @@ describe('controlled runtime pickers outside the composer', () => {
       effortLevel: 'high',
     })
 
-    // Reopen on Carbon: only Low / Medium / High (NO X-High!)
-    await clickByRole('Gemini 4 Carbon, Antigravity')
-    dropdown = within(screen.getByTestId('model-selector-dropdown'))
-    expect(dropdown.getByRole('radio', { name: 'Low' })).toBeInTheDocument()
-    expect(dropdown.getByRole('radio', { name: 'Medium' })).toBeInTheDocument()
-    expect(dropdown.getByRole('radio', { name: 'High' })).toBeInTheDocument()
-    expect(dropdown.queryByRole('radio', { name: 'X-High' })).not.toBeInTheDocument()
+    // Reopen effort popover on Carbon: only Low / Medium / High (NO X-High!)
+    await clickByRole(/High/)
+    effortPopover = within(screen.getByTestId('reasoning-effort-popover'))
+    expect(effortPopover.getAllByTestId('reasoning-effort-stop').map((el) => el.textContent)).toEqual([
+      'Low', 'Medium', 'High',
+    ])
 
     // Switching to Orchestrator (supportedReasoningEfforts: []) clears effortLevel and hides the effort control
+    await clickByRole('Gemini 4 Carbon, Antigravity')
+    dropdown = within(screen.getByTestId('model-selector-dropdown'))
     fireEvent.click(dropdown.getByRole('button', { name: /Orchestrator \(Neon\)/ }))
     expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
       providerId: 'antigravity-acp',
       modelId: 'gemini-pro-orchestrator-neon',
     })
 
-    await clickByRole('Orchestrator (Neon), Antigravity')
-    dropdown = within(screen.getByTestId('model-selector-dropdown'))
-    expect(dropdown.queryByRole('radio', { name: 'Low' })).not.toBeInTheDocument()
-    expect(dropdown.queryByRole('radio', { name: 'High' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Low|Medium|High|X-High/ })).not.toBeInTheDocument()
   })
 })

@@ -284,10 +284,12 @@ describe('ActivityGroup · pictures in an open run', () => {
     toolResult('read-b', [picture('second picture'), picture('third picture')]),
   ])
 
-  it('shows each picture once, in its own row, and none under the summary', () => {
+  it('shows each picture once, in its own row, and none under the summary when expanded', () => {
     renderGroup(steps, results, { isLive: true })
     const group = groupOf()
 
+    expect(group).toHaveAttribute('data-expanded', 'false')
+    fireEvent.click(summaryOf(group))
     expect(group).toHaveAttribute('data-expanded', 'true')
     const strips = stripsIn(group)
     expect(strips).toHaveLength(2)
@@ -298,12 +300,11 @@ describe('ActivityGroup · pictures in an open run', () => {
     expect(within(group).getAllByRole('img')).toHaveLength(3)
   })
 
-  it('moves the pictures between the rows and the summary as the reader folds and opens it', () => {
+  it('moves the pictures between the summary and the rows as the reader opens and folds it', () => {
     renderGroup(steps, results, { isLive: true })
     const group = groupOf()
     const imagesShown = () => within(group).getAllByRole('img').length
 
-    fireEvent.click(summaryOf(group))
     expect(group).toHaveAttribute('data-expanded', 'false')
     expect(stripsIn(group)).toHaveLength(2)
     expect(stripsIn(group).every((strip) => strip.parentElement === group)).toBe(true)
@@ -314,33 +315,38 @@ describe('ActivityGroup · pictures in an open run', () => {
     expect(stripsIn(group)).toHaveLength(2)
     expect(stripsIn(group).every((strip) => strip.parentElement !== group)).toBe(true)
     expect(imagesShown()).toBe(3)
+
+    fireEvent.click(summaryOf(group))
+    expect(group).toHaveAttribute('data-expanded', 'false')
+    expect(stripsIn(group)).toHaveLength(2)
+    expect(stripsIn(group).every((strip) => strip.parentElement === group)).toBe(true)
+    expect(imagesShown()).toBe(3)
   })
 
-  it('shows the pictures of a live run the reader has folded', () => {
+  it('shows the pictures of a collapsed live run under the summary', () => {
     renderGroup(steps, results, { isLive: true, isStreaming: true })
-    expect(stripsIn(groupOf()).every((strip) => strip.closest('[data-tool-call-chrome="row"]'))).toBe(true)
-
-    fireEvent.click(summaryOf(groupOf()))
-
     expect(groupOf()).toHaveAttribute('data-expanded', 'false')
     expect(stripsIn(groupOf())).toHaveLength(2)
     expect(stripsIn(groupOf()).every((strip) => strip.parentElement === groupOf())).toBe(true)
+
+    fireEvent.click(summaryOf(groupOf()))
+    expect(groupOf()).toHaveAttribute('data-expanded', 'true')
+    expect(stripsIn(groupOf()).every((strip) => strip.closest('[data-tool-call-chrome="row"]'))).toBe(true)
   })
 })
 
 describe('ActivityGroup · a run of one call', () => {
-  it('shows the picture once, in its row, as it did before', () => {
+  it('shows the picture once under the single-step work row', () => {
     renderGroup(stepsOf(readA), resultsOf([toolResult('read-a', [picture('only picture')])]))
     const group = groupOf()
 
     expect(group).toHaveAttribute('data-single-step', 'true')
     const strips = stripsIn(group)
     expect(strips).toHaveLength(1)
-    expect(strips[0]!.closest('[data-tool-call-chrome="row"]')).not.toBeNull()
     expect(within(group).getAllByRole('img')).toHaveLength(1)
   })
 
-  it('shows the picture of its row once the result arrives', () => {
+  it('shows the picture once the result arrives', () => {
     const steps = stepsOf(readA)
     const { rerender } = renderGroup(steps, resultsOf([]))
     expect(stripsIn(document.body)).toEqual([])
@@ -354,7 +360,7 @@ describe('ActivityGroup · a run of one call', () => {
     )
 
     expect(stripsIn(groupOf())).toHaveLength(1)
-    expect(stripsIn(groupOf())[0]!.closest('[data-tool-call-chrome="row"]')).not.toBeNull()
+    expect(within(groupOf()).getAllByRole('img')).toHaveLength(1)
   })
 })
 

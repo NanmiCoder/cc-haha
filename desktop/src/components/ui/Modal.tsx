@@ -126,7 +126,7 @@ export function Modal({
               type="button"
               onClick={onClose}
               aria-label="Close dialog"
-              className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] motion-reduce:active:scale-100"
+              className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-text-tertiary)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] motion-reduce:active:scale-100"
             >
               <X size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>

@@ -69,7 +69,7 @@ export function ProjectContextChip({
 
   if (!label) return null
 
-  const worktreeBadgeClassName = 'inline-flex h-[18px] shrink-0 cursor-help items-center gap-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]'
+  const worktreeBadgeClassName = 'inline-flex h-[18px] shrink-0 cursor-help items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]'
   const iconClassName = 'shrink-0 text-[var(--color-text-tertiary)]'
 
   if (isToolbar) {
@@ -104,7 +104,7 @@ export function ProjectContextChip({
               tabIndex={0}
               className={worktreeBadgeClassName}
             >
-              <GitFork size={12} strokeWidth={2} aria-hidden="true" />
+              <GitFork size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('repoLaunch.worktreeBadge')}
             </span>
           </Tooltip>

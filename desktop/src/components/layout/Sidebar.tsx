@@ -77,9 +77,9 @@ const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
 const MOD_KEY = detectPlatform() === 'mac' ? '⌘' : 'Ctrl+'
-/** Soft editorial active highlight on the sidebar surface without heavy shadow clutter. */
+/** V6C raised glass active highlight on the frosted sidebar surface. */
 const SIDEBAR_ROW_RAISED =
-  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)]'
+  'v6c-raised text-[var(--color-text-primary)]'
 const ICON_STROKE = 1.75
 const PROJECT_GROUP_VISIBLE_COUNT = SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT
 // Long enough to notice a mistaken archive and take it back.
@@ -1227,7 +1227,7 @@ export function Sidebar({
 
   return (
     <aside
-      className="sidebar-panel relative h-full flex flex-col bg-[var(--color-surface-sidebar)] select-none"
+      className="sidebar-panel relative h-full flex flex-col select-none"
       data-state={expanded ? 'open' : 'closed'}
       aria-label={t('sidebar.regionLabel')}
     >
@@ -1257,7 +1257,7 @@ export function Sidebar({
               href="https://github.com/NanmiCoder/cc-haha"
               target="_blank"
               rel="noopener noreferrer"
-              className={`sidebar-copy ${expanded ? 'sidebar-copy--visible' : 'sidebar-copy--hidden'} inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
+              className={`sidebar-copy ${expanded ? 'sidebar-copy--visible' : 'sidebar-copy--hidden'} inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
               title="GitHub"
               tabIndex={expanded ? undefined : -1}
               aria-hidden={!expanded}
@@ -1268,7 +1268,7 @@ export function Sidebar({
               type="button"
               onClick={toggleSidebar}
               data-testid={expanded ? 'sidebar-collapse-button' : 'sidebar-expand-button'}
-              className={`sidebar-toggle-button ${expanded ? 'sidebar-toggle-button--open h-7 w-7' : 'sidebar-toggle-button--collapsed h-8 w-8'} flex items-center justify-center rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-sidebar)]`}
+              className={`sidebar-toggle-button ${expanded ? 'sidebar-toggle-button--open h-7 w-7' : 'sidebar-toggle-button--collapsed h-8 w-8'} flex items-center justify-center rounded-[var(--radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-sidebar)]`}
               aria-label={expanded ? t('sidebar.collapse') : t('sidebar.expand')}
               title={expanded ? t('sidebar.collapse') : t('sidebar.expand')}
             >
@@ -1289,7 +1289,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={() => openModal('globalSearch')}
-                className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-sidebar-search-border)] bg-[var(--color-sidebar-search-bg)] pl-2 pr-1.5 text-left text-[12px] text-[var(--color-text-tertiary)] shadow-[var(--bevel-surface-rest)] transition-colors hover:border-[var(--color-outline)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]"
+                className="v6c-field flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-card-inner)] pl-2.5 pr-1.5 text-left text-[12px] text-[var(--color-text-tertiary)] transition-[background-color,color,box-shadow] duration-150 hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]"
                 aria-label={t('search.global.trigger')}
                 title={t('search.global.trigger')}
               >
@@ -1340,7 +1340,7 @@ export function Sidebar({
             className="sidebar-section sidebar-section--visible flex flex-1 min-h-0 flex-col"
           >
             {isBatchMode && (
-              <div className="mx-2 mb-1 mt-1.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2">
+              <div className="v6c-glass-card mx-2 mb-1 mt-1.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-2">
                 <div className="flex items-center gap-1 pl-1">
                   <span className="min-w-0 flex-1 text-[12px] font-medium tabular-nums text-[var(--color-text-primary)]">
                     {t('sidebar.batchSelectedCount', { count: selectedCount })}
@@ -1501,9 +1501,9 @@ export function Sidebar({
                         onDragEnd={clearProjectDragState}
                         onClick={() => toggleProjectCollapsed(project.key)}
                         data-state={projectCollapsed ? 'closed' : 'open'}
-                        className={`flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                        className={`flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-control)] px-2 text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                           highlightedProject?.key === project.key
-                            ? 'bg-[var(--color-sidebar-item-active)] ring-1 ring-[var(--color-brand)]'
+                            ? 'v6c-raised v6c-active-bar pl-3 text-[var(--color-text-primary)]'
                             : ''
                         }`}
                         aria-expanded={!projectCollapsed}
@@ -1525,7 +1525,7 @@ export function Sidebar({
                           {project.title}
                         </span>
                         {isProjectPinned && (
-                          <Pin size={12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+                          <Pin size={12} strokeWidth={ICON_STROKE} className="flex-shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                         )}
                         {!isBatchMode && !archiveOnly && (
                           <span
@@ -1616,7 +1616,7 @@ export function Sidebar({
                                     if (e.key === 'Enter') handleFinishRename()
                                     if (e.key === 'Escape') cancelRename()
                                   }}
-                                  className="h-[30px] w-full rounded-[var(--radius-sm)] border border-[var(--color-border-focus)] bg-[var(--color-surface)] pl-[31px] pr-2 text-[13px] text-[var(--color-text-primary)] outline-none"
+                                  className="v6c-field h-[30px] w-full rounded-[var(--radius-control)] border border-[var(--color-border-focus)] pl-[31px] pr-2 text-[13px] text-[var(--color-text-primary)] outline-none"
                                 />
                               ) : (
                                 <SidebarSessionCard
@@ -1648,7 +1648,7 @@ export function Sidebar({
                             <button
                               type="button"
                               onClick={() => toggleProjectSessionExpansion(project.key)}
-                              className="inline-flex h-7 items-center justify-start rounded-[var(--radius-sm)] pl-8 pr-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                              className="inline-flex h-7 items-center justify-start rounded-[var(--radius-control)] pl-8 pr-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                               aria-expanded={sessionsExpanded}
                             >
                               {sessionsExpanded
@@ -1752,7 +1752,7 @@ export function Sidebar({
         <div
           ref={sessionContextMenuRef}
           role="menu"
-          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-y-auto rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-y-auto rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={sessionContextMenuPosition.style}
         >
           <SidebarMenuItem
@@ -1801,11 +1801,11 @@ export function Sidebar({
         if (!project) return null
         const pinned = pinnedProjectKeys.has(project.key)
         const hidden = hiddenProjectKeys.has(project.key)
-        return (
+        return createPortal(
           <div
             ref={projectContextMenuRef}
             role="menu"
-            className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[230px] overflow-hidden rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+            className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[230px] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
             style={positionProjectMenu(projectContextMenu.x, projectContextMenu.y)}
             onClick={(event) => event.stopPropagation()}
           >
@@ -1842,11 +1842,12 @@ export function Sidebar({
             >
               {t(hidden ? 'sidebar.restoreProjectToSidebar' : 'sidebar.hideProjectFromSidebar')}
             </SidebarMenuItem>
-          </div>
+          </div>,
+          document.body,
         )
       })()}
 
-      {projectHeaderMenu && (
+      {projectHeaderMenu && createPortal(
         <ProjectHeaderMenu
           ref={projectHeaderMenuRef}
           type={projectHeaderMenu.type}
@@ -1863,10 +1864,11 @@ export function Sidebar({
           onOpenArchives={() => openArchiveView()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
-        />
+        />,
+        document.body,
       )}
 
-      {projectHeaderSubmenu && (
+      {projectHeaderSubmenu && createPortal(
         <ProjectHeaderMenu
           ref={projectHeaderSubmenuRef}
           type={projectHeaderSubmenu.type}
@@ -1883,7 +1885,8 @@ export function Sidebar({
           onOpenArchives={() => openArchiveView()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
-        />
+        />,
+        document.body,
       )}
 
       {projectEditor?.mode === 'create' && (
@@ -2130,7 +2133,7 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
 }, ref) {
   const width = type === 'sort' ? 230 : type === 'create' ? 250 : 270
   const style: React.CSSProperties = { left: x, top: y, width }
-  const className = 'dropdown-glass popover-motion fixed z-[var(--z-dropdown)] overflow-hidden rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]'
+  const className = 'dropdown-glass popover-motion fixed z-[var(--z-dropdown)] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]'
 
   if (type === 'create') {
     return (
@@ -2228,13 +2231,13 @@ function HeaderMenuItem({
       role="menuitem"
       onClick={onClick}
       onMouseEnter={onMouseEnter}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${checked ? 'bg-[var(--color-surface-hover)]' : ''}`}
+      className={`flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${checked ? 'v6c-row-highlight font-medium' : ''}`}
     >
       <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {checked && <Check size={14} strokeWidth={2} className="shrink-0 text-[var(--color-brand)]" aria-hidden="true" />}
+      {checked && <Check size={14} strokeWidth={ICON_STROKE} className="shrink-0 text-[var(--color-brand)]" aria-hidden="true" />}
       {trailing && !checked && (
         <ChevronRight size={14} strokeWidth={ICON_STROKE} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
       )}
@@ -2442,16 +2445,16 @@ function NavItem({
       className={`
         group/nav flex items-center text-[13px] transition-[background-color,color,box-shadow] duration-150
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]
-        ${collapsed ? 'h-9 w-9 justify-center rounded-[var(--radius-md)] px-0 py-0' : 'h-[30px] w-full min-w-0 gap-2.5 rounded-[var(--radius-sm)] px-2'}
+        ${collapsed ? 'h-9 w-9 justify-center rounded-[var(--radius-control)] px-0 py-0' : 'h-[30px] w-full min-w-0 gap-2.5 rounded-[var(--radius-control)] pl-3 pr-2'}
         ${active
-          ? `${SIDEBAR_ROW_RAISED} font-medium`
+          ? `${SIDEBAR_ROW_RAISED}${collapsed ? '' : ' v6c-active-bar'} font-medium`
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)]'
         }
       `}
     >
-      {/* Selected nav gets the brand on its glyph — the one place the
-          sidebar uses terracotta as a selection mark. */}
-      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center ${active ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)] group-hover/nav:text-[var(--color-text-secondary)]'}`}>
+      {/* Selected expanded nav carries the 3px terracotta leading bar via
+          `.v6c-active-bar`; on the collapsed icon rail the glyph carries it. */}
+      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center ${active ? (collapsed ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-primary)]') : 'text-[var(--color-text-tertiary)] group-hover/nav:text-[var(--color-text-secondary)]'}`}>
         {icon}
       </span>
       <span className={`sidebar-copy min-w-0 flex-1 text-left ${collapsed ? 'sidebar-copy--hidden' : 'sidebar-copy--visible'}`}>

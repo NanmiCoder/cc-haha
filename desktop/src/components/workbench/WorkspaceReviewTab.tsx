@@ -55,10 +55,10 @@ import {
 } from '../../lib/workspace/types'
 import type { ReviewFile } from '../../api/review'
 
-const REVIEW_MENU_ITEM = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]'
+const REVIEW_MENU_ITEM = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]'
 
-/** A labelled action inside the floating bulk-action pill. */
-const REVIEW_PILL_BUTTON = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent'
+/** A labelled action inside the floating bulk-action bar. */
+const REVIEW_PILL_BUTTON = 'v6c-pressable inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent'
 
 const SOURCE_OPTIONS: readonly WorkspaceReviewSource[] = [
   { kind: 'unstaged' },
@@ -550,13 +550,13 @@ export function WorkspaceReviewTab({
             aria-haspopup="menu"
             aria-expanded={sourceMenuOpen}
             onClick={() => setSourceMenuOpen((open) => !open)}
-            className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-2.5 pr-2 text-[12px] text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="v6c-raised flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-border)] pl-2.5 pr-2 text-[12px] text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-outline)] hover:[background:var(--v6c-raised-fill-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             <span id={`${fieldIds}-source-label`} className="sr-only">
               {t('workspace.review.sourceLabel')}
             </span>
             <span id={`${fieldIds}-source-value`}>{sourceLabel(source)}</span>
-            <ChevronDown size={12} strokeWidth={2} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
+            <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
           </button>
           {sourceMenuOpen ? (
             <div
@@ -564,7 +564,7 @@ export function WorkspaceReviewTab({
               role="menu"
               aria-label={t('workspace.review.sourceLabel')}
               onKeyDown={handleSourceMenuKeyDown}
-              className="absolute left-0 top-8 z-[var(--z-dropdown)] min-w-[200px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+              className="dropdown-glass popover-motion absolute left-0 top-8 z-[var(--z-dropdown)] min-w-[200px] overflow-hidden rounded-[var(--radius-xl)] p-[5px]"
             >
               {sourceOptions.map((option) => {
                 const current = reviewSourceKey(option) === reviewSourceKey(source)
@@ -577,10 +577,10 @@ export function WorkspaceReviewTab({
                       setSourceMenuOpen(false)
                       useWorkspaceStore.getState().setReviewSource(sessionId, tab.id, option)
                     }}
-                    className={`${REVIEW_MENU_ITEM} ${current ? 'bg-[var(--color-surface-hover)]' : ''}`}
+                    className={`${REVIEW_MENU_ITEM} ${current ? 'v6c-row-highlight font-medium' : ''}`}
                   >
                     <span className="min-w-0 flex-1 truncate">{sourceLabel(option)}</span>
-                    {current ? <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" /> : null}
+                    {current ? <Check size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" /> : null}
                   </button>
                 )
               })}
@@ -797,7 +797,7 @@ export function WorkspaceReviewTab({
           {writable && files.length > 0 ? (
             <div
               data-testid="workspace-review-bulk-bar"
-              className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[3px] shadow-[var(--shadow-dropdown)]"
+              className="dropdown-glass absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-0.5 rounded-[var(--radius-xl)] p-1"
             >
               {source.kind !== 'staged' ? <>
                 <button
@@ -879,9 +879,9 @@ export function WorkspaceReviewTab({
                     onKeyDown={(event) => handleTreeKeyDown(event, row)}
                     style={{ paddingLeft: 2 + row.depth * 16 }}
                     className={[
-                      'flex h-[26px] cursor-default items-center gap-1.5 rounded-[var(--radius-xs)] pr-1.5 text-left text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                      'flex h-[26px] cursor-default items-center gap-1.5 rounded-[var(--radius-md)] pr-1.5 text-left text-[12px] outline-none transition-[background-color,box-shadow,color] duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                       selected
-                        ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
+                        ? 'v6c-row-highlight font-medium text-[var(--color-text-primary)]'
                         : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
                     ].join(' ')}
                   >
@@ -889,8 +889,8 @@ export function WorkspaceReviewTab({
                       <>
                         <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
                           {row.expanded
-                            ? <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
-                            : <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />}
+                            ? <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+                            : <ChevronRight size={12} strokeWidth={1.75} aria-hidden="true" />}
                         </span>
                         {row.expanded
                           ? <FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
@@ -1046,7 +1046,7 @@ function ReviewFileSection({
       data-testid={`workspace-review-section-${file.path}`}
       // `overflow-clip`, not `overflow-hidden`: the rounded frame must clip its
       // corners without becoming the scroll box its sticky header pins against.
-      className="shrink-0 overflow-clip rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)]"
+      className={`v6c-glass-card shrink-0 overflow-clip rounded-[var(--radius-lg)] border border-[var(--color-border)] ${file.conflicted ? 'v6c-ring-error' : ''}`}
     >
       <header className={`sticky top-0 z-[var(--z-sticky)] flex h-9 items-center gap-2 bg-[var(--color-surface-container)] pl-1.5 pr-1.5 ${open ? 'border-b border-[var(--color-border)]' : ''}`}>
         <IconButton
@@ -1090,9 +1090,9 @@ function ReviewFileSection({
           </span>
         </span>
         {untracked ? (
-          <Badge tone="success" size="sm" className="shrink-0">{t('workspace.review.untracked')}</Badge>
+          <Badge tone="success" size="sm" pill={false} className="shrink-0">{t('workspace.review.untracked')}</Badge>
         ) : file.status === 'added' ? (
-          <Badge tone="success" size="sm" className="shrink-0">{t('workspace.review.newFile')}</Badge>
+          <Badge tone="success" size="sm" pill={false} className="shrink-0">{t('workspace.review.newFile')}</Badge>
         ) : null}
         {file.statsTruncated ? (
           <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
@@ -1113,7 +1113,7 @@ function ReviewFileSection({
             copiedLabel={t('common.copied')}
             displayLabel={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
             displayCopiedLabel={<Check size={14} strokeWidth={1.75} aria-hidden="true" />}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           />
           <IconButton
             icon={<ExternalLink size={14} strokeWidth={1.75} />}

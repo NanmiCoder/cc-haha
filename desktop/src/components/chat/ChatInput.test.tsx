@@ -1742,7 +1742,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput compact />)
 
     const send = screen.getByRole('button', { name: 'Run' })
-    expect(send).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(send).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
     // Terracotta is the send key's alone.
     expect(send).toHaveClass('bg-[var(--color-brand)]')
     expect(send.querySelector('[data-icon="send"]')).toBeInTheDocument()
@@ -1757,7 +1757,7 @@ describe('ChatInput file mentions', () => {
     })
 
     const stop = screen.getByRole('button', { name: 'Stop' })
-    expect(stop).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(stop).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9')
     // Mid-turn the same circle turns ink with a filled square — a running turn
     // must not read as the error-red danger button.
     expect(stop).toHaveClass('bg-[var(--color-btn-primary-bg)]')
@@ -1905,14 +1905,14 @@ describe('ChatInput file mentions', () => {
     expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
     const wide = screen.getByRole('button', { name: 'Run' })
     expect(wide).not.toHaveTextContent('Run')
-    expect(wide).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(wide).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
 
     column.resizeTo(580)
 
     expect(screen.getByTestId('run-location-readonly')).toBeInTheDocument()
     const narrow = screen.getByRole('button', { name: 'Run' })
     expect(narrow).not.toHaveTextContent('Run')
-    expect(narrow).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(narrow).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
   })
 
   it('moves the run location out of the toolbar as the column is dragged narrow', async () => {
@@ -4578,15 +4578,15 @@ describe('ChatInput file mentions', () => {
 
     render(<ChatInput />)
 
-    // Empty draft while streaming: single Stop circle.
+    // Empty draft while streaming: single Stop key.
     const stopOnly = screen.getByRole('button', { name: 'Stop' })
-    expect(stopOnly).toHaveClass('control-bevel-cta', 'h-8', 'w-8', 'rounded-full')
+    expect(stopOnly).toHaveClass('control-bevel-cta', 'h-9', 'w-9', 'rounded-[var(--radius-key)]')
     expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
 
-    // Typing mid-turn exposes the circular Queue/Send CTA beside Stop.
+    // Typing mid-turn exposes the Queue/Send key beside Stop.
     setComposerText('follow-up steer', 15)
     const queueBtn = screen.getByRole('button', { name: 'Run' })
-    expect(queueBtn).toHaveClass('control-bevel-cta', 'h-8', 'w-8', 'rounded-full')
+    expect(queueBtn).toHaveClass('control-bevel-cta', 'v6c-send-btn', 'h-9', 'w-9', 'rounded-[var(--radius-key)]')
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
 
     // Clicking Queue docks the message into the top `.composer-seam-above` banner outside the panel.

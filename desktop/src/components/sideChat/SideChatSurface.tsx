@@ -15,7 +15,7 @@ export function SideChatSurface({ parentSessionId, sideChatId, visible = true }:
   const empty = useChatStore(state => !state.sessions[sideChatId]?.messages.length && !state.sessions[sideChatId]?.streamingText && (state.sessions[sideChatId]?.chatState ?? 'idle') === 'idle')
   if (!entry || entry.parentSessionId !== parentSessionId) return null
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[var(--color-surface)]" aria-label={t('sideChat.title')} data-side-chat-id={sideChatId}>
+    <section className="v6c-main-canvas flex h-full min-h-0 flex-col" aria-label={t('sideChat.title')} data-side-chat-id={sideChatId}>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {empty && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><EmptyState variant="plain" title={t('sideChat.title')} description={t('sideChat.emptyDescription')} /></div>}
         <MessageList sessionId={sideChatId} visible={visible} compact />

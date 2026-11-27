@@ -32,7 +32,7 @@ export const FIELD_SIZE_CLASSES: Record<FieldSize, string> = {
  * sitting next to each other actually match.
  */
 export const FIELD_BASE_CLASSES = [
-  'w-full rounded-[var(--radius-md)] border outline-none bg-clip-padding',
+  'w-full rounded-[var(--radius-card-inner)] border outline-none bg-clip-padding',
   'bg-[var(--color-surface)] text-[var(--color-text-primary)]',
   'placeholder:text-[var(--color-text-tertiary)]',
   'shadow-[var(--bevel-surface-rest)]',

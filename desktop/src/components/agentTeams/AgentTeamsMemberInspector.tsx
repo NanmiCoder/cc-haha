@@ -245,9 +245,9 @@ function memberTone(state: MemberWorkState): Tone {
 
 /** Container and foreground pairs, the same ones `Badge` uses for these tones. */
 function recoveryNoticeClasses(state: MemberWorkState): string {
-  if (state === 'error') return 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-  if (state === 'retrying') return 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-  return 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+  if (state === 'error') return 'v6c-ring-error bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+  if (state === 'retrying') return 'v6c-ring-waiting bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
+  return 'border border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
 }
 
 function retryCountdown(autoRetry: TeamMemberAutoRetry, now: number, t: TranslationFn): string {
@@ -437,13 +437,13 @@ export function AgentTeamsMemberInspector({
           <Button
             variant="secondary"
             size="sm"
-            icon={<ChevronLeft aria-hidden="true" />}
+            icon={<ChevronLeft strokeWidth={1.75} aria-hidden="true" />}
             onClick={onBack}
           >
             {t('agentTeams.communication.backToFeed')}
           </Button>
           <IconButton
-            icon={<ChevronRight aria-hidden="true" />}
+            icon={<ChevronRight strokeWidth={1.75} aria-hidden="true" />}
             label={t('agentTeams.communication.close')}
             size="sm"
             tone="muted"
@@ -458,7 +458,7 @@ export function AgentTeamsMemberInspector({
               src={MEMBER_AVATARS[avatarKey]}
               alt=""
               draggable={false}
-              className="h-11 w-11 select-none object-contain drop-shadow-[0_3px_3px_var(--color-border-strong)]"
+              className="h-11 w-11 select-none object-contain"
             />
             <span
               aria-hidden="true"
@@ -528,7 +528,7 @@ export function AgentTeamsMemberInspector({
           <div
             data-testid="agent-teams-member-recovery"
             data-member-state={workState}
-            className={`mt-3 min-w-0 rounded-[var(--radius-md)] px-2.5 py-2 text-[11px] leading-[1.45] ${recoveryNoticeClasses(workState)}`}
+            className={`mt-3 min-w-0 rounded-[var(--radius-card-inner)] px-2.5 py-2 text-[11px] leading-[1.45] ${recoveryNoticeClasses(workState)}`}
           >
             {failureReason ? (
               <p className="flex min-w-0 items-baseline gap-1.5">
@@ -658,8 +658,8 @@ export function AgentTeamsMemberInspector({
                         {t(sent ? 'agentTeams.inspector.sent' : 'agentTeams.inspector.received')}
                       </span>
                       {sent
-                        ? <ArrowRight size={11} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-                        : <ArrowLeft size={11} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
+                        ? <ArrowRight size={11} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                        : <ArrowLeft size={11} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
                       <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
                         {row.peerName}
                       </span>

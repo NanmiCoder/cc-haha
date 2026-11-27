@@ -32,14 +32,15 @@ export function TabAttentionJump({
       aria-label={label}
       title={label}
       data-testid="tab-attention-jump"
-      className="tab-bar-interactive flex-shrink-0 rounded-full transition-[filter] hover:brightness-95 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+      className="tab-bar-interactive flex-shrink-0 rounded-[var(--radius-sm)] transition-[filter] hover:brightness-95 active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
     >
       <Badge
         tone="warning"
         size="sm"
+        pill={false}
         bordered
         className="tabular-nums"
-        icon={<CircleAlert aria-hidden="true" size={12} strokeWidth={2} />}
+        icon={<CircleAlert aria-hidden="true" size={12} strokeWidth={1.75} />}
       >
         {count > 9 ? '9+' : count}
       </Badge>

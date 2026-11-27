@@ -15,6 +15,7 @@ const DRAG_START_THRESHOLD = 4
 
 const KIND_ICON = {
   'side-chat': MessageCircle,
+  'background-task': SquareTerminal,
   file: FolderClosed,
   browser: Globe,
   review: SquareSplitVertical,
@@ -212,7 +213,7 @@ export function WorkspaceTabStrip({
     <div
       data-testid={`workspace-tab-strip-${dock}`}
       data-desktop-drag-region={placement === 'window' ? true : undefined}
-      className={`flex min-w-0 shrink-0 items-center gap-1 pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)]'}`}
+      className={`flex min-w-0 shrink-0 items-center gap-1 pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-sidebar)]'}`}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1">
         <div
@@ -236,6 +237,7 @@ export function WorkspaceTabStrip({
               newTab: t('workspace.newTabTitle'),
               review: t('workspace.reviewTabTitle'),
               sideChat: t('sideChat.title'),
+              backgroundTask: t('workspace.backgroundTask.header'),
               files: t('workspace.files.openTitle'),
               terminal: (ordinal) => t('workspace.terminalTabTitle', { n: ordinal }),
             })
@@ -312,7 +314,7 @@ export function WorkspaceTabStrip({
                       setMenu({ tabId: tab.id, x: rect.left, y: rect.bottom })
                     } else handleTabKeyDown(event, index)
                   }}
-                  className="flex h-7 min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-7 min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-[var(--radius-control)] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   {tab.kind === 'file' && tab.path ? <WorkspaceFileIcon path={tab.path} /> : (
                     <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
@@ -330,7 +332,7 @@ export function WorkspaceTabStrip({
                 </button>
                 <span className={`shrink-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
                   <IconButton
-                    icon={<X size={12} strokeWidth={2} />}
+                    icon={<X size={12} strokeWidth={1.75} />}
                     label={t('workspace.tabClose', { title })}
                     size="2xs"
                     tone="muted"
@@ -398,7 +400,7 @@ export function WorkspaceTabStrip({
           aria-label={t('workspace.tabMenu')}
           data-testid="workspace-tab-menu"
           onKeyDown={handleMenuKeyDown}
-          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={menuPosition.style}
         >
           {menuRuntime ? <>
@@ -454,7 +456,7 @@ function WorkspaceTabMenuItem({
       role="menuitem"
       disabled={disabled}
       onClick={onSelect}
-      className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+      className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
     >
       {label}
     </button>

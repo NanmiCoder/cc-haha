@@ -99,17 +99,17 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
       data-kind={kind}
       role="region"
       aria-label={title}
-      className="flex flex-col gap-2.5 rounded-[var(--radius-xl)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] p-3 shadow-[var(--shadow-raised)]"
+      className="v6c-glass-card v6c-ring-waiting flex flex-col gap-2.5 rounded-[var(--radius-2xl)] p-3 backdrop-blur-[var(--glass-blur)]"
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container-lowest)] text-[var(--color-on-warning-container)]">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
           <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 text-[var(--color-text-primary)]">{title}</h2>
             {current.subagentName ? (
-              <Badge tone="info" size="xs" data-testid="mobile-approval-subagent-badge" className="shrink-0">
+              <Badge tone="info" size="xs" pill={false} data-testid="mobile-approval-subagent-badge" className="shrink-0">
                 {t('permission.fromSubagent', { name: current.subagentName })}
               </Badge>
             ) : null}
@@ -177,17 +177,17 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
                 autoFocus
                 onChange={(event) => setReason(event.target.value)}
                 placeholder={t('mobile.approval.reasonPlaceholder')}
-                className="h-11 min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 text-[15px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
+                className="v6c-field h-11 min-w-0 flex-1 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-3 text-[15px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
               />
               <Button
                 type="submit"
                 variant="accent"
                 size="lg"
-                shape="circle"
+                shape="key"
                 disabled={!reason.trim()}
                 aria-label={t('mobile.approval.denyWithReason')}
                 className="h-11 w-11 shrink-0"
-                icon={<ArrowUp size={18} strokeWidth={2} aria-hidden="true" />}
+                icon={<ArrowUp size={18} strokeWidth={1.75} aria-hidden="true" />}
               />
             </form>
           ) : (

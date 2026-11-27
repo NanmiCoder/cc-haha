@@ -22,7 +22,7 @@ export function SidebarMenuItem({
       disabled={disabled}
       title={title}
       onClick={disabled ? undefined : onClick}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:opacity-45 ${
+      className={`flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:opacity-45 ${
         danger
           ? 'text-[var(--color-error)] enabled:hover:bg-[var(--color-error-container)]'
           : 'text-[var(--color-text-primary)] enabled:hover:bg-[var(--color-surface-hover)]'

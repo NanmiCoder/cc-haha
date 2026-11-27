@@ -287,7 +287,7 @@ describe('window background constants', () => {
     // process had its own copies. Without this, changing the palette would
     // leave the pre-paint window color silently behind.
     expect(LIGHT_WINDOW_BACKGROUND).toBe('#FFFFFF')
-    expect(DARK_WINDOW_BACKGROUND).toBe('#1B1A18')
+    expect(DARK_WINDOW_BACKGROUND).toBe('#181818')
     expect(LIGHT_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.white)
     expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.dark)
     // The defaults of each half — what a first launch paints before the

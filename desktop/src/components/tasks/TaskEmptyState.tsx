@@ -16,7 +16,7 @@ type Props = {
 export function TaskEmptyState({ onCreateTask }: Props) {
   const t = useTranslation()
   return (
-    <Card radius="lg" surface="lowest" padding="none">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card">
       <EmptyState
         variant="plain"
         size="md"

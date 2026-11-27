@@ -25,7 +25,7 @@ function ToastItem({ toast }: { toast: ToastType }) {
       aria-live={isUrgent ? 'assertive' : 'polite'}
       aria-atomic="true"
       data-tone={toast.type}
-      className="animate-overlay-in-right flex items-start gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-2.5 pl-3 pr-2 text-[13px] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
+      className="dropdown-glass animate-overlay-in-right flex items-start gap-2.5 rounded-[var(--radius-xl)] py-2.5 pl-3 pr-2 text-[13px] text-[var(--color-text-primary)]"
     >
       <Icon size={16} strokeWidth={1.75} className={`mt-0.5 shrink-0 ${color}`} aria-hidden="true" />
       <span className="min-w-0 flex-1 leading-5">{toast.message}</span>
@@ -36,7 +36,7 @@ function ToastItem({ toast }: { toast: ToastType }) {
             removeToast(toast.id)
             toast.action!.onClick()
           }}
-          className="h-6 shrink-0 rounded-[var(--radius-sm)] px-1.5 text-[13px] font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          className="h-6 shrink-0 rounded-[var(--radius-control)] px-1.5 text-[13px] font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           {toast.action.label}
         </button>

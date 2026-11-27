@@ -15,7 +15,7 @@ export function InlineTaskSummary({ tasks }: { tasks: TaskSummaryItem[] }) {
   const total = tasks.length
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+    <div className="v6c-glass-card overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
       <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-3 text-[13px]">
         <ListChecks size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="font-medium text-[var(--color-text-primary)]">

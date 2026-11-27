@@ -275,8 +275,8 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   onClick={() => setActiveImageIndex(images.findIndex((image) => image.src === src))}
                   className={
                     isComposer
-                      ? 'relative overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:ring-1 after:ring-inset after:ring-[var(--color-border)]'
-                      : 'relative overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] text-left after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] after:ring-1 after:ring-inset after:ring-[var(--color-border)] hover:after:ring-[var(--color-outline)] motion-reduce:transition-none'
+                      ? 'relative overflow-hidden rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-card-inner)] after:ring-1 after:ring-inset after:ring-[var(--color-border)]'
+                      : 'relative overflow-hidden rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] text-left after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-card-inner)] after:ring-1 after:ring-inset after:ring-[var(--color-border)] hover:after:ring-[var(--color-outline)] motion-reduce:transition-none'
                   }
                 >
                   <img
@@ -315,7 +315,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                       title={selectionNote}
                       tabIndex={0}
                       className={[
-                        'inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-full border',
+                        'inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-[var(--radius-sm)] border',
                         'border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5',
                         'text-[12px] font-medium leading-none text-[var(--color-text-primary)]',
                         'transition-colors hover:border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-surface-container)]',
@@ -334,7 +334,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                     className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-error)] text-[var(--color-on-error)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                     aria-label={t('attachments.remove', { name: attachment.name })}
                   >
-                    <X size={12} strokeWidth={2} aria-hidden="true" />
+                    <X size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -467,7 +467,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 title={t('openWith.title')}
                 className="flex w-9 shrink-0 items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
+                <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>
             </div>
           )

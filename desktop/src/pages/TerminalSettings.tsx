@@ -853,7 +853,7 @@ function TerminalHelpHint({
           A native `title` would duplicate it and, per the a11y baseline, tooltips
           are wired with aria-describedby rather than becoming the accessible name. */}
       <IconButton
-        icon={<Info size={compact ? 12 : 14} aria-hidden="true" strokeWidth={compact ? 2 : 1.75} />}
+        icon={<Info size={compact ? 12 : 14} aria-hidden="true" strokeWidth={1.75} />}
         label={t('settings.terminal.infoLabel')}
         showTooltip={false}
         size={compact ? 'xs' : 'sm'}
@@ -870,7 +870,7 @@ function TerminalHelpHint({
       <span
         id={tooltipId}
         role="tooltip"
-        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} dropdown-glass popover-motion absolute left-0 top-full z-[var(--z-tooltip)] mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-md)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
+        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} dropdown-glass popover-motion absolute left-0 top-full z-[var(--z-tooltip)] mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-control)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
       >
         {t('settings.terminal.description')}
       </span>

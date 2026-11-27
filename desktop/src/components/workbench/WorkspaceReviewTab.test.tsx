@@ -1026,7 +1026,7 @@ describe('review content parity', () => {
     const toolbar = screen.getByTestId('workspace-review-toolbar')
     expect(toolbar.parentElement).toContainElement(screen.getByTestId('workspace-tree-sidebar'))
     expect(toolbar.nextElementSibling).toContainElement(screen.getByTestId('workspace-tree-sidebar'))
-    expect(screen.getByTestId('workspace-review-bulk-bar')).toHaveClass('absolute', 'rounded-full')
+    expect(screen.getByTestId('workspace-review-bulk-bar')).toHaveClass('absolute', 'dropdown-glass', 'rounded-[var(--radius-xl)]')
   })
 
   it('locates a faraway file inside a virtualized review list without mounting every section', async () => {

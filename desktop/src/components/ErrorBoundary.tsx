@@ -34,8 +34,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
 function ErrorBoundaryFallback() {
   return (
-    <div className="h-screen w-screen bg-[var(--color-background)] text-[var(--color-text-primary)] flex items-center justify-center p-6">
-      <div className="max-w-md w-full text-center">
+    <div className="app-shell-viewport v6c-ambient-shell w-screen text-[var(--color-text-primary)] flex items-center justify-center p-6">
+      <div className="v6c-glass-card max-w-md w-full rounded-[var(--radius-xl)] border border-[var(--color-border)] p-6 text-center">
         <div className="text-[15px] font-semibold">{t('errorBoundary.title')}</div>
         <div className="mt-2 text-sm text-[var(--color-text-tertiary)]">
           {t('errorBoundary.description')}

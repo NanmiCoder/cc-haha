@@ -38,7 +38,7 @@ function RunOutput({ run }: { run: TaskRun }) {
 
   if (!text) {
     return (
-      <Card radius="lg" surface="container" shadow="bevel" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
+      <Card radius="lg" surface="none" padding="none" className="v6c-glass-card mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
         {run.sessionId ? t('tasks.outputHintSession') : t('tasks.noOutputText')}
       </Card>
     )
@@ -48,7 +48,7 @@ function RunOutput({ run }: { run: TaskRun }) {
   // sunken ground rather than a second tinted inset, so the commit hashes
   // inside it read as chips against a surface instead of two greys stacked.
   return (
-    <Card radius="lg" surface="container" shadow="bevel" padding="none" className="scrollbar-autohide mt-2.5 max-h-48 overflow-y-auto px-4 py-3">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card scrollbar-autohide mt-2.5 max-h-48 overflow-y-auto px-4 py-3">
       <MarkdownRenderer
         content={text}
         variant="compact"
@@ -67,7 +67,7 @@ type Props = {
 // The app-wide status vocabulary: in progress = info, done = success, failed
 // (including a timeout) = error. Running used to borrow the warning amber,
 // which elsewhere means "waiting for you".
-const ICON_PROPS = { size: 12, strokeWidth: 2, 'aria-hidden': true } as const
+const ICON_PROPS = { size: 12, strokeWidth: 1.75, 'aria-hidden': true } as const
 const STATUS_CONFIG: Record<string, { icon: ReactNode; tone: Tone }> = {
   running:   { icon: <LoaderCircle {...ICON_PROPS} className="animate-spin" />, tone: 'info' },
   completed: { icon: <CircleCheck {...ICON_PROPS} />, tone: 'success' },
@@ -280,7 +280,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
                 <div key={run.id} className="py-2">
                   <div className="flex min-h-7 items-center gap-2.5">
                     {/* Status */}
-                    <Badge tone={cfg.tone} icon={cfg.icon}>
+                    <Badge tone={cfg.tone} pill={false} icon={cfg.icon}>
                       {t(`tasks.runStatus.${run.status}` as any)} {/* dynamic key */}
                     </Badge>
 
@@ -302,7 +302,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          icon={<ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />}
+                          icon={<ArrowUpRight size={12} strokeWidth={1.75} aria-hidden="true" />}
                           iconPosition="end"
                           onClick={() => openSession(run.sessionId!, run.taskName)}
                         >
@@ -328,7 +328,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
                   {isExpanded && (run.output || run.error) ? (
                     <RunOutput run={run} />
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'loading' ? (
-                    <Card radius="lg" surface="container" shadow="bevel" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
+                    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
                       {t('common.loading')}
                     </Card>
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'error' ? (

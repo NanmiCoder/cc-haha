@@ -207,9 +207,9 @@ export function SkillList({ compact = false }: { compact?: boolean }) {
 
               <Card
                 radius="lg"
-                surface="lowest"
+                surface="none"
                 padding="none"
-                className="divide-y divide-[var(--color-border)] overflow-hidden"
+                className="v6c-glass-card divide-y divide-[var(--color-border)] overflow-hidden"
               >
                 {group.map((skill) => (
                   <button
@@ -229,9 +229,9 @@ export function SkillList({ compact = false }: { compact?: boolean }) {
                         <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">
                           {skill.displayName || skill.name}
                         </span>
-                        {skill.version && <Badge mono>v{skill.version}</Badge>}
+                        {skill.version && <Badge pill={false} mono>v{skill.version}</Badge>}
                         {skill.userInvocable && (
-                          <Badge variant="outline">{t('settings.skills.slashCommand')}</Badge>
+                          <Badge variant="outline" pill={false}>{t('settings.skills.slashCommand')}</Badge>
                         )}
                         {/* Only flagged for `.agents`: `.claude` is the norm and
                             badging it would be noise on every existing skill. */}
@@ -241,6 +241,7 @@ export function SkillList({ compact = false }: { compact?: boolean }) {
                           // repository rather than being installed by the
                           // user — hence two hint strings.
                           <Badge
+                            pill={false}
                             mono
                             title={t(skill.source === 'project'
                               ? 'settings.skills.agentsDirProjectHint'
@@ -289,7 +290,7 @@ function SummaryCard({
   icon: LucideIcon
 }) {
   return (
-    <Card radius="lg" surface="lowest" padding="none" className="min-w-0 px-4 py-3">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card min-w-0 px-4 py-3">
       <div className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
         <Icon className="flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
         <span className="truncate">{label}</span>

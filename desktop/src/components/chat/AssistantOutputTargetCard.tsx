@@ -72,7 +72,7 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
   }, [openWith, sessionId, t, linkTarget, workDir])
 
   return (
-    <section className="flex items-stretch overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+    <section className="v6c-glass-card flex items-stretch overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
       {/* The whole row body is the hit area, not just the trailing icon button:
           the icon is a discoverability affordance. Everything inside is a span
           because a `button` may only contain phrasing content. */}
@@ -121,7 +121,7 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
           aria-label={t('openWith.title')}
           onClick={handleOpenWith}
           className="shrink-0"
-          icon={<ChevronDown size={12} strokeWidth={2} aria-hidden="true" />}
+          icon={<ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />}
           iconPosition="end"
         >
           {t('openWith.title')}

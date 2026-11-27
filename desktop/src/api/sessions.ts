@@ -237,6 +237,14 @@ export type SessionUsageSnapshot = {
   }>
 }
 
+export type SessionBackgroundTaskOutputResult = {
+  taskId: string
+  state: 'available' | 'empty' | 'missing'
+  text: string
+  totalBytes: number
+  truncated: boolean
+}
+
 export type SessionContextSnapshot = {
   /** Fast meter response; categories are collected only for an opened panel. */
   summaryOnly?: boolean
@@ -834,6 +842,13 @@ export const sessionsApi = {
 
   getWorkspaceDiff(sessionId: string, workspacePath: string) {
     return api.get<WorkspaceDiffResult>(buildWorkspacePath(sessionId, 'diff', workspacePath))
+  },
+
+  getBackgroundTaskOutput(sessionId: string, taskId: string, signal?: AbortSignal) {
+    return api.get<SessionBackgroundTaskOutputResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(taskId)}/output`,
+      { signal },
+    )
   },
 
   getTurnCheckpoints(sessionId: string, options?: ApiRequestOptions, frozen = false) {

@@ -165,8 +165,8 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
 
   let offset = 0
   return (
-    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]`} onMouseDown={event => event.preventDefault()}>
-      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="scrollbar-autohide min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
+    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-xl)]`} onMouseDown={event => event.preventDefault()}>
+      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="scrollbar-autohide min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-[5px]">
         {visibleGroups.map(group => {
           const start = offset
           offset += group.rows.length
@@ -187,7 +187,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
                 icon={row.icon ?? (row.mention?.icon ? <img src={publicAssetPath(row.mention.icon)} alt="" className="h-4 w-4 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />)}
                 trailing={<>
                   {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
-                  {row.file?.isDirectory ? <span data-navigate-directory title={t('fileSearch.openFolder')} className="-my-1.5 -mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-selected)]"><ChevronRight aria-hidden="true" className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" /></span> : null}
+                  {row.file?.isDirectory ? <span data-navigate-directory title={t('fileSearch.openFolder')} className="-my-1.5 -mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] hover:bg-[var(--color-surface-selected)]"><ChevronRight aria-hidden="true" strokeWidth={1.75} className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" /></span> : null}
                 </>}
               />
             })}

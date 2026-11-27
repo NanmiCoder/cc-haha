@@ -36,7 +36,7 @@ export function PromptEditor({
 }: Props) {
   const t = useTranslation()
   return (
-    <div className="overflow-visible rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] transition-colors focus-within:border-[var(--color-border-focus)]">
+    <div className="v6c-field overflow-visible rounded-[var(--radius-lg)] border border-[var(--color-border)] transition-colors focus-within:border-[var(--color-border-focus)]">
       {/* Prompt textarea */}
       <textarea
         value={value}
@@ -49,13 +49,14 @@ export function PromptEditor({
 
       {/* Bottom toolbar. The rule was `--color-border` at `/40`, which Safari 15
           WebView drops entirely — the toolbar then floated with no seam. */}
-      <div className="flex flex-col gap-2 rounded-b-[var(--radius-xl)] border-t border-[var(--color-border)] bg-[var(--color-surface-sidebar)] px-3 py-2.5">
+      <div className="flex flex-col gap-2 rounded-b-[var(--radius-lg)] border-t border-[var(--color-border)] bg-[var(--color-surface-sidebar)] px-3 py-2.5">
         {/* Row 1: Permission + Model selectors */}
         <div className="flex items-center justify-between">
           <Badge
             tone="danger"
             size="md"
-            icon={<Gavel size={12} strokeWidth={2} aria-hidden="true" />}
+            pill={false}
+            icon={<Gavel size={12} strokeWidth={1.75} aria-hidden="true" />}
           >
             {t('newTask.fullPermissions')}
           </Badge>
@@ -77,7 +78,7 @@ export function PromptEditor({
             which a default badge would push onto one unbreakable line. Fill
             only, no border: a tinted strip with an edge as well is the
             "fill + border" double the spec rules out for inset blocks. */}
-        <Badge tone="danger" size="sm" wrap pill={false} className="w-full" icon={<TriangleAlert size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />}>
+        <Badge tone="danger" size="sm" wrap pill={false} className="w-full" icon={<TriangleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />}>
           {t('promptEditor.bypassWarning')}{folderPath ? ` ${t('promptEditor.within')} ${folderPath}` : ` ${t('promptEditor.selectFolder')}`}.
         </Badge>
       </div>

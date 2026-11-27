@@ -23,7 +23,7 @@
   transition: background-color 180ms ease-out;
 }
 
-.team-plan-member:hover {
+.team-plan-member:not(.v6c-row-highlight):hover {
   background: var(--color-surface-hover);
 }
 

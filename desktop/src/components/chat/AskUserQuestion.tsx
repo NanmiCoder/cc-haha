@@ -1005,10 +1005,10 @@ export function AskUserQuestion({
     <div
       ref={cardRef}
       tabIndex={submitted ? undefined : -1}
-      className={`overflow-hidden rounded-[var(--radius-lg)] border focus:outline-none ${
+      className={`v6c-glass-card overflow-hidden rounded-[var(--radius-lg)] focus:outline-none ${
         submitted
-          ? 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
-          : 'border-[var(--color-outline)] border-l-2 border-l-[var(--color-info)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
+          ? 'border border-[var(--color-border)]'
+          : 'v6c-ring-waiting backdrop-blur-[var(--glass-blur)]'
       }`}
       onKeyDown={submitted ? undefined : handleShortcutKeyDown}
     >
@@ -1022,7 +1022,7 @@ export function AskUserQuestion({
           // handing the question back is not an answer — saying "answered"
           // there misreports what the user did; and an expired question was
           // never answered at all, whatever happened to the answers
-          <Badge className="shrink-0">{t(statusBadgeKey)}</Badge>
+          <Badge pill={false} className="shrink-0">{t(statusBadgeKey)}</Badge>
         )}
         {!submitted && hasMultipleQuestions && (
           <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
@@ -1044,14 +1044,14 @@ export function AskUserQuestion({
                 type="button"
                 onClick={() => setActiveTab(i)}
                 aria-current={isActive || undefined}
-                className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                   isActive
-                    ? 'bg-[var(--color-surface-container)] font-medium text-[var(--color-text-primary)]'
+                    ? 'v6c-raised font-medium text-[var(--color-text-primary)]'
                     : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
                 }`}
               >
                 {isAnswered && (
-                  <CircleCheck aria-hidden="true" size={12} strokeWidth={2} className="text-[var(--color-success)]" />
+                  <CircleCheck aria-hidden="true" size={12} strokeWidth={1.75} className="text-[var(--color-success)]" />
                 )}
                 {tabLabel}
               </button>
@@ -1093,7 +1093,7 @@ export function AskUserQuestion({
                     onClick={() => handleSelect(safeActiveTab, opt.label, optIndex)}
                     disabled={submitted || readOnly}
                     aria-pressed={isSelected}
-                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default ${
+                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-card-inner)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default ${
                       isSelected
                         ? 'bg-[var(--color-brand-soft)] shadow-[inset_0_0_0_1.5px_var(--color-brand)]'
                         : 'shadow-[inset_0_0_0_1px_var(--color-border)] hover:shadow-[inset_0_0_0_1px_var(--color-outline)]'
@@ -1113,7 +1113,7 @@ export function AskUserQuestion({
                           : 'shadow-[inset_0_0_0_1.5px_var(--color-border-strong)]'
                       }`}
                     >
-                      {isSelected && isMultiSelect ? <Check size={12} strokeWidth={2.5} /> : null}
+                      {isSelected && isMultiSelect ? <Check size={12} strokeWidth={1.75} /> : null}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -1165,7 +1165,7 @@ export function AskUserQuestion({
                 )}
               </div>
               <div
-                className={`rounded-[var(--radius-md)] border bg-[var(--color-surface-container-low)] transition-colors focus-within:border-[var(--color-outline)] focus-within:bg-[var(--color-surface-container-lowest)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
+                className={`v6c-field rounded-[var(--radius-card-inner)] border transition-colors focus-within:border-[var(--color-outline)] focus-within:ring-2 focus-within:ring-[var(--color-border-focus)] ${
                   isDragActive ? 'border-[var(--color-brand)]' : 'border-[var(--color-border)]'
                 }`}
               >

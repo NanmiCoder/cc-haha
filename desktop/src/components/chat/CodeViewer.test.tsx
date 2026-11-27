@@ -30,8 +30,8 @@ describe('CodeViewer', () => {
     expect(copy.textContent).toBe('Copy')
     expect(copy.querySelector('svg.lucide-copy')).not.toBeNull()
     expect(copy.className.split(/\s+/)).not.toContain('border')
-    // The card is an elevated artifact code block using the lg radius token.
-    expect((container.firstElementChild as HTMLElement).className).toContain('rounded-[var(--radius-lg)]')
+    // The card is an 8px V6C code block using the md radius token.
+    expect((container.firstElementChild as HTMLElement).className).toContain('rounded-[var(--radius-md)]')
     expect(copy.className).toContain('control-bevel')
   })
 

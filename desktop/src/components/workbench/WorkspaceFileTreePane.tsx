@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { SearchField } from '@/components/ui/SearchField'
 import { Button } from '@/components/ui/Button'
@@ -308,7 +309,7 @@ export function WorkspaceFileTreePane({
   return (
     <div
       data-testid="workspace-file-tree"
-      className="flex h-full min-h-0 w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
+      className="flex h-full min-h-0 w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-sidebar)]"
     >
       <div className="shrink-0 px-2 pb-2 pt-2.5">
         <SearchField
@@ -420,9 +421,9 @@ export function WorkspaceFileTreePane({
                   }}
                   style={{ paddingLeft: 6 + row.depth * 16 }}
                   className={[
-                    'relative flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                    'relative flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-md)] pr-2 text-[13px] outline-none transition-[background-color,box-shadow,color] duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                     isSelected
-                      ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
+                      ? 'v6c-row-highlight font-medium text-[var(--color-text-primary)]'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
                   ].join(' ')}
                 >
@@ -445,14 +446,14 @@ export function WorkspaceFileTreePane({
           </div>
         )}
       </div>
-      {menu ? (
+      {menu ? createPortal(
         <div
           ref={menuRef}
           role="menu"
           aria-label={t('workspace.addSelectionToChat')}
           onKeyDown={handleMenuKeyDown}
           style={menuPosition.style}
-          className="fixed z-[var(--z-dropdown)] min-w-[160px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[160px] overflow-y-auto rounded-[var(--radius-xl)] p-[5px]"
         >
           <Button role="menuitem" variant="ghost" size="sm" onClick={() => {
             useWorkspaceChatContextStore.getState().addReference(sessionId, {
@@ -473,7 +474,8 @@ export function WorkspaceFileTreePane({
               onAfterSelect={closeMenu}
             />
           ) : null}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   )

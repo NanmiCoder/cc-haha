@@ -193,7 +193,7 @@ export function InlineImageGallery({ text, sessionId, workDir, mentions, changed
     <>
       <div className="mt-3 space-y-2">
         <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
-          <ImageIcon size={12} strokeWidth={2} aria-hidden="true" />
+          <ImageIcon size={12} strokeWidth={1.75} aria-hidden="true" />
           {t(visibleImages.length === 1 ? 'chat.imageCountOne' : 'chat.imageCountOther', { count: visibleImages.length })}
         </div>
         <div className={`grid gap-2 ${visibleImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>

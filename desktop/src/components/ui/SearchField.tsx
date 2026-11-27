@@ -43,9 +43,9 @@ const ICON_INSET: Record<FieldSize, string> = { sm: 'left-2', md: 'left-2.5', lg
 const TEXT_INSET: Record<FieldSize, string> = { sm: 'pl-7', md: 'pl-8', lg: 'pl-9', xl: 'pl-10' }
 /** Page-level (`xl`) search bars take the card corner; inline ones the control corner. */
 const RADIUS: Record<FieldSize, string> = {
-  sm: 'rounded-[var(--radius-md)]',
-  md: 'rounded-[var(--radius-md)]',
-  lg: 'rounded-[var(--radius-md)]',
+  sm: 'rounded-[var(--radius-control)]',
+  md: 'rounded-[var(--radius-card-inner)]',
+  lg: 'rounded-[var(--radius-card-inner)]',
   xl: 'rounded-[var(--radius-lg)]',
 }
 

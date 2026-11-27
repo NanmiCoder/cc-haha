@@ -3,6 +3,7 @@ import { forwardRef, useState, useRef, useEffect, useCallback, useId, useImperat
 import DOMPurify from 'dompurify'
 import { Check, ChevronDown, CirclePlay, DraftingCompass, Folder, Gavel, ShieldCheck, Zap, type LucideIcon } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
+import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -113,7 +114,12 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const [autoConsentPending, setAutoConsentPending] = useState(false)
   const interactionTabIdRef = useRef<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const [roomRef, menuRoom, roomSide] = useRoomAbove<HTMLDivElement>({ allowBelow: menuPlacement !== 'bottom' })
+  const setDesktopMenuRef = useCallback((node: HTMLDivElement | null) => {
+    menuRef.current = node
+    roomRef(node)
+  }, [roomRef])
 
   const isControlled = value !== undefined
   const PERMISSION_ITEMS: Array<{
@@ -206,11 +212,12 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const glyphOnly = compact || (trigger === 'quiet' && currentMode === 'default')
   const compactButtonClass = glyphOnly
     ? isMobile
-      ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0'
-      : 'h-7 w-7 justify-center rounded-[var(--radius-sm)] p-0'
-    : 'control-bevel h-7 gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 text-xs'
+      ? 'h-11 w-11 justify-center rounded-[var(--radius-card-inner)] p-0'
+      : 'h-7 w-7 justify-center rounded-[var(--radius-control)] p-0'
+    : 'v6c-raised v6c-pressable h-7 gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-surface-glass-border)] px-2 text-xs'
   const TriggerIcon = MODE_ICONS[currentMode]
-  const menuPlacementClass = menuPlacement === 'bottom'
+  const effectivePlacement = menuPlacement === 'bottom' ? 'bottom' : roomSide
+  const menuPlacementClass = effectivePlacement === 'bottom'
     ? 'top-full mt-2'
     : 'bottom-full mb-2'
   const menuAlignClass = menuAlign === 'right' ? 'right-0' : 'left-0'
@@ -310,7 +317,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             <div className="text-xs leading-snug text-[var(--color-text-tertiary)]">{item.description}</div>
           </div>
           {item.value === currentMode && (
-            <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-brand)]" />
+            <Check aria-hidden="true" size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--color-brand)]" />
           )}
         </button>
       ))}
@@ -341,8 +348,10 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
         // `shrink-0` / `whitespace-nowrap`: it shares the composer toolbar with
         // the run-location pill, whose branch name can be arbitrarily long.
         // Without these the label wrapped to two lines and grew the whole row.
-        className={`flex shrink-0 items-center whitespace-nowrap text-[var(--color-text-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-          open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+        className={`flex shrink-0 items-center whitespace-nowrap text-[var(--color-text-secondary)] transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          glyphOnly
+            ? `hover:bg-[var(--color-surface-hover)] ${open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`
+            : `hover:[background:var(--v6c-raised-fill-hover)] ${open ? '[background:var(--v6c-raised-fill-hover)] text-[var(--color-text-primary)]' : ''}`
         } ${compactButtonClass}`}
       >
         {glyphOnly ? (
@@ -353,7 +362,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
         {!glyphOnly && (
           <>
             <span>{MODE_LABELS[currentMode]}</span>
-            <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="text-[var(--color-text-tertiary)]" />
+            <ChevronDown aria-hidden="true" size={12} strokeWidth={1.75} className="text-[var(--color-text-tertiary)]" />
           </>
         )}
       </button>
@@ -374,7 +383,13 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             </div>
           </MobileBottomSheet>
         ) : (
-          <div id={menuId} ref={menuRef} role="menu" className={`absolute ${menuAlignClass} ${menuPlacementClass} z-[var(--z-dropdown)] w-[340px] ${COMPOSER_POPOVER}`}>
+          <div
+            id={menuId}
+            ref={setDesktopMenuRef}
+            role="menu"
+            style={menuPlacement !== 'bottom' && menuRoom ? { maxHeight: menuRoom } : undefined}
+            className={`absolute ${menuAlignClass} ${menuPlacementClass} z-[var(--z-dropdown)] scrollbar-autohide w-[340px] overflow-y-auto ${COMPOSER_POPOVER}`}
+          >
             <div className={COMPOSER_MENU_SECTION}>
               {t('permMode.executionPermissions')}
             </div>
@@ -410,15 +425,15 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             </div>
             <ul className="space-y-1.5 text-xs text-[var(--color-text-secondary)]">
               <li className="flex items-start gap-2">
-                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
+                <Check aria-hidden="true" size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permReadWrite')}
               </li>
               <li className="flex items-start gap-2">
-                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
+                <Check aria-hidden="true" size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permShell')}
               </li>
               <li className="flex items-start gap-2">
-                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
+                <Check aria-hidden="true" size={14} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permPackages')}
               </li>
             </ul>

@@ -192,7 +192,7 @@ const TrajectoryRowView = memo(function TrajectoryRowView({ item, selected, coll
       className={cx(
         'group flex h-full items-center border-l-2 pr-3 text-[13px]',
         selected
-          ? 'border-l-[var(--color-brand)] bg-[var(--color-surface-selected)]'
+          ? 'v6c-row-highlight border-l-[var(--color-brand)]'
           : 'border-l-transparent hover:bg-[var(--color-surface-hover)]',
         turnStart && 'border-t border-t-[var(--color-border)]',
       )}
@@ -207,7 +207,7 @@ const TrajectoryRowView = memo(function TrajectoryRowView({ item, selected, coll
             aria-label={t(collapsed ? 'trajectory.table.expandTurn' : 'trajectory.table.collapseTurn', { turn: turnLabel(row.turn, t) })}
             className="flex items-center gap-0.5 rounded-[var(--radius-xs)] px-1 text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            {collapsed ? <ChevronRight size={12} strokeWidth={2} aria-hidden /> : <ChevronDown size={12} strokeWidth={2} aria-hidden />}
+            {collapsed ? <ChevronRight size={12} strokeWidth={1.75} aria-hidden /> : <ChevronDown size={12} strokeWidth={1.75} aria-hidden />}
             <span className="whitespace-nowrap">{turnLabel(row.turn, t)}</span>
           </button>
         )}

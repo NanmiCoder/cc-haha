@@ -68,7 +68,7 @@ export function InstallConfirmDialog({
           {t('market.installConfirm.message', { name: skill.name, source: t(`market.source.${skill.source}`) })}
         </p>
 
-        <div className="flex flex-col gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2.5 text-xs">
+        <div className="flex flex-col gap-2 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2.5 text-xs">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[var(--color-text-tertiary)]">{t('market.filter.source')}</span>
             <span className="font-medium text-[var(--color-text-primary)]">{t(`market.source.${skill.source}`)}</span>
@@ -112,7 +112,7 @@ export function InstallConfirmDialog({
             <h3 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
               {t('market.installConfirm.willGet')}
             </h3>
-            <ul className="mt-2 divide-y divide-[var(--color-border)] rounded-[var(--radius-md)] border border-[var(--color-border)]">
+            <ul className="mt-2 divide-y divide-[var(--color-border)] rounded-[var(--radius-card-inner)] border border-[var(--color-border)]">
               {capabilities.map((capability) => {
                 const text = capabilityText(t, capability)
                 return (
@@ -123,7 +123,7 @@ export function InstallConfirmDialog({
                         {text.detail}
                       </span>
                     </span>
-                    <Badge tone={CAPABILITY_LEVEL_TONES[capability.level]} size="xs">
+                    <Badge tone={CAPABILITY_LEVEL_TONES[capability.level]} size="xs" pill={false}>
                       {t(`market.cap.level.${capability.level}`)}
                     </Badge>
                   </li>

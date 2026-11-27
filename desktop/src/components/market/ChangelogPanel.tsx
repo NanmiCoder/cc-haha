@@ -27,9 +27,9 @@ export function ChangelogPanel({
   return (
     <Card
       radius="lg"
-      surface="lowest"
+      surface="none"
       padding="none"
-      className="overflow-hidden"
+      className="v6c-glass-card overflow-hidden"
       data-testid="market-changelog-panel"
     >
       <h2 className="flex h-10 items-center border-b border-[var(--color-border)] px-4 text-[13px] font-medium text-[var(--color-text-primary)]">{t('market.detail.changelog')}</h2>
@@ -38,7 +38,7 @@ export function ChangelogPanel({
           <article>
             <header className="flex flex-wrap items-center gap-2">
               {releaseVersion && (
-                <Badge variant="outline" size="xs" mono>
+                <Badge variant="outline" size="xs" pill={false} mono>
                   {releaseVersion.startsWith('v') ? releaseVersion : `v${releaseVersion}`}
                 </Badge>
               )}

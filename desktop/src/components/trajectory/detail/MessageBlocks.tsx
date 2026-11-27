@@ -40,7 +40,7 @@ export function MessageBlocks({ message }: { message: NormalizedMessage }) {
   const styles = ROLE_STYLES[message.role]
   return (
     <div
-      className={`trace-message-cv rounded-[var(--radius-md)] px-3.5 py-3 ${styles.container}`}
+      className={`trace-message-cv rounded-[var(--radius-card-inner)] px-3.5 py-3 ${styles.container}`}
       data-testid={`trace-message-${message.role}`}
     >
       <div className={`font-mono text-[11px] font-medium ${styles.badge}`}>
@@ -101,7 +101,7 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        className="v6c-raised v6c-pressable inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2.5 text-[12px] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
       >
         {t('trace.detail.thinking')} · {t('trace.detail.chars', { count: thinking.length })}
       </button>
@@ -133,7 +133,7 @@ function ToolResultBlock({ toolUseId, content, isError }: { toolUseId?: string; 
   const t = useTranslation()
   const text = extractPlainText(content)
   return (
-    <div className={`min-w-0 ${isError ? 'rounded-[var(--radius-md)] border border-[var(--color-error)] p-2' : ''}`}>
+    <div className={`min-w-0 ${isError ? 'v6c-ring-error rounded-[var(--radius-md)] p-2' : ''}`}>
       <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--color-text-primary)]">
         <span className={isError ? 'text-[var(--color-error)]' : ''}>
           {isError ? t('trace.toolError') : t('trace.toolResult')}

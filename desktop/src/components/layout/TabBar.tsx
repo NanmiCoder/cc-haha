@@ -104,11 +104,11 @@ const isDesktopRuntime = desktopHost.isDesktop
 const EMPTY_DISMISSED_BACKGROUND_TASK_KEYS: readonly string[] = []
 const EMPTY_ACTIVITY_MESSAGES: UIMessage[] = []
 
-/** Scheme A quiet capsule tab on the floating inset canvas (no bulky card lift). */
+/** V6C low-radius raised glass tab (9px corner, neutral glass rim, no border jump). */
 const SESSION_TAB_BASE =
-  'tab-bar-interactive group relative flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] pl-2.5 pr-1 min-w-[112px] max-w-[200px] transition-[background-color,box-shadow,color] duration-150 ease-out'
+  'tab-bar-interactive group relative flex h-7 shrink-0 items-center rounded-[var(--radius-control)] pl-2.5 pr-1 min-w-[112px] max-w-[200px] transition-[background-color,box-shadow,color] duration-150 ease-out'
 const SESSION_TAB_ACTIVE =
-  'bg-[var(--color-surface-container)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border)]'
+  'v6c-raised text-[var(--color-text-primary)]'
 const SESSION_TAB_IDLE =
   'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
 
@@ -758,37 +758,37 @@ export function TabBar() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] p-1 [-webkit-app-region:no-drag]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             onClick={() => { handleClose(contextMenu.sessionId); setContextMenu(null) }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.close')}
           </button>
           <button
             onClick={() => handleCloseOthers(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeOthers')}
           </button>
           <button
             onClick={() => handleCloseLeft(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeLeft')}
           </button>
           <button
             onClick={() => handleCloseRight(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeRight')}
           </button>
           <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
             onClick={handleCloseAll}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeAll')}
           </button>
@@ -796,7 +796,7 @@ export function TabBar() {
           <button
             disabled={!canReopenClosedTab}
             onClick={() => { setContextMenu(null); void reopenClosedSessionTab() }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
           >
             {t('tabs.reopenClosed')}
           </button>
@@ -921,7 +921,7 @@ const TabItem = forwardRef<HTMLDivElement, {
 
       <span className={`ml-1.5 flex-shrink-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
         <IconButton
-          icon={<X size={12} strokeWidth={2} aria-hidden="true" />}
+          icon={<X size={12} strokeWidth={1.75} aria-hidden="true" />}
           label={closeLabel}
           onMouseDown={(e) => { e.stopPropagation() }}
           onClick={(e) => { e.stopPropagation(); onClose() }}

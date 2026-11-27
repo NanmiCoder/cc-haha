@@ -98,7 +98,7 @@ function RecentProjectItem({
       onClick={() => onSelect(project.realPath)}
       // Selected and keyboard-highlighted share the hover fill; the terracotta
       // check on the right is what marks the current project.
-      className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] ${
+      className={`flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] ${
         touch ? 'min-h-[56px] py-2.5' : 'min-h-8 py-1.5'
       } ${
         isSelected || highlighted ? 'bg-[var(--color-surface-hover)]' : ''
@@ -118,7 +118,7 @@ function RecentProjectItem({
         </div>
       </div>
       {isSelected && (
-        <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />
+        <Check size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />
       )}
     </button>
   )
@@ -313,7 +313,7 @@ export function RecentProjectsPanel({
     }
   }
 
-  const actionRowClassName = `flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none ${
+  const actionRowClassName = `flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none ${
     touch ? 'min-h-11 py-2' : 'min-h-8 py-1.5'
   }`
 
@@ -324,7 +324,7 @@ export function RecentProjectsPanel({
           <button
             type="button"
             onClick={() => setMode('recent')}
-            className="mr-1 inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="mr-1 inline-flex h-7 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
             {t('dirPicker.recent')}
@@ -347,7 +347,7 @@ export function RecentProjectsPanel({
           ) : (
             <>
               {browseParent && browseParent !== browsePath && (
-                <button onClick={() => loadBrowseDir(browseParent)} className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]">
+                <button onClick={() => loadBrowseDir(browseParent)} className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]">
                   <ArrowUp size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                   <span className="text-[13px] text-[var(--color-text-secondary)]">..</span>
                 </button>
@@ -357,7 +357,7 @@ export function RecentProjectsPanel({
               ) : browseEntries.map((entry) => (
                 <div
                   key={entry.path}
-                  className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 transition-colors hover:bg-[var(--color-surface-hover)]"
+                  className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-control)] px-2 transition-colors hover:bg-[var(--color-surface-hover)]"
                 >
                   <button
                     type="button"
@@ -541,19 +541,19 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
   // The workbar trigger is a form field (ProjectEditorModal's folder row), so it
   // takes the geometry of the secondary button it alternates with there: h-9,
   // 8px corner, a hairline that firms up on hover.
-  const workbarTriggerClassName = (isMobileBrowser ? 'min-h-11 ' : '') + 'group inline-flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm font-medium leading-none text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-50'
+  const workbarTriggerClassName = (isMobileBrowser ? 'min-h-11 ' : '') + 'group inline-flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-surface-glass-border)] v6c-raised px-3 text-sm font-medium leading-none text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:[background:var(--v6c-raised-fill-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-50'
   const triggerClassName = isWorkbar
     ? 'max-w-full ' + workbarTriggerClassName
-    : 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    : 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
   const emptyTriggerClassName = isWorkbar
     ? workbarTriggerClassName
-    : 'inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    : 'inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-1.5 text-xs text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
   const containerClassName = isWorkbar
     ? `relative min-w-0 ${isMobileBrowser ? 'flex-1' : 'max-w-[320px] shrink'}`
     : 'relative'
 
-  const dropdownClassName = 'flex flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  const dropdownClassName = 'dropdown-glass flex flex-col overflow-y-auto rounded-[var(--radius-xl)] p-[5px]'
   const dropdownStyle = {
     position: 'fixed' as const,
     left: dropdownPos?.left,

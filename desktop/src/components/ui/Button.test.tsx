@@ -79,7 +79,7 @@ describe('Button', () => {
     it('leaves the default shape square-cornered and padded', () => {
       const { container } = render(<Button>Label</Button>)
       const className = container.firstElementChild?.className ?? ''
-      expect(className.match(/\brounded-\S+/g)).toEqual(['rounded-[var(--radius-md)]'])
+      expect(className.match(/\brounded-\S+/g)).toEqual(['rounded-[var(--radius-control)]'])
       expect(className).toMatch(/\bpx-/)
     })
   })
@@ -140,5 +140,62 @@ describe('Button', () => {
 
     expect(ref.current).toBeInstanceOf(HTMLButtonElement)
     expect(ref.current).toBe(screen.getByRole('button', { name: 'Anchor' }))
+  })
+
+  describe('shape="key"', () => {
+    it.each(SIZES)('is a square at size=%s with the 11px key corner and no padding', (size) => {
+      const { container } = render(
+        <Button variant="accent" shape="key" size={size} aria-label="Send" icon={<span>i</span>} />,
+      )
+      const className = container.firstElementChild?.className ?? ''
+      expect(className.match(/\bh-(\d+)\b/)?.[1]).toBe(className.match(/\bw-(\d+)\b/)?.[1])
+      // Exactly one radius, so the corner never depends on stylesheet order.
+      expect(className.match(/\brounded-\S+/g)).toEqual(['rounded-[var(--radius-key)]'])
+      expect(className).not.toMatch(/\bpx-/)
+    })
+  })
+
+  describe('V6C Calm Liquid Glass', () => {
+    it('renders accent as the sculptural terracotta send key, not a flat brand fill', () => {
+      const { container } = render(<Button variant="accent" shape="circle" aria-label="Send" icon={<span>i</span>} />)
+      const className = container.firstElementChild?.className ?? ''
+      expect(className).toContain('v6c-send-btn')
+      // The flat brand color stays only as the background-color under the
+      // sculpted gradient image; terracotta remains the send key's alone.
+      expect(className).toContain('bg-[var(--color-brand)]')
+      expect(className).not.toMatch(/(?:^|\s)bg-\[(?:image:|linear|radial)/)
+      expect(className).toContain('text-[var(--v6c-send-fg)]')
+      // Disabled must still drop the gradient so the opaque block shows.
+      expect(className).toContain('disabled:bg-none')
+    })
+
+    it('raises secondary as glass with a hairline instead of a drawn border', () => {
+      const { container } = render(<Button variant="secondary">Cancel</Button>)
+      const className = container.firstElementChild?.className ?? ''
+      expect(className).toContain('v6c-raised')
+      expect(className).toContain('border-[var(--color-surface-glass-border)]')
+      expect(className).toContain('disabled:bg-none')
+    })
+
+    it('never uses a heavier weight than semibold', () => {
+      for (const variant of VARIANTS) {
+        const { container, unmount } = render(<Button variant={variant}>Label</Button>)
+        expect(container.firstElementChild?.className).not.toMatch(/\bfont-(?:bold|extrabold|black)\b/)
+        unmount()
+      }
+    })
+
+    it.each(['xs', 'sm'] as const)('keeps compact size=%s buttons on 6px corners instead of looking pill-shaped', (size) => {
+      const { container } = render(<Button size={size}>Retry</Button>)
+      const className = container.firstElementChild?.className ?? ''
+      expect(className.match(/\brounded-\S+/g)).toEqual(['rounded-[var(--radius-sm)]'])
+    })
+
+    it('lets .v6c-send-btn own active scaling without multiplying the base active scale', () => {
+      const { container } = render(<Button variant="accent" shape="key" aria-label="Send" icon={<span>i</span>} />)
+      const className = container.firstElementChild?.className ?? ''
+      expect(className).toContain('v6c-send-btn')
+      expect(className).toContain('[&:active:not(:disabled):not([aria-haspopup])]:scale-100')
+    })
   })
 })

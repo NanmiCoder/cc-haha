@@ -53,13 +53,13 @@ type Props = {
   markerWhenPending?: boolean
 }
 
-/** Card shell shared by the permission and plan-approval cards (「素」). */
+/** Frosted glass card shell shared by the permission and plan-approval cards (V6C). */
 const PENDING_CARD =
-  'mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-outline)] border-l-2 border-l-[var(--color-warning)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'
+  'v6c-glass-card v6c-ring-waiting mb-4 overflow-hidden rounded-[var(--radius-lg)] backdrop-blur-[var(--glass-blur)]'
 
 /** A request that has been answered collapses to one quiet line. */
 const RESOLVED_ROW =
-  'mb-4 flex min-h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1.5 pl-3 pr-2 text-[13px] text-[var(--color-text-secondary)]'
+  'v6c-glass-card mb-4 flex min-h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] py-1.5 pl-3 pr-2 text-[13px] text-[var(--color-text-secondary)]'
 
 /** Sunken inset for commands, paths and raw input inside the card. */
 const INSET_BLOCK =
@@ -200,7 +200,7 @@ export function PermissionDialog({
         <ToolIcon aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {effectiveSubagentName ? (
-          <Badge tone="info" data-testid="permission-subagent-badge" className="shrink-0">
+          <Badge tone="info" pill={false} data-testid="permission-subagent-badge" className="shrink-0">
             {t('permission.fromSubagent', { name: effectiveSubagentName })}
           </Badge>
         ) : null}
@@ -209,7 +209,7 @@ export function PermissionDialog({
             {details.primary}
           </span>
         ) : null}
-        <Badge icon={<Check aria-hidden="true" size={12} strokeWidth={2} />}>
+        <Badge pill={false} icon={<Check aria-hidden="true" size={12} strokeWidth={1.75} />}>
           {t('permission.responded')}
         </Badge>
       </div>
@@ -234,7 +234,7 @@ export function PermissionDialog({
     >
       {/* Header: icon block, title over context, "awaiting" pill. */}
       <div className="flex items-start gap-3 px-4 pb-3 pt-3.5">
-        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
+        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
           <ToolIcon aria-hidden="true" size={16} strokeWidth={1.75} />
         </div>
         <div className="min-w-0 flex-1">
@@ -243,7 +243,7 @@ export function PermissionDialog({
               {title}
             </span>
             {effectiveSubagentName ? (
-              <Badge tone="info" data-testid="permission-subagent-badge" className="shrink-0">
+              <Badge tone="info" pill={false} data-testid="permission-subagent-badge" className="shrink-0">
                 {t('permission.fromSubagent', { name: effectiveSubagentName })}
               </Badge>
             ) : null}
@@ -254,6 +254,7 @@ export function PermissionDialog({
         </div>
         <Badge
           tone="warning"
+          pill={false}
           icon={<StatusDot tone="warning" pulse />}
           className="shrink-0"
         >
@@ -448,7 +449,7 @@ function ExitPlanModePermissionDialog({
       <div className={RESOLVED_ROW}>
         <ListChecks aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate">{t('permission.planReadyTitle')}</span>
-        <Badge icon={<Check aria-hidden="true" size={12} strokeWidth={2} />}>
+        <Badge pill={false} icon={<Check aria-hidden="true" size={12} strokeWidth={1.75} />}>
           {t('permission.responded')}
         </Badge>
       </div>
@@ -483,6 +484,7 @@ function ExitPlanModePermissionDialog({
         </span>
         <Badge
           tone="warning"
+          pill={false}
           icon={<StatusDot tone="warning" pulse />}
           className="shrink-0"
         >
@@ -509,7 +511,7 @@ function ExitPlanModePermissionDialog({
           placeholder={t('permission.planFeedbackPlaceholder')}
           rows={3}
           disabled={submittingRuntime}
-          className="scrollbar-autohide min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2.5 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)]"
+          className="v6c-field scrollbar-autohide min-h-[72px] w-full resize-y rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-3 py-2.5 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)]"
         />
         <div className="flex items-center justify-between gap-3">
           <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">

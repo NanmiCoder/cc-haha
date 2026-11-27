@@ -2697,15 +2697,18 @@ describe('Sidebar', () => {
 
     expect(screen.getByRole('button', { name: /First Session/ }).parentElement).toHaveClass('mb-px')
     expect(screen.getByRole('button', { name: /First Session/ })).toHaveClass('sidebar-session-row--selected')
-    // Both the batch selection and the open session use the calm flat editorial highlight.
+    // Both the batch selection and the open session use the V6C raised glass row;
+    // the active session also carries the 3px terracotta leading bar.
     for (const name of [/First Session/, /Second Session/]) {
       expect(screen.getByRole('button', { name })).toHaveClass(
-        'bg-[var(--color-sidebar-item-active)]',
+        'v6c-raised',
         'text-[var(--color-text-primary)]',
       )
-      expect(screen.getByRole('button', { name }).className).not.toContain('--shadow-raised')
     }
-    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('bg-[var(--color-sidebar-item-active)]')
+    expect(screen.getByRole('button', { name: /Second Session/ })).toHaveClass('v6c-active-bar')
+    expect(screen.getByRole('button', { name: /First Session/ })).not.toHaveClass('v6c-active-bar')
+    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('v6c-raised')
+    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('v6c-active-bar')
     expect(screen.getByRole('button', { name: /Second Session/ })).toHaveClass('sidebar-session-row--active')
     expect(screen.getByRole('button', { name: /Third Session/ })).toHaveClass('sidebar-session-row--idle')
   })
@@ -3859,6 +3862,45 @@ describe('Sidebar', () => {
       expect(useUIStore.getState().sidebarOpen).toBe(true)
       const railGroup = await screen.findByTestId('sidebar-project-group-workspace-rail-repo')
       expect(within(railGroup).getByText('Rail thread')).toBeInTheDocument()
+    })
+
+    it('portals project context, header, and organize submenus to document.body outside the sidebar aside', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('s-portal', 'Portal thread', '/workspace/portal-repo', at)],
+      })
+      useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      const { container } = render(<Sidebar />)
+      const aside = container.querySelector('aside.sidebar-panel')!
+      expect(aside).toBeInTheDocument()
+      expect(aside).not.toHaveClass('v6c-sidebar-glass')
+
+      // Project header menu + Organize submenu must render outside <aside> so
+      // .sidebar-shell overflow:hidden never clips the right-aligned submenu.
+      fireEvent.click(screen.getByRole('button', { name: 'Project menu' }))
+      const headerMenu = screen.getByRole('menu')
+      expect(aside).not.toContainElement(headerMenu)
+      expect(document.body).toContainElement(headerMenu)
+
+      fireEvent.click(within(headerMenu).getByRole('menuitem', { name: 'Organize sidebar' }))
+      const menus = screen.getAllByRole('menu')
+      expect(menus).toHaveLength(2)
+      for (const menu of menus) {
+        expect(aside).not.toContainElement(menu)
+        expect(document.body).toContainElement(menu)
+      }
+
+      // Close header menus before opening the project context menu.
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+      // Project context menu must also portal to document.body.
+      const actionsBtn = screen.getByRole('button', { name: 'Project actions for portal-repo' })
+      fireEvent.click(actionsBtn)
+      const contextMenu = screen.getByRole('menu')
+      expect(aside).not.toContainElement(contextMenu)
+      expect(document.body).toContainElement(contextMenu)
     })
   })
 })

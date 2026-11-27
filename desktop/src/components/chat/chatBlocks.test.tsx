@@ -207,7 +207,7 @@ describe('chat blocks', () => {
 
     const thinkingRow = screen.getByRole('button', { name: /Thinking/ })
     expect(thinkingRow).toBeTruthy()
-    expect(thinkingRow.querySelector('.thinking-dots')).not.toBeNull()
+    expect(thinkingRow.querySelector('.codex-shimmer-text')).not.toBeNull()
   })
 
   it('replaces every image placeholder with the saved tool result', () => {
@@ -350,8 +350,9 @@ describe('chat blocks', () => {
     const content = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join('\n')
     const { container } = render(<ThinkingBlock content={content} />)
 
-    // Collapsed shows the opening line only; the body stays shut.
-    expect(container.textContent).toContain('line-1')
+    // Collapsed stays completely quiet (`Thought`) until clicked; the body stays shut.
+    expect(container.textContent).toContain('Thought')
+    expect(container.textContent).not.toContain('line-1')
     expect(container.textContent).not.toContain('line-11')
     expect(container.querySelector('[data-thinking-content="expanded"]')).toBeNull()
 

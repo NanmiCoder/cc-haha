@@ -86,7 +86,7 @@ export function SidebarTaskList({
                       if (event.key === 'Enter') onFinishRename()
                       if (event.key === 'Escape') onCancelRename()
                     }}
-                    className="h-[30px] w-full rounded-[var(--radius-sm)] border border-[var(--color-border-focus)] bg-[var(--color-surface)] px-2 text-[13px] text-[var(--color-text-primary)] outline-none"
+                    className="v6c-field h-[30px] w-full rounded-[var(--radius-control)] border border-[var(--color-border-focus)] px-2 text-[13px] text-[var(--color-text-primary)] outline-none"
                   />
                 ) : (
                   <SidebarSessionCard

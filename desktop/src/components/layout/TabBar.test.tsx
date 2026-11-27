@@ -1983,7 +1983,7 @@ describe('TabBar', () => {
     expect(screen.getByTestId('workspace-layout-controls')).toHaveClass('tab-bar-interactive')
   })
 
-  it('renders Scheme A quiet capsule session tabs without bulky card shadows or border jumps', async () => {
+  it('renders V6C low-radius raised glass session tabs without border jumps', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -2007,9 +2007,9 @@ describe('TabBar', () => {
     const active = screen.getByText('Active One').closest('.tab-bar-interactive')
     const inactive = screen.getByText('Inactive One').closest('.tab-bar-interactive')
 
-    expect(active?.className).toContain('bg-[var(--color-surface-container)]')
-    expect(active?.className).toContain('0_0_0_1px_var(--color-border)')
-    expect(active?.className).not.toContain('--shadow-raised')
+    expect(active).toHaveClass('v6c-raised', 'rounded-[var(--radius-control)]')
+    expect(inactive).toHaveClass('rounded-[var(--radius-control)]')
+    expect(inactive).not.toHaveClass('v6c-raised')
     expect(inactive?.className).not.toMatch(/(?:^|\s)bg-/)
     expect(inactive?.className).toContain('hover:bg-[var(--color-surface-hover)]')
 
@@ -2041,8 +2041,8 @@ describe('TabBar', () => {
     const strip = screen.getByTestId('tab-bar')
 
     expect(strip).toHaveClass('bg-transparent', 'border-b', 'border-[var(--color-border)]')
-    expect(screen.getByText('Active One').closest('.tab-bar-interactive')?.className)
-      .toContain('bg-[var(--color-surface-container)]')
+    expect(screen.getByText('Active One').closest('.tab-bar-interactive'))
+      .toHaveClass('v6c-raised')
   })
 
   it('marks every tab with its selection state', async () => {

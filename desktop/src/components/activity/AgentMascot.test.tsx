@@ -34,14 +34,28 @@ describe('AgentMascot', () => {
     expect(mascot).toHaveAttribute('aria-hidden', 'true')
     expect(mascot).toHaveClass('h-[30px]')
     expect(mascot).toHaveClass('w-[30px]')
+    expect(mascot.className).not.toContain('color-mix')
     expect(mascot.querySelector('img')).toHaveAttribute('alt', '')
     expect(mascot.querySelector('img')).toHaveAttribute('draggable', 'false')
   })
 
-  it('only renders the motion ring for active agents', () => {
+  it.each([
+    ['running', 'v6c-ring-running'],
+    ['completed', 'v6c-ring-success'],
+    ['failed', 'v6c-ring-error'],
+  ] as const)('applies crisp V6C status ring %s -> %s', (status, ringClass) => {
+    render(<AgentMascot seed="agent-seed" status={status} />)
+    expect(screen.getByTestId('agent-mascot')).toHaveClass(ringClass)
+  })
+
+  it('only renders a circular concentric motion ring for active agents', () => {
     const { rerender } = render(<AgentMascot seed="agent-seed" status="running" />)
 
-    expect(screen.getByTestId('agent-mascot-motion-ring')).toBeInTheDocument()
+    const mascot = screen.getByTestId('agent-mascot')
+    const ring = screen.getByTestId('agent-mascot-motion-ring')
+    expect(mascot).toHaveClass('rounded-full')
+    expect(ring).toBeInTheDocument()
+    expect(ring).toHaveClass('rounded-full', 'inset-0', 'motion-safe:animate-spin', 'motion-reduce:animate-none')
 
     rerender(<AgentMascot seed="agent-seed" status="completed" />)
 

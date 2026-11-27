@@ -1811,6 +1811,9 @@ describe('MessageList nested tool calls', () => {
     render(<MessageList />)
 
     expect(screen.getByText('Goal set')).toBeTruthy()
+    // Goal event cards default collapsed for a calm transcript and expand on click.
+    expect(screen.queryByText('Objective: ship the smoke test')).toBeNull()
+    fireEvent.click(screen.getByTestId('goal-event-card').querySelector('button')!)
     expect(screen.getByText('Objective: ship the smoke test')).toBeTruthy()
     expect(screen.getByText('Status: active')).toBeTruthy()
     expect(screen.getByText('Budget: 0 / 2,000 tokens')).toBeTruthy()
@@ -1836,6 +1839,7 @@ describe('MessageList nested tool calls', () => {
     render(<MessageList />)
 
     expect(screen.getByText('Goal set')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('goal-event-card').querySelector('button')!)
     expect(screen.getByText('Objective: ship the replacement target')).toBeTruthy()
     expect(screen.getByText('Budget: 0 / unlimited tokens')).toBeTruthy()
   })
@@ -2659,9 +2663,7 @@ describe('MessageList nested tool calls', () => {
 
     expect(screen.getByText('preferences.md')).toBeTruthy()
     expect(screen.getByText('Tool details')).toBeTruthy()
-    const memoryCardClassName = screen.getByTestId('memory-tool-activity-card').className
-    expect(memoryCardClassName).toContain('border-[var(--color-memory-border)]')
-    expect(memoryCardClassName).toContain('bg-[var(--color-memory-surface)]')
+    expect(screen.getByTestId('memory-tool-activity-card').querySelector('.codex-work-row')).not.toBeNull()
   })
 
   it('promotes memory file reads into collapsible memory references', () => {
@@ -2815,18 +2817,47 @@ describe('MessageList nested tool calls', () => {
 
     const group = screen.getByTestId('activity-group')
     expect(group.getAttribute('data-running')).toBe('true')
-    // The tool finished but the run has not: feedback has to stay somewhere the
-    // reader can see (#d3ba73af3, which restored it after an earlier collapse
-    // dropped it). It now sits on the step that is actually still going — the
-    // streaming thinking row — rather than on a summary header above them all.
-    expect(group.querySelector('.thinking-dots')).not.toBeNull()
+    // Collapsed live work row reflects the streaming thinking step with shimmer
+    // without stacking a duplicate StreamingIndicator beneath it.
+    expect(group.querySelector('.codex-shimmer-text')).not.toBeNull()
+    expect(screen.queryByTestId('turn-status-indicator')).toBeNull()
 
     act(() => {
       store.handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' })
     })
 
     expect(group.getAttribute('data-running')).toBe('false')
-    expect(group.querySelector('.thinking-dots')).toBeNull()
+    expect(group.querySelector('.codex-shimmer-text')).toBeNull()
+  })
+
+  it('suppresses red error chrome and failed badges for self-recovered tool errors in a settled turn', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'idle',
+          messages: [
+            { id: 'u1', type: 'user_text', content: 'Fix the lint error', timestamp: 1 },
+            { id: 't1', type: 'tool_use', toolName: 'Bash', toolUseId: 'bash-fail', input: { command: 'bun run lint' }, timestamp: 2 },
+            { id: 'r1', type: 'tool_result', toolUseId: 'bash-fail', content: 'Error: unused var\nExit code 1', isError: true, timestamp: 3 },
+            { id: 't2', type: 'tool_use', toolName: 'Edit', toolUseId: 'edit-fix', input: { file_path: '/repo/a.ts', old_string: 'x', new_string: 'y' }, timestamp: 4 },
+            { id: 'r2', type: 'tool_result', toolUseId: 'edit-fix', content: 'updated', isError: false, timestamp: 5 },
+            { id: 'a1', type: 'assistant_text', content: 'Fixed the unused variable and lint now passes.', timestamp: 6 },
+          ],
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList sessionId={ACTIVE_TAB} />)
+    const group = screen.getByTestId('activity-group')
+    expect(group.className).not.toContain('v6c-ring-error')
+    expect(screen.queryByText(/failed/i)).toBeNull()
+    expect(container.querySelector('.v6c-ring-error')).toBeNull()
+
+    // Expanding reveals the intermediate failed step in calm monochrome.
+    fireEvent.click(group.querySelector('[data-chat-disclosure="true"]')!)
+    const failedRow = group.querySelector('[data-tool-use-id="bash-fail"]')!
+    expect(failedRow.getAttribute('data-tool-status')).toBe('recovered')
+    expect(failedRow.getAttribute('data-tool-error-severity')).toBe('recovered')
   })
 
   it('keeps an expanded tool group mounted when older and newer pages extend it', () => {
@@ -2993,17 +3024,20 @@ describe('MessageList nested tool calls', () => {
     )
 
     // Whether a thought is followed by a tool call is a fact about the run, not
-    // about the thought, so it must not change how the thought is drawn — the
-    // lone one used to show its label and nothing else.
-    expect(screen.getByText('先加载浏览器技能再读 issue。')).toBeTruthy()
-    expect(screen.getByText('gh issue 失败了,改用 REST API。')).toBeTruthy()
-
+    // about the thought, so both draw identically as quiet borderless rows.
     const [lone, inRun] = Array.from(
       container.querySelectorAll<HTMLElement>('[data-thinking-row="true"]'),
     )
     expect(lone).toBeTruthy()
     expect(inRun).toBeTruthy()
     expect(lone!.className).toBe(inRun!.className)
+    expect(lone!.className).toContain('codex-work-row')
+
+    // Expanding each reveals its full reasoning body.
+    fireEvent.click(lone!)
+    fireEvent.click(inRun!)
+    expect(screen.getByText('先加载浏览器技能再读 issue。')).toBeTruthy()
+    expect(screen.getByText('gh issue 失败了,改用 REST API。')).toBeTruthy()
   })
 
   it('leaves a run of pure reasoning as standalone thinking blocks', () => {
@@ -3259,6 +3293,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('keeps a row the reader opened open when nested tool calls arrive', async () => {
+    clearDisclosureMemory()
     const initialMessages: UIMessage[] = [
       {
         id: 'tool-task-update',
@@ -3289,12 +3324,12 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    // Every step is on screen already; what the reader opts into is one row's
-    // detail. That choice is what has to survive the next server update — the
-    // regression here was expansion state resetting on every live refresh.
+    // Live activity runs default collapsed; open the run first, then opt into
+    // one row's detail and verify that choice survives the next server update.
     const group = screen.getByTestId('activity-group')
+    fireEvent.click(group.querySelector('[data-chat-disclosure="true"]')!)
     expect(group.querySelectorAll('[data-tool-call-details]')).toHaveLength(0)
-    fireEvent.click(within(group).getByText('git status --short'))
+    fireEvent.click(group.querySelector('[data-tool-use-id="bash-1"] [data-chat-disclosure="true"]')!)
     expect(group.querySelectorAll('[data-tool-call-details]')).toHaveLength(1)
 
     act(() => {
@@ -4558,7 +4593,7 @@ describe('MessageList nested tool calls', () => {
     clearDisclosureMemory()
   })
 
-  it.each([0, 1])('preserves the reading position when standalone tool-result button %s expands (idle)', async (buttonIndex) => {
+  it('preserves the reading position when standalone tool-result disclosure expands (idle)', async () => {
     const sessionId = 'review-idle-tool-result'
     dropSession(sessionId)
     clearDisclosureMemory()
@@ -4588,7 +4623,7 @@ describe('MessageList nested tool calls', () => {
     await waitForProgrammaticScrollReset()
     fireEvent.scroll(scroller)
     const row = container.querySelector<HTMLElement>('[data-virtual-message-item="reader-219"]')!
-    const button = row.querySelectorAll('button')[buttonIndex]!
+    const button = row.querySelector<HTMLButtonElement>('[data-chat-disclosure="true"]')!
     expect(button).toBeTruthy()
     const observer = observers.find(observer => observer.targets.includes(row))!
     expect(observer).toBeTruthy()
@@ -4920,6 +4955,10 @@ describe('MessageList nested tool calls', () => {
     })
 
     const { container } = render(<MessageList />)
+    const disclosure = container.querySelector<HTMLButtonElement>('[data-testid="activity-group"] [data-chat-disclosure="true"]')
+    if (disclosure) {
+      fireEvent.click(disclosure)
+    }
     const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
     let scrollTop = 552
     Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
@@ -4957,7 +4996,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('2 lines · 36 chars')).toBeTruthy()
+      expect(screen.getAllByText('2 lines · 36 chars').length).toBeGreaterThan(0)
     })
     await waitForProgrammaticScrollReset()
     expect(scrollIntoView).not.toHaveBeenCalled()
@@ -6698,14 +6737,13 @@ describe('MessageList nested tool calls', () => {
     expect(userActions?.className).not.toContain('mt-2')
     expect(userActions?.className).not.toContain('group-hover:h-')
     expect(userActions?.className).not.toContain('invisible')
-    // The closing reply's bar stays in flow: it is always shown.
+    // The closing reply's bar stays in flow and reveals on hover/focus (Codex style).
     expect(assistantActions?.getAttribute('data-placement')).toBe('inline')
     expect(assistantActions?.className).not.toContain('absolute')
     expect(userTime.getAttribute('title')).toBe(formatExactMessageTimestamp(userTimestamp, 'en'))
-    // The closing reply's bar is not hover-gated: it is rare and deliberate now,
-    // so hiding it until hover would only make a present affordance hard to find.
-    expect(assistantActions?.className).not.toContain('opacity-0')
-    expect(assistantActions?.className).not.toContain('pointer-events-none')
+    expect(assistantActions?.className).toContain('opacity-0')
+    expect(assistantActions?.className).toContain('group-hover:opacity-100')
+    expect(assistantActions?.className).toContain('group-focus-within:opacity-100')
   })
 
   describe('turn completion footer (#1151)', () => {
@@ -6750,7 +6788,7 @@ describe('MessageList nested tool calls', () => {
           .getByRole('button', { name: 'Copy reply' })
           .closest('[data-message-actions]'),
       )
-      expect(footer?.className).not.toContain('opacity-0')
+      expect(footer?.className).toContain('group-hover:opacity-100')
     })
 
     it('measures each turn from its own prompt', () => {

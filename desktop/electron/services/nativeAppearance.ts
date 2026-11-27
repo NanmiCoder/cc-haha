@@ -39,11 +39,11 @@ export const APPEARANCE_STATE_FILE = 'appearance-state.json'
 
 /**
  * Grounds used before the renderer has reported anything — the defaults of
- * each half (`white` = `#FFFFFF`, `dark` = `#1B1A18`). Pinned to
+ * each half (`white` = `#FFFFFF`, `dark` = `#181818`). Pinned to
  * THEME_BACKGROUNDS by nativeAppearance.test.ts.
  */
 export const LIGHT_WINDOW_BACKGROUND = '#FFFFFF'
-export const DARK_WINDOW_BACKGROUND = '#1B1A18'
+export const DARK_WINDOW_BACKGROUND = '#181818'
 
 export type AppliedAppearance = {
   isDark: boolean

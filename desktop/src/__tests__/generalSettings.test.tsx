@@ -492,10 +492,11 @@ describe('Settings > General tab', () => {
     render(<Settings />)
 
     const activeItem = screen.getByRole('button', { name: 'General' })
-    // Selection is a rounded ground inside the rail, not a full-bleed band:
-    // the rail is padded, so a square highlight would touch the divider.
-    expect(activeItem.className).toContain('rounded-[var(--radius-sm)]')
-    expect(activeItem.className).toContain('bg-[var(--color-surface-selected)]')
+    // Selection uses the V6C 3px terracotta leading bar and raised glass fill
+    // inside the padded rail, not a heavy full-bleed band.
+    expect(activeItem.className).toContain('rounded-[var(--radius-control)]')
+    expect(activeItem.className).toContain('v6c-active-bar')
+    expect(activeItem.className).toContain('v6c-raised')
     expect(activeItem.className).toContain('h-[30px]')
     expect(activeItem).toHaveAttribute('aria-current', 'page')
 
@@ -2485,11 +2486,11 @@ describe('Settings > Providers tab', () => {
     render(<Settings />)
 
     const card = screen.getByTestId('provider-provider-1')
-    // A terracotta-mixed hairline plus a soft brand halo, so the default row
-    // reads as chosen at a glance — not the focus border, which collided with
-    // the real focus ring.
+    // A crisp terracotta-tinted hairline on the V6C glass card (no outer
+    // colored glow, and not the focus border which collided with the focus ring).
+    expect(card.className).toContain('v6c-glass-card')
     expect(card.className).toContain('border-[var(--color-primary-fixed-dim)]')
-    expect(card.className).toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
+    expect(card.className).not.toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
     expect(card.className).not.toContain('border-[var(--color-border-focus)]')
     // Only the default card carries the accent.
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))

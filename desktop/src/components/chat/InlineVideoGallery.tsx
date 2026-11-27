@@ -167,7 +167,7 @@ function VideoPreview({ video, sessionId, workDir }: { video: GalleryVideo; sess
         onError={() => setFailed(true)}
       />
       <div className="flex h-[30px] items-center gap-1.5 border-t border-[var(--color-border)] px-3 text-[11px] text-[var(--color-text-tertiary)]">
-        <Film size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+        <Film size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
         <span className="truncate">{video.name}</span>
       </div>
     </div>

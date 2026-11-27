@@ -91,7 +91,6 @@ export const AssistantMessage = memo(function AssistantMessage({
   turnOutputEvidence,
   isTurnOutputOwner = true,
   turnCompletion,
-  isLatestTurn = true,
 }: Props) {
   const t = useTranslation()
   const workDir = useWorkspaceContentStore((s) => (sessionId ? s.statusBySession[sessionId]?.workDir : undefined))
@@ -371,7 +370,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             copyLabel={t('chat.copyReply')}
             branchAction={actionMenu.enabled ? undefined : branchAction}
             align="start"
-            alwaysVisible={isLatestTurn}
+            alwaysVisible={false}
             metadata={<TurnCompletionStamp completion={turnCompletion!} />}
           />
         )}

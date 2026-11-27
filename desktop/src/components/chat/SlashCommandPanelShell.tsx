@@ -24,7 +24,7 @@ export function SlashCommandPanelShell({
   const t = useTranslation()
   const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
   return (
-    <div ref={roomRef} style={{ maxHeight: roomAbove }} className="dropdown-glass popover-motion absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-1.5 flex flex-col overflow-hidden rounded-[var(--radius-2xl)]">
+    <div ref={roomRef} style={{ maxHeight: roomAbove }} className="dropdown-glass popover-motion absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-1.5 flex flex-col overflow-hidden rounded-[var(--radius-xl)]">
       <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold leading-snug text-[var(--color-text-primary)]">{title}</h3>

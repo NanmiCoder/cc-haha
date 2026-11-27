@@ -327,49 +327,51 @@ export function GlobalSearchModal({ open, onClose, onSelectProject }: Props) {
   return createPortal(
     <div className="fixed inset-0 z-[var(--z-dialog)] flex items-start justify-center pt-[12vh]">
       <div
-        className="absolute inset-0 bg-[var(--color-modal-scrim)] transition-opacity duration-200"
+        className="dialog-backdrop absolute inset-0 transition-opacity duration-200"
         onClick={onClose}
       />
 
-      {/* The command palette (「素」): a paper sheet with a 52px query row,
-          sectioned 36px rows, and the key legend as its footer. */}
+      {/* V6C command palette: frosted 14px dialog-panel sheet, recessed 10px
+          v6c-field search input, concentric 9px rows, and keycap legend footer. */}
       <div
-        className="animate-overlay-in relative z-10 flex max-h-[70vh] w-[620px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
+        className="dialog-panel animate-overlay-in relative z-10 flex max-h-[70vh] w-[620px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[var(--radius-xl)]"
         role="dialog"
         aria-modal="true"
         aria-label={t('search.global.placeholder')}
       >
         {/* Search input */}
-        <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-[var(--color-border)] px-3.5">
-          <Search size={18} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onCompositionStart={() => setIsComposing(true)}
-            onCompositionEnd={() => setIsComposing(false)}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={t('search.global.placeholder')}
-            aria-label={t('search.global.placeholder')}
-            className="min-w-0 flex-1 bg-transparent text-[15px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
-          />
-          {loading && <Spinner size={14} className="text-[var(--color-text-tertiary)]" />}
-          {/* Esc closes from the keyboard; this is the same exit for the
-              pointer, drawn as the key it stands for. */}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('search.global.close')}
-            title={t('search.global.close')}
-            className={`${KEYCAP_CLASS} cursor-pointer transition-colors hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
-          >
-            esc
-          </button>
+        <div className="shrink-0 border-b border-[var(--color-border)] p-2.5">
+          <div className="v6c-field flex h-10 items-center gap-2.5 rounded-[var(--radius-card-inner)] px-3 transition-[box-shadow] duration-150 focus-within:ring-2 focus-within:ring-[var(--color-border-focus)]">
+            <Search size={16} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={t('search.global.placeholder')}
+              aria-label={t('search.global.placeholder')}
+              className="min-w-0 flex-1 bg-transparent text-[14px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+            />
+            {loading && <Spinner size={14} className="text-[var(--color-text-tertiary)]" />}
+            {/* Esc closes from the keyboard; this is the same exit for the
+                pointer, drawn as the key it stands for. */}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('search.global.close')}
+              title={t('search.global.close')}
+              className={`${KEYCAP_CLASS} cursor-pointer transition-colors hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
+            >
+              esc
+            </button>
+          </div>
         </div>
 
         {/* Results */}
-        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto pb-1.5" role="listbox">
+        <div ref={listRef} className="scrollbar-autohide min-h-0 flex-1 overflow-y-auto px-[5px] py-1.5" role="listbox">
           {!isSearching ? (
             <>
               {rows.length > 0 && <SectionTitle>{t('search.global.recentTitle')}</SectionTitle>}
@@ -484,7 +486,7 @@ function Keycap({ children }: { children: ReactNode }) {
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
-    <div className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+    <div className="px-3 pb-1 pt-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
       {children}
     </div>
   )
@@ -518,8 +520,8 @@ function ProjectRow({ project, index, active, onActivate, onSelect, t }: Project
       title={project.path || project.title}
       onMouseEnter={() => onActivate(index)}
       onClick={() => onSelect(project)}
-      className={`mx-1.5 flex w-[calc(100%-12px)] flex-col rounded-[var(--radius-md)] px-2.5 text-left transition-colors focus-visible:outline-none ${
-        active ? 'bg-[var(--color-surface-selected)]' : 'hover:bg-[var(--color-surface-hover)]'
+      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none ${
+        active ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
       }`}
     >
       <div className="flex h-9 w-full min-w-0 items-center gap-2.5">
@@ -564,8 +566,8 @@ function ResultRow({ row, index, active, onActivate, onOpen, t }: RowProps) {
       aria-selected={active}
       onMouseEnter={() => onActivate(index)}
       onClick={() => onOpen(row)}
-      className={`mx-1.5 flex w-[calc(100%-12px)] flex-col rounded-[var(--radius-md)] px-2.5 text-left transition-colors focus-visible:outline-none ${
-        active ? 'bg-[var(--color-surface-selected)]' : 'hover:bg-[var(--color-surface-hover)]'
+      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none ${
+        active ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
       }`}
     >
       <div className="flex h-9 w-full min-w-0 items-center gap-2.5">

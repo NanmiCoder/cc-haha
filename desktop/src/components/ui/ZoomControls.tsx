@@ -94,7 +94,7 @@ export function ZoomControls({
       className={cx(floatingPillClass(surface, { flat }), className)}
     >
       <IconButton
-        icon={<Minus size={16} strokeWidth={1.9} />}
+        icon={<Minus size={16} strokeWidth={1.75} />}
         label={labels.zoomOut}
         size={lightbox ? '2xl' : 'md'}
         shape={lightbox ? 'circle' : 'square'}
@@ -105,7 +105,7 @@ export function ZoomControls({
       />
       <span className={lightbox ? 'min-w-[4rem] px-2 text-center text-[14px] tabular-nums' : 'min-w-[3.25rem] px-1 text-center font-mono text-xs tabular-nums'}>{percent}%</span>
       <IconButton
-        icon={<Plus size={16} strokeWidth={1.9} />}
+        icon={<Plus size={16} strokeWidth={1.75} />}
         label={labels.zoomIn}
         size={lightbox ? '2xl' : 'md'}
         shape={lightbox ? 'circle' : 'square'}
@@ -116,8 +116,8 @@ export function ZoomControls({
       />
       <IconButton
         icon={fitMode === 'width'
-          ? <MoveHorizontal size={16} strokeWidth={1.9} />
-          : <Scan size={15} strokeWidth={1.9} />}
+          ? <MoveHorizontal size={16} strokeWidth={1.75} />
+          : <Scan size={15} strokeWidth={1.75} />}
         label={labels.fit}
         size={lightbox ? '2xl' : 'md'}
         shape={lightbox ? 'circle' : 'square'}

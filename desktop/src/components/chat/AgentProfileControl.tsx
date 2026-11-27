@@ -95,7 +95,7 @@ export const AgentProfileControl = forwardRef<AgentProfileControlHandle, Props>(
                 <span className="text-xs text-[var(--color-text-tertiary)]">{choice.summary}</span>
               </span>
               {value === choice.profile && (
-                <Check size={14} strokeWidth={2} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-brand)]" />
+                <Check size={14} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-brand)]" />
               )}
             </button>
           ))}

@@ -343,8 +343,8 @@ function VoiceModelRow({ provider, active, groupName, pending, onSelect, onDownl
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <span id={nameId} className="min-w-0 text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">{info.name}</span>
-          {info.id === DEFAULT_VOICE_PROVIDER_ID ? <Badge tone="neutral" size="xs">{t('voice.settings.model.defaultBadge')}</Badge> : null}
-          {active ? <Badge tone="success" size="xs">{t('voice.settings.model.activeBadge')}</Badge> : null}
+          {info.id === DEFAULT_VOICE_PROVIDER_ID ? <Badge tone="neutral" size="xs" pill={false}>{t('voice.settings.model.defaultBadge')}</Badge> : null}
+          {active ? <Badge tone="success" size="xs" pill={false}>{t('voice.settings.model.activeBadge')}</Badge> : null}
         </div>
         <div id={detailId} className="space-y-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
           {copy ? <p>{t(copy.description)}</p> : null}

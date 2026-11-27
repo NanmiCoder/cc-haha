@@ -249,7 +249,7 @@ export function MemorySettings() {
         </div>
       )}
 
-      <div className="mt-6 grid h-[calc(100vh_-_260px)] min-h-[520px] grid-rows-[minmax(0,240px)_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--bevel-surface-rest)] sm:grid-cols-[216px_minmax(0,1fr)] sm:grid-rows-1">
+      <div className="v6c-glass-card mt-6 grid h-[calc(100vh_-_260px)] min-h-[520px] grid-rows-[minmax(0,240px)_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] sm:grid-cols-[216px_minmax(0,1fr)] sm:grid-rows-1">
         <aside className="flex min-h-0 flex-col border-b border-[var(--color-border)] bg-[var(--color-surface-sidebar)] sm:border-b-0 sm:border-r">
           <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
             <h3 className="truncate text-xs font-semibold text-[var(--color-text-tertiary)]">
@@ -310,8 +310,8 @@ export function MemorySettings() {
                 <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
                   {selectedFile?.path ? fileNameFromPath(selectedFile.path) : t('settings.memory.noFileSelected')}
                 </h3>
-                {isDirty && <Badge tone="warning">{t('settings.memory.unsaved')}</Badge>}
-                {lastSavedAt && !isDirty && <Badge tone="success">{t('settings.memory.saved')}</Badge>}
+                {isDirty && <Badge tone="warning" pill={false}>{t('settings.memory.unsaved')}</Badge>}
+                {lastSavedAt && !isDirty && <Badge tone="success" pill={false}>{t('settings.memory.saved')}</Badge>}
               </div>
               {selectedProject?.memoryDir ? (
                 <p className="mt-0.5 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={selectedProject.memoryDir}>
@@ -581,8 +581,8 @@ function MemoryTreeRow({
         style={{ paddingLeft: `${2 + Math.max(depth - 1, 0) * 14}px` }}
       >
         {isCollapsed
-          ? <ChevronRight size={12} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
-          : <ChevronDown size={12} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />}
+          ? <ChevronRight size={12} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+          : <ChevronDown size={12} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />}
         <Folder size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">{node.name}</span>
       </button>

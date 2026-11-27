@@ -119,7 +119,7 @@ export const TrajectoryMinimap = memo(function TrajectoryMinimap({ model, viewpo
         {hover && hoverRow && (
           <div
             role="tooltip"
-            className="pointer-events-none absolute top-full z-[var(--z-tooltip)] mt-1 max-w-[320px] -translate-x-1/2 truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2 py-1 text-[12px] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
+            className="dropdown-glass pointer-events-none absolute top-full z-[var(--z-tooltip)] mt-1 max-w-[320px] -translate-x-1/2 truncate rounded-[var(--radius-control)] px-2 py-1 text-[12px] text-[var(--color-text-primary)]"
             style={{ left: hover.left }}
           >
             <span className="text-[var(--color-text-tertiary)]">{t(KIND_LABEL_KEYS[hoverRow.kind])} · </span>

@@ -30,6 +30,7 @@ describe('FloatingSelectionMenu', () => {
 
     const button = screen.getByRole('button', { name: 'Add to chat' })
     expect(button).toHaveStyle({ left: '120px', top: '48px' })
+    expect(button).toHaveClass('dropdown-glass', 'rounded-[var(--radius-xl)]')
   })
 
   it('stays clickable when it is clamped up under the window titlebar', () => {

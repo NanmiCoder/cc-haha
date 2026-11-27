@@ -262,7 +262,7 @@ export function PluginList() {
       <div
         className={cx(
           'flex flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between',
-          selectedPlugins.length > 0 ? 'bg-[var(--color-surface-selected)]' : 'bg-[var(--color-surface-container-lowest)]',
+          selectedPlugins.length > 0 ? 'bg-[var(--color-surface-selected)]' : 'v6c-glass-card',
         )}
       >
         <div className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
@@ -322,7 +322,7 @@ export function PluginList() {
       {marketplaces.length > 0 && (
         <section className="min-w-0">
           <GroupHeading title={t('settings.plugins.marketplacesTitle')} hint={t('settings.plugins.marketplacesHint')} />
-          <Card radius="lg" surface="lowest" padding="none" className="divide-y divide-[var(--color-border)] overflow-hidden">
+          <Card radius="lg" surface="none" padding="none" className="v6c-glass-card divide-y divide-[var(--color-border)] overflow-hidden">
             {marketplaces.map((marketplace) => (
               <div key={marketplace.name} className="flex min-w-0 items-start gap-3 px-4 py-3">
                 <span className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
@@ -333,7 +333,7 @@ export function PluginList() {
                     <span className="text-[13px] font-medium text-[var(--color-text-primary)]">
                       {marketplace.name}
                     </span>
-                    <Badge tone={marketplace.autoUpdate ? 'success' : 'neutral'}>
+                    <Badge tone={marketplace.autoUpdate ? 'success' : 'neutral'} pill={false}>
                       {marketplace.autoUpdate
                         ? t('settings.plugins.marketplaceAutoUpdateOn')
                         : t('settings.plugins.marketplaceAutoUpdateOff')}
@@ -427,7 +427,7 @@ function renderGroup(
         hint={t('settings.plugins.groupHint', { count: String(items.length) })}
         count={items.length}
       />
-      <Card radius="lg" surface="lowest" padding="none" className="divide-y divide-[var(--color-border)] overflow-hidden">
+      <Card radius="lg" surface="none" padding="none" className="v6c-glass-card divide-y divide-[var(--color-border)] overflow-hidden">
         {items.map((plugin) => {
           const selected = selectedPluginIds.has(plugin.id)
           return (
@@ -473,7 +473,7 @@ function renderGroup(
                     </span>
                     <StatusPill plugin={plugin} />
                     <ScopePill scope={plugin.scope} />
-                    {plugin.version && <Badge mono>v{plugin.version}</Badge>}
+                    {plugin.version && <Badge pill={false} mono>v{plugin.version}</Badge>}
                   </div>
                   <p className="mt-0.5 break-words text-xs leading-5 text-[var(--color-text-secondary)]">
                     {plugin.description || t('settings.plugins.noDescription')}
@@ -530,7 +530,7 @@ function SummaryCard({
   icon: LucideIcon
 }) {
   return (
-    <Card radius="lg" surface="lowest" padding="none" className="min-w-0 px-4 py-3">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card min-w-0 px-4 py-3">
       <div className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
         <Icon className="flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
         <span className="min-w-0 truncate">{label}</span>
@@ -546,11 +546,11 @@ function StatusPill({ plugin }: { plugin: PluginSummary }) {
   const t = useTranslation()
 
   if (plugin.hasErrors) {
-    return <Badge tone="danger">{t('settings.plugins.status.attention')}</Badge>
+    return <Badge tone="danger" pill={false}>{t('settings.plugins.status.attention')}</Badge>
   }
 
   return (
-    <Badge tone={plugin.enabled ? 'success' : 'neutral'}>
+    <Badge tone={plugin.enabled ? 'success' : 'neutral'} pill={false}>
       {plugin.enabled
         ? t('settings.plugins.status.enabled')
         : t('settings.plugins.status.disabled')}
@@ -560,5 +560,5 @@ function StatusPill({ plugin }: { plugin: PluginSummary }) {
 
 function ScopePill({ scope }: { scope: PluginSummary['scope'] }) {
   const t = useTranslation()
-  return <Badge variant="outline">{t(`settings.plugins.scope.${scope}`)}</Badge>
+  return <Badge variant="outline" pill={false}>{t(`settings.plugins.scope.${scope}`)}</Badge>
 }

@@ -18,6 +18,7 @@ import {
   toActivitySteps,
   toolCallDurationMs,
   type ActivityStep,
+  type ToolErrorSeverity,
 } from './activityGroupModel'
 import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
@@ -110,6 +111,7 @@ type Props = {
   steps?: ActivityStep[]
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>
   agentTaskNotifications: Record<string, AgentTaskNotification>
   agentTaskStatuses?: Record<string, BackgroundAgentTask['status']>
   activeThinkingId?: string | null
@@ -140,6 +142,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   steps,
   resultMap,
   childToolCallsByParent,
+  errorSeverityByToolUseId,
   agentTaskNotifications,
   agentTaskStatuses,
   activeThinkingId,
@@ -160,7 +163,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       (step) => step.kind === 'thinking' || !isMemoryToolCall(step.toolCall),
     )
     return (
-      <div className={regularSteps.length > 0 ? 'space-y-2' : ''}>
+      <div className={regularSteps.length > 0 ? 'space-y-1.5' : ''}>
         <MemoryToolActivityGroup
           activity={memoryActivity}
           toolCalls={memoryToolCalls}
@@ -176,11 +179,13 @@ export const ToolCallGroup = memo(function ToolCallGroup({
             steps={regularSteps}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
+            errorSeverityByToolUseId={errorSeverityByToolUseId}
             agentTaskNotifications={agentTaskNotifications}
             agentTaskStatuses={agentTaskStatuses}
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            isLive={isLive}
             disclosureKey={disclosureKey}
             revealToolUseId={revealToolUseId}
             activityPresentation={activityPresentation}
@@ -198,6 +203,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       steps={resolvedSteps}
       resultMap={resultMap}
       childToolCallsByParent={childToolCallsByParent}
+      errorSeverityByToolUseId={errorSeverityByToolUseId}
       agentTaskNotifications={agentTaskNotifications}
       agentTaskStatuses={agentTaskStatuses}
       activeThinkingId={activeThinkingId}
@@ -220,6 +226,7 @@ function ToolCallGroupContent({
   steps,
   resultMap,
   childToolCallsByParent,
+  errorSeverityByToolUseId,
   agentTaskNotifications,
   agentTaskStatuses,
   activeThinkingId,
@@ -282,11 +289,13 @@ function ToolCallGroupContent({
             steps={segment.steps}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
+            errorSeverityByToolUseId={errorSeverityByToolUseId}
             agentTaskNotifications={agentTaskNotifications}
             agentTaskStatuses={agentTaskStatuses}
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            isLive={isLive}
             revealToolUseId={revealToolUseId}
             activityPresentation={activityPresentation}
           />
@@ -320,6 +329,7 @@ function ToolCallGroupContent({
         toolCalls={toolCalls}
         resultMap={resultMap}
         childToolCallsByParent={childToolCallsByParent}
+        errorSeverityByToolUseId={errorSeverityByToolUseId}
         agentTaskNotifications={agentTaskNotifications}
         agentTaskStatuses={agentTaskStatuses}
         showOpenRun={showOpenRun}
@@ -339,6 +349,7 @@ function ToolCallGroupContent({
       steps={steps}
       resultMap={resultMap}
       childToolCallsByParent={childToolCallsByParent}
+      errorSeverityByToolUseId={errorSeverityByToolUseId}
       activeThinkingId={activeThinkingId}
       isStreaming={isStreaming}
       isLive={isLive}
@@ -397,40 +408,28 @@ function MemoryToolActivityGroup({
     <div>
       <div
         data-testid="memory-tool-activity-card"
-        className={expanded
-          ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)]'
-          : 'overflow-hidden rounded-[var(--radius-sm)]'}
       >
         <button
           type="button"
           data-chat-disclosure="true"
           aria-expanded={expanded}
           onClick={toggleExpanded}
-          className={[
-            'flex w-full items-center gap-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
-            expanded ? 'min-h-9 px-3' : '-mx-1.5 min-h-6 w-[calc(100%+0.75rem)] rounded-[var(--radius-sm)] px-1.5 py-0.5',
-            isStreaming && !expanded ? 'border-b border-[var(--color-memory-border)]' : '',
-          ].filter(Boolean).join(' ')}
+          className="codex-work-row group/memory inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
-          <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--color-memory-accent)]">
-            <BookMarked size={14} strokeWidth={1.75} />
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-secondary)]">
+          <BookMarked size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+          <span className={`min-w-0 truncate ${isStreaming ? 'codex-shimmer-text font-medium' : ''}`}>
             {t(titleKey, { count: activity.files.length })}
           </span>
-          {isStreaming ? (
-            <span className="animate-stepped-pulse h-1.5 w-1.5 rounded-full bg-[var(--color-memory-accent)]" />
-          ) : null}
           <ChevronRight
             size={14}
             strokeWidth={1.75}
             aria-hidden="true"
-            className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+            className={`shrink-0 opacity-60 transition-transform duration-150 group-hover/memory:opacity-100 ${expanded ? 'rotate-90' : ''}`}
           />
         </button>
 
         {expanded ? (
-          <div className="border-t border-[var(--color-border)] px-3 py-2.5">
+          <div className="mt-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5">
             <div className="space-y-1.5">
               {visibleFiles.map((file) => (
                 <button
@@ -438,10 +437,10 @@ function MemoryToolActivityGroup({
                   type="button"
                   title={file.path}
                   onClick={() => openMemorySettings(file.path)}
-                  className="group flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+                  className="group flex w-full items-start gap-2 rounded-[var(--radius-card-inner)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
                 >
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-memory-border)] bg-[var(--color-memory-icon-bg)] text-[var(--color-text-tertiary)] group-hover:text-[var(--color-memory-accent)]">
-                    <Settings size={12} strokeWidth={2} aria-hidden="true" />
+                    <Settings size={12} strokeWidth={1.75} aria-hidden="true" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -510,6 +509,7 @@ function AgentToolGroup({
   toolCalls,
   resultMap,
   childToolCallsByParent,
+  errorSeverityByToolUseId,
   agentTaskNotifications,
   agentTaskStatuses,
   showOpenRun = true,
@@ -525,37 +525,30 @@ function AgentToolGroup({
       taskStatus: agentTaskNotifications[toolCall.toolUseId]?.status ?? agentTaskStatuses?.[toolCall.toolUseId],
     }),
   )
+  const hasBlockingFailure = toolCalls.some((toolCall, index) => (
+    statuses[index] === 'failed' && errorSeverityByToolUseId?.get(toolCall.toolUseId) !== 'recovered'
+  ))
   const groupStatus: AgentStatus = statuses.some((status) => status === 'running' || status === 'starting')
     ? 'running'
-    : statuses.some((status) => status === 'failed')
+    : hasBlockingFailure
       ? 'failed'
-      : statuses.every((status) => status === 'done')
+      : statuses.every((status) => status === 'done' || status === 'failed')
         ? 'done'
         : statuses.some((status) => status === 'stopped')
           ? 'stopped'
           : 'starting'
 
   return (
-    <div
-      className={expanded
-        ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)]'
-        : 'overflow-hidden rounded-[var(--radius-sm)]'}
-    >
+    <div>
       <button
         type="button"
         data-chat-disclosure="true"
         aria-expanded={expanded}
         onClick={toggleExpanded}
-        className={[
-          'flex w-full items-center gap-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
-          expanded ? 'min-h-9 px-3' : '-mx-1.5 min-h-6 w-[calc(100%+0.75rem)] rounded-[var(--radius-sm)] px-1.5 py-0.5',
-          (groupStatus === 'running' || groupStatus === 'starting') && !expanded ? 'border-b border-[var(--color-info-container)]' : '',
-        ].filter(Boolean).join(' ')}
+        className="codex-work-row group/agent inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
-        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
-          <Bot size={14} strokeWidth={1.75} />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-secondary)]">
+        <Bot size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+        <span className={`min-w-0 truncate ${groupStatus === 'running' || groupStatus === 'starting' ? 'codex-shimmer-text font-medium' : ''}`}>
           {toolCalls.length === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: toolCalls.length })}
         </span>
         <AgentStatusBadge status={groupStatus} t={t} />
@@ -563,12 +556,12 @@ function AgentToolGroup({
           size={14}
           strokeWidth={1.75}
           aria-hidden="true"
-          className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+          className={`shrink-0 opacity-60 transition-transform duration-150 group-hover/agent:opacity-100 ${expanded ? 'rotate-90' : ''}`}
         />
       </button>
 
       {expanded && (
-        <div className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
+        <div className="mt-1 divide-y divide-[var(--color-border)] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
           {toolCalls.map((toolCall) => (
             <AgentCallCard
               key={toolCall.id}
@@ -578,6 +571,7 @@ function AgentToolGroup({
               toolCall={toolCall}
               resultMap={resultMap}
               childToolCallsByParent={childToolCallsByParent}
+              errorSeverity={errorSeverityByToolUseId?.get(toolCall.toolUseId)}
               agentTaskNotification={agentTaskNotifications[toolCall.toolUseId]}
               agentTaskStatus={agentTaskStatuses?.[toolCall.toolUseId]}
               showOpenRun={showOpenRun}
@@ -601,14 +595,14 @@ function AgentStatusBadge({
   t: (key: TranslationKey, params?: Record<string, string | number>) => string
 }) {
   const icon = status === 'running' || status === 'starting'
-    ? <LoaderCircle size={11} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+    ? <LoaderCircle size={11} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
     : status === 'done'
-      ? <Check size={11} strokeWidth={2} aria-hidden="true" />
+      ? <Check size={11} strokeWidth={1.75} aria-hidden="true" />
       : status === 'failed'
-        ? <CircleX size={11} strokeWidth={2} aria-hidden="true" />
-        : <CircleStop size={11} strokeWidth={2} aria-hidden="true" />
+        ? <CircleX size={11} strokeWidth={1.75} aria-hidden="true" />
+        : <CircleStop size={11} strokeWidth={1.75} aria-hidden="true" />
   return (
-    <Badge tone={getAgentStatusTone(status)} icon={icon} data-agent-status={status}>
+    <Badge tone={getAgentStatusTone(status)} pill={false} icon={icon} data-agent-status={status}>
       {getAgentStatusLabel(status, t)}
     </Badge>
   )
@@ -621,6 +615,7 @@ function AgentCallCard({
   toolCall,
   resultMap,
   childToolCallsByParent,
+  errorSeverity,
   agentTaskNotification,
   agentTaskStatus,
   showOpenRun = true,
@@ -631,6 +626,7 @@ function AgentCallCard({
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+  errorSeverity?: ToolErrorSeverity
   agentTaskNotification?: AgentTaskNotification
   agentTaskStatus?: BackgroundAgentTask['status']
   showOpenRun?: boolean
@@ -703,18 +699,18 @@ function AgentCallCard({
     typeof toolUseCount === 'number' ? t('agentStatus.toolUses', { count: toolUseCount }) : '',
     typeof elapsedMs === 'number' ? formatDuration(elapsedMs) : '',
   ].filter(Boolean).join(' · ')
+  const isRecoveredFailure = status === 'failed' && errorSeverity === 'recovered'
   const AvatarIcon = status === 'running' || status === 'starting' ? LoaderCircle : Bot
 
   return (
     <div data-agent-call-layout="row" data-agent-status={status}>
       <div className="flex items-center gap-3 px-3 py-2.5">
-        {/* The avatar carries the row's state — blue while it works, green when
-            done, red on failure — so a group of five does not stack five pills
-            under the header's own. Its name is the state, for screen readers. */}
         <span
           role="img"
           aria-label={statusLabel}
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] ${AGENT_AVATAR_TONE[status]}`}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] ${
+            isRecoveredFailure ? AGENT_AVATAR_TONE.stopped : AGENT_AVATAR_TONE[status]
+          }`}
         >
           <AvatarIcon
             size={16}
@@ -748,7 +744,7 @@ function AgentCallCard({
             </div>
           )}
           {!expanded && !outputSummary && !recentToolCalls.length && errorText && (
-            <div className="mt-0.5 truncate text-[12px] text-[var(--color-error)]">
+            <div className={`mt-0.5 truncate text-[12px] ${isRecoveredFailure ? 'text-[var(--color-text-tertiary)]' : 'text-[var(--color-error)]'}`}>
               {errorText}
             </div>
           )}

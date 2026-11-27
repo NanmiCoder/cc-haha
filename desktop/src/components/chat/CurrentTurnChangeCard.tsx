@@ -185,13 +185,13 @@ export function CurrentTurnChangeCard({
       // Follows the message it belongs to inside the same rail box, so it takes a
       // top margin and no width of its own — `max-w-[900px]` here would have
       // overflowed the column once the rail indented it.
-      className="mt-2.5 w-full overflow-x-clip rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]"
+      className="mt-2.5 w-full overflow-x-clip rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
       aria-label={cardLabel}
     >
-      {/* One sticky 40px line. The disclosure's hit area is stretched over the
+      {/* One sticky 36px line. The disclosure's hit area is stretched over the
           whole row (its ::after), so the trailing chevron toggles too; the undo
           button is lifted above that layer to keep its own click. */}
-      <div className={`sticky top-0 z-[var(--z-sticky)] flex h-10 items-center gap-2 bg-[var(--color-surface-container)] pl-3 pr-2 ${expanded || hasUnverifiedChanges || Boolean(error) ? 'rounded-t-[var(--radius-lg)]' : 'rounded-[var(--radius-lg)]'}`}>
+      <div className={`sticky top-0 z-[var(--z-sticky)] flex h-9 items-center gap-2 bg-[var(--color-surface-container-lowest)] pl-3 pr-2 ${expanded || hasUnverifiedChanges || Boolean(error) ? 'rounded-t-[var(--radius-lg)]' : 'rounded-[var(--radius-lg)]'}`}>
         <button
           type="button"
           data-chat-disclosure="true"
@@ -267,7 +267,7 @@ export function CurrentTurnChangeCard({
                     { path: fileEntry.displayPath },
                   )}
                   title={fileEntry.displayPath}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-card-inner)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   <FileTypeIcon path={fileEntry.displayPath} size={14} />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-tertiary)]">

@@ -9,7 +9,7 @@ import { openSessionSource } from '@/lib/sessionNavigation'
 export function ScheduledTaskCard({ result }: { result: ScheduledTaskResult | ScheduledTaskRunsResult | ScheduledTaskListResult }) {
   const { tasks, loaded, error, openTaskEditor } = useTaskStore()
   const t = useTranslation()
-  if (result.kind === 'scheduled_task_list') return <Card surface="container" shadow="bevel" padding="sm" className="space-y-2">
+  if (result.kind === 'scheduled_task_list') return <Card radius="lg" surface="none" padding="sm" className="v6c-glass-card space-y-2">
     <p className="text-[13px] font-medium tabular-nums">{t('scheduledPage.title')} · {result.totalCount ?? result.tasks.length}</p>
     {result.tasks.map(task => <div key={task.id} className="flex items-center gap-2 text-[12px]">
       <Clock size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
@@ -20,7 +20,7 @@ export function ScheduledTaskCard({ result }: { result: ScheduledTaskResult | Sc
       <Button size="sm" variant="secondary" onClick={() => openTaskEditor(task.id)}>{t('scheduledChat.open')}</Button>
     </div>)}
   </Card>
-  if (result.kind === 'scheduled_task_runs') return <Card surface="container" shadow="bevel" padding="sm" className="space-y-2">
+  if (result.kind === 'scheduled_task_runs') return <Card radius="lg" surface="none" padding="sm" className="v6c-glass-card space-y-2">
     <p className="text-[13px] font-medium">{t('scheduledChat.results')}</p>
     {result.runs.length === 0 ? <p className="text-[12px] text-[var(--color-text-secondary)]">{t('scheduledChat.noRuns')}</p> : null}
     {result.runs.map(run => <div key={run.id} className="flex flex-wrap items-center gap-2 text-[12px]">
@@ -34,7 +34,7 @@ export function ScheduledTaskCard({ result }: { result: ScheduledTaskResult | Sc
   const task = liveTask ?? result.task
   const deleted = result.operation === 'deleted' || (loaded && !error && !liveTask)
   const status = deleted ? t('scheduledChat.deleted') : task.scheduleState === 'completed' ? t('scheduledChat.completed') : task.enabled === false ? t('scheduledChat.paused') : ''
-  return <Card surface="container" shadow="bevel" padding="md" className="flex items-center gap-3" data-testid="scheduled-task-card">
+  return <Card radius="lg" surface="none" padding="md" className="v6c-glass-card flex items-center gap-3" data-testid="scheduled-task-card">
     <Clock size={22} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
     <div className="min-w-0 flex-1">
       <p className="truncate text-[14px] font-medium text-[var(--color-text-primary)]">{task.name || task.prompt}</p>
