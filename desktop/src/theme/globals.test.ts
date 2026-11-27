@@ -943,4 +943,27 @@ describe('V6C Calm Liquid Glass contract', () => {
       }
     }
   })
+
+  it('keeps --v6c-row-highlight visibly distinct from .dropdown-glass ground in both themes', () => {
+    const parseHex = (hex: string) => {
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim())
+      if (!m) throw new Error(`Expected hex color, got ${hex}`)
+      return [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)] as const
+    }
+    const parseRgba = (rgba: string) => {
+      const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(rgba.trim())
+      if (!m) throw new Error(`Expected rgba color, got ${rgba}`)
+      return [Number(m[1]), Number(m[2]), Number(m[3])] as const
+    }
+    const channelDelta = (a: readonly [number, number, number], b: readonly [number, number, number]) =>
+      Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+
+    const lightHighlight = /--v6c-row-highlight:\s*([^;]+);/.exec(root)?.[1] ?? ''
+    const lightGlass = /--color-surface-glass:\s*([^;]+);/.exec(root)?.[1] ?? ''
+    expect(channelDelta(parseHex(lightHighlight), parseRgba(lightGlass))).toBeGreaterThanOrEqual(15)
+
+    const darkHighlight = /--v6c-row-highlight:\s*([^;]+);/.exec(dark)?.[1] ?? ''
+    const darkGlass = /--color-surface-glass:\s*([^;]+);/.exec(dark)?.[1] ?? ''
+    expect(channelDelta(parseHex(darkHighlight), parseRgba(darkGlass))).toBeGreaterThanOrEqual(15)
+  })
 })

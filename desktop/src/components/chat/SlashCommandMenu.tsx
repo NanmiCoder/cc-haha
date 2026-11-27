@@ -33,8 +33,8 @@ import { Kbd } from '@/components/ui/Kbd'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
 import { COMPOSER_MENU_SECTION } from './composerMenuStyles'
 
-/** One menu row: icon, then the name over its description (V6C 9px row). */
-const ROW = 'flex min-h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+/** One menu row: compact icon, name, and muted description. */
+const ROW = 'flex min-h-7 w-full cursor-default items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   agent: Bot,
@@ -132,19 +132,19 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         >
           <Icon
             aria-hidden="true"
-            className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]"
+            className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]"
             strokeWidth={1.75}
           />
-          <span className="grid min-w-0 flex-1 gap-px">
-            <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+          <span className="grid min-w-0 flex-1">
+            <span id={`${id}-label-${index}`} className="truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]">
               /{command.name}
             </span>
-            <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">
+            <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">
               {command.description}
             </span>
           </span>
           {isSearching && command.argumentHint ? (
-            <span className="max-w-[30%] shrink truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
+            <span className="max-w-[30%] shrink truncate font-mono text-[10.5px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
               {command.argumentHint}
             </span>
           ) : null}
@@ -192,20 +192,20 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                   ref={element => { itemRefs.current[index] = element }}
                   onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
                   className={`${ROW} ${index === selectedIndex ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'}`}>
-                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-4 w-4 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
-                  <span className="grid min-w-0 flex-1 gap-px">
-                    <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
-                    <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">{command.description}</span>
+                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
+                  <span className="grid min-w-0 flex-1">
+                    <span id={`${id}-label-${index}`} className="truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                    <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{command.description}</span>
                   </span>
-                  {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
+                  {sourceLabel ? <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
                 </div>
               })}
             </div>
           ) : null)}
         </div>
-        {!isSearching ? <div className="px-3 pb-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
+        {!isSearching ? <div className="px-2.5 pb-1.5 text-[11px] text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
         {showKeyboardHints ? (
-          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-2.5 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
             <Kbd size="xs">↑↓</Kbd>
             <span>{t('chat.navigate')}</span>
             <Kbd size="xs" className="ml-2">Enter</Kbd>

@@ -712,6 +712,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }, [slashFilter])
 
   useEffect(() => {
+    setSlashSelectedIndex((prev) =>
+      filteredCommands.length === 0 ? 0 : Math.min(prev, filteredCommands.length - 1),
+    )
+  }, [filteredCommands.length])
+
+  useEffect(() => {
     const activeItem = slashMenuOpen ? slashItemRefs.current[slashSelectedIndex] : null
     if (activeItem && typeof activeItem.scrollIntoView === 'function') {
       activeItem.scrollIntoView({ block: 'nearest' })
@@ -1246,7 +1252,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         return true
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           event.key === 'Enter' &&
           exactSlashCommand &&

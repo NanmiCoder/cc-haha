@@ -982,9 +982,9 @@
   --v6c-field-fill: #F6F6F6;
   --v6c-field-ring: inset 0 0 0 0.5px rgba(0, 0, 0, 0.10);
   --v6c-track-fill: #EFEFEF;
-  /* Selected menu row and pressed control. */
-  --v6c-row-highlight: #FFFFFF;
-  --v6c-row-highlight-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  /* Selected menu row and pressed control — distinct neutral tint on both white popovers and #F6F6F6 rails. */
+  --v6c-row-highlight: #ECECEC;
+  --v6c-row-highlight-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
   /* Codex monochrome primary submit key: crisp ink on light, white on dark. */
   --v6c-send-fill: #1A1C1F;
   --v6c-send-fill-hover: #2E3033;
@@ -1428,8 +1428,8 @@
   --v6c-field-fill: #1F1F1F;
   --v6c-field-ring: inset 0 0 0 0.5px rgba(255, 255, 255, 0.09);
   --v6c-track-fill: #141414;
-  --v6c-row-highlight: #2C2C2C;
-  --v6c-row-highlight-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --v6c-row-highlight: #333333;
+  --v6c-row-highlight-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
   /* Codex monochrome primary submit key on dark ground: crisp white button + dark icon. */
   --v6c-send-fill: #FFFFFF;
   --v6c-send-fill-hover: #E8E8E8;

@@ -9,16 +9,16 @@
 export const COMPOSER_POPOVER =
   'dropdown-glass popover-motion rounded-[var(--radius-xl)] p-[5px]'
 
-/** A menu row: 32px minimum, 9px V6C control corner, 13px. */
+/** A compact menu row: 28px minimum, 9px V6C control corner, 12.5px. */
 export const COMPOSER_MENU_ITEM =
-  'flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  'flex min-h-7 w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-left text-[12.5px] leading-[17px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 /** The selected/highlighted row uses the V6C glass row highlight. */
 export const COMPOSER_MENU_ITEM_ACTIVE = 'v6c-row-highlight'
 
 /** Group heading: 11px semibold tertiary, sentence case. */
 export const COMPOSER_MENU_SECTION =
-  'px-2 pb-1 pt-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]'
+  'px-2 pb-0.5 pt-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]'
 
 /** Hairline between groups inside a menu. */
 export const COMPOSER_MENU_SEPARATOR = 'mx-1 my-1 h-px bg-[var(--color-border)]'

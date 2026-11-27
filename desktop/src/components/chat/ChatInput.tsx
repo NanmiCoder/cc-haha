@@ -956,6 +956,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [slashFilter])
 
   useEffect(() => {
+    setSlashSelectedIndex((prev) =>
+      filteredCommands.length === 0 ? 0 : Math.min(prev, filteredCommands.length - 1),
+    )
+  }, [filteredCommands.length])
+
+  useEffect(() => {
     const activeItem = slashMenuOpen ? slashItemRefs.current[slashSelectedIndex] : null
     if (activeItem && typeof activeItem.scrollIntoView === 'function') {
       activeItem.scrollIntoView({ block: 'nearest' })
@@ -1470,7 +1476,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         return true
       }
       if (event.key === 'Enter') {
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           exactSlashCommand &&
           !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
@@ -1488,7 +1494,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       }
       if (event.key === 'Tab') {
         event.preventDefault()
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (selected) selectSlashCommand(selected.name)
         return true
       }
