@@ -181,7 +181,7 @@ export function useCapabilityMenu(options: {
   // on Claude Code's experimental Agent Teams flag in Settings.
   const agentTeamAvailable = antigravity || agentTeamsEnabled
   const agentTeamArmed = armed && agentTeamAvailable && !lean
-  const browserUseAvailable = isDesktop && !browserUseUnavailable && Boolean(browserUseConfig?.enabled) && !lean && !antigravity
+  const browserUseAvailable = isDesktop && !browserUseUnavailable && Boolean(browserUseConfig?.enabled) && !lean
   const browserUseArmed = browserArmed && browserUseAvailable
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
@@ -190,7 +190,7 @@ export function useCapabilityMenu(options: {
   // reflect Settings immediately. On non-desktop / remote H5 (or after a
   // 403/error), do not loop-fetch or render a broken toggle.
   useEffect(() => {
-    if (lean || antigravity || !isDesktop || browserUseLoaded || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
+    if (lean || !isDesktop || browserUseLoaded || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
     let active = true
     browserUseFetchInFlightRef.current = true
     void browserUseApi.getConfig().then(config => {
@@ -204,7 +204,7 @@ export function useCapabilityMenu(options: {
       browserUseFetchInFlightRef.current = false
     })
     return () => { active = false }
-  }, [lean, antigravity, isDesktop, browserUseLoaded])
+  }, [lean, isDesktop, browserUseLoaded])
 
   useEffect(() => {
     if (!open || lean) return
@@ -227,20 +227,20 @@ export function useCapabilityMenu(options: {
       void loadPopularSkills().then(items => {
         if (active) setPopularSkills(items)
       }).catch(() => {})
-      if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
-        browserUseFetchInFlightRef.current = true
-        void browserUseApi.getConfig().then(config => {
-          if (active) {
-            setBrowserUseUnavailable(false)
-            useBrowserUseStore.setState({ config, loaded: true })
-          }
-        }).catch(() => {
-          browserUseFetchFailedRef.current = true
-          if (active) setBrowserUseUnavailable(true)
-        }).finally(() => {
-          browserUseFetchInFlightRef.current = false
-        })
-      }
+    }
+    if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
+      browserUseFetchInFlightRef.current = true
+      void browserUseApi.getConfig().then(config => {
+        if (active) {
+          setBrowserUseUnavailable(false)
+          useBrowserUseStore.setState({ config, loaded: true })
+        }
+      }).catch(() => {
+        browserUseFetchFailedRef.current = true
+        if (active) setBrowserUseUnavailable(true)
+      }).finally(() => {
+        browserUseFetchInFlightRef.current = false
+      })
     }
     void (async () => {
       try {
@@ -260,7 +260,7 @@ export function useCapabilityMenu(options: {
     })()
 
     return () => { active = false }
-  }, [open, cwd, lean, antigravity])
+  }, [open, cwd, lean, antigravity, isDesktop])
 
   const sections = useMemo(() => buildCapabilitySections({
     antigravity,
@@ -274,7 +274,7 @@ export function useCapabilityMenu(options: {
     workflows: data.workflows,
     agentTeam: { enabled: agentTeamAvailable, armed: agentTeamArmed },
     computerUse: data.computerUse,
-    browserUse: !antigravity && isDesktop && !browserUseUnavailable && browserUseConfig
+    browserUse: isDesktop && !browserUseUnavailable && browserUseConfig
       ? { enabled: browserUseConfig.enabled, armed: browserUseArmed, preferredTarget: browserUseConfig.preferredTarget }
       : null,
     agentProfile: profileValue && !antigravity ? { value: profileValue, locked: profileLocked ?? true } : undefined,
@@ -500,7 +500,15 @@ export function useCapabilityMenu(options: {
 }
 
 function isAntigravityAction(action: CapabilityAction): boolean {
-  return action.type === 'attachment' || action.type === 'slashTrigger' || action.type === 'toggleAgentTeam' || action.type === 'toggleComputerUse' || action.type === 'settings'
+  return (
+    action.type === 'attachment' ||
+    action.type === 'slashTrigger' ||
+    action.type === 'toggleAgentTeam' ||
+    action.type === 'toggleBrowserUse' ||
+    action.type === 'setBrowserUseTarget' ||
+    action.type === 'toggleComputerUse' ||
+    action.type === 'settings'
+  )
 }
 
 function isLeanAction(action: CapabilityAction): boolean {

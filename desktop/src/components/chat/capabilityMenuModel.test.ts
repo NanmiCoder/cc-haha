@@ -396,15 +396,22 @@ describe('the Browser Use row', () => {
 })
 
 describe('Antigravity capability menu', () => {
-  it('keeps add-files, agent-team, computer-use, and slash-commands while hiding Claude-only controls', () => {
+  it('keeps add-files, agent-team, browser-use, computer-use, and slash-commands while hiding Claude-only controls', () => {
     const sections = buildCapabilitySections(buildInput({
       antigravity: true,
       agentProfile: { value: 'standard', locked: false },
+      browserUse: { enabled: true, armed: false, preferredTarget: 'auto' },
     }))
     const allKeys = sections.flatMap((section) => section.items.map((item) => item.key))
-    expect(allKeys).toEqual(['add-files', 'agent-team', 'computer-use', 'slash-commands'])
+    expect(allKeys).toEqual(['add-files', 'agent-team', 'browser-use', 'computer-use', 'slash-commands'])
     expect(allKeys).not.toContain('agent-profile')
     expect(allKeys).not.toContain('skills')
     expect(allKeys).not.toContain('connectors')
+
+    const browserRow = sections.flatMap((section) => section.items).find((item) => item.key === 'browser-use')
+    expect(browserRow).toMatchObject({
+      action: { type: 'toggleBrowserUse' },
+      switch: { checked: false, disabled: false },
+    })
   })
 })

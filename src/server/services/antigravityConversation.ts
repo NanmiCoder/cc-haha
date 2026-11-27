@@ -16,6 +16,12 @@ import {
   type AntigravitySlashCommand,
 } from './antigravityAcp.js'
 import {
+  estimateAntigravityBrowserUseTokens,
+  isAntigravityBrowserUseToolName,
+  resolveAntigravityBrowserUseToolName,
+  type AntigravityBrowserUseBridge,
+} from './antigravityBrowserUseBridge.js'
+import {
   estimateAntigravityComputerUseTokens,
   isAntigravityComputerUseToolName,
   type AntigravityComputerUseBridge,
@@ -178,6 +184,7 @@ type ProjectedTool = {
 
 export type AntigravityConversationOptions = {
   computerUseBridge?: AntigravityComputerUseBridge | null
+  browserUseBridge?: AntigravityBrowserUseBridge | null
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   antigravityAppDataDir?: string
 }
@@ -297,22 +304,100 @@ function textContent(value: unknown): string {
   return block?.type === 'text' && typeof block.text === 'string' ? block.text : ''
 }
 
+function imageContentBlock(value: unknown): Frame | null {
+  const block = acpObject(value)
+  if (block?.type !== 'image') return null
+  const mimeType = typeof block.mimeType === 'string'
+    ? block.mimeType
+    : typeof block.mime_type === 'string'
+      ? block.mime_type
+      : undefined
+  const data = typeof block.data === 'string' ? block.data : undefined
+  if (mimeType && data) {
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mimeType,
+        data,
+      },
+    }
+  }
+  const source = acpObject(block.source)
+  if (source?.type === 'base64' && typeof source.media_type === 'string' && typeof source.data === 'string') {
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: source.media_type,
+        data: source.data,
+      },
+    }
+  }
+  return null
+}
+
 function fallbackToolName(tool: Frame): string {
   // ACP 标题是显示文本，不应触发同名的 Claude Code 特殊工具逻辑。
   return typeof tool.title === 'string' && tool.title.trim() ? `Antigravity: ${tool.title}` : 'Antigravity'
 }
 
-function toolContent(tool: Frame): string {
+function toolContentText(content: string | Frame[]): string {
+  if (typeof content === 'string') return content
+  return content
+    .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .filter(Boolean)
+    .join('\n')
+}
+
+function collectToolContentItems(
+  items: unknown[],
+  textParts: string[],
+  imageBlocks: Frame[],
+): void {
+  for (const value of items) {
+    const item = acpObject(value)
+    if (!item) continue
+    if (item.type === 'content') {
+      const text = textContent(item.content)
+      if (text) textParts.push(text)
+      const image = imageContentBlock(item.content)
+      if (image) imageBlocks.push(image)
+    } else if (item.type === 'text') {
+      const text = textContent(item)
+      if (text) textParts.push(text)
+    } else if (item.type === 'image') {
+      const image = imageContentBlock(item)
+      if (image) imageBlocks.push(image)
+    } else if (item.type === 'diff' && typeof item.path === 'string') {
+      textParts.push(item.path)
+    }
+  }
+}
+
+function toolContent(tool: Frame): string | Frame[] {
   const output = acpObject(tool.rawOutput)
   const commandOutput = output?.combinedOutput ?? output?.combined_output ?? output?.output
-  if (typeof commandOutput === 'string') return commandOutput
-  const content = Array.isArray(tool.content) ? tool.content.map(value => {
-    const item = acpObject(value)
-    if (item?.type === 'content') return textContent(item.content)
-    if (item?.type === 'diff' && typeof item.path === 'string') return item.path
-    return ''
-  }).filter(Boolean).join('\n') : ''
-  if (content) return content
+  const textParts: string[] = []
+  const imageBlocks: Frame[] = []
+  if (Array.isArray(tool.content) && tool.content.length > 0) {
+    collectToolContentItems(tool.content, textParts, imageBlocks)
+  }
+  if (Array.isArray(output?.content) && output.content.length > 0) {
+    if (textParts.length === 0 && imageBlocks.length === 0) {
+      collectToolContentItems(output.content, textParts, imageBlocks)
+    } else if (imageBlocks.length === 0) {
+      collectToolContentItems(output.content, [], imageBlocks)
+    }
+  }
+  const text = typeof commandOutput === 'string' ? commandOutput : textParts.join('\n')
+  if (imageBlocks.length > 0) {
+    return [
+      ...(text ? [{ type: 'text', text }] : []),
+      ...imageBlocks,
+    ]
+  }
+  if (text) return text
   return typeof tool.rawOutput === 'string' ? tool.rawOutput : typeof tool.title === 'string' ? tool.title : ''
 }
 
@@ -669,6 +754,7 @@ export class AntigravityConversation {
   private readonly subagentNameCache = new Map<string, string>()
   private readonly claimedSubagentIds = new Set<string>()
   private readonly computerUseBridge?: AntigravityComputerUseBridge | null
+  private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   private readonly antigravityAppDataDir: string
 
@@ -679,6 +765,7 @@ export class AntigravityConversation {
     options: AntigravityConversationOptions = {},
   ) {
     this.computerUseBridge = options.computerUseBridge
+    this.browserUseBridge = options.browserUseBridge
     this.onAvailableCommands = options.onAvailableCommands
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
     acp.onMessage = (method, params, id) => this.receive(method, params, id)
@@ -945,17 +1032,21 @@ export class AntigravityConversation {
       const baseline = Math.min(used, this.firstTurnBaselineTokens)
       const messageTokens = Math.max(0, used - baseline)
       categories = []
-      if (this.computerUseBridge?.isEnabled()) {
-        const cuTokens = Math.min(baseline, estimateAntigravityComputerUseTokens(this.computerUseBridge))
-        const systemAndToolsTokens = baseline - cuTokens
-        if (systemAndToolsTokens > 0) {
-          categories.push({ name: 'System & tools', tokens: systemAndToolsTokens, color: '#6366f1' })
-        }
-        if (cuTokens > 0) {
-          categories.push({ name: 'MCP tools (Computer Use)', tokens: cuTokens, color: '#0ea5e9' })
-        }
-      } else {
-        categories.push({ name: 'System & tools', tokens: baseline, color: '#6366f1' })
+      const cuTokens = this.computerUseBridge?.isEnabled()
+        ? Math.min(baseline, estimateAntigravityComputerUseTokens(this.computerUseBridge))
+        : 0
+      const buTokens = this.browserUseBridge?.isEnabled()
+        ? Math.min(Math.max(0, baseline - cuTokens), estimateAntigravityBrowserUseTokens(this.browserUseBridge))
+        : 0
+      const systemAndToolsTokens = Math.max(0, baseline - cuTokens - buTokens)
+      if (systemAndToolsTokens > 0) {
+        categories.push({ name: 'System & tools', tokens: systemAndToolsTokens, color: '#6366f1' })
+      }
+      if (cuTokens > 0) {
+        categories.push({ name: 'MCP tools (Computer Use)', tokens: cuTokens, color: '#0ea5e9' })
+      }
+      if (buTokens > 0) {
+        categories.push({ name: 'MCP tools (Browser Use)', tokens: buTokens, color: '#14b8a6' })
       }
       if (messageTokens > 0) {
         categories.push({ name: 'Messages', tokens: messageTokens, color: '#7c3aed' })
@@ -1035,6 +1126,7 @@ export class AntigravityConversation {
     this.tools.clear()
     this.toolStartedAt.clear()
     void this.computerUseBridge?.releaseLock()
+    void this.browserUseBridge?.cleanupAfterTurn()
     const turn = this.turn
     if (turn) {
       turn.replyOpen = false
@@ -1050,6 +1142,7 @@ export class AntigravityConversation {
     this.listening = false
     this.acp.end()
     void this.computerUseBridge?.releaseLock()
+    void this.browserUseBridge?.cleanupAfterTurn()
     return this.turnDone
   }
 
@@ -1079,6 +1172,7 @@ export class AntigravityConversation {
     if (this.turn || !this.acp.isOpen) return false
     const prompt = this.buildPromptBlocks(userContent)
     this.computerUseBridge?.resetTurnAbort()
+    this.browserUseBridge?.resetTurnAbort()
     for (const [id, tool] of this.tools) {
       if (!tool) {
         this.tools.delete(id)
@@ -1139,6 +1233,7 @@ export class AntigravityConversation {
     this.tools.clear()
     this.toolStartedAt.clear()
     this.computerUseBridge?.abortCurrentTurn()
+    this.browserUseBridge?.abortCurrentTurn()
     const sent = this.acp.cancel()
     if (!turn) return sent
     this.pauseModelPhase(turn)
@@ -1288,7 +1383,7 @@ export class AntigravityConversation {
       this.claimedSubagentIds.add(direct)
       return direct
     }
-    const contentText = toolContent(tool)
+    const contentText = toolContentText(toolContent(tool))
     const fromContent = this.extractConversationIdFromText(contentText)
     if (fromContent) {
       this.claimedSubagentIds.add(fromContent)
@@ -1504,6 +1599,18 @@ export class AntigravityConversation {
           ...(pattern ? { pattern } : {}),
           ...(targetPath ? { path: targetPath } : {}),
         },
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
+    const browserUseToolName = resolveAntigravityBrowserUseToolName(rawName)
+    if (browserUseToolName) {
+      return {
+        name: browserUseToolName,
+        input: rawInput,
         displayName: title,
         antigravityToolName: rawName,
         ...(subagentName ? { subagentName } : {}),
@@ -1757,7 +1864,13 @@ export class AntigravityConversation {
     } catch {
       error = new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Could not save the Antigravity response.')
     }
-    void this.computerUseBridge?.releaseLock()
+    await Promise.race([
+      Promise.allSettled([
+        this.computerUseBridge?.releaseLock(),
+        this.browserUseBridge?.cleanupAfterTurn(),
+      ]),
+      new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+    ])
     this.cancelPermissions(turn)
     this.turn = undefined
     const failed = !turn.cancelled && error
@@ -1891,8 +2004,9 @@ export class AntigravityConversation {
     } else if (tool.name === 'invoke_subagent') {
       const childId = this.resolveChildConversationIdForInvoke(tool)
       const body = toolContent(tool)
+      const bodyText = toolContentText(body)
       content = childId
-        ? (body && body !== 'Run invoke_subagent' ? `agentId: ${childId}\n${body}` : `agentId: ${childId}`)
+        ? (bodyText && bodyText !== 'Run invoke_subagent' ? `agentId: ${childId}\n${bodyText}` : `agentId: ${childId}`)
         : body
     } else {
       content = toolContent(tool)
@@ -2114,9 +2228,12 @@ export class AntigravityConversation {
       return
     }
 
-    // Auto-approve our own injected Computer Use MCP server when Computer Use is globally enabled in Settings.
+    // Auto-approve our own injected Computer Use / Browser Use MCP servers when globally enabled in Settings.
     const rawToolName = typeof mergedTool.name === 'string' ? mergedTool.name : undefined
-    if (!question && this.computerUseBridge?.isEnabled() && isAntigravityComputerUseToolName(rawToolName)) {
+    const autoApproveInjectedMcp =
+      (this.computerUseBridge?.isEnabled() && isAntigravityComputerUseToolName(rawToolName)) ||
+      (this.browserUseBridge?.isEnabled() && isAntigravityBrowserUseToolName(rawToolName))
+    if (!question && autoApproveInjectedMcp) {
       const allowOption = options.find(option => option.kind === 'allow_once')
         ?? options.find(option => option.kind === 'allow_always')
       if (allowOption) {

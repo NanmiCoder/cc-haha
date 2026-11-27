@@ -53,9 +53,16 @@ import {
 } from './antigravityAcp.js'
 import { AntigravityConversation } from './antigravityConversation.js'
 import {
+  createAntigravityBrowserUseBridge,
+  type AntigravityBrowserUseBridge,
+} from './antigravityBrowserUseBridge.js'
+import {
   createAntigravityComputerUseBridge,
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
+import { isBrowserUseEnabled } from '../../services/browserUse/config.js'
+import { isComputerUseEnabledForDispatch } from '../../utils/computerUse/skillGate.js'
+import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
 import {
   beginAntigravitySwarmPause,
   completeAntigravitySwarmPause,
@@ -324,6 +331,7 @@ type SessionProcess = {
   proc: ReturnType<typeof Bun.spawn>
   antigravity?: AntigravityConversation
   antigravityBridge?: AntigravityComputerUseBridge | null
+  antigravityBrowserUseBridge?: AntigravityBrowserUseBridge | null
   antigravityHistoryDraining?: boolean
   antigravitySwarmPausePending?: boolean
   outputCallbacks: SessionOutputCallback[]
@@ -1160,6 +1168,29 @@ export class ConversationService {
     }
 
     const bridge = await createAntigravityComputerUseBridge(sessionId)
+    let browserUseBridge: AntigravityBrowserUseBridge | null = null
+    try {
+      browserUseBridge = await createAntigravityBrowserUseBridge(sessionId)
+    } catch (error) {
+      await bridge?.close()
+      throw error
+    }
+    const closeBridges = async () => {
+      await Promise.allSettled([
+        bridge?.close(),
+        browserUseBridge?.close(),
+      ])
+    }
+    const mcpServers = [
+      ...(bridge ? [bridge.mcpServerConfig] : []),
+      ...(browserUseBridge ? [browserUseBridge.mcpServerConfig] : []),
+    ]
+    const systemPromptParts = [
+      bridge?.systemPromptAppend,
+      browserUseBridge?.systemPromptAppend,
+    ].filter((part): part is string => Boolean(part))
+    const systemPromptAppend = systemPromptParts.length > 0 ? systemPromptParts.join('\n\n') : undefined
+
     let acp: Awaited<ReturnType<typeof openAntigravityAcp>>
     try {
       acp = await openAntigravityAcp(workDir, {
@@ -1168,11 +1199,11 @@ export class ConversationService {
         effortLevel,
         permissionMode,
         additionalDirectories,
-        mcpServers: bridge ? [bridge.mcpServerConfig] : [],
-        systemPromptAppend: bridge?.systemPromptAppend,
+        mcpServers,
+        systemPromptAppend,
       })
     } catch (error) {
-      await bridge?.close()
+      await closeBridges()
       throw error
     }
 
@@ -1184,7 +1215,7 @@ export class ConversationService {
       assertSessionAvailable()
       if (this.sessions.has(sessionId)) {
         acp.close()
-        await bridge?.close()
+        await closeBridges()
         return
       }
       await sessionService.appendSessionMetadata(sessionId, {
@@ -1199,12 +1230,12 @@ export class ConversationService {
       assertSessionAvailable()
       if (this.sessions.has(sessionId)) {
         acp.close()
-        await bridge?.close()
+        await closeBridges()
         return
       }
     } catch (error) {
       acp.close()
-      await bridge?.close()
+      await closeBridges()
       throw error
     }
 
@@ -1221,6 +1252,7 @@ export class ConversationService {
       permissionMode: acp.permissionMode,
       providerId: ANTIGRAVITY_PROVIDER_ID,
       antigravityBridge: bridge,
+      antigravityBrowserUseBridge: browserUseBridge,
       runtimeSelection: {
         providerId: ANTIGRAVITY_PROVIDER_ID,
         modelId,
@@ -1265,6 +1297,7 @@ export class ConversationService {
       ),
       {
         computerUseBridge: bridge,
+        browserUseBridge,
         onAvailableCommands: (commands: AntigravitySlashCommand[]) => {
           session.initMessage = {
             ...session.initMessage,
@@ -1289,7 +1322,10 @@ export class ConversationService {
     rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
     void acp.proc.exited.then(async () => {
       await session.antigravity!.waitForExit()
-      await session.antigravityBridge?.close()
+      await Promise.allSettled([
+        session.antigravityBridge?.close(),
+        session.antigravityBrowserUseBridge?.close(),
+      ])
       if (current()) this.sessions.delete(sessionId)
     })
   }
@@ -1334,6 +1370,20 @@ export class ConversationService {
 
   isAntigravityResponding(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.antigravity?.isResponding === true
+  }
+
+  /**
+   * True when an idle Antigravity session's attached Browser Use or Computer Use
+   * MCP bridges no longer match current Settings (either enabled or disabled
+   * mid-session), so restarting via ACP `session/resume` reconciles MCP servers
+   * and injected system prompts before the next user turn.
+   */
+  needsAntigravityCapabilityRestart(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return false
+    if (Boolean(session.antigravityBrowserUseBridge) !== isBrowserUseEnabled()) return true
+    if (Boolean(session.antigravityBridge) !== isComputerUseEnabledForDispatch()) return true
+    return false
   }
 
   getAntigravityTurnCompletion(sessionId: string): Promise<boolean> | undefined {
@@ -2117,6 +2167,71 @@ export class ConversationService {
       if (request.subtype === 'get_session_usage') {
         return activeSession.antigravity.getSessionUsageSnapshot()
       }
+      if (request.subtype === 'enqueue_session_message') {
+        if (request.sender_session_id !== sessionId) {
+          throw new AntigravityError(
+            'ANTIGRAVITY_UNSUPPORTED',
+            'Cross-session collaboration messages are unavailable in an Antigravity session.',
+          )
+        }
+        if (request.start_if_idle !== true) {
+          return { status: 'busy' }
+        }
+        const text = typeof request.text === 'string' ? request.text : ''
+        if (!text.trim()) {
+          return { status: 'rejected', error: 'Empty session message' }
+        }
+        if (timeoutMs > 0) {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          let onAbort: (() => void) | undefined
+          try {
+            await Promise.race([
+              activeSession.antigravity.waitForCancelledTurn(),
+              new Promise<void>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error('Timed out waiting for Antigravity turn cancellation')), timeoutMs)
+                if (signal) {
+                  onAbort = () => reject(controlRequestAbortReason(signal))
+                  signal.addEventListener('abort', onAbort, { once: true })
+                }
+              }),
+            ])
+          } finally {
+            if (timer) clearTimeout(timer)
+            if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+          }
+        } else {
+          await activeSession.antigravity.waitForCancelledTurn()
+        }
+        if (signal?.aborted) {
+          throw controlRequestAbortReason(signal)
+        }
+        if (
+          this.sessions.get(sessionId) !== activeSession ||
+          activeSession.controlRevoked ||
+          migrationMaintenance.isActive ||
+          (canSend && !canSend())
+        ) {
+          return { status: 'cancelled' }
+        }
+        if (beforeSend && !(await beforeSend())) {
+          return { status: 'cancelled' }
+        }
+        if (signal?.aborted) {
+          throw controlRequestAbortReason(signal)
+        }
+        if (
+          this.sessions.get(sessionId) !== activeSession ||
+          activeSession.controlRevoked ||
+          migrationMaintenance.isActive ||
+          (canSend && !canSend())
+        ) {
+          return { status: 'cancelled' }
+        }
+        const rawMessageId = typeof request.message_id === 'string' ? request.message_id.trim() : ''
+        const replayUuid = rawMessageId ? sessionMessageUuid(rawMessageId) : crypto.randomUUID()
+        const sent = activeSession.antigravity.send([{ type: 'text', text }], replayUuid)
+        return sent ? { status: 'queued' } : { status: 'busy' }
+      }
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This Claude Code action is unavailable in an Antigravity session.')
     }
 
@@ -2638,6 +2753,7 @@ export class ConversationService {
     this.clearSessionAutoAnswerWaits(session)
     this.sessions.delete(sessionId)
     void session.antigravityBridge?.close()
+    void session.antigravityBrowserUseBridge?.close()
     this.killProcess(sessionId, session)
   }
 
@@ -2676,7 +2792,10 @@ export class ConversationService {
     session.pendingPermissionRequests.clear()
     if (!options?.requireExit) this.sessions.delete(sessionId)
     await this.stopProcessAndWait(sessionId, session, timeoutMs, options?.requireExit)
-    await session.antigravityBridge?.close()
+    await Promise.allSettled([
+      session.antigravityBridge?.close(),
+      session.antigravityBrowserUseBridge?.close(),
+    ])
     if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
   }
 
@@ -2706,6 +2825,7 @@ export class ConversationService {
         this.stopProcessAndWait(sessionId, session, timeoutMs),
         history,
         session.antigravityBridge?.close(),
+        session.antigravityBrowserUseBridge?.close(),
       ])
       if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
     }))

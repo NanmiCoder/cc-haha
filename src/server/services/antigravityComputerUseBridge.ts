@@ -1,6 +1,4 @@
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import {
   buildPlatformComputerUseTools,
@@ -22,9 +20,9 @@ import { getChicagoCoordinateMode } from '../../utils/computerUse/gates.js'
 import { getComputerUseHostAdapter } from '../../utils/computerUse/hostAdapter.js'
 import { isComputerUseEnabledForDispatch } from '../../utils/computerUse/skillGate.js'
 import type { AntigravityMcpServerConfig } from './antigravityAcp.js'
+import { createAntigravityMcpHttpHost } from './antigravityMcpHttpHost.js'
 
 export const ANTIGRAVITY_COMPUTER_USE_SERVER_NAME = 'cc-haha-computer-use'
-const MCP_PATH = '/mcp'
 
 const ENABLED_GRANT_FLAGS = {
   clipboardRead: true,
@@ -126,20 +124,8 @@ export function estimateAntigravityComputerUseTokens(
   return Math.ceil((promptChars + schemaChars) / 3.5)
 }
 
-function tokensEqual(expected: string, actual: string): boolean {
-  const a = Buffer.from(expected, 'utf8')
-  const b = Buffer.from(actual, 'utf8')
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
-}
-
 function formatLockHeldMessage(holder: string): string {
   return `Computer use is in use by another session (${holder.slice(0, 8)}…). Wait for that session to finish before continuing.`
-}
-
-type McpSessionEntry = {
-  server: Server
-  transport: WebStandardStreamableHTTPServerTransport
 }
 
 /**
@@ -164,14 +150,12 @@ export async function createAntigravityComputerUseBridge(
     release: releaseComputerUseLock,
   }
 
-  let closed = false
   let turnAbort = new AbortController()
   const lockTurn = Symbol(`agy-cu-${sessionId}`)
   let selectedDisplayId: number | undefined
   let displayPinnedByModel = false
   let displayResolvedForApps: string | undefined
   let lastScreenshotDims: ScreenshotDims | undefined
-  const sessions = new Map<string, McpSessionEntry>()
 
   const buildContext = (): ComputerUseSessionContext => ({
     getAgentId: () => `antigravity:${sessionId}`,
@@ -180,7 +164,7 @@ export async function createAntigravityComputerUseBridge(
     getAllowedApps: () => [],
     getGrantFlags: () => ENABLED_GRANT_FLAGS,
     getUserDeniedBundleIds: () => [],
-    isAborted: () => closed || turnAbort.signal.aborted || !isEnabled(),
+    isAborted: () => host.isClosed() || turnAbort.signal.aborted || !isEnabled(),
     getSelectedDisplayId: () => selectedDisplayId,
     getDisplayPinnedByModel: () => displayPinnedByModel,
     getDisplayResolvedForApps: () => displayResolvedForApps,
@@ -219,7 +203,7 @@ export async function createAntigravityComputerUseBridge(
       }
     },
     acquireCuLock: async () => {
-      if (closed || turnAbort.signal.aborted) {
+      if (host.isClosed() || turnAbort.signal.aborted) {
         throw new Error('Computer Use cancelled before lock acquisition')
       }
       if (activeBridgeLock && activeBridgeLock.turn !== lockTurn) {
@@ -238,7 +222,7 @@ export async function createAntigravityComputerUseBridge(
         }
         throw error
       }
-      if (closed || turnAbort.signal.aborted) {
+      if (host.isClosed() || turnAbort.signal.aborted) {
         if (!alreadyOwnedBySelf && activeBridgeLock?.turn === lockTurn) {
           activeBridgeLock = null
         }
@@ -262,7 +246,7 @@ export async function createAntigravityComputerUseBridge(
     const gatedAdapter: ComputerUseHostAdapter = {
       ...adapter,
       serverName: ANTIGRAVITY_COMPUTER_USE_SERVER_NAME,
-      isDisabled: () => closed || !isEnabled() || adapter.isDisabled(),
+      isDisabled: () => host.isClosed() || !isEnabled() || adapter.isDisabled(),
     }
     const server = createComputerUseMcpServer(gatedAdapter, coordinateMode, buildContext())
     if (deps.installedAppNames) {
@@ -278,105 +262,6 @@ export async function createAntigravityComputerUseBridge(
     return server
   }
 
-  const token = randomBytes(24).toString('hex')
-  const expectedAuth = `Bearer ${token}`
-
-  const httpServer = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    async fetch(req: Request): Promise<Response> {
-      const url = new URL(req.url)
-      // agy probes OAuth protected-resource metadata unauthenticated on HTTP MCP.
-      if (req.method === 'GET' && url.pathname.startsWith('/.well-known/')) {
-        return new Response('Not Found', { status: 404 })
-      }
-      if (url.pathname !== MCP_PATH) {
-        return new Response('Not Found', { status: 404 })
-      }
-      const authHeader = req.headers.get('authorization') ?? ''
-      if (!tokensEqual(expectedAuth, authHeader)) {
-        return new Response('Unauthorized', { status: 401 })
-      }
-      if (closed) {
-        return new Response('Bridge closed', { status: 503 })
-      }
-
-      let parsedBody: unknown
-      if (req.method === 'POST') {
-        const rawText = await req.text()
-        if (rawText.trim()) {
-          try {
-            parsedBody = JSON.parse(rawText)
-          } catch {
-            return Response.json(
-              { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } },
-              { status: 400 },
-            )
-          }
-        }
-        // agy 1.5.17 sends `server/discover` before `initialize`; reply -32601 cleanly so it falls back to standard initialize.
-        if (
-          parsedBody &&
-          typeof parsedBody === 'object' &&
-          !Array.isArray(parsedBody) &&
-          (parsedBody as Record<string, unknown>).method === 'server/discover'
-        ) {
-          const rpcId = (parsedBody as Record<string, unknown>).id ?? null
-          return Response.json({
-            jsonrpc: '2.0',
-            id: rpcId,
-            error: { code: -32601, message: 'Method not found' },
-          })
-        }
-      }
-
-      const mcpSessionId = req.headers.get('mcp-session-id')?.trim() || undefined
-      if (mcpSessionId) {
-        const entry = sessions.get(mcpSessionId)
-        if (!entry) {
-          return Response.json(
-            { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } },
-            { status: 404 },
-          )
-        }
-        return entry.transport.handleRequest(req, parsedBody !== undefined ? { parsedBody } : undefined)
-      }
-
-      const server = createBoundServer()
-      let initializedSessionId: string | undefined
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        enableJsonResponse: true,
-        onsessioninitialized: (id) => {
-          initializedSessionId = id
-          sessions.set(id, { server, transport })
-        },
-        onsessionclosed: (id) => {
-          sessions.delete(id)
-          void server.close().catch(() => {})
-        },
-      })
-      await server.connect(transport)
-      try {
-        return await transport.handleRequest(req, parsedBody !== undefined ? { parsedBody } : undefined)
-      } finally {
-        if (!initializedSessionId) {
-          await transport.close().catch(() => {})
-          await server.close().catch(() => {})
-        }
-      }
-    },
-  })
-
-  const url = `http://127.0.0.1:${httpServer.port}${MCP_PATH}`
-  const mcpServerConfig: AntigravityMcpServerConfig = {
-    type: 'http',
-    name: ANTIGRAVITY_COMPUTER_USE_SERVER_NAME,
-    url,
-    headers: [{ name: 'Authorization', value: expectedAuth }],
-  }
-  const systemPromptAppend = buildAntigravityComputerUsePrompt(platform)
-
   const releaseLock = async (): Promise<void> => {
     if (activeBridgeLock?.turn === lockTurn) {
       activeBridgeLock = null
@@ -384,35 +269,34 @@ export async function createAntigravityComputerUseBridge(
     await lockOps.release(lockTurn).catch(() => false)
   }
 
+  const host = createAntigravityMcpHttpHost({
+    serverName: ANTIGRAVITY_COMPUTER_USE_SERVER_NAME,
+    createServer: createBoundServer,
+    onBeforeClose: async () => {
+      turnAbort.abort()
+      await releaseLock()
+    },
+  })
+
+  const systemPromptAppend = buildAntigravityComputerUsePrompt(platform)
+
   return {
     serverName: ANTIGRAVITY_COMPUTER_USE_SERVER_NAME,
-    url,
-    token,
-    mcpServerConfig,
+    url: host.url,
+    token: host.token,
+    mcpServerConfig: host.mcpServerConfig,
     systemPromptAppend,
-    isEnabled: () => !closed && isEnabled(),
+    isEnabled: () => !host.isClosed() && isEnabled(),
     abortCurrentTurn: () => {
       turnAbort.abort()
     },
     resetTurnAbort: () => {
-      if (!closed && turnAbort.signal.aborted) {
+      if (!host.isClosed() && turnAbort.signal.aborted) {
         turnAbort = new AbortController()
       }
     },
     releaseLock,
-    close: async () => {
-      if (closed) return
-      closed = true
-      turnAbort.abort()
-      await releaseLock()
-      const entries = [...sessions.values()]
-      sessions.clear()
-      await Promise.allSettled(entries.map(async ({ server, transport }) => {
-        await transport.close().catch(() => {})
-        await server.close().catch(() => {})
-      }))
-      httpServer.stop(true)
-    },
+    close: host.close,
   }
 }
 

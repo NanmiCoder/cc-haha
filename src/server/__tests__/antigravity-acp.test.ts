@@ -20,11 +20,14 @@ import {
   AntigravityConversation,
   parseSubagentToolCallPrefix,
 } from '../services/antigravityConversation.js'
+import type { AntigravityBrowserUseBridge } from '../services/antigravityBrowserUseBridge.js'
 import type { AntigravityComputerUseBridge } from '../services/antigravityComputerUseBridge.js'
+import { invalidateBrowserUseConfigCache, saveBrowserUseConfig } from '../../services/browserUse/config.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { startServer } from '../index.js'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
+import { getSessionTurnState, stopSessionTurn, submitSessionTurn, waitForSessionTurnIdle } from '../ws/handler.js'
 import type { ClientMessage, ServerMessage } from '../ws/events.js'
 
 const BANNED_FLAGS = [
@@ -2684,6 +2687,353 @@ describe('Antigravity ACP server core & integration', () => {
       server.stop(true)
     }
   })
+
+  test('projects cc-haha-browser-use MCP tools to canonical Browser* names, preserves image blocks, auto-approves permissions, cleans up after turn, and attributes context tokens', async () => {
+    const emitted: Record<string, unknown>[] = []
+    const replies: Array<{ id: number | string; result?: Record<string, unknown>; errorCode?: number }> = []
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt!: (result: Record<string, unknown>) => void
+
+    let browserEnabled = true
+    let cleanupCount = 0
+    let abortCount = 0
+    let resetCount = 0
+
+    const mockBrowserBridge: AntigravityBrowserUseBridge = {
+      serverName: 'cc-haha-browser-use',
+      url: 'http://127.0.0.1:23456/mcp',
+      token: 'tok-bu',
+      mcpServerConfig: { type: 'http', name: 'cc-haha-browser-use', url: 'http://127.0.0.1:23456/mcp' },
+      systemPromptAppend: 'a'.repeat(700),
+      isEnabled: () => browserEnabled,
+      abortCurrentTurn: () => { abortCount++ },
+      resetTurnAbort: () => { resetCount++ },
+      cleanupAfterTurn: async () => { cleanupCount++ },
+      close: async () => {},
+    }
+
+    const unitAcp = {
+      sessionId: 'native-bu-unit',
+      modelId: 'gemini-3.8-pro',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: typeof onMessage) { onMessage = fn },
+      get onMessage() { return onMessage },
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvePrompt = resolve }),
+      reply: (id: number | string, result?: Record<string, unknown>, errorCode?: number) => {
+        replies.push({ id, result, errorCode })
+        return true
+      },
+      cancel: () => {
+        setTimeout(() => resolvePrompt({ stopReason: 'cancelled' }), 5)
+        return true
+      },
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      unitAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      msg => emitted.push(msg),
+      async () => {},
+      { browserUseBridge: mockBrowserBridge },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'open example.com and screenshot' }], 'u-bu-1')).toBe(true)
+    expect(resetCount).toBe(1)
+    await waitUntil(() => typeof resolvePrompt === 'function')
+
+    // 1. Auto-approve mcp_cc-haha-browser-use_BrowserSnapshot permission request and project tool_use as canonical BrowserSnapshot
+    onMessage?.('session/request_permission', {
+      sessionId: 'native-bu-unit',
+      toolCall: {
+        toolCallId: 'bu-call-1',
+        name: 'mcp_cc-haha-browser-use_BrowserSnapshot',
+        title: 'BrowserSnapshot',
+        rawInput: { screenshot: true, target: 'workspace' },
+        status: 'in_progress',
+      },
+      options: [
+        { optionId: 'allow-1', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'deny-1', name: 'Reject once', kind: 'reject_once' },
+      ],
+    }, 'perm-bu-1')
+
+    expect(replies).toContainEqual({
+      id: 'perm-bu-1',
+      result: { outcome: { outcome: 'selected', optionId: 'allow-1' } },
+      errorCode: undefined,
+    })
+    expect(emitted.filter(m => m.type === 'control_request')).toHaveLength(0)
+
+    const toolUseMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_use' && b.id === 'bu-call-1')
+    })
+    expect(toolUseMsg).toBeDefined()
+    const toolUseBlock = ((toolUseMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(toolUseBlock.name).toBe('BrowserSnapshot')
+    expect(toolUseBlock.input).toEqual({ screenshot: true, target: 'workspace' })
+
+    // 2. Completing tool_call_update with rawOutput.output + unwrapped text/image content preserves both text and image blocks
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-1',
+        status: 'completed',
+        rawOutput: { output: '{"screenshotAttached":true}' },
+        content: [
+          { type: 'text', text: 'ignored-because-output-wins' },
+          { type: 'image', data: pngBase64, mimeType: 'image/png' },
+        ],
+      },
+    })
+
+    const toolResultMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'bu-call-1')
+    })
+    expect(toolResultMsg).toBeDefined()
+    const resultBlock = ((toolResultMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(resultBlock.content).toEqual([
+      { type: 'text', text: '{"screenshotAttached":true}' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBase64 } },
+    ])
+
+    // 2a. Empty tool.content: [] falls back to rawOutput.content (text + image)
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'bu-call-empty-content',
+        name: 'mcp_cc-haha-browser-use_BrowserSnapshot',
+        title: 'BrowserSnapshot',
+        rawInput: { screenshot: true },
+        content: [],
+        status: 'in_progress',
+      },
+    })
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-empty-content',
+        status: 'completed',
+        rawOutput: {
+          content: [
+            { type: 'text', text: '{"url":"https://example.test"}' },
+            { type: 'image', data: pngBase64, mimeType: 'image/png' },
+          ],
+        },
+      },
+    })
+    const emptyFallbackMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'bu-call-empty-content')
+    })
+    expect(((emptyFallbackMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!.content).toEqual([
+      { type: 'text', text: '{"url":"https://example.test"}' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBase64 } },
+    ])
+
+    // 2b. invoke_subagent completing with an image block in tool.content does not throw in resolveChildConversationIdForInvoke
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'sub-img-1',
+        name: 'invoke_subagent',
+        title: 'Run subagent',
+        rawInput: { Role: 'Inspector', Prompt: 'Check page' },
+        status: 'in_progress',
+      },
+    })
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'sub-img-1',
+        name: 'invoke_subagent',
+        status: 'completed',
+        content: [
+          { type: 'text', text: 'conversationId: child_img_12345678' },
+          { type: 'image', data: pngBase64, mimeType: 'image/png' },
+        ],
+      },
+    })
+    const subResultMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'sub-img-1')
+    })
+    expect(subResultMsg).toBeDefined()
+    const subResultBlock = ((subResultMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(String(subResultBlock.content)).toContain('agentId: child_img_12345678')
+
+    // 3. Disabling Browser Use mid-session stops auto-approving permission requests
+    browserEnabled = false
+    onMessage?.('session/request_permission', {
+      sessionId: 'native-bu-unit',
+      toolCall: {
+        toolCallId: 'bu-call-2',
+        name: 'mcp_cc-haha-browser-use_BrowserAct',
+        title: 'BrowserAct',
+        rawInput: { steps: [{ action: 'click', ref: '@e1' }] },
+        status: 'in_progress',
+      },
+      options: [
+        { optionId: 'allow-2', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'deny-2', name: 'Reject once', kind: 'reject_once' },
+      ],
+    }, 'perm-bu-2')
+    const permReq = emitted.filter(m => m.type === 'control_request') as Array<{ request_id: string }>
+    expect(permReq).toHaveLength(1)
+    expect(conv.respond(permReq[0]!.request_id, false)).toBe(true)
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-2',
+        status: 'failed',
+        rawOutput: 'User denied permission',
+      },
+    })
+
+    // Re-enable for context usage check before finishing turn
+    browserEnabled = true
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: { sessionUpdate: 'usage_update', used: 20_000, size: 200_000 },
+    })
+    resolvePrompt({ stopReason: 'end_turn', usage: { inputTokens: 15_000, outputTokens: 200 } })
+    await conv.pendingTurnCompletion
+
+    // cleanupAfterTurn ran on turn completion
+    expect(cleanupCount).toBe(1)
+
+    // Context snapshot includes MCP tools (Browser Use)
+    const snapshot = conv.getContextUsageSnapshot() as { categories: Array<{ name: string; tokens: number }> }
+    expect(snapshot.categories.some(c => c.name === 'MCP tools (Browser Use)' && c.tokens > 0)).toBe(true)
+
+    // Cancel aborts turn on browserUseBridge
+    expect(conv.send([{ type: 'text', text: 'second turn' }], 'u-bu-2')).toBe(true)
+    await waitUntil(() => conv.isResponding)
+    expect(conv.cancel()).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(abortCount).toBe(1)
+    expect(cleanupCount).toBe(2)
+  })
+
+  test('injects cc-haha-browser-use MCP when enabled, supports mid-session enable restart detection, and accepts enqueue_session_message for takeover resume', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-bu-wire')
+    await mkdir(workDir, { recursive: true })
+
+    invalidateBrowserUseConfigCache()
+    saveBrowserUseConfig({ enabled: false, preferredTarget: 'workspace' })
+
+    const created = await sessionService.createSession(workDir, 'Antigravity BU Test', {
+      providerId: ANTIGRAVITY_PROVIDER_ID,
+      modelId: ANTIGRAVITY_DEFAULT_MODEL,
+    })
+    const sessionId = created.sessionId
+
+    try {
+      // 1. Start while Browser Use is disabled -> no Browser Use MCP, no restart needed
+      await conversationService.startSession(sessionId, workDir, '', {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        model: ANTIGRAVITY_DEFAULT_MODEL,
+      })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(false)
+
+      const initialWire = await fake.readWire()
+      const initialNew = initialWire.find(w => w.method === 'session/new')
+      expect(initialNew).toBeDefined()
+      const initialServers = (initialNew!.params?.mcpServers ?? []) as Array<{ name: string }>
+      expect(initialServers.some(s => s.name === 'cc-haha-browser-use')).toBe(false)
+
+      // 2. Enable Browser Use mid-session -> needsAntigravityCapabilityRestart flips to true
+      saveBrowserUseConfig({ enabled: true, preferredTarget: 'workspace' })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(true)
+
+      // 3. Restart idle session (as ensureCliSessionStarted does on next user_message) -> resumes with cc-haha-browser-use MCP
+      await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+      await conversationService.startSession(sessionId, workDir, '', {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        model: ANTIGRAVITY_DEFAULT_MODEL,
+      })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(false)
+
+      const wireAfterRestart = await fake.readWire()
+      const sessionResume = wireAfterRestart.find(w => w.method === 'session/resume')
+      expect(sessionResume).toBeDefined()
+      const mcpServers = (sessionResume!.params?.mcpServers ?? []) as Array<{ name: string; type: string; url: string }>
+      expect(mcpServers.some(s => s.name === 'cc-haha-browser-use' && s.type === 'http')).toBe(true)
+      const meta = sessionResume!.params?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined
+      expect(meta?.antigravity?.systemPrompt?.append).toContain('cc-haha Browser Use MCP')
+
+      // 4. requestControl('enqueue_session_message') rejects cross-session callers and non-start_if_idle calls,
+      //    and supports full Stop -> waitForSessionTurnIdle -> submitSessionTurn Resume flow
+      await expect(
+        conversationService.requestControl(sessionId, {
+          subtype: 'enqueue_session_message',
+          sender_session_id: 'other-session-id',
+          start_if_idle: true,
+          message_id: 'cross-session-attempt',
+          text: 'untrusted cross-session prompt',
+        }),
+      ).rejects.toMatchObject({ code: 'ANTIGRAVITY_UNSUPPORTED' })
+
+      const busyRes = await conversationService.requestControl(sessionId, {
+        subtype: 'enqueue_session_message',
+        sender_session_id: sessionId,
+        message_id: 'resume-bu-no-start',
+        text: 'should not start when start_if_idle is omitted',
+      })
+      expect(busyRes).toEqual({ status: 'busy' })
+
+      const server = startServer(0, '127.0.0.1')
+      try {
+        // Simulate user-initiated Takeover/Stop setting sessionStopRequested before Resume
+        stopSessionTurn(sessionId)
+        expect(await waitForSessionTurnIdle(sessionId, 1_000)).toBe(true)
+        const submitRes = await submitSessionTurn(
+          sessionId,
+          '[Browser Use] The user completed the manual browser takeover. Call BrowserSnapshot to observe the updated page and continue.',
+          {
+            serverHost: '127.0.0.1',
+            serverPort: server.port,
+            messageId: 'resume-bu-after-stop',
+            sourceSessionId: sessionId,
+          },
+        )
+        expect(submitRes).toEqual({ status: 'queued' })
+        // waitForSessionTurnIdle awaits the active Antigravity turn until it settles to idle
+        expect(await waitForSessionTurnIdle(sessionId, 5_000)).toBe(true)
+        expect(getSessionTurnState(sessionId)).toBe('idle')
+
+        const wireAfterPrompt = await fake.readWire()
+        expect(wireAfterPrompt.some(w => w.method === 'session/prompt')).toBe(true)
+
+        // 5. Disabling Browser Use mid-session also marks needsAntigravityCapabilityRestart true (on -> off)
+        saveBrowserUseConfig({ enabled: false })
+        expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(true)
+      } finally {
+        server.stop(true)
+      }
+    } finally {
+      await conversationService.stopSessionAndWait(sessionId)
+      saveBrowserUseConfig({ enabled: false })
+      invalidateBrowserUseConfigCache()
+    }
+  }, 20_000)
+
   test('streams mid-turn usage and tok/s incrementally from Antigravity transcript.jsonl without double-counting prior turns or turn finish', async () => {
     const appDataDir = join(sandboxDir, 'live-usage-appdata')
     const nativeId = 'native-live-usage-1'

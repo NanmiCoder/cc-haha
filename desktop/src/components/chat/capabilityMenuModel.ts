@@ -126,7 +126,7 @@ export type CapabilityMenuBrowserUse = {
 } | null
 
 export type CapabilityMenuInput = {
-  /** Antigravity ACP engine keeps attachments, Computer Use, and slash commands while hiding Claude-only rows. */
+  /** Antigravity ACP engine keeps attachments, Browser Use, Computer Use, and slash commands while hiding Claude-only rows. */
   antigravity?: boolean
   /** Skill mention candidates (kind 'skill'), already loaded for the composer. */
   skills: ComposerReferenceCandidate[]
@@ -522,7 +522,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
         id: 'run',
         title: t('chat.capabilities.sectionRun'),
         showTitle: true,
-        items: [agentTeamItem, computerUseItem],
+        items: [agentTeamItem, browserUseItem, computerUseItem],
       },
       {
         id: 'more',

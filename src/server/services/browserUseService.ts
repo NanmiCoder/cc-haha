@@ -35,6 +35,7 @@ import {
   sendToSession,
   stopSessionTurn,
   submitSessionTurn,
+  waitForSessionTurnIdle,
 } from '../ws/handler.js'
 import type {
   BrowserActInput,
@@ -592,6 +593,7 @@ export interface BrowserUseServiceDependencies {
   broadcastToSession?: (sessionId: string, message: ServerMessage) => boolean
   submitResumeTurn?: (sessionId: string, content: string) => Promise<void>
   stopSession?: (sessionId: string) => void
+  waitForSessionIdle?: (sessionId: string, timeoutMs?: number) => Promise<boolean>
 }
 
 interface SessionTabOwnership {
@@ -615,6 +617,10 @@ export class BrowserUseService {
     content: string,
   ) => Promise<void>
   private readonly stopSessionFn: (sessionId: string) => void
+  private readonly waitForSessionIdleFn: (
+    sessionId: string,
+    timeoutMs?: number,
+  ) => Promise<boolean>
 
   private bridgeClient: ElectronBridgeRpcClient | null = null
   private workspaceTransport: ElectronDebuggerTransport | null = null
@@ -645,6 +651,7 @@ export class BrowserUseService {
     this.broadcastFn = deps.broadcastToSession ?? sendToSession
     this.submitResumeTurnFn = deps.submitResumeTurn
     this.stopSessionFn = deps.stopSession ?? stopSessionTurn
+    this.waitForSessionIdleFn = deps.waitForSessionIdle ?? waitForSessionTurnIdle
 
     const config = loadBrowserUseConfig({ env: this.env, bypassCache: true })
     this.chromeManager =
@@ -1665,6 +1672,27 @@ export class BrowserUseService {
     return takeover
   }
 
+  hasPendingTakeover(sessionId: string): boolean {
+    if (this.sessionTakeovers.get(sessionId)?.status === 'pending') {
+      return true
+    }
+    const workspaceTakeover = this.workspaceEngine?.getActiveTakeover({ sessionId })
+    if (
+      workspaceTakeover?.status === 'pending' &&
+      workspaceTakeover.sessionId === sessionId
+    ) {
+      return true
+    }
+    const chromeTakeover = this.chromeEngine?.getActiveTakeover({ sessionId })
+    if (
+      chromeTakeover?.status === 'pending' &&
+      chromeTakeover.sessionId === sessionId
+    ) {
+      return true
+    }
+    return false
+  }
+
   private claimPendingTakeover(
     sessionId: string,
     takeoverId?: string,
@@ -1753,7 +1781,8 @@ export class BrowserUseService {
         }
       } else if (
         this.serverPort > 0 &&
-        getSessionTurnState(options.sessionId) === 'idle'
+        (getSessionTurnState(options.sessionId) === 'idle' ||
+          (await this.waitForSessionIdleFn(options.sessionId, 8_000)))
       ) {
         try {
           await submitSessionTurn(options.sessionId, resumeMessage, {

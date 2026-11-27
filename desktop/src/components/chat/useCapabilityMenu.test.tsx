@@ -461,4 +461,36 @@ describe('the Agent mode row', () => {
     act(() => result.current.disarmAgentTeam())
     expect(result.current.agentTeamArmed).toBe(false)
   })
+
+  it('exposes, arms, and updates Browser Use target for Antigravity on desktop', async () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    mocks.browserUseGetConfig.mockResolvedValue({
+      enabled: true,
+      preferredTarget: 'auto',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    })
+    const composer = handlers()
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true,
+      antigravity: true,
+      cwd: '/repo',
+      references: [],
+      handlers: composer,
+    }))
+    await waitFor(() => expect(result.current.browserUse.enabled).toBe(true))
+
+    const browserRow = result.current.sections.flatMap(section => section.items).find(item => item.key === 'browser-use')
+    expect(browserRow).toMatchObject({ action: { type: 'toggleBrowserUse' }, switch: { checked: false, disabled: false } })
+
+    act(() => result.current.onAction({ type: 'toggleBrowserUse' }))
+    expect(result.current.browserUse.armed).toBe(true)
+
+    act(() => result.current.onAction({ type: 'setBrowserUseTarget', target: 'chrome' }))
+    await waitFor(() => expect(mocks.browserUseUpdateConfig).toHaveBeenCalledWith({ preferredTarget: 'chrome' }))
+
+    act(() => result.current.browserUse.disarm())
+    expect(result.current.browserUse.armed).toBe(false)
+  })
 })
