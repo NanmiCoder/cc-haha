@@ -25,10 +25,10 @@ export const ComposerSuggestionRow = forwardRef<HTMLDivElement, Props>(function 
     className={`flex ${touch ? 'min-h-11 py-1.5' : 'min-h-7 py-1'} min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-control)] px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${selected ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'} ${className}`} {...rest}>
     {icon}
     {details ? <span className="min-w-0 flex-1 space-y-px">
-      <span id={`${id}-label`} title={label} className="block truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]">{label}</span>
+      <span id={`${id}-label`} title={label} className="block truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">{label}</span>
       <span id={`${id}-description`} className="flex min-w-0 items-center gap-2 text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{details}</span>
     </span> : <>
-    <span id={`${id}-label`} className={`${description ? 'max-w-[45%] shrink-0' : 'min-w-0 flex-1'} truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]`}>{label}</span>
+    <span id={`${id}-label`} className={`${description ? 'max-w-[45%] shrink-0' : 'min-w-0 flex-1'} truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]`}>{label}</span>
     {description ? <span id={`${id}-description`} className="min-w-0 flex-1 truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{description}</span> : null}
     </>}
     {trailing}

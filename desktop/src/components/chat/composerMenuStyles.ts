@@ -9,9 +9,9 @@
 export const COMPOSER_POPOVER =
   'dropdown-glass popover-motion rounded-[var(--radius-xl)] p-[5px]'
 
-/** A compact menu row: 28px minimum, 9px V6C control corner, 12.5px. */
+/** A compact menu row: 28px minimum, 9px V6C control corner, 12px. */
 export const COMPOSER_MENU_ITEM =
-  'flex min-h-7 w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-left text-[12.5px] leading-[17px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  'flex min-h-7 w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-left text-[12px] leading-[17px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 /** The selected/highlighted row uses the V6C glass row highlight. */
 export const COMPOSER_MENU_ITEM_ACTIVE = 'v6c-row-highlight'

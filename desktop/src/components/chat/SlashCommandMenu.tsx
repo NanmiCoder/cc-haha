@@ -136,7 +136,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
             strokeWidth={1.75}
           />
           <span className="grid min-w-0 flex-1">
-            <span id={`${id}-label-${index}`} className="truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]">
+            <span id={`${id}-label-${index}`} className="truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">
               /{command.name}
             </span>
             <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">
@@ -144,7 +144,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
             </span>
           </span>
           {isSearching && command.argumentHint ? (
-            <span className="max-w-[30%] shrink truncate font-mono text-[10.5px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
+            <span className="max-w-[30%] shrink truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
               {command.argumentHint}
             </span>
           ) : null}
@@ -194,7 +194,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                   className={`${ROW} ${index === selectedIndex ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'}`}>
                   {icon ? <img src={publicAssetPath(icon)} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
                   <span className="grid min-w-0 flex-1">
-                    <span id={`${id}-label-${index}`} className="truncate text-[12.5px] font-medium leading-[17px] text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                    <span id={`${id}-label-${index}`} className="truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
                     <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{command.description}</span>
                   </span>
                   {sourceLabel ? <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
