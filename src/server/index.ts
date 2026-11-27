@@ -56,9 +56,11 @@ import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
 import {
   hasConfiguredLocalAccessToken,
   hasConfiguredPetAccessToken,
+  hasConfiguredUsageWidgetAccessToken,
   isLocalAccessAuthorized,
   isP2PEndpointAuthorized,
   isPetAccessAuthorized,
+  isUsageWidgetAccessAuthorized,
 } from './localAccessAuth.js'
 import {
   getPetScopedSessionId,
@@ -66,6 +68,7 @@ import {
   isPetSessionInProjection,
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
+import { isUsageWidgetHttpRequestAllowed } from './usageWidgetAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
 import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './services/remoteAccessConnectivity.js'
 import { configureMcpHostProxy } from './services/networkSettings.js'
@@ -432,6 +435,16 @@ export function startServer(port = PORT, host = HOST) {
             { status: 403 },
           )
         }
+        const usageWidgetAccessAuthorized = isUsageWidgetAccessAuthorized(req)
+        if (usageWidgetAccessAuthorized && !isUsageWidgetHttpRequestAllowed(req, url)) {
+          return Response.json(
+            {
+              error: 'Forbidden',
+              message: 'The usage widget token cannot access this capability.',
+            },
+            { status: 403 },
+          )
+        }
         const petScopedSessionId = petAccessAuthorized
           ? getPetScopedSessionId(url.pathname)
           : null
@@ -458,9 +471,13 @@ export function startServer(port = PORT, host = HOST) {
           clientAddress,
           trustedRendererOrigin,
           localAccessTokenConfigured:
-            hasConfiguredLocalAccessToken() || hasConfiguredPetAccessToken(),
+            hasConfiguredLocalAccessToken() ||
+            hasConfiguredPetAccessToken() ||
+            hasConfiguredUsageWidgetAccessToken(),
           localAccessAuthorized:
-            isLocalAccessAuthorized(req, localTokenOverride) || petAccessAuthorized,
+            isLocalAccessAuthorized(req, localTokenOverride) ||
+            petAccessAuthorized ||
+            usageWidgetAccessAuthorized,
           internalSdkAuthorized: Boolean(
             sdkSessionId && sdkToken && conversationService.authorizeSdkConnection(sdkSessionId, sdkToken),
           ),

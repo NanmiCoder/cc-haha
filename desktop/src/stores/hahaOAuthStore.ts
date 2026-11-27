@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { hahaOAuthApi, type HahaOAuthStatus } from '../api/hahaOAuth'
 import { useSettingsStore } from './settingsStore'
+import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
 
@@ -43,6 +44,9 @@ export const useHahaOAuthStore = create<HahaOAuthState>((set, get) => {
         ) {
           await useSettingsStore.getState().fetchAll()
         }
+        if (previous !== null && previous.loggedIn !== status.loggedIn) {
+          void useUsageSummaryStore.getState().fetchSummary({ force: true })
+        }
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
@@ -69,6 +73,7 @@ export const useHahaOAuthStore = create<HahaOAuthState>((set, get) => {
       try {
         await hahaOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({
           isLoading: false,

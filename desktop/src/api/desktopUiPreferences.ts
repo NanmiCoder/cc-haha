@@ -32,6 +32,31 @@ export type DesktopPetPreferences = {
   lastSessionId: string | null
 }
 
+export type UsageSidebarVisibility = 'auto' | 'always' | 'hidden'
+export type UsageDisplayMode = 'remaining' | 'used'
+
+export type DesktopUsageWidgetPreferences = {
+  sidebarVisibility: UsageSidebarVisibility
+  displayMode: UsageDisplayMode
+  showExactResetTime: boolean
+  floatingEnabled: boolean
+  floatingCompact: boolean
+  floatingAlwaysOnTop: boolean
+  menuBarEnabled: boolean
+  pinnedMetricKeys: string[]
+}
+
+export const DEFAULT_DESKTOP_USAGE_WIDGET_PREFERENCES: DesktopUsageWidgetPreferences = {
+  sidebarVisibility: 'auto',
+  displayMode: 'remaining',
+  showExactResetTime: false,
+  floatingEnabled: false,
+  floatingCompact: false,
+  floatingAlwaysOnTop: true,
+  menuBarEnabled: false,
+  pinnedMetricKeys: ['claude-official:five_hour', 'openai-official:five_hour'],
+}
+
 export type DesktopUiPreferences = {
   schemaVersion: number
   sidebar: SidebarProjectPreferences
@@ -39,6 +64,8 @@ export type DesktopUiPreferences = {
   pet: DesktopPetPreferences
   /** Absent when talking to a server older than the voice input feature. */
   voiceInput?: VoicePreferences
+  /** Absent when talking to a server older than the usage widget feature. */
+  usageWidget?: DesktopUsageWidgetPreferences
   projectDisplayNames: Record<string, string>
   projectAdditionalDirectories?: Record<string, string[]>
   explicitProjectRoots?: string[]
@@ -116,6 +143,19 @@ export const desktopUiPreferencesApi = {
     return api.put<DesktopPetPreferencesUpdateResponse>(
       '/api/desktop-ui/preferences/pet',
       pet,
+    )
+  },
+
+  getUsageWidgetPreferences() {
+    return api.get<{ exists: boolean; usageWidget: DesktopUsageWidgetPreferences }>(
+      '/api/desktop-ui/preferences/usage-widget',
+    )
+  },
+
+  updateUsageWidgetPreferences(usageWidget: Partial<DesktopUsageWidgetPreferences>) {
+    return api.put<{ ok: true; preferences: DesktopUiPreferences; usageWidget: DesktopUsageWidgetPreferences }>(
+      '/api/desktop-ui/preferences/usage-widget',
+      usageWidget,
     )
   },
 

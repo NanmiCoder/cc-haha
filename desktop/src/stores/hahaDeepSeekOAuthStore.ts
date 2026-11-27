@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { hahaDeepSeekOAuthApi, type HahaDeepSeekOAuthStatus } from '../api/hahaDeepSeekOAuth'
 import { useSettingsStore } from './settingsStore'
+import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
 
@@ -27,7 +28,12 @@ export const useHahaDeepSeekOAuthStore = create<HahaDeepSeekOAuthState>((set, ge
 
     fetchStatus: async () => {
       try {
-        set({ status: await hahaDeepSeekOAuthApi.status(), error: null })
+        const previous = get().status
+        const status = await hahaDeepSeekOAuthApi.status()
+        set({ status, error: null })
+        if (previous !== null && previous.loggedIn !== status.loggedIn) {
+          void useUsageSummaryStore.getState().fetchSummary({ force: true })
+        }
       } catch (err) {
         set({ error: err instanceof Error ? err.message : String(err) })
       }
@@ -54,6 +60,7 @@ export const useHahaDeepSeekOAuthStore = create<HahaDeepSeekOAuthState>((set, ge
       try {
         await hahaDeepSeekOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({
           isLoading: false,
