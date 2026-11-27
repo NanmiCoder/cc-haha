@@ -191,7 +191,7 @@ function Connect() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#121110' }}>
+    <View style={{ flex: 1, backgroundColor: '#131313' }}>
       <StatusBar style={pairing && !dark ? 'dark' : 'light'} />
       {pairing ? (
         <PairingView state={pairing} onCancel={closeForm} onRescan={rescan} />

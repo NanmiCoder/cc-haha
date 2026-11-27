@@ -23,6 +23,8 @@ import {
   Spinner,
   useColors,
 } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { Message } from '../Message'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../chat/StepGroup'
@@ -122,7 +124,7 @@ export function SubagentRun({
   toolUseId: string
   title?: string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const { client, error: connectionError } = useConnection(hostId)
   const [running, setRunning] = useState(true)
   const byAgent = isAgentIdRef(toolUseId)
@@ -235,9 +237,9 @@ export function SubagentRun({
                   height: 36,
                   paddingLeft: 12,
                   paddingRight: 14,
-                  borderRadius: 18,
-                  backgroundColor: colors.card,
-                  boxShadow: `0 1px 2px rgba(28,25,23,0.06), 0 2px 8px rgba(28,25,23,0.07), 0 0 0 1px ${colors.hair}`,
+                  borderRadius: radius.control,
+                  backgroundColor: colors.cardRaised,
+                  boxShadow: shadows.card,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,

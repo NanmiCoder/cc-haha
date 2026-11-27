@@ -1,6 +1,7 @@
 import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Button, Icon, InlineError, Mono, Spinner, useColors } from '../kit'
+import { Button, Icon, InlineError, Mono, Spinner } from '../kit'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { PulseRing } from './motion'
 import { simulatedPhoneChrome } from '../webChrome'
@@ -22,7 +23,7 @@ export function PairingView({
   onCancel(): void
   onRescan(): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   // iOS card-style modals report no top inset; keep the layout off the card edge.
   const top = simulatedPhoneChrome ? 47 : Math.max(insets.top, 12)
@@ -38,10 +39,10 @@ export function PairingView({
                 width: 96,
                 height: 96,
                 borderRadius: 48,
-                backgroundColor: colors.card,
+                backgroundColor: colors.cardRaised,
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 6px 20px rgba(28,25,23,0.08)',
+                boxShadow: shadows.card,
               }}
             >
               <Icon name="laptop" size={44} color={colors.ink} strokeWidth={1.4} />

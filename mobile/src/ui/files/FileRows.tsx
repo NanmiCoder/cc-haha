@@ -1,6 +1,8 @@
 import { Pressable, TextInput, View } from 'react-native'
 import { Text } from '../Text'
 import { Icon, Mono, useColors } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { isImagePath, type BadgeStatus } from '../../core/changesView'
 import {
   changedRowLabel,
@@ -10,14 +12,11 @@ import {
   type TreeItem,
 } from './filesModel'
 
-export const floatShadow = (hair: string) =>
-  `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
-
 /* ───────────── 分段 ───────────── */
 
-/** 「已修改 | 所有文件」：圆角胶囊分段，选中项是白色浮起的一段。 */
+/** 「已修改 | 所有文件」：分段切换，选中项是浮起的一段。 */
 export function FilesTabs({ value, onChange }: { value: FilesTab; onChange(value: FilesTab): void }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const options: { value: FilesTab; label: string }[] = [
     { value: 'changed', label: '已修改' },
     { value: 'all', label: '所有文件' },
@@ -29,7 +28,7 @@ export function FilesTabs({ value, onChange }: { value: FilesTab; onChange(value
       style={{
         height: 44,
         marginHorizontal: 16,
-        borderRadius: 22,
+        borderRadius: radius.control,
         backgroundColor: colors.fill,
         padding: 3,
         flexDirection: 'row',
@@ -45,11 +44,11 @@ export function FilesTabs({ value, onChange }: { value: FilesTab; onChange(value
             onPress={() => onChange(option.value)}
             style={{
               flex: 1,
-              borderRadius: 19,
+              borderRadius: radius.md,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: selected ? colors.card : 'transparent',
-              boxShadow: selected ? `0 1px 3px rgba(28,25,23,0.12), 0 0 0 1px ${colors.hair}` : undefined,
+              backgroundColor: selected ? colors.cardRaised : 'transparent',
+              boxShadow: selected ? shadows.segment : undefined,
             }}
           >
             <Text
@@ -292,7 +291,7 @@ export function FilesSearchBar({
   onChangeText(value: string): void
   bottom: number
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   return (
     <View
       style={{
@@ -301,9 +300,9 @@ export function FilesSearchBar({
         right: 16,
         bottom,
         height: 52,
-        borderRadius: 26,
-        backgroundColor: colors.card,
-        boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.10), 0 0 0 1px ${colors.hair}`,
+        borderRadius: radius.composer,
+        backgroundColor: colors.cardRaised,
+        boxShadow: shadows.composer,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,

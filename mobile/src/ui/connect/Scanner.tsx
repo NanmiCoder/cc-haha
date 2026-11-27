@@ -11,7 +11,7 @@ import { ScanLine } from './motion'
 import { simulatedPhoneChrome } from '../webChrome'
 
 /** 扫码页固定用暗色取景：相机画面之上只有白色线条与文字。 */
-const scannerBackground = '#121110'
+const scannerBackground = '#131313'
 const frameSize = 240
 
 /**

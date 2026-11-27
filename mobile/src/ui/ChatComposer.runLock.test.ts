@@ -21,7 +21,7 @@ test('a running composer keeps the model disabled and muted without a separate l
     mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
     const colors = { ink: 'ink', ink2: 'ink2', ink3: 'muted' }
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({ Icon: 'Icon', Mono: 'Mono', Spinner: 'Spinner', useColors: () => colors }))
-    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String }))
+    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String, useTheme: () => ({ colors, shadows: {}, dark: false, scheme: 'light' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/BringSheet'))}, () => ({ BringSheet: 'BringSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))

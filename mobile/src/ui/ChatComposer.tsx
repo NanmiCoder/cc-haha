@@ -7,7 +7,8 @@ import type { ApiClient } from '../core/client'
 import { formatBytes, type ComposerAttachment } from '../core/chatComposer'
 import { pickChatMaterial } from './chatMaterials'
 import { Icon, Mono, Spinner, useColors } from './kit'
-import { errorText } from './theme'
+import { radius } from './palette'
+import { errorText, useTheme } from './theme'
 import type { RuntimeConfig } from '../core/types'
 import { isAntigravityProvider } from '../core/runtimeCatalog'
 import {
@@ -98,18 +99,20 @@ function Pill({
           height: 32,
           paddingLeft: 11,
           paddingRight: removable ? 8 : 11,
-          borderRadius: 16,
-          backgroundColor: colors.runTint,
+          borderRadius: radius.sm,
+          backgroundColor: colors.brandSoft,
+          borderWidth: 1,
+          borderColor: colors.brandBorder,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 6,
         }}
       >
         {icon}
-        <Body numberOfLines={1} style={{ maxWidth: 180, fontSize: 13, fontWeight: '600', color: colors.run }}>
+        <Body numberOfLines={1} style={{ maxWidth: 180, fontSize: 13, fontWeight: '600', color: colors.brandInk }}>
           {label}
         </Body>
-        {removable ? <Icon name="x" size={13} color={colors.run} strokeWidth={2.6} /> : null}
+        {removable ? <Icon name="x" size={13} color={colors.brandInk} strokeWidth={2.6} /> : null}
       </View>
     </Pressable>
   )
@@ -133,7 +136,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
         backgroundColor: colors.ink,
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: `0 0 0 2px ${colors.card}`,
+        boxShadow: `0 0 0 2px ${colors.cardRaised}`,
       }}
     >
       <Icon name="x" size={10} color={colors.bg} strokeWidth={3.5} />
@@ -146,7 +149,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
         <Pressable accessibilityRole="button" accessibilityLabel={`预览 ${attachment.name}`} onPress={onPreview}>
           <Image
             source={{ uri }}
-            style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
+            style={{ width: 52, height: 52, borderRadius: radius.inner, backgroundColor: colors.fill }}
           />
         </Pressable>
         {remove}
@@ -157,7 +160,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
       style={{
         height: 52,
         maxWidth: 220,
-        borderRadius: 12,
+        borderRadius: radius.inner,
         backgroundColor: colors.fill,
         flexDirection: 'row',
         alignItems: 'center',
@@ -193,14 +196,14 @@ function CandidateCard({
   antigravity?: boolean
   onChoose(candidate: ComposerCandidate): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   return (
     <View
       style={{
-        backgroundColor: colors.card,
-        borderRadius: 18,
+        backgroundColor: colors.cardRaised,
+        borderRadius: radius.card,
         overflow: 'hidden',
-        boxShadow: `0 1px 2px rgba(28,25,23,0.06), 0 10px 28px rgba(28,25,23,0.14), 0 0 0 1px ${colors.hair}`,
+        boxShadow: shadows.popover,
       }}
     >
       <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 232 }} contentContainerStyle={{ padding: 6 }}>
@@ -230,7 +233,7 @@ function CandidateCard({
                   gap: 10,
                   paddingHorizontal: 10,
                   paddingVertical: 6,
-                  borderRadius: 12,
+                  borderRadius: radius.control,
                   backgroundColor: pressed || active ? colors.runTint : 'transparent',
                 })}
               >
@@ -241,7 +244,7 @@ function CandidateCard({
                   {candidate.description}
                 </Text>
                 {active ? <Icon name="check" size={16} color={colors.run} strokeWidth={2.4} /> : null}
-                <View style={{ height: 22, paddingHorizontal: 7, borderRadius: 7, backgroundColor: colors.fill, justifyContent: 'center' }}>
+                <View style={{ height: 22, paddingHorizontal: 7, borderRadius: radius.sm, backgroundColor: colors.fill, justifyContent: 'center' }}>
                   <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink2 }}>{candidateTypeLabel(candidate)}</Text>
                 </View>
               </Pressable>
@@ -374,7 +377,7 @@ export function ChatComposer({
   /** 为提示词优化等幂等请求生成 v4 UUID（原生端由页面注入 expo-crypto）。 */
   newRequestId?: () => string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const inset = useBottomInset()
   const keyboard = useKeyboardVisible()
   const input = useRef<ComponentRef<typeof TextInput>>(null)
@@ -593,12 +596,12 @@ export function ChatComposer({
       ) : null}
       <View
         style={{
-          backgroundColor: colors.card,
-          borderRadius: 22,
+          backgroundColor: colors.cardRaised,
+          borderRadius: radius.composer,
           paddingHorizontal: 6,
           paddingTop: chips ? 10 : 6,
           paddingBottom: 4,
-          boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.10), 0 0 0 1px ${colors.hair}`,
+          boxShadow: shadows.composer,
         }}
       >
         {chips ? (
@@ -628,7 +631,7 @@ export function ChatComposer({
                 onPress={() =>
                   onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))
                 }
-                icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} /> : undefined}
+                icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.brandInk} strokeWidth={2} /> : undefined}
               />
             ))}
             {teamActive && onTeam ? (
@@ -636,7 +639,7 @@ export function ChatComposer({
                 label="团队"
                 accessibilityLabel="关闭这条消息的 Agent 团队"
                 onPress={() => onTeam(false)}
-                icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
+                icon={<Icon name="users" size={14} color={colors.brandInk} strokeWidth={2} />}
               />
             ) : null}
           </ScrollView>
@@ -732,12 +735,12 @@ export function ChatComposer({
             onPress={press}
             style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
           >
-            {/* 一直是墨色实心圆：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
+            {/* 一直是墨色圆角方键：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
             <View
               style={{
                 width: 36,
                 height: 36,
-                borderRadius: 18,
+                borderRadius: radius.key,
                 backgroundColor: colors.btn,
                 opacity: slot.kind === 'blocked' ? 0.35 : 1,
                 alignItems: 'center',

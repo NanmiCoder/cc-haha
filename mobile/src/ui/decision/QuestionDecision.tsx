@@ -3,6 +3,8 @@ import { Modal, Platform, Pressable, ScrollView, TextInput, View } from 'react-n
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { ChatState, PermissionRequest } from '../../core/types'
 import { Button, HaloDot, Icon, InlineError, Sheet, Spinner, TextButton, useColors } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { KeyboardViewport } from '../KeyboardViewport'
 import {
@@ -55,7 +57,7 @@ export function QuestionPrompt({
   clock?: QuestionClock | null
   subagentName?: string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const label = questionPromptLabel(count)
   const displayLabel = subagentName ? `${subagentName}：${label}` : label
   return (
@@ -67,9 +69,9 @@ export function QuestionPrompt({
       onPress={onOpen}
       style={({ pressed }) => ({
         minHeight: 52,
-        borderRadius: 16,
-        backgroundColor: colors.card,
-        boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.08), 0 0 0 1px ${colors.hair}`,
+        borderRadius: radius.card,
+        backgroundColor: colors.cardRaised,
+        boxShadow: shadows.composer,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,

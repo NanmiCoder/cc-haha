@@ -1,10 +1,10 @@
 import { Pressable, View } from 'react-native'
 import type { ActivityProgress } from '../../core/sessionActivityModel'
-import { Icon, Mono, Spinner, useColors } from '../kit'
+import { Icon, Mono, Spinner } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { capsuleBadge, capsuleLabel, capsuleText } from './activityView'
-
-const SHADOW = '0 1px 2px rgba(28,25,23,0.06), 0 2px 8px rgba(28,25,23,0.07)'
 
 /**
  * 顶栏右侧的活动胶囊：转圈 + 完成数/总数，子 Agent/后台在跑时角上叠个数；
@@ -31,7 +31,7 @@ export function ActivityCapsule({
   /** 团队方案已确认、成员还没就位：没有任务也要出现。 */
   launching?: boolean
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const attention = tone === 'attention'
   const starting = launching && !attention
   if (!starting && (!visible || (runningCount === 0 && progress.total === 0))) return null
@@ -48,14 +48,12 @@ export function ActivityCapsule({
           height: 36,
           paddingLeft: 10,
           paddingRight: 12,
-          borderRadius: 18,
+          borderRadius: radius.card,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 6,
-          backgroundColor: attention ? colors.attnSoft : colors.card,
-          boxShadow: attention
-            ? `0 1px 2px rgba(28,25,23,0.06), 0 0 0 1.5px ${colors.attn}61`
-            : `${SHADOW}, 0 0 0 1px ${colors.hair}`,
+          backgroundColor: attention ? colors.attnSoft : colors.cardRaised,
+          boxShadow: attention ? shadows.capsuleWaiting : shadows.capsule,
         }}
       >
         {attention ? (
