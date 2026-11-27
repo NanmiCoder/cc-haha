@@ -150,6 +150,24 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       onPanelPlacementChanged: handler =>
         subscribe(ELECTRON_EVENT_CHANNELS.petPanelPlacementChanged, handler),
     },
+    usageWidget: {
+      show: options => invoke(ELECTRON_IPC_CHANNELS.usageWidgetShow, options),
+      hide: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetHide),
+      toggle: options => invoke(ELECTRON_IPC_CHANNELS.usageWidgetToggle, options),
+      setCompact: compact => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSetCompact, compact),
+      setAlwaysOnTop: alwaysOnTop => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop, alwaysOnTop),
+      snapToTop: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop),
+      dragWindow: payload => invoke(ELECTRON_IPC_CHANNELS.usageWidgetDragWindow, payload),
+      syncMenuBar: payload => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar, payload),
+      focusMainWindow: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow),
+      openSettings: tab => invoke(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, tab),
+      notifyPreferencesChanged: () =>
+        invoke(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged),
+      onVisibilityChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetVisibilityChanged, handler),
+      onPreferencesChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged, () => handler()),
+    },
     dialogs: {
       open: options => invoke(ELECTRON_IPC_CHANNELS.dialogOpen, options),
       save: options => invoke(ELECTRON_IPC_CHANNELS.dialogSave, options),

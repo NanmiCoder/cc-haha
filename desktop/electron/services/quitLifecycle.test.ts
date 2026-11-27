@@ -39,9 +39,11 @@ function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAcc
     idlePowerService: { dispose: cleanup('idlePower') },
     mainWindow: {}, saveWindowState: cleanup('window'),
     trayController: { dispose: cleanup('tray') },
+    usageMenuBarTrayController: { dispose: cleanup('usageMenuBarTray') },
     terminalService: { killAll: cleanup('terminal') },
     previewService: { close: cleanup('preview') },
     petWindowController: { dispose: cleanup('pet') },
+    usageWidgetWindowController: { dispose: cleanup('usageWidget') },
     p2pTerminator: { dispose: () => { cleanup('p2p')(); return p2pClosed } },
     workspaceBrowserService: null,
     publicAccessManager: {
@@ -89,7 +91,7 @@ describe('Electron quit lifecycle', () => {
     expect(fixture.requestQuit().preventDefault).toHaveBeenCalledOnce()
     expect(fixture.exit).not.toHaveBeenCalled()
     await settle()
-    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess', 'server'])
+    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'usageMenuBarTray', 'terminal', 'preview', 'pet', 'usageWidget', 'p2p', 'publicAccess', 'server'])
     expect(fixture.context.console.error).not.toHaveBeenCalled()
 
     fixture.finishServer()
@@ -104,7 +106,7 @@ describe('Electron quit lifecycle', () => {
       expect(() => fixture.requestQuit()).not.toThrow()
       fixture.requestQuit()
       await settle()
-      expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess', 'server'])
+      expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'usageMenuBarTray', 'terminal', 'preview', 'pet', 'usageWidget', 'p2p', 'publicAccess', 'server'])
       expect(fixture.exit).not.toHaveBeenCalled()
 
       fixture.finishServer()
@@ -121,7 +123,7 @@ describe('Electron quit lifecycle', () => {
     const fixture = quitFixture(undefined, false, false, null, directClosed)
     fixture.requestQuit()
     await settle()
-    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess'])
+    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'usageMenuBarTray', 'terminal', 'preview', 'pet', 'usageWidget', 'p2p', 'publicAccess'])
     closeDirect()
     await settle()
     expect(fixture.calls.at(-1)).toBe('server')

@@ -3184,7 +3184,10 @@ html[data-touch-h5] body {
 
 html[data-window-kind='pet'],
 html[data-window-kind='pet'] body,
-html[data-window-kind='pet'] #root {
+html[data-window-kind='pet'] #root,
+html[data-window-kind='usage-widget'],
+html[data-window-kind='usage-widget'] body,
+html[data-window-kind='usage-widget'] #root {
   background: transparent !important;
   overflow: hidden;
 }

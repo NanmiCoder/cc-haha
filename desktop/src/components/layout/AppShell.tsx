@@ -34,6 +34,7 @@ import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { useUsageSummaryStore } from '../../stores/usageSummaryStore'
 import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { MobileShell } from '../mobile/MobileShell'
@@ -140,6 +141,17 @@ export function AppShell() {
               preferences.projectDisplayNames ?? {},
               displayNameHydrationRevision,
             )
+            if (preferences.usageWidget) {
+              void useUsageSummaryStore.getState().hydratePreferences(preferences.usageWidget)
+            }
+            if (desktopRuntime && preferences.usageWidget?.floatingEnabled) {
+              void getDesktopHost().usageWidget?.show({
+                compact: preferences.usageWidget.floatingCompact,
+                alwaysOnTop: preferences.usageWidget.floatingAlwaysOnTop,
+              }).then(() => {
+                useUsageSummaryStore.getState().setFloatingVisible(true)
+              }).catch(() => undefined)
+            }
             if (desktopRuntime && preferences.pet.enabled) {
               return getDesktopHost().pets.show()
             }
@@ -184,15 +196,50 @@ export function AppShell() {
     if (!host.isDesktop) return
     let unlisten: (() => void) | undefined
     host.window.onNativeMenuNavigate((target) => {
-      const destination = target as SettingsTab | 'settings'
+      const destination = target as SettingsTab | 'settings' | 'settings:providers'
       if (destination === 'about') {
         useUIStore.getState().setPendingSettingsTab('about')
+      } else if (destination === 'settings:providers') {
+        useUIStore.getState().setPendingSettingsTab('providers')
       }
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
     })
       .then((fn) => { unlisten = fn })
       .catch(() => {})
     return () => { unlisten?.() }
+  }, [])
+
+  // Keep usage widget visibility and cross-window preference changes in sync with the main window.
+  useEffect(() => {
+    const host = getDesktopHost()
+    if (!host.isDesktop || !host.usageWidget) return
+    let unlistenVisibility: (() => void) | undefined
+    let unlistenPrefs: (() => void) | undefined
+    let disposed = false
+
+    host.usageWidget.onVisibilityChanged((visible) => {
+      useUsageSummaryStore.getState().handleExternalVisibilityChange(visible)
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlistenVisibility = fn
+      })
+      .catch(() => {})
+
+    host.usageWidget.onPreferencesChanged?.(() => {
+      void useUsageSummaryStore.getState().hydratePreferences()
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlistenPrefs = fn
+      })
+      .catch(() => {})
+
+    return () => {
+      disposed = true
+      unlistenVisibility?.()
+      unlistenPrefs?.()
+    }
   }, [])
 
   useEffect(() => {

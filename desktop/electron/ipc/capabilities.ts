@@ -328,6 +328,25 @@ const localePreference: Validator = value =>
   || value === 'jp'
   || value === 'kr'
 
+export const usageWidgetShowOptions: Validator = value =>
+  value === undefined
+  || (
+    isRecord(value)
+    && hasOnlyKeys(value, ['compact', 'alwaysOnTop'])
+    && (value.compact === undefined || typeof value.compact === 'boolean')
+    && (value.alwaysOnTop === undefined || typeof value.alwaysOnTop === 'boolean')
+  )
+
+const usageWidgetMenuBarSync: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['enabled', 'title', 'tooltip'])
+  && typeof value.enabled === 'boolean'
+  && (value.title === undefined || (typeof value.title === 'string' && value.title.length <= 64))
+  && (value.tooltip === undefined || (typeof value.tooltip === 'string' && value.tooltip.length <= 240))
+
+const usageWidgetSettingsTab: Validator = value =>
+  value === undefined || value === 'general' || value === 'providers'
+
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
   [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning]: booleanPayload,
@@ -349,6 +368,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken]: noPayload,
+  [ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.commandInvoke]: commandInvoke,
   [ELECTRON_IPC_CHANNELS.clipboardReadText]: noPayload,
   [ELECTRON_IPC_CHANNELS.clipboardWriteText]: stringPayload,
@@ -368,6 +388,17 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.petsSetInteractiveRegions]: petInteractiveRegions,
   [ELECTRON_IPC_CHANNELS.petsFocusMainWindow]: noPayload,
   [ELECTRON_IPC_CHANNELS.petsFocusSession]: sessionIdPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetShow]: usageWidgetShowOptions,
+  [ELECTRON_IPC_CHANNELS.usageWidgetHide]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetToggle]: usageWidgetShowOptions,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSetCompact]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetDragWindow]: petWindowDrag,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar]: usageWidgetMenuBarSync,
+  [ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings]: usageWidgetSettingsTab,
+  [ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged]: noPayload,
   [ELECTRON_IPC_CHANNELS.dialogOpen]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.dialogSave]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.updateCheck]: updateCheckOptions,
@@ -447,6 +478,22 @@ const petWindowChannels = new Set<ElectronIpcChannel>([
   ELECTRON_IPC_CHANNELS.petsFocusSession,
 ])
 
+const usageWidgetWindowChannels = new Set<ElectronIpcChannel>([
+  ELECTRON_IPC_CHANNELS.appGetLocalePreference,
+  ELECTRON_IPC_CHANNELS.appGetPreferredSystemLanguages,
+  ELECTRON_IPC_CHANNELS.runtimeGetServerUrl,
+  ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken,
+  ELECTRON_IPC_CHANNELS.usageWidgetHide,
+  ELECTRON_IPC_CHANNELS.usageWidgetSetCompact,
+  ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop,
+  ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop,
+  ELECTRON_IPC_CHANNELS.usageWidgetDragWindow,
+  ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar,
+  ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow,
+  ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings,
+  ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
+])
+
 export function isElectronIpcChannel(channel: string): channel is ElectronIpcChannel {
   return allowedChannels.has(channel as ElectronIpcChannel)
 }
@@ -457,4 +504,8 @@ export function validateElectronIpcPayload(channel: ElectronIpcChannel, payload:
 
 export function isElectronIpcChannelAllowedForPetWindow(channel: ElectronIpcChannel): boolean {
   return petWindowChannels.has(channel)
+}
+
+export function isElectronIpcChannelAllowedForUsageWidgetWindow(channel: ElectronIpcChannel): boolean {
+  return usageWidgetWindowChannels.has(channel)
 }

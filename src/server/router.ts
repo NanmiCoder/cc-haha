@@ -30,6 +30,7 @@ import { handleDiagnosticsApi } from './api/diagnostics.js'
 import { handleDoctorApi } from './api/doctor.js'
 import { handleH5AccessApi } from './api/h5-access.js'
 import { handleActivityStatsApi } from './api/activityStats.js'
+import { handleUsageSummaryApi } from './api/usage-summary.js'
 import { handleOpenTargetsApi } from './api/open-targets.js'
 import { handleMemoryApi } from './api/memory.js'
 import { handleDesktopUiApi } from './api/desktop-ui.js'
@@ -58,6 +59,9 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
   if (mobileParts[1] === 'sessions' && mobileParts[2] === 'mobile-push') return handleMobilePushApi(req, mobileParts, context)
   if (!context.remoteBrowser) return routeApiRequest(req, url)
   const parts = url.pathname.split('/').filter(Boolean)
+  if (parts[1] === 'usage-summary') {
+    return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
+  }
   const isProvider = parts[1] === 'providers'
   const isSettings = parts[1] === 'settings'
   if (!isProvider && !isSettings) return routeApiRequest(req, url)
@@ -206,6 +210,9 @@ async function routeApiRequest(req: Request, url: URL): Promise<Response> {
 
     case 'activity-stats':
       return handleActivityStatsApi(req, url, segments)
+
+    case 'usage-summary':
+      return handleUsageSummaryApi(req, url, segments)
 
     case 'open-targets':
       return handleOpenTargetsApi(req, url, segments)

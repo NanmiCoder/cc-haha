@@ -184,6 +184,47 @@ export const browserHost: DesktopHost = {
       return noopUnlisten
     },
   },
+  usageWidget: {
+    async show() {
+      unsupported('Showing the floating usage widget')
+    },
+    async hide() {
+      unsupported('Hiding the floating usage widget')
+    },
+    async toggle() {
+      return false
+    },
+    async setCompact() {
+      return { compact: false, alwaysOnTop: true, snappedTop: false }
+    },
+    async setAlwaysOnTop() {
+      return { compact: false, alwaysOnTop: true, snappedTop: false }
+    },
+    async snapToTop() {
+      return { compact: true, alwaysOnTop: true, snappedTop: true }
+    },
+    async dragWindow() {
+      return { compact: false, alwaysOnTop: true, snappedTop: false }
+    },
+    async syncMenuBar() {
+      return
+    },
+    async focusMainWindow() {
+      unsupported('Focusing the main desktop window')
+    },
+    async openSettings() {
+      unsupported('Opening desktop settings')
+    },
+    async notifyPreferencesChanged() {
+      return
+    },
+    async onVisibilityChanged() {
+      return noopUnlisten
+    },
+    async onPreferencesChanged() {
+      return noopUnlisten
+    },
+  },
   dialogs: {
     async open() {
       unsupported('Native file dialogs')

@@ -10,7 +10,9 @@ import { normalizeProjectAdditionalDirectories, resolveProjectDirectories, valid
 import { normalizeExplicitProjectRoots } from './projectIdentity.js'
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from './voice/types.js'
 
-const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 8
+const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 9
+const MAX_PINNED_USAGE_METRICS = 24
+const MAX_PINNED_USAGE_METRIC_KEY_LENGTH = 120
 const MAX_PROJECT_PREFERENCE_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_KEY_LENGTH = 4_096
@@ -66,6 +68,21 @@ export type DesktopPetPreferences = {
 
 export type DesktopVoiceInputPreferences = VoicePreferences
 
+export type UsageSidebarVisibility = 'auto' | 'always' | 'hidden'
+export type UsageDisplayMode = 'remaining' | 'used'
+
+export type DesktopUsageWidgetPreferences = {
+  /** 'auto' hides the sidebar widget for API-key-only users and reveals it when an official account is signed in. */
+  sidebarVisibility: UsageSidebarVisibility
+  displayMode: UsageDisplayMode
+  showExactResetTime: boolean
+  floatingEnabled: boolean
+  floatingCompact: boolean
+  floatingAlwaysOnTop: boolean
+  menuBarEnabled: boolean
+  pinnedMetricKeys: string[]
+}
+
 export type ProjectDisplayNames = Record<string, string>
 
 export type DesktopUiPreferences = {
@@ -74,6 +91,7 @@ export type DesktopUiPreferences = {
   profile: DesktopProfilePreferences
   pet: DesktopPetPreferences
   voiceInput: DesktopVoiceInputPreferences
+  usageWidget: DesktopUsageWidgetPreferences
   projectDisplayNames: ProjectDisplayNames
   explicitProjectRoots: string[]
   projectAdditionalDirectories: ProjectAdditionalDirectories
@@ -110,6 +128,17 @@ const DEFAULT_PET_PREFERENCES: DesktopPetPreferences = {
   lastSessionId: null,
 }
 
+export const DEFAULT_USAGE_WIDGET_PREFERENCES: DesktopUsageWidgetPreferences = {
+  sidebarVisibility: 'auto',
+  displayMode: 'remaining',
+  showExactResetTime: false,
+  floatingEnabled: false,
+  floatingCompact: false,
+  floatingAlwaysOnTop: true,
+  menuBarEnabled: false,
+  pinnedMetricKeys: ['claude-official:five_hour', 'openai-official:five_hour'],
+}
+
 function createProjectDisplayNames(): ProjectDisplayNames {
   return Object.fromEntries([]) as ProjectDisplayNames
 }
@@ -121,6 +150,10 @@ function defaultPreferences(): DesktopUiPreferences {
     profile: { ...DEFAULT_PROFILE_PREFERENCES },
     pet: { ...DEFAULT_PET_PREFERENCES },
     voiceInput: { ...DEFAULT_VOICE_PREFERENCES },
+    usageWidget: {
+      ...DEFAULT_USAGE_WIDGET_PREFERENCES,
+      pinnedMetricKeys: [...DEFAULT_USAGE_WIDGET_PREFERENCES.pinnedMetricKeys],
+    },
     projectDisplayNames: createProjectDisplayNames(),
     explicitProjectRoots: [],
     projectAdditionalDirectories: {},
@@ -344,6 +377,67 @@ function normalizeProjectSortBy(value: unknown): SidebarProjectPreferences['proj
   return value === 'createdAt' || value === 'updatedAt' ? value : 'updatedAt'
 }
 
+function normalizePinnedMetricKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_USAGE_WIDGET_PREFERENCES.pinnedMetricKeys]
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (
+      trimmed.length === 0 ||
+      trimmed.length > MAX_PINNED_USAGE_METRIC_KEY_LENGTH ||
+      !/^[a-z0-9_:-]+$/i.test(trimmed) ||
+      seen.has(trimmed)
+    ) {
+      continue
+    }
+    seen.add(trimmed)
+    normalized.push(trimmed)
+    if (normalized.length >= MAX_PINNED_USAGE_METRICS) break
+  }
+  return normalized
+}
+
+export function normalizeDesktopUsageWidgetPreferences(value: unknown): DesktopUsageWidgetPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      ...DEFAULT_USAGE_WIDGET_PREFERENCES,
+      pinnedMetricKeys: [...DEFAULT_USAGE_WIDGET_PREFERENCES.pinnedMetricKeys],
+    }
+  }
+  const record = value as Record<string, unknown>
+  const sidebarVisibility: UsageSidebarVisibility =
+    record.sidebarVisibility === 'auto' || record.sidebarVisibility === 'always' || record.sidebarVisibility === 'hidden'
+      ? record.sidebarVisibility
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.sidebarVisibility
+  const displayMode: UsageDisplayMode =
+    record.displayMode === 'remaining' || record.displayMode === 'used'
+      ? record.displayMode
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.displayMode
+  return {
+    ...record,
+    sidebarVisibility,
+    displayMode,
+    showExactResetTime: typeof record.showExactResetTime === 'boolean'
+      ? record.showExactResetTime
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.showExactResetTime,
+    floatingEnabled: typeof record.floatingEnabled === 'boolean'
+      ? record.floatingEnabled
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.floatingEnabled,
+    floatingCompact: typeof record.floatingCompact === 'boolean'
+      ? record.floatingCompact
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.floatingCompact,
+    floatingAlwaysOnTop: typeof record.floatingAlwaysOnTop === 'boolean'
+      ? record.floatingAlwaysOnTop
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.floatingAlwaysOnTop,
+    menuBarEnabled: typeof record.menuBarEnabled === 'boolean'
+      ? record.menuBarEnabled
+      : DEFAULT_USAGE_WIDGET_PREFERENCES.menuBarEnabled,
+    pinnedMetricKeys: normalizePinnedMetricKeys(record.pinnedMetricKeys),
+  }
+}
+
 function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null
@@ -362,6 +456,7 @@ function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | n
     profile: normalizeProfilePreferences(record.profile),
     pet: normalizeDesktopPetPreferences(record.pet),
     voiceInput: normalizeVoicePreferences(record.voiceInput),
+    usageWidget: normalizeDesktopUsageWidgetPreferences(record.usageWidget),
     projectDisplayNames: normalizeProjectDisplayNames(record.projectDisplayNames),
     explicitProjectRoots: normalizeExplicitProjectRoots(record.explicitProjectRoots),
     projectAdditionalDirectories: normalizeProjectAdditionalDirectories(record.projectAdditionalDirectories),
@@ -628,6 +723,33 @@ export class DesktopUiPreferencesService {
         pet: normalizeDesktopPetPreferences(preferences.pet),
         voiceInput: normalizeVoicePreferences({
           ...currentVoiceInput,
+          ...patch,
+        }),
+        projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
+      }
+
+      await this.writePreferences(nextPreferences)
+      return nextPreferences
+    })
+  }
+
+  async updateUsageWidgetPreferences(usageWidget: unknown): Promise<DesktopUiPreferences> {
+    const filePath = this.getPreferencesPath()
+    return this.withWriteLock(filePath, async () => {
+      const { preferences } = await this.readPreferences()
+      const currentUsageWidget = normalizeDesktopUsageWidgetPreferences(preferences.usageWidget)
+      const patch = usageWidget && typeof usageWidget === 'object' && !Array.isArray(usageWidget)
+        ? usageWidget as Record<string, unknown>
+        : {}
+      const nextPreferences: DesktopUiPreferences = {
+        ...preferences,
+        schemaVersion: preferences.schemaVersion,
+        sidebar: normalizeSidebarProjectPreferences(preferences.sidebar),
+        profile: normalizeProfilePreferences(preferences.profile),
+        pet: normalizeDesktopPetPreferences(preferences.pet),
+        voiceInput: normalizeVoicePreferences(preferences.voiceInput),
+        usageWidget: normalizeDesktopUsageWidgetPreferences({
+          ...currentUsageWidget,
           ...patch,
         }),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),

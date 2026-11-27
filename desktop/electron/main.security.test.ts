@@ -47,6 +47,24 @@ describe('Electron preview security boundary', () => {
     expect(mainSource).toContain('resolvePetServerAccess')
   })
 
+  it('isolates the usage widget preload and session from the desktop master access token', () => {
+    const widgetPreloadSource = readFileSync(
+      path.join(desktopRoot, 'electron', 'usage-widget-preload.ts'),
+      'utf8',
+    )
+    const widgetControllerSource = mainSource.slice(
+      mainSource.indexOf('function getUsageWidgetWindowController()'),
+      mainSource.indexOf('function getWorkspaceBrowserService()'),
+    )
+
+    expect(widgetPreloadSource).toContain('runtimeGetUsageWidgetAccessToken')
+    expect(widgetPreloadSource).not.toContain('runtimeGetLocalAccessToken')
+    expect(widgetControllerSource).toContain('usageWidgetPreloadPath()')
+    expect(widgetControllerSource).toContain('configurePreviewSessionPermissions')
+    expect(widgetControllerSource).toContain('resolveUsageWidgetServerAccess')
+    expect(widgetControllerSource).not.toContain('resolveMainRendererServerAccess')
+  })
+
   it('uses a fresh in-memory session partition for every remote preview', () => {
     const firstPartition = createPreviewSessionPartition()
     const secondPartition = createPreviewSessionPartition()

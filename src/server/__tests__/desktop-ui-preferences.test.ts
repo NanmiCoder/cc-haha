@@ -28,6 +28,17 @@ const DEFAULT_VOICE_INPUT_PREFERENCES = {
   correctionModelId: null,
 }
 
+const DEFAULT_USAGE_WIDGET_PREFERENCES = {
+  sidebarVisibility: 'auto',
+  displayMode: 'remaining',
+  showExactResetTime: false,
+  floatingEnabled: false,
+  floatingCompact: false,
+  floatingAlwaysOnTop: true,
+  menuBarEnabled: false,
+  pinnedMetricKeys: ['claude-official:five_hour', 'openai-official:five_hour'],
+}
+
 async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'desktop-ui-preferences-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -76,7 +87,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(result.exists).toBe(false)
     expect(result.preferences).toEqual({
-      schemaVersion: 8,
+      schemaVersion: 9,
       profile: {
         displayName: 'cc-haha',
         subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -85,6 +96,7 @@ describe('DesktopUiPreferencesService', () => {
       },
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
       projectAdditionalDirectories: {},
       explicitProjectRoots: [],
       projectDisplayNames: {},
@@ -135,7 +147,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(before.exists).toBe(true)
     expect(before.preferences).toEqual({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -145,6 +157,7 @@ describe('DesktopUiPreferencesService', () => {
       },
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
       projectAdditionalDirectories: {},
       explicitProjectRoots: [],
       projectDisplayNames: {
@@ -159,7 +172,7 @@ describe('DesktopUiPreferencesService', () => {
       },
     })
     expect(after).toEqual({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -169,6 +182,7 @@ describe('DesktopUiPreferencesService', () => {
       },
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
       projectAdditionalDirectories: {},
       explicitProjectRoots: [],
       projectDisplayNames: {
@@ -328,7 +342,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       profile: {
         displayName: 'Local Operator',
@@ -407,7 +421,7 @@ describe('DesktopUiPreferencesService', () => {
     const after = await new DesktopUiPreferencesService().updatePetPreferences({ enabled: true })
 
     expect(after).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       pet: {
         futurePetField: { keep: 'pet-too' },
@@ -509,7 +523,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toEqual({
-      schemaVersion: 8,
+      schemaVersion: 9,
       profile: {
         displayName: 'Claude Captain',
         subtitle: 'local.example/profile',
@@ -518,6 +532,7 @@ describe('DesktopUiPreferencesService', () => {
       },
       pet: DEFAULT_PET_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
       projectAdditionalDirectories: {},
       explicitProjectRoots: [],
       projectDisplayNames: {},
@@ -605,7 +620,7 @@ describe('desktop UI preferences API', () => {
     expect(putBody).toEqual({
       ok: true,
       preferences: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -614,6 +629,7 @@ describe('desktop UI preferences API', () => {
         },
         pet: DEFAULT_PET_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+        usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
         projectAdditionalDirectories: {},
         explicitProjectRoots: [],
         projectDisplayNames: {},
@@ -635,7 +651,7 @@ describe('desktop UI preferences API', () => {
     expect(getBody).toEqual({
       exists: true,
       preferences: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -644,6 +660,7 @@ describe('desktop UI preferences API', () => {
         },
         pet: DEFAULT_PET_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+        usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
         projectAdditionalDirectories: {},
         explicitProjectRoots: [],
         projectDisplayNames: {},
@@ -736,7 +753,7 @@ describe('desktop UI preferences API', () => {
     await expect(putRes.json()).resolves.toMatchObject({
       ok: true,
       preferences: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         pet: {
           enabled: true,
           selectedPetId: 'seedy',
@@ -1037,7 +1054,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     const read = await service.readPreferences()
     expect(read.exists).toBe(true)
     expect(read.preferences).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       pet: { enabled: true },
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
@@ -1047,7 +1064,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
 
     expect(after.voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'zh' })
     expect(await readDesktopUiFile()).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       futureField: { keep: true },
       pet: { enabled: true },
       sidebar: { projectOrder: ['/workspace/alpha'] },
@@ -1218,6 +1235,50 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
       schemaVersion: 99,
       futureField: 1,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
+    })
+  })
+
+  test('upgrades schema-8 desktop-ui.json without usageWidget and preserves unknown fields', async () => {
+    await writeDesktopUiFile({
+      schemaVersion: 8,
+      futureRootField: { keep: 'root' },
+      sidebar: { projectOrder: ['/workspace/alpha'] },
+    })
+
+    const service = new DesktopUiPreferencesService()
+    const read = await service.readPreferences()
+    expect(read.preferences).toMatchObject({
+      schemaVersion: 9,
+      futureRootField: { keep: 'root' },
+      usageWidget: DEFAULT_USAGE_WIDGET_PREFERENCES,
+    })
+
+    const putReq = makeRequest('PUT', '/api/desktop-ui/preferences/usage-widget', {
+      sidebarVisibility: 'always',
+      displayMode: 'used',
+      floatingEnabled: true,
+      floatingCompact: true,
+      menuBarEnabled: true,
+      pinnedMetricKeys: ['claude-official:five_hour', 'bad key!!', 'grok-official:seven_day'],
+    })
+    const putRes = await handleDesktopUiApi(putReq.req, putReq.url, putReq.segments)
+    expect(putRes.status).toBe(200)
+    const putBody = await putRes.json() as { ok: boolean; usageWidget: Record<string, unknown> }
+    expect(putBody.ok).toBe(true)
+    expect(putBody.usageWidget).toEqual({
+      ...DEFAULT_USAGE_WIDGET_PREFERENCES,
+      sidebarVisibility: 'always',
+      displayMode: 'used',
+      floatingEnabled: true,
+      floatingCompact: true,
+      menuBarEnabled: true,
+      pinnedMetricKeys: ['claude-official:five_hour', 'grok-official:seven_day'],
+    })
+    expect(await readDesktopUiFile()).toMatchObject({
+      schemaVersion: 9,
+      futureRootField: { keep: 'root' },
+      usageWidget: putBody.usageWidget,
     })
   })
 })
