@@ -87,7 +87,7 @@ function focusWorkspaceBrowserTab(sessionId: string | null | undefined, tabId?: 
   const workspaceStore = useWorkspaceStore.getState()
   if (tabId) {
     const owner = workspaceStore.findBrowserTabOwner(tabId)
-    if (owner) {
+    if (owner && (!sessionId || owner.sessionId === sessionId)) {
       workspaceStore.activateTab(owner.sessionId, owner.tabId)
       if (workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
         workspaceStore.setLayout(owner.sessionId, 'split')

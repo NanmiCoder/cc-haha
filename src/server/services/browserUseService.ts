@@ -67,6 +67,7 @@ interface BridgePushEvent {
 
 interface BridgeTabDescriptor {
   tabId: string
+  sessionId?: string
   url: string
   title: string
   visible?: boolean
@@ -723,6 +724,7 @@ export class BrowserUseService {
         const tabId = typeof params.tabId === 'string' ? params.tabId : ''
         if (tabId) {
           this.workspaceEngine?.unregisterTab(tabId)
+          this.clearTrackedTab(tabId)
           void this.workspaceTransport?.releaseLease(tabId)
         }
         return
@@ -922,6 +924,8 @@ export class BrowserUseService {
   }
 
   private findSessionIdForTab(tabId: string): string | undefined {
+    const registeredOwner = this.workspaceEngine?.getTab(tabId)?.ownerSessionId
+    if (registeredOwner) return registeredOwner
     for (const ownership of this.sessionTabs.values()) {
       if (ownership.tabId === tabId) return ownership.sessionId
     }
@@ -932,6 +936,20 @@ export class BrowserUseService {
       if (takeover.tabId === tabId) return sessionId
     }
     return undefined
+  }
+
+  private clearTrackedTab(tabId: string): void {
+    for (const [key, ownership] of [...this.sessionTabs.entries()]) {
+      if (ownership.tabId === tabId) {
+        this.sessionTabs.delete(key)
+      }
+    }
+    for (const [key, touched] of [...this.sessionTouchedTabs.entries()]) {
+      touched.delete(tabId)
+      if (touched.size === 0) {
+        this.sessionTouchedTabs.delete(key)
+      }
+    }
   }
 
   private scopeKey(sessionId: string, agentId?: string): string {
@@ -975,6 +993,9 @@ export class BrowserUseService {
             url: t.url,
             title: t.title,
             active: t.visible ?? existing?.active ?? false,
+            ...(t.sessionId || existing?.ownerSessionId
+              ? { ownerSessionId: t.sessionId ?? existing?.ownerSessionId }
+              : {}),
             cdpSessionId: t.tabId,
           })
         }
@@ -1153,11 +1174,11 @@ export class BrowserUseService {
   }): Promise<{ engine: BrowserUseEngine; tab: BrowserTabInfo }> {
     const key = this.scopeKey(options.sessionId, options.agentId)
     const remembered = this.sessionTabs.get(key)
-    const desiredTabId =
-      options.tabId ??
-      (remembered && remembered.target === options.target
+    const rememberedTabId =
+      remembered && remembered.target === options.target
         ? remembered.tabId
-        : undefined)
+        : undefined
+    let desiredTabId = options.tabId ?? rememberedTabId
 
     if (options.target === 'workspace') {
       if (!this.bridgeClient || !this.workspaceEngine) {
@@ -1166,6 +1187,22 @@ export class BrowserUseService {
           'Workspace Browser bridge is unavailable',
           'WORKSPACE_BROWSER_UNAVAILABLE',
         )
+      }
+      // Never allow one session to hijack a workspace browser tab owned by a
+      // different session (e.g., from a stale or cross-session tabId).
+      if (desiredTabId) {
+        const known = this.workspaceEngine.getTab(desiredTabId)
+        if (known?.ownerSessionId && known.ownerSessionId !== options.sessionId) {
+          const fallbackKnown = rememberedTabId
+            ? this.workspaceEngine.getTab(rememberedTabId)
+            : null
+          desiredTabId =
+            rememberedTabId &&
+            (!fallbackKnown?.ownerSessionId ||
+              fallbackKnown.ownerSessionId === options.sessionId)
+              ? rememberedTabId
+              : undefined
+        }
       }
       const config = this.getConfig()
       if (options.url) {
@@ -1181,13 +1218,20 @@ export class BrowserUseService {
           revealWorkbench: config.autoOpenWorkspacePanel,
         },
       )
+      if (ensured.sessionId && ensured.sessionId !== options.sessionId) {
+        throw new ApiError(
+          409,
+          `Workspace browser tab ${ensured.tabId} belongs to another session`,
+          'WORKSPACE_TAB_SESSION_MISMATCH',
+        )
+      }
       const tab = this.workspaceEngine.registerTab({
         tabId: ensured.tabId,
         target: 'workspace',
         url: ensured.url || options.url || 'about:blank',
         title: ensured.title || '',
         active: true,
-        ownerSessionId: options.sessionId,
+        ownerSessionId: ensured.sessionId ?? options.sessionId,
         ownerAgentId: options.agentId,
         cdpSessionId: ensured.tabId,
       })
@@ -1275,19 +1319,29 @@ export class BrowserUseService {
       if (input.action === 'list') {
         const res = await this.bridgeClient.rpc<{ tabs?: BridgeTabDescriptor[] }>(
           'tabs.list',
-          {},
+          { sessionId: input.sessionId },
           { signal: input.signal },
         )
-        const tabs: BrowserTabInfo[] = (res.tabs ?? []).map(t =>
-          this.workspaceEngine!.registerTab({
-            tabId: t.tabId,
-            target: 'workspace',
-            url: t.url,
-            title: t.title,
-            active: t.visible ?? false,
-            cdpSessionId: t.tabId,
-          }),
-        )
+        const tabs: BrowserTabInfo[] = []
+        for (const t of res.tabs ?? []) {
+          const existing = this.workspaceEngine.getTab(t.tabId)
+          const ownerSessionId = t.sessionId ?? existing?.ownerSessionId
+          if (ownerSessionId && ownerSessionId !== input.sessionId) {
+            continue
+          }
+          tabs.push(
+            this.workspaceEngine.registerTab({
+              ...(existing ?? {}),
+              tabId: t.tabId,
+              target: 'workspace',
+              url: t.url,
+              title: t.title,
+              active: t.visible ?? false,
+              ownerSessionId: ownerSessionId ?? input.sessionId,
+              cdpSessionId: t.tabId,
+            }),
+          )
+        }
         return { target, tabs }
       }
       if (input.action === 'open') {
@@ -1312,7 +1366,7 @@ export class BrowserUseService {
           url: ensured.url || input.url || 'about:blank',
           title: ensured.title || '',
           active: true,
-          ownerSessionId: input.sessionId,
+          ownerSessionId: ensured.sessionId ?? input.sessionId,
           ownerAgentId: input.agentId,
           cdpSessionId: ensured.tabId,
         })
@@ -1322,28 +1376,61 @@ export class BrowserUseService {
           'workspace',
           tab.tabId,
         )
-        return { target, tab, tabs: this.workspaceEngine.listTabs() }
+        return {
+          target,
+          tab,
+          tabs: this.workspaceEngine
+            .listTabs()
+            .filter(t => t.ownerSessionId === input.sessionId),
+        }
       }
       if (input.action === 'focus') {
         if (!input.tabId) throw ApiError.badRequest('tabId is required for focus')
+        const existing = this.workspaceEngine.getTab(input.tabId)
+        if (existing?.ownerSessionId && existing.ownerSessionId !== input.sessionId) {
+          throw new ApiError(
+            403,
+            `Workspace browser tab ${input.tabId} belongs to another session`,
+            'WORKSPACE_TAB_SESSION_MISMATCH',
+          )
+        }
         const config = this.getConfig()
         await this.bridgeClient.rpc(
           'tabs.focus',
-          { tabId: input.tabId, revealWorkbench: config.autoOpenWorkspacePanel },
+          {
+            tabId: input.tabId,
+            sessionId: input.sessionId,
+            revealWorkbench: config.autoOpenWorkspacePanel,
+          },
           { signal: input.signal },
         )
         const tab = this.workspaceEngine.setActiveTab(input.tabId)
+        this.recordTabOwnership(
+          input.sessionId,
+          input.agentId,
+          'workspace',
+          input.tabId,
+        )
         return { ok: true, target, tabId: input.tabId, ...(tab ? { tab } : {}) }
       }
       if (input.action === 'close') {
         if (!input.tabId) throw ApiError.badRequest('tabId is required for close')
+        const existing = this.workspaceEngine.getTab(input.tabId)
+        if (existing?.ownerSessionId && existing.ownerSessionId !== input.sessionId) {
+          throw new ApiError(
+            403,
+            `Workspace browser tab ${input.tabId} belongs to another session`,
+            'WORKSPACE_TAB_SESSION_MISMATCH',
+          )
+        }
         await this.workspaceTransport?.releaseLease(input.tabId)
         await this.bridgeClient.rpc(
           'tabs.close',
-          { tabId: input.tabId },
+          { tabId: input.tabId, sessionId: input.sessionId },
           { signal: input.signal },
         )
         this.workspaceEngine.unregisterTab(input.tabId)
+        this.clearTrackedTab(input.tabId)
         return { ok: true, target, tabId: input.tabId }
       }
     }

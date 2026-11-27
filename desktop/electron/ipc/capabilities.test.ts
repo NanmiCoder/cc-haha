@@ -88,7 +88,9 @@ describe('Electron IPC capabilities', () => {
     const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserCreate
     const identity = { tabId: 'wb-1', storageId: 'store-1', webContentsId: 7 }
     expect(validateElectronIpcPayload(channel, identity)).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: 'session-1' })).toBe(true)
     expect(validateElectronIpcPayload(channel, { ...identity, url: 'https://example.com/' })).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: '../escape' })).toBe(false)
     for (const webContentsId of [undefined, 0, -1, 1.5, '7', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       expect(validateElectronIpcPayload(channel, { ...identity, webContentsId })).toBe(false)
     }

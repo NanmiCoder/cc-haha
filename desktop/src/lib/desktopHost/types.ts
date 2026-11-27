@@ -320,11 +320,13 @@ export type BrowserUseHostEvent =
   | {
       type: 'focus-tab'
       tabId: string
+      sessionId?: string
       revealWorkbench?: boolean
     }
   | {
       type: 'close-tab'
       tabId: string
+      sessionId?: string
     }
   | {
       type: 'control-state'
@@ -676,7 +678,7 @@ export type DesktopHost = {
     /** Registers the page's `<webview>` guest with the host and starts `url`. */
     create(
       tabId: string,
-      options: { storageId: string; url?: string; webContentsId: number },
+      options: { sessionId?: string; storageId: string; url?: string; webContentsId: number },
     ): Promise<void>
     navigate(tabId: string, url: string): Promise<void>
     goBack(tabId: string): Promise<void>

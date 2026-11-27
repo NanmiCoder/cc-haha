@@ -51,10 +51,7 @@ import {
   type SessionHeaderMetaItem,
 } from '@/components/chat/SessionChatSurface'
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
-import {
-  WorkspaceSurface,
-  useWorkspaceBrowserEventBridge,
-} from '../components/workbench/WorkspaceSurface'
+import { WorkspaceSurface } from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
 import { endedBeforeAnyMemberJoined, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
 import {
@@ -490,9 +487,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     void useWorkspaceContentStore.getState().loadStatus(activeTabId)
   }, [activeTabId, activeTabType])
 
-  // Subscribed once for the app, not per task: the owner of each event is
-  // resolved from the page id, so a background task's pages keep reporting.
-  useWorkspaceBrowserEventBridge(active && !isMobileLayout)
   useWorkspaceFocusReturn(active && workspaceEnabled ? activeTabId : null)
   useWorkspaceShortcuts({
     sessionId: activeTabId,

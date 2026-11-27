@@ -55,7 +55,7 @@ export const workspaceBrowserHost = {
   },
   create: (
     tabId: string,
-    options: { storageId: string; url?: string; webContentsId: number },
+    options: { sessionId?: string; storageId: string; url?: string; webContentsId: number },
   ) => call((api) => api.create(tabId, options)),
   navigate: (tabId: string, url: string) => call((api) => api.navigate(tabId, url)),
   goBack: (tabId: string) => call((api) => api.goBack(tabId)),

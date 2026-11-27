@@ -48,7 +48,10 @@ function createMockWorkspaceHost() {
   const closedTabs: string[] = []
 
   const host: BrowserUseWorkspaceHost = {
-    listPages: () => [...pages.values()],
+    listPages: options => {
+      const all = [...pages.values()]
+      return options?.sessionId ? all.filter(page => page.sessionId === options.sessionId) : all
+    },
     getPageInfo: tabId => pages.get(tabId) ?? null,
     getPageZoomFactor: tabId => {
       const page = pages.get(tabId)
@@ -648,5 +651,87 @@ describe('ElectronBrowserBridge JSON-RPC, WS push events & cursor ceiling', () =
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('isolates tabs.list, tabs.ensure, tabs.focus, and tabs.close by sessionId', async () => {
+    const { bridge, url, token, workspace, rendererEvents } = await startTestBridge({
+      emitToRenderer: event => {
+        if (event.type === 'ensure-tab') {
+          queueMicrotask(() => {
+            workspace.pages.set('wb-sess-b', {
+              tabId: 'wb-sess-b',
+              sessionId: event.sessionId,
+              url: event.url ?? 'about:blank',
+              title: 'Session B',
+              visible: true,
+              zoomFactor: 1,
+              appZoomFactor: 1.25,
+            })
+            bridge.handleRendererTabReady({ requestId: event.requestId, tabId: 'wb-sess-b', ok: true })
+          })
+        }
+        return true
+      },
+    })
+
+    workspace.pages.set('wb-sess-a', {
+      tabId: 'wb-sess-a',
+      sessionId: 'sess-a',
+      url: 'https://modeldial.com/',
+      title: 'ModelDial',
+      visible: true,
+      zoomFactor: 1,
+      appZoomFactor: 1.25,
+    })
+
+    // 1. tabs.list scoped to sess-b must not return sess-a's tab.
+    const listB = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'list-b', method: 'tabs.list', params: { sessionId: 'sess-b' } }),
+    })
+    expect(JSON.parse(listB.body)).toEqual({ id: 'list-b', result: { tabs: [] } })
+
+    const listA = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'list-a', method: 'tabs.list', params: { sessionId: 'sess-a' } }),
+    })
+    expect(JSON.parse(listA.body).result.tabs.map((t: { tabId: string }) => t.tabId)).toEqual(['wb-sess-a'])
+
+    // 2. tabs.ensure for sess-b with sess-a's tabId must NOT reuse wb-sess-a;
+    // it drops the foreign tabId and asks the renderer to ensure a tab for sess-b.
+    const ensureB = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'ensure-b',
+        method: 'tabs.ensure',
+        params: { sessionId: 'sess-b', tabId: 'wb-sess-a', url: 'https://modeldial.com/subscriptions' },
+      }),
+    })
+    expect(JSON.parse(ensureB.body)).toMatchObject({
+      id: 'ensure-b',
+      result: { tabId: 'wb-sess-b', sessionId: 'sess-b' },
+    })
+    const ensureEvent = rendererEvents.find(e => e.type === 'ensure-tab')
+    expect(ensureEvent).toMatchObject({ type: 'ensure-tab', sessionId: 'sess-b' })
+    expect(ensureEvent && 'tabId' in ensureEvent ? ensureEvent.tabId : undefined).toBeUndefined()
+
+    // 3. tabs.focus / tabs.close reject foreign session tabs.
+    const badFocus = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'focus-bad', method: 'tabs.focus', params: { sessionId: 'sess-b', tabId: 'wb-sess-a' } }),
+    })
+    expect(JSON.parse(badFocus.body).error.message).toMatch(/belongs to another session/)
+
+    const badClose = await httpRequest(url, '/rpc', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'close-bad', method: 'tabs.close', params: { sessionId: 'sess-b', tabId: 'wb-sess-a' } }),
+    })
+    expect(JSON.parse(badClose.body).error.message).toMatch(/belongs to another session/)
+    expect(workspace.closedTabs).toEqual([])
   })
 })

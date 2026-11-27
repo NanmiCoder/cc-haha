@@ -42,6 +42,7 @@ const MAX_HISTORY_ENTRIES = 200
 
 export type WorkspaceBrowserPageInfo = {
   tabId: string
+  sessionId?: string
   url: string
   title: string
   visible: boolean
@@ -241,6 +242,7 @@ export type WorkspaceBrowserParentWindowLike = {
 }
 
 export type WorkspaceBrowserCreateOptions = {
+  sessionId?: string
   storageId: string
   url?: string
   /** The `<webview>` guest the renderer created for this page. */
@@ -279,6 +281,7 @@ export type ElectronWorkspaceBrowserServiceOptions = {
 
 type WorkspaceBrowserPage = {
   tabId: string
+  sessionId?: string
   storageId: string
   webContents: WorkspaceBrowserWebContentsLike
   /** Whether the renderer currently shows this page. Only it can take input. */
@@ -426,11 +429,13 @@ export class ElectronWorkspaceBrowserService {
     return raw !== undefined && Number.isFinite(raw) && raw > 0 ? raw : 1
   }
 
-  listPages(): WorkspaceBrowserPageInfo[] {
+  listPages(options?: { sessionId?: string }): WorkspaceBrowserPageInfo[] {
     const appZoomFactor = this.getAppZoomFactor()
+    const filterSessionId = options?.sessionId?.trim() || undefined
     const result: WorkspaceBrowserPageInfo[] = []
     for (const page of this.pages.values()) {
       if (page.closed || page.webContents.isDestroyed?.()) continue
+      if (filterSessionId && page.sessionId !== filterSessionId) continue
       result.push(this.toPageInfo(page, appZoomFactor))
     }
     return result
@@ -468,6 +473,7 @@ export class ElectronWorkspaceBrowserService {
     }
     const webContents = this.resolveGuest(options.webContentsId)
 
+    const sessionId = options.sessionId?.trim() || undefined
     this.parent = parent
     const existing = this.pages.get(tabId)
     if (existing) {
@@ -478,13 +484,16 @@ export class ElectronWorkspaceBrowserService {
       if (existing.webContents !== webContents) {
         throw new Error(`workspace browser tab already has a live page: ${tabId}`)
       }
+      if (sessionId && !existing.sessionId) {
+        existing.sessionId = sessionId
+      }
       this.emitState(existing)
       return
     }
     const owner = this.findPageByWebContents(webContents)
     if (owner) throw new Error(`workspace browser guest already belongs to ${owner.tabId}`)
 
-    const page = this.openPage(tabId, options.storageId, webContents)
+    const page = this.openPage(tabId, options.storageId, webContents, sessionId)
     // Resolving means "registered": the renderer may now send visibility,
     // Stop and navigation. The first load is an ordinary navigation, so its
     // failure reaches the tab as a `failed` event like any other — answering
@@ -723,9 +732,11 @@ export class ElectronWorkspaceBrowserService {
     tabId: string,
     storageId: string,
     webContents: WorkspaceBrowserWebContentsLike,
+    sessionId?: string,
   ): WorkspaceBrowserPage {
     const page: WorkspaceBrowserPage = {
       tabId,
+      ...(sessionId ? { sessionId } : {}),
       storageId,
       webContents,
       presented: false,
@@ -1210,6 +1221,7 @@ export class ElectronWorkspaceBrowserService {
     const blank = webContents.getURL() === WORKSPACE_BROWSER_INITIAL_SRC
     return {
       tabId: page.tabId,
+      ...(page.sessionId ? { sessionId: page.sessionId } : {}),
       url: blank ? '' : webContents.getURL(),
       title: blank ? '' : webContents.getTitle(),
       visible: page.presented,

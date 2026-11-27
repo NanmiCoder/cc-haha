@@ -416,13 +416,18 @@ export function useBrowserUseEventBridge() {
       const browserUseStore = useBrowserUseStore.getState()
       switch (event.type) {
         case 'ensure-tab': {
-          const existingOwner = event.tabId ? workspaceStore.findBrowserTabOwner(event.tabId) : null
+          const explicitSessionId = event.sessionId?.trim() || ''
+          const rawOwner = event.tabId ? workspaceStore.findBrowserTabOwner(event.tabId) : null
+          // Never hijack another session's browser tab when the request names a session.
+          const existingOwner = rawOwner && (!explicitSessionId || rawOwner.sessionId === explicitSessionId)
+            ? rawOwner
+            : null
           const tabStore = useTabStore.getState()
           const activeSessionTabId = tabStore.tabs.find(
             (tab) => tab.sessionId === tabStore.activeTabId && tab.type === 'session',
           )?.sessionId
           const targetSessionId =
-            (event.sessionId && event.sessionId.trim())
+            explicitSessionId
             || existingOwner?.sessionId
             || activeSessionTabId
             || Object.keys(workspaceStore.bySession)[0]
@@ -436,13 +441,18 @@ export function useBrowserUseEventBridge() {
             return
           }
           const sessionWorkspace = workspaceStore.getSession(targetSessionId)
+          const activeBrowserTab = sessionWorkspace.activeSideTabId
+            ? sessionWorkspace.tabs.find(
+                (tab) => tab.id === sessionWorkspace.activeSideTabId && tab.kind === 'browser',
+              )
+            : undefined
           let targetTab = event.createNew
             ? undefined
             : existingOwner
               ? workspaceStore.getSession(existingOwner.sessionId).tabs.find(
                   (tab) => tab.id === existingOwner.tabId && tab.kind === 'browser',
                 )
-              : sessionWorkspace.tabs.find((tab) => tab.kind === 'browser')
+              : activeBrowserTab ?? sessionWorkspace.tabs.find((tab) => tab.kind === 'browser')
           const ownerSessionId = !event.createNew && existingOwner ? existingOwner.sessionId : targetSessionId
           const reusedExisting = Boolean(targetTab)
           if (!targetTab) {
@@ -451,6 +461,9 @@ export function useBrowserUseEventBridge() {
             })
             if (openedId) {
               targetTab = useWorkspaceStore.getState().getTab(targetSessionId, openedId) ?? undefined
+              if (targetTab && event.focus !== false) {
+                useWorkspaceStore.getState().activateTab(targetSessionId, targetTab.id)
+              }
             }
           } else if (event.focus !== false) {
             workspaceStore.activateTab(ownerSessionId, targetTab.id)
@@ -477,6 +490,7 @@ export function useBrowserUseEventBridge() {
             ? Promise.resolve()
             : ensureWorkspaceBrowserGuest(browserTabId, async (webContentsId) => {
                 const res = await workspaceBrowserHost.create(browserTabId, {
+                  sessionId: ownerSessionId,
                   storageId,
                   webContentsId,
                   ...(event.url ? { url: event.url } : {}),
@@ -511,6 +525,7 @@ export function useBrowserUseEventBridge() {
         case 'focus-tab': {
           const owner = workspaceStore.findBrowserTabOwner(event.tabId)
           if (!owner) return
+          if (event.sessionId && owner.sessionId !== event.sessionId) return
           workspaceStore.activateTab(owner.sessionId, owner.tabId)
           if (event.revealWorkbench !== false && workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
             workspaceStore.setLayout(owner.sessionId, 'split')
@@ -518,8 +533,9 @@ export function useBrowserUseEventBridge() {
           break
         }
         case 'close-tab': {
-          browserUseStore.applyHostEvent(event)
           const owner = workspaceStore.findBrowserTabOwner(event.tabId)
+          if (event.sessionId && owner && owner.sessionId !== event.sessionId) return
+          browserUseStore.applyHostEvent(event)
           if (owner) workspaceStore.closeTab(owner.sessionId, owner.tabId)
           break
         }

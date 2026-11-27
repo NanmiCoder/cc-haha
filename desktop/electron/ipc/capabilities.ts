@@ -221,8 +221,9 @@ const workspaceBrowserTab: Validator = value =>
 // the main process adopts it solely if it is a browser guest of the main window.
 const workspaceBrowserCreate: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['tabId', 'storageId', 'url', 'webContentsId'])
+  && hasOnlyKeys(value, ['tabId', 'sessionId', 'storageId', 'url', 'webContentsId'])
   && isWorkspaceBrowserId(value.tabId)
+  && (value.sessionId === undefined || sessionIdPayload(value.sessionId))
   && isWorkspaceBrowserId(value.storageId)
   && (value.url === undefined || (typeof value.url === 'string' && value.url.length <= 8_192))
   && typeof value.webContentsId === 'number'

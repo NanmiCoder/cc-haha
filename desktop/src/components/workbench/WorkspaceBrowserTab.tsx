@@ -199,6 +199,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
     const request = ++navigationRequestRef.current
     void ensureWorkspaceBrowserGuest(browserTabId, async (webContentsId) => {
       const result = await workspaceBrowserHost.create(browserTabId, {
+        sessionId,
         storageId: tab.storageId,
         webContentsId,
         ...(tab.url ? { url: tab.url } : {}),

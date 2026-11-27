@@ -220,6 +220,7 @@ describe('lifecycle readiness', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
     await flushGuests()
     expect(host.create).toHaveBeenCalledWith(tab.browserTabId, {
+      sessionId: SESSION,
       storageId: tab.storageId,
       webContentsId: expect.any(Number),
       url: 'https://example.test/',

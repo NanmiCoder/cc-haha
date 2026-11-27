@@ -893,4 +893,125 @@ describe('BrowserUseService', () => {
       await service.dispose()
     }
   })
+
+  test('isolates workspace tabs strictly per session across list, open, navigate, focus, and close', async () => {
+    const env = createEnv()
+    saveBrowserUseConfig({ enabled: true, preferredTarget: 'workspace' }, { env })
+
+    const fakeBridge = new FakeBridgeServer()
+    const perSessionTabs = new Map<string, { tabId: string; sessionId: string; url: string; title: string }>()
+    let seq = 1
+    const baseFetch = fakeBridge.createFetch()
+    const sessionAwareFetch: typeof fetch = (async (url, init) => {
+      const parsed = JSON.parse(String(init?.body)) as {
+        id: number
+        method: string
+        params: Record<string, unknown>
+      }
+      if (parsed.method === 'tabs.list') {
+        fakeBridge.rpcCalls.push({ method: parsed.method, params: parsed.params, transport: 'http' })
+        const sid = typeof parsed.params.sessionId === 'string' ? parsed.params.sessionId : undefined
+        const tabs = [...perSessionTabs.values()]
+          .filter(t => (!sid || t.sessionId === sid))
+          .map(t => ({ ...t, visible: true, zoomFactor: 1, appZoomFactor: 1 }))
+        return Response.json({ id: parsed.id, result: { tabs } })
+      }
+      if (parsed.method === 'tabs.ensure') {
+        fakeBridge.rpcCalls.push({ method: parsed.method, params: parsed.params, transport: 'http' })
+        const sid = String(parsed.params.sessionId || '')
+        const requestedTabId = typeof parsed.params.tabId === 'string' ? parsed.params.tabId : undefined
+        const existing = !parsed.params.createNew && requestedTabId
+          ? perSessionTabs.get(requestedTabId)
+          : !parsed.params.createNew
+            ? [...perSessionTabs.values()].find(t => t.sessionId === sid)
+            : undefined
+        if (existing && existing.sessionId === sid) {
+          return Response.json({
+            id: parsed.id,
+            result: { ...existing, visible: true, zoomFactor: 1, appZoomFactor: 1 },
+          })
+        }
+        const tabId = `wb-${sid}-${seq++}`
+        const created = {
+          tabId,
+          sessionId: sid,
+          url: String(parsed.params.url || 'about:blank'),
+          title: sid,
+        }
+        perSessionTabs.set(tabId, created)
+        return Response.json({
+          id: parsed.id,
+          result: { ...created, visible: true, zoomFactor: 1, appZoomFactor: 1 },
+        })
+      }
+      return baseFetch(url, init)
+    }) as typeof fetch
+
+    const client = new ElectronBridgeRpcClient({
+      config: resolveElectronBridgeConfig(env)!,
+      fetchFn: sessionAwareFetch,
+      webSocketFactory: fakeBridge.createWebSocketFactory(),
+    })
+
+    const service = new BrowserUseService({
+      env,
+      serverHost: '127.0.0.1',
+      serverPort: 3456,
+      bridgeClient: client,
+      broadcastToSession: () => true,
+    })
+
+    try {
+      // Session A navigates and gets its own workspace tab.
+      const navA = await service.executeNavigate({
+        sessionId: 'sess-A',
+        url: 'http://127.0.0.1:5173/a',
+        waitUntil: 'none',
+      })
+      expect(navA.tabId).toBe('wb-sess-A-1')
+
+      // Session B listing tabs must pass sessionId and see zero tabs from Session A.
+      const listB = await service.executeTabs({
+        sessionId: 'sess-B',
+        action: 'list',
+      })
+      expect(listB.tabs).toEqual([])
+      expect(fakeBridge.rpcCalls.findLast(c => c.method === 'tabs.list')?.params).toEqual({
+        sessionId: 'sess-B',
+      })
+
+      // Session B passing Session A's tabId to navigate must NOT hijack Session A's tab.
+      const navB = await service.executeNavigate({
+        sessionId: 'sess-B',
+        tabId: navA.tabId,
+        url: 'http://127.0.0.1:5173/b',
+        waitUntil: 'none',
+      })
+      expect(navB.tabId).toBe('wb-sess-B-2')
+      expect(navB.tabId).not.toBe(navA.tabId)
+      const ensureB = fakeBridge.rpcCalls.findLast(c => c.method === 'tabs.ensure')
+      expect(ensureB?.params.sessionId).toBe('sess-B')
+      expect(ensureB?.params.tabId).toBeUndefined()
+
+      // Session B opening another tab must only see Session B's tabs in the returned list.
+      const openB2 = await service.executeTabs({
+        sessionId: 'sess-B',
+        action: 'open',
+        url: 'http://127.0.0.1:5173/b2',
+      })
+      const openBTabs = openB2.tabs as Array<{ tabId: string }>
+      expect(openBTabs.map(t => t.tabId)).not.toContain(navA.tabId)
+      expect(openBTabs.map(t => t.tabId)).toContain(navB.tabId)
+
+      // Session B cannot focus or close Session A's tab.
+      await expect(
+        service.executeTabs({ sessionId: 'sess-B', action: 'focus', tabId: navA.tabId }),
+      ).rejects.toThrow(/belongs to another session/)
+      await expect(
+        service.executeTabs({ sessionId: 'sess-B', action: 'close', tabId: navA.tabId }),
+      ).rejects.toThrow(/belongs to another session/)
+    } finally {
+      await service.dispose()
+    }
+  })
 })

@@ -1591,4 +1591,30 @@ describe('browser use CDP lease integration and agent control hygiene', () => {
     await expect(service.navigate('tab-ssrf', 'http://127.0.0.1:49321/preview-fs/s1/app.html')).resolves.toBeUndefined()
     service.closeAll()
   })
+
+  it('tracks owning sessionId per page and filters listPages by sessionId', async () => {
+    const guests: FakeWebContents[] = []
+    const service = new ElectronWorkspaceBrowserService({
+      resolveGuest: id => guests.find(g => g.id === id)!,
+      previewScriptPath: previewScript(),
+      emit: () => {},
+    })
+    const guestA = new FakeWebContents()
+    guestA.id = 11
+    guestA.url = 'https://session-a.test/'
+    const guestB = new FakeWebContents()
+    guestB.id = 12
+    guestB.url = 'https://session-b.test/'
+    guests.push(guestA, guestB)
+
+    await service.create(fakeParent(), 'wb-a', { sessionId: 'sess-a', storageId: 'store-a', webContentsId: 11 })
+    await service.create(fakeParent(), 'wb-b', { sessionId: 'sess-b', storageId: 'store-b', webContentsId: 12 })
+
+    expect(service.getPageInfo('wb-a')).toMatchObject({ tabId: 'wb-a', sessionId: 'sess-a' })
+    expect(service.getPageInfo('wb-b')).toMatchObject({ tabId: 'wb-b', sessionId: 'sess-b' })
+    expect(service.listPages({ sessionId: 'sess-a' }).map(p => p.tabId)).toEqual(['wb-a'])
+    expect(service.listPages({ sessionId: 'sess-b' }).map(p => p.tabId)).toEqual(['wb-b'])
+    expect(service.listPages().map(p => p.tabId).sort()).toEqual(['wb-a', 'wb-b'])
+    service.closeAll()
+  })
 })
