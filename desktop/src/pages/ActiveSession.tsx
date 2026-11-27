@@ -154,11 +154,11 @@ function ActiveGoalStrip({
     <div
       data-testid="active-goal-strip"
       className={[
-        'mt-2 flex max-w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)] px-2.5 py-1.5',
+        'v6c-glass-card mt-2 flex max-w-full items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)] px-2.5 py-1.5',
         compact ? 'text-[11px]' : 'text-[12px]',
       ].join(' ')}
     >
-      <Target size={compact ? 13 : 14} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={2.25} aria-hidden="true" />
+      <Target size={compact ? 13 : 14} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={1.75} aria-hidden="true" />
       <span className="shrink-0 font-semibold text-[var(--color-text-primary)]">
         {t('chat.activeGoal.title')}
       </span>
@@ -743,7 +743,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               className="flex max-w-[160px] shrink-0 items-center gap-1"
               title={session?.workDir ?? undefined}
             >
-              <Folder size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <Folder size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{headerProjectLabel}</span>
             </span>
           ),
@@ -758,7 +758,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               className="flex max-w-[160px] shrink-0 items-center gap-1"
               title={headerBranch}
             >
-              <GitBranch size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <GitBranch size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{headerBranch}</span>
             </span>
           ),
@@ -788,7 +788,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                 tabIndex={0}
                 className="flex min-w-0 max-w-[260px] shrink cursor-help items-center gap-1 rounded-[var(--radius-xs)] text-[var(--color-text-secondary)] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <GitFork size={12} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+                <GitFork size={12} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                 <span className="shrink-0 capitalize">{t('sidebar.worktree')}:</span>
                 <span className="min-w-0 truncate font-medium">{worktreeName}</span>
               </span>

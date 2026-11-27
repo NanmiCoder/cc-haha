@@ -209,7 +209,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
             breadcrumbSegments.map((segment, index) => (
               <span key={`${segment}-${index}`} className="flex min-w-0 items-center gap-0.5">
                 {index > 0 ? (
-                  <ChevronRight size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)] opacity-70" />
+                  <ChevronRight size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)] opacity-70" />
                 ) : null}
                 <span
                   className={`truncate ${index === breadcrumbSegments.length - 1 ? 'font-medium text-[var(--color-text-primary)]' : ''}`}
@@ -245,14 +245,14 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                 if (previewVisible) setTreeOpen(true)
               }}
             />
-            <span className="relative ml-1 flex h-7 shrink-0 items-stretch rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+            <span className="v6c-raised relative ml-1 flex h-7 shrink-0 items-stretch rounded-[var(--radius-control)] border border-[var(--color-border)]">
               <button
                 type="button"
                 data-testid="workspace-file-open-primary"
                 disabled={!fileOpen.primaryTarget}
                 aria-label={fileOpen.primaryTarget ? t('openWith.openInTarget', { target: fileOpen.primaryTarget.label }) : t('workspace.files.openWith')}
                 onClick={() => { if (fileOpen.primaryTarget) fileOpen.openTarget(fileOpen.primaryTarget) }}
-                className="flex min-w-0 items-center gap-1.5 rounded-l-[var(--radius-md)] pl-2 pr-2.5 text-[12px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
+                className="flex min-w-0 items-center gap-1.5 rounded-l-[var(--radius-control)] pl-2 pr-2.5 text-[12px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
               >
                 <span aria-hidden="true" className="flex">{fileOpen.primaryTarget ? <TargetIcon target={fileOpen.primaryTarget} size={14} /> : <ExternalLink size={14} strokeWidth={1.75} />}</span>
                 {t('workspace.files.openWith')}
@@ -266,9 +266,9 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                 aria-controls={openWithOpen ? openWithMenuId : undefined}
                 onClick={() => setOpenWithOpen((open) => !open)}
                 aria-label={t('workspace.files.openWith')}
-                className="flex w-6 items-center justify-center rounded-r-[var(--radius-md)] border-l border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                className="flex w-6 items-center justify-center rounded-r-[var(--radius-control)] border-l border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
               >
-                <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+                <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
               </button>
               {openWithOpen ? (
                 <div
@@ -277,7 +277,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                   role="menu"
                   aria-label={t('workspace.files.openWith')}
                   onKeyDown={handleOpenWithKeyDown}
-                  className="absolute right-0 top-[30px] z-[var(--z-dropdown)] max-h-[65vh] w-[220px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+                  className="dropdown-glass popover-motion absolute right-0 top-[30px] z-[var(--z-dropdown)] max-h-[65vh] w-[220px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-[var(--radius-xl)] p-[5px]"
                 >
                   <WorkspaceFileOpenWith
                     absolutePath={absolutePath}

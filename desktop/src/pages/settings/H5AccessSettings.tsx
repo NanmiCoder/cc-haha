@@ -316,7 +316,7 @@ export function H5AccessSettings() {
                 title={t('settings.general.h5AccessEnabled')}
                 description={t('settings.general.h5AccessEnabledHint')}
               >
-                <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm">
+                <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm" pill={false}>
                   {h5Access.enabled ? t('settings.general.h5AccessStatusEnabled') : t('settings.general.h5AccessDisabledValue')}
                 </Badge>
                 <Switch
@@ -401,7 +401,7 @@ export function H5AccessSettings() {
                         />
                       ) : (
                         <div className="flex flex-col items-center gap-3 px-4 text-center">
-                          <QrCode size={40} strokeWidth={1.5} className="text-neutral-400" aria-hidden="true" />
+                          <QrCode size={40} strokeWidth={1.75} className="text-neutral-400" aria-hidden="true" />
                           <p className="text-xs leading-5 text-neutral-500">
                             {t('settings.general.h5AccessQrEmptyHint')}
                           </p>

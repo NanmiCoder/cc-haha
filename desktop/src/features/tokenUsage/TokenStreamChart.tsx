@@ -249,7 +249,7 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
             ref={previewRef}
             data-testid="stream-day-preview"
             aria-hidden="true"
-            className="dropdown-glass popover-motion pointer-events-none absolute z-[var(--z-raised)] w-max min-w-[148px] max-w-[240px] rounded-[var(--radius-md)] px-3 py-2"
+            className="dropdown-glass popover-motion pointer-events-none absolute z-[var(--z-raised)] w-max min-w-[148px] max-w-[240px] rounded-[var(--radius-xl)] px-3 py-2"
             style={{ left: preview.left, top: preview.top }}
           >
             <div className="flex items-baseline justify-between gap-3 whitespace-nowrap">

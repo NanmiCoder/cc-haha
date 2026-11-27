@@ -37,7 +37,7 @@ export function AgentTeamsWorkbenchTab({
         <Button
           variant="ghost"
           size="sm"
-          icon={<ArrowLeft size={14} strokeWidth={2} aria-hidden="true" />}
+          icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
           onClick={() => useTabStore.getState().returnFromTeamWorkbench(tabId)}
         >
           {t('agentTeams.backToSession')}

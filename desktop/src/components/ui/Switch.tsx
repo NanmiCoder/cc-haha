@@ -116,12 +116,12 @@ export function Switch({
         />
         <span
           aria-hidden="true"
-          className="absolute inset-0 rounded-full bg-[var(--color-outline)] shadow-[var(--bevel-surface-pressed)] transition-[background-color,box-shadow] duration-150 peer-checked:bg-[var(--color-switch-checked-bg)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--color-surface)]"
+          className="absolute inset-0 rounded-full bg-[var(--color-outline)] shadow-[var(--v6c-switch-track-shadow)] transition-[background-color,box-shadow] duration-150 peer-checked:bg-[var(--color-switch-checked-bg)] peer-checked:[background:var(--v6c-switch-checked-fill)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--color-surface)]"
         />
         <span
           aria-hidden="true"
           className={cx(
-            'relative rounded-full bg-[var(--color-switch-thumb)] shadow-[var(--bevel-surface-rest)] transition-transform duration-150 ease-out motion-reduce:transition-none',
+            'relative rounded-full bg-[var(--color-switch-thumb)] shadow-[var(--v6c-switch-thumb-shadow)] transition-transform duration-150 ease-out motion-reduce:transition-none',
             !disabled && 'group-active/switch:scale-x-110 group-active/switch:scale-y-95 motion-reduce:group-active/switch:scale-100',
             THUMB_SIZE[size],
             THUMB_OFFSET[size],

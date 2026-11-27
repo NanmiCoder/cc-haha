@@ -189,6 +189,16 @@ describe('Settings section navigation', () => {
     expect(rail).not.toHaveClass('bg-transparent')
   })
 
+  it('marks only the active navigation item with the V6C active bar and raised glass highlight', () => {
+    render(<Settings />)
+
+    const activeItem = screen.getByRole('button', { name: 'Model Settings', current: 'page' })
+    const inactiveItem = screen.getByRole('button', { name: 'General' })
+    expect(activeItem).toHaveClass('v6c-active-bar', 'v6c-raised', 'rounded-[var(--radius-control)]')
+    expect(inactiveItem).not.toHaveClass('v6c-active-bar')
+    expect(inactiveItem).not.toHaveClass('v6c-raised')
+  })
+
   it('ignores the / search shortcut while a nested modal dialog is open on top of inline Settings', () => {
     render(<Settings />)
 

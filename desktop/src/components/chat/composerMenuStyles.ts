@@ -5,16 +5,16 @@
  * menus again.
  */
 
-/** Frosted glass sheet, hairline rim, card corner, dropdown glass shadow, 4px inset. */
+/** Frosted glass sheet, hairline rim, 14px V6C corner, dropdown glass shadow, 5px inset. */
 export const COMPOSER_POPOVER =
-  'dropdown-glass popover-motion rounded-[var(--radius-lg)] p-1'
+  'dropdown-glass popover-motion rounded-[var(--radius-xl)] p-[5px]'
 
-/** A menu row: 32px minimum, the row corner, 13px. Hover doubles as highlight. */
+/** A menu row: 32px minimum, 9px V6C control corner, 13px. */
 export const COMPOSER_MENU_ITEM =
-  'flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  'flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
-/** The selected/highlighted row keeps the hover fill at rest. */
-export const COMPOSER_MENU_ITEM_ACTIVE = 'bg-[var(--color-surface-hover)]'
+/** The selected/highlighted row uses the V6C glass row highlight. */
+export const COMPOSER_MENU_ITEM_ACTIVE = 'v6c-row-highlight'
 
 /** Group heading: 11px semibold tertiary, sentence case. */
 export const COMPOSER_MENU_SECTION =
@@ -29,4 +29,4 @@ export const COMPOSER_KBD =
 
 /** A 28px toolbar control in the composer's bottom row. */
 export const COMPOSER_TOOLBAR_CONTROL =
-  'inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50'
+  'v6c-pressable inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50'

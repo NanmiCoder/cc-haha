@@ -87,4 +87,14 @@ describe('Switch', () => {
     fireEvent.click(screen.getByText('Enable lean mode'))
     expect(onChange).toHaveBeenCalledWith(true)
   })
+
+  it('draws the V6C recessed track and lit thumb, and stays fully round', () => {
+    const { container } = render(<Switch checked onChange={() => {}} label="Auto update" />)
+    const [track, thumb] = Array.from(container.querySelectorAll('span[aria-hidden="true"]'))
+    expect(track!.className).toContain('rounded-full')
+    expect(track!.className).toContain('shadow-[var(--v6c-switch-track-shadow)]')
+    expect(track!.className).toContain('peer-checked:bg-[var(--color-switch-checked-bg)]')
+    expect(track!.className).toContain('peer-checked:[background:var(--v6c-switch-checked-fill)]')
+    expect(thumb!.className).toContain('shadow-[var(--v6c-switch-thumb-shadow)]')
+  })
 })

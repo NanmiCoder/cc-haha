@@ -224,7 +224,7 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
           </div>
         </div>
 
-        <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+        <ul className="v6c-glass-card divide-y divide-[var(--color-border)] rounded-[var(--radius-lg)] border border-[var(--color-border)]">
           {candidates.map((candidate) => (
             <li
               key={candidate.sourceId}
@@ -241,12 +241,12 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
                 label={(
                   <span className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium text-[var(--color-text-primary)]">{candidate.name}</span>
-                    <Badge tone="neutral">{t(APP_TYPE_KEYS[candidate.appType])}</Badge>
+                    <Badge tone="neutral" pill={false}>{t(APP_TYPE_KEYS[candidate.appType])}</Badge>
                     {candidate.isCurrent && (
-                      <Badge tone="brand" bordered>{t('settings.providers.ccSwitch.currentBadge')}</Badge>
+                      <Badge tone="brand" bordered pill={false}>{t('settings.providers.ccSwitch.currentBadge')}</Badge>
                     )}
                     {candidate.duplicate && (
-                      <Badge tone="warning">{t('settings.providers.ccSwitch.duplicateBadge')}</Badge>
+                      <Badge tone="warning" pill={false}>{t('settings.providers.ccSwitch.duplicateBadge')}</Badge>
                     )}
                   </span>
                 )}

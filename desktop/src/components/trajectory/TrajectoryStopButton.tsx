@@ -20,7 +20,7 @@ export function TrajectoryStopButton({ sessionId }: { sessionId: string }) {
       size="sm"
       onClick={() => stopGeneration(sessionId)}
       title={t('chat.stopTitle')}
-      icon={<Square size={10} strokeWidth={2} fill="currentColor" aria-hidden />}
+      icon={<Square size={10} strokeWidth={1.75} fill="currentColor" aria-hidden />}
       className="shrink-0"
     >
       {t('common.stop')}

@@ -83,6 +83,11 @@ describe('PermissionDialog Antigravity & Subagent extensions', () => {
     )
 
     expect(screen.getByTestId('permission-subagent-badge')).toHaveTextContent('From verifier')
+    expect(screen.getByTestId('permission-subagent-badge')).toHaveClass('rounded-[var(--radius-sm)]')
+    expect(screen.getByTestId('permission-subagent-badge')).not.toHaveClass('rounded-full')
+    const awaitingBadge = screen.getByText('Awaiting approval').closest('span')
+    expect(awaitingBadge).toHaveClass('rounded-[var(--radius-sm)]')
+    expect(awaitingBadge).not.toHaveClass('rounded-full')
     expect(container.textContent).toContain('/repo/src/index.ts')
     expect(container.textContent).toContain('+1')
     expect(container.textContent).toContain('−1')

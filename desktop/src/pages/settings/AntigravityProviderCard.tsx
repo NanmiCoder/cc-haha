@@ -107,6 +107,7 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
               <span>{t('settings.providers.antigravity.name')}</span>
               <Badge
                 tone={tone}
+                pill={false}
                 icon={status === 'ready' || status === 'login_required' || status === 'error'
                   ? <StatusDot tone={tone} />
                   : undefined}
@@ -114,12 +115,12 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
                 {t(`settings.providers.antigravity.badge.${status}`)}
               </Badge>
               {antigravity.version ? (
-                <Badge tone="neutral">
+                <Badge tone="neutral" pill={false}>
                   <span className="font-mono text-[11px]">{antigravity.version}</span>
                 </Badge>
               ) : null}
               {antigravity.tier?.name ? (
-                <Badge tone="info">{antigravity.tier.name}</Badge>
+                <Badge tone="info" pill={false}>{antigravity.tier.name}</Badge>
               ) : null}
             </div>
           )}
@@ -190,7 +191,7 @@ export function AntigravityProviderCard({ browserMode = false }: { browserMode?:
               <MonitorSmartphone size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
               <span>{t('settings.providers.antigravity.computerUseTitle')}</span>
               {computerUseEnabled !== null ? (
-                <Badge tone={computerUseEnabled ? 'success' : 'neutral'}>
+                <Badge tone={computerUseEnabled ? 'success' : 'neutral'} pill={false}>
                   {t(computerUseEnabled
                     ? 'settings.providers.antigravity.computerUseBadgeOn'
                     : 'settings.providers.antigravity.computerUseBadgeOff')}

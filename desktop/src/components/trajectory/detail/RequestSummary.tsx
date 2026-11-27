@@ -82,7 +82,7 @@ export function RequestSummary({ call, response }: { call: TraceCallRecord; resp
   }
 
   return (
-    <section className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5" data-testid="trajectory-request-summary">
+    <section className="v6c-glass-card mb-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-3 py-2.5" data-testid="trajectory-request-summary">
       <MetaList items={items} />
     </section>
   )

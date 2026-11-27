@@ -53,12 +53,12 @@ describe('ReasoningEffortPopover', () => {
 
     const popover = screen.getByTestId('reasoning-effort-popover')
     expect(popover).toHaveStyle({ width: '320px' })
-    expect(popover).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-lg)]', 'p-1')
+    expect(popover).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-xl)]', 'p-[5px]')
     expect(popover.querySelectorAll('svg')).toHaveLength(0)
     expect(screen.getByTestId('reasoning-effort-context-label')).toHaveTextContent('推理强度')
     expect(screen.getByTestId('reasoning-effort-header')).toHaveClass('text-[11px]', 'font-semibold')
     const slider = screen.getByRole('slider', { name: '推理强度' })
-    expect(slider).toHaveClass('h-[30px]', 'bg-[var(--color-surface-container-high)]', 'shadow-[var(--bevel-surface-pressed)]')
+    expect(slider).toHaveClass('h-[30px]', 'v6c-track', 'rounded-[var(--radius-control)]')
     expect(slider).toHaveStyle({ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' })
     expect(screen.getAllByTestId('reasoning-effort-stop').map((stop) => stop.textContent))
       .toEqual(['低', '中', '高', '极高', '最大'])
@@ -71,9 +71,9 @@ describe('ReasoningEffortPopover', () => {
     const selected = stops.filter((stop) => stop.hasAttribute('data-selected'))
     expect(selected).toHaveLength(1)
     expect(selected[0]).toHaveTextContent('极高')
-    // The beveled lifted segment of SegmentedControl, not a brand fill: brand is
+    // The V6C raised glass segment of SegmentedControl, not a brand fill: brand is
     // reserved for the send key and selection checks.
-    expect(selected[0]).toHaveClass('control-bevel', 'bg-[var(--color-surface-container)]', 'shadow-[var(--bevel-surface-rest)]')
+    expect(selected[0]).toHaveClass('v6c-raised', 'rounded-[var(--radius-sm)]')
     for (const stop of stops) {
       expect(stop.className).not.toMatch(/white/)
       expect(stop.className).not.toMatch(/\/\d+/)

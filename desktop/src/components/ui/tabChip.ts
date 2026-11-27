@@ -20,10 +20,10 @@
  * moves the label.
  */
 export const TAB_CHIP_BASE =
-  'tab-bar-interactive group relative flex h-7 shrink-0 items-center rounded-[var(--radius-sm)] pl-2.5 pr-1 transition-[background-color,box-shadow,color] duration-150 ease-out'
+  'tab-bar-interactive group relative flex h-7 shrink-0 items-center rounded-[var(--radius-control)] pl-2.5 pr-1 transition-[background-color,box-shadow,color] duration-150 ease-out'
 
 export const TAB_CHIP_ACTIVE =
-  'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-tab-edge),var(--shadow-raised)]'
+  'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-tab-edge),var(--shadow-raised),var(--glass-rim)]'
 
 export const TAB_CHIP_IDLE =
   'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text-primary)] hover:shadow-[0_0_0_1px_var(--color-tab-separator)]'

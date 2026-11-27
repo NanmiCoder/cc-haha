@@ -36,11 +36,11 @@ function ToggleButton({ pressed, onClick, icon, children, title }: { pressed: bo
       onClick={onClick}
       title={title}
       className={cx(
-        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[12px] transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
-        // A pressed toggle is the neutral selected fill; terracotta is kept for
+        'v6c-pressable inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+        // A pressed toggle is raised glass; terracotta is kept for
         // the brand and selection marks, not on/off state.
         pressed
-          ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
+          ? 'v6c-raised font-medium text-[var(--color-text-primary)]'
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
       )}
     >
@@ -101,11 +101,11 @@ export function TrajectoryToolbar({
           <button
             type="button"
             onClick={onExitAgent}
-            className="shrink-0 rounded-[var(--radius-sm)] px-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="shrink-0 rounded-[var(--radius-control)] px-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('trajectory.subagent.main')}
           </button>
-          <ChevronRight size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <ChevronRight size={12} strokeWidth={1.75} aria-hidden className="shrink-0 text-[var(--color-text-tertiary)]" />
           <span className="truncate font-medium text-[var(--color-text-primary)]">{agentLabel}</span>
         </nav>
       )}

@@ -37,7 +37,7 @@ export function TokenDayCard({ day, locale, onClose, style }: Props) {
       role="group"
       aria-labelledby={headingId}
       data-testid="stream-day-card"
-      className="dropdown-glass popover-motion absolute top-2 z-[var(--z-raised)] rounded-[var(--radius-lg)] p-4"
+      className="dropdown-glass popover-motion absolute top-2 z-[var(--z-raised)] rounded-[var(--radius-xl)] p-4"
       style={style}
     >
       <div className="flex items-center justify-between gap-2">

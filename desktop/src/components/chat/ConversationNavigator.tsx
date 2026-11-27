@@ -233,7 +233,7 @@ export function ConversationNavigator({
           id="conversation-navigation-preview"
           data-testid="conversation-navigation-preview"
           role="tooltip"
-          className="dropdown-glass popover-motion fixed z-[var(--z-tooltip)] w-[min(320px,calc(100vw-88px))] -translate-y-1/2 rounded-[var(--radius-lg)] px-3.5 py-2.5 text-left"
+          className="dropdown-glass popover-motion fixed z-[var(--z-tooltip)] w-[min(320px,calc(100vw-88px))] -translate-y-1/2 rounded-[var(--radius-xl)] px-3.5 py-2.5 text-left"
           style={{ left: previewPosition.left, top: previewPosition.top }}
         >
           <div className="mb-1 text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">

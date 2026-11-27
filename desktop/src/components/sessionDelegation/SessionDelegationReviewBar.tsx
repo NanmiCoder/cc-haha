@@ -51,7 +51,7 @@ function ReviewBatchBar({ sessionId, snapshot, batch }: { sessionId: string; sna
     <section
       aria-label={t('delegation.title')}
       data-testid="delegation-review-bar"
-      className="@container flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3"
+      className="@container v6c-glass-card flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3"
     >
       <Split size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
       <div className="min-w-0 flex-1 basis-48">

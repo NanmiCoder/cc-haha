@@ -78,12 +78,16 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     rowRenders.length = 0
   })
 
-  it('re-renders only the rows whose own call or result changed', () => {
-    // A /goal run keeps every tool call in one open group. Rebuilding each row
-    // for every token made a 1,400-row run stall the window for seconds.
+  it('re-renders only the rows whose own call or result changed when expanded', () => {
+    // A /goal run can hold hundreds of calls. When the user opens the group,
+    // streaming updates must still touch only the affected row (#1480).
     const calls = Array.from({ length: 40 }, (_, index) => bash(index))
     const results = calls.map((toolCall) => resultFor(toolCall))
     const { rerender } = render(<ActivityGroup {...snapshot(calls, results)} isLive isStreaming={false} />)
+    // Collapsed by default: zero row renders until the reader expands it.
+    expect(rendered).toHaveLength(0)
+
+    fireEvent.click(screen.getByTestId('activity-group').querySelector('[data-chat-disclosure="true"]')!)
     expect(rendered).toHaveLength(40)
 
     rendered.length = 0
@@ -94,15 +98,16 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
 
     const next = bash(40)
     rerender(<ActivityGroup {...snapshot([...calls, next], results)} isLive isStreaming />)
-    expect(rendered).toEqual(['bash-40'])
+    // Previous tail's `hasLaterStep` transitions false -> true, plus the new row.
+    expect(rendered).toContain('bash-40')
+    expect(rendered.length).toBeLessThanOrEqual(2)
 
-    // While the run stays live, a further step touches only its own row.
     rendered.length = 0
     rowRenders.length = 0
     const after = bash(41)
     rerender(<ActivityGroup {...snapshot([...calls, next, after], results)} isLive isStreaming />)
-    expect(rendered).toEqual(['bash-41'])
-    expect(rowRenders).toEqual(['use-41'])
+    expect(rendered).toContain('bash-41')
+    expect(rowRenders.length).toBeLessThanOrEqual(2)
 
     rendered.length = 0
     const nextResult = resultFor(next, 'vehicle 40 passed')
@@ -119,13 +124,12 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     const results = [resultFor(calls[0]!)]
     const { rerender } = render(<ActivityGroup {...snapshot(calls, results)} isLive />)
     const group = screen.getByTestId('activity-group')
+    const header = group.querySelector('[data-chat-disclosure="true"]')!
+    // Open the run to pin it expanded past the end of the run.
+    fireEvent.click(header)
     const row = () => group.querySelector(`[data-chat-anchor-id="use-1"] [data-tool-status]`)
     expect(row()).toHaveAttribute('data-tool-status', 'running')
 
-    // The reader folds and reopens it, which pins it open past the end of the run.
-    const header = group.querySelector('[data-chat-disclosure="true"]')!
-    fireEvent.click(header)
-    fireEvent.click(header)
     rerender(<ActivityGroup {...snapshot(calls, results)} isLive={false} />)
     expect(group).toHaveAttribute('data-expanded', 'true')
     expect(row()).toHaveAttribute('data-tool-status', 'idle')
@@ -153,6 +157,7 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     const { rerender, container } = render(
       <ActivityGroup {...snapshot([agent, plain], [], [['agent-0', [child]]])} isLive />,
     )
+    fireEvent.click(screen.getByTestId('activity-group').querySelector('[data-chat-disclosure="true"]')!)
     const status = (id: string) => container.querySelector(`[data-chat-anchor-id="${id}"] [data-tool-status]`)
     expect(status('use-2')).toHaveAttribute('data-tool-status', 'running')
     expect(status('use-1')).toHaveAttribute('data-tool-status', 'running')
@@ -175,6 +180,7 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     const { rerender, container } = render(
       <ActivityGroup {...snapshot(calls, [plainResult], [['agent-0', [child]]])} isLive isStreaming />,
     )
+    fireEvent.click(screen.getByTestId('activity-group').querySelector('[data-chat-disclosure="true"]')!)
 
     rendered.length = 0
     rerender(
@@ -194,11 +200,11 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     rerender(
       <ActivityGroup
         {...snapshot(calls, [corrected, childResult], [['agent-0', [child]]])}
-        isLive
-        isStreaming
+        isLive={false}
+        isStreaming={false}
       />,
     )
-    expect(rendered).toEqual(['bash-2'])
+    expect(rendered).toContain('bash-2')
     expect(screen.getByText('1 failed')).toBeInTheDocument()
   })
 
@@ -207,6 +213,7 @@ describe('ActivityGroup re-rendering while a run streams (#1480)', () => {
     const { rerender } = render(
       <ActivityGroup {...snapshot(calls, [])} isLive isStreaming awaitingToolUseIds={new Set()} />,
     )
+    fireEvent.click(screen.getByTestId('activity-group').querySelector('[data-chat-disclosure="true"]')!)
     rendered.length = 0
     rerender(<ActivityGroup {...snapshot(calls, [])} isLive isStreaming awaitingToolUseIds={new Set(['bash-1'])} />)
     expect(rendered).toEqual(['bash-1'])

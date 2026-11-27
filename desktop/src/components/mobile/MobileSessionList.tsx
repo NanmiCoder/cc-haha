@@ -108,21 +108,23 @@ export function MobileSessionList({
           <section key={group.id} aria-labelledby={`mobile-session-group-${group.id}`}>
             <h2
               id={`mobile-session-group-${group.id}`}
-              className={`sticky top-0 z-[var(--z-raised)] flex items-center gap-1.5 bg-[var(--color-surface)] px-4 pb-1.5 pt-3 text-[12px] font-medium ${
+              className={`sticky top-0 z-[var(--z-raised)] flex items-center gap-1.5 bg-[var(--color-surface-glass)] px-4 pb-1.5 pt-3 text-[12px] font-medium ${
                 group.id === 'attention'
                   ? 'text-[var(--color-on-warning-container)]'
-                  : 'text-[var(--color-text-tertiary)]'
+                  : group.id === 'running'
+                    ? 'text-[var(--color-on-info-container)]'
+                    : 'text-[var(--color-text-tertiary)]'
               }`}
             >
               {t(GROUP_LABEL_KEYS[group.id])}
               <span className="tabular-nums">· {group.sessions.length}</span>
             </h2>
             <ul className={group.id === 'attention'
-              ? 'mx-3 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)]'
-              : 'mx-3'}
+              ? 'v6c-ring-waiting mx-3 flex flex-col gap-0.5 rounded-[var(--radius-lg)] bg-[var(--color-surface-glass)] p-1'
+              : 'mx-3 flex flex-col gap-0.5'}
             >
               {group.sessions.map((session) => (
-                <li key={session.id} className="border-b border-[var(--color-border)] last:border-b-0">
+                <li key={session.id}>
                   <MobileSessionRow
                     session={session}
                     running={runningIds.has(session.id)}
@@ -237,8 +239,10 @@ function MobileSessionRow({
       aria-describedby={hintId}
       onClick={() => onOpen(session)}
       {...longPress}
-      className={`flex min-h-[56px] w-full select-none items-center gap-3 px-1 py-2 text-left [-webkit-touch-callout:none] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${
-        selected ? 'rounded-[var(--radius-md)] bg-[var(--color-surface-selected)]' : 'active:bg-[var(--color-surface-hover)]'
+      className={`v6c-pressable flex min-h-[56px] w-full select-none items-center gap-3 rounded-[var(--radius-control)] py-2 pl-3.5 pr-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out [-webkit-touch-callout:none] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${
+        selected
+          ? 'v6c-raised v6c-active-bar'
+          : 'hover:bg-[var(--color-surface-hover)] active:bg-[var(--color-surface-hover)]'
       }`}
     >
       <span className="flex h-5 w-5 shrink-0 items-center justify-center">
@@ -280,7 +284,7 @@ function SheetAction({
       type="button"
       role="menuitem"
       onClick={onClick}
-      className={`flex min-h-12 items-center gap-3 rounded-[var(--radius-md)] px-3 text-left text-[15px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] ${
+      className={`v6c-pressable flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-left text-[15px] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] ${
         danger ? 'text-[var(--color-error)]' : 'text-[var(--color-text-primary)]'
       }`}
     >

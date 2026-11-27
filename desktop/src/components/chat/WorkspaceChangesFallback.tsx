@@ -30,7 +30,7 @@ export function WorkspaceChangesFallback({ sessionId, files, truncated = false }
   return (
     <section
       aria-label={t('chat.workspaceChangesFallbackLabel')}
-      className="mx-auto mb-5 mt-2.5 w-full max-w-[var(--chat-content-max-width)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
+      className="v6c-glass-card mx-auto mb-5 mt-2.5 w-full max-w-[var(--chat-content-max-width)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]"
     >
       <div className="space-y-0.5 px-3 py-2.5">
         <h3 className="text-[13px] font-medium text-[var(--color-text-primary)]">

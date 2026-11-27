@@ -489,7 +489,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           title={<HighlightedText text={t(official.title)} terms={terms} />}
           subtitle={<HighlightedText text={t(official.subtitle)} terms={terms} />}
           badges={isActive ? (
-            <Badge tone="brand">{t('settings.providers.default')}</Badge>
+            <Badge tone="brand" pill={false}>{t('settings.providers.default')}</Badge>
           ) : null}
           details={!browserMode ? (
             <div className="flex flex-col gap-3">
@@ -554,13 +554,13 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           <>
             {isMagpie ? (
               // The preset is named like the provider; what tells it apart is where it runs.
-              <Badge tone="neutral">{t('settings.providers.magpie.localGateway')}</Badge>
+              <Badge tone="neutral" pill={false}>{t('settings.providers.magpie.localGateway')}</Badge>
             ) : preset && preset.id !== 'custom' && (
-              <Badge tone="neutral">{preset.name}</Badge>
+              <Badge tone="neutral" pill={false}>{preset.name}</Badge>
             )}
-            {formatBadge && <Badge tone="warning">{formatBadge}</Badge>}
+            {formatBadge && <Badge tone="warning" pill={false}>{formatBadge}</Badge>}
             {isActive && (
-              <Badge tone="brand">{t('settings.providers.default')}</Badge>
+              <Badge tone="brand" pill={false}>{t('settings.providers.default')}</Badge>
             )}
           </>
         )}
@@ -848,13 +848,12 @@ function SortableProviderCard({
       style={style}
       data-testid={providerItemTestId(item)}
       className={cx(
-        'group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border bg-[var(--color-surface-container)] p-[14px] pl-1.5',
+        'v6c-glass-card group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border p-[14px] pl-1.5',
         'transition-[border-color,box-shadow] duration-150 ease-out',
-        // The default provider: a cobalt/accent-mixed hairline plus a soft brand
-        // halo. Not the focus color, which would collide with the real focus ring.
+        // The default provider: a crisp accent-tinted hairline with no outer colored glow.
         isActive
-          ? 'border-[var(--color-primary-fixed-dim)] shadow-[0_0_0_3px_var(--color-brand-soft)]'
-          : 'border-[var(--color-border)] shadow-[var(--bevel-surface-rest)] hover:border-[var(--color-outline)]',
+          ? 'border-[var(--color-primary-fixed-dim)]'
+          : 'border-[var(--color-border)] hover:border-[var(--color-outline)]',
         isDragging && 'opacity-90 shadow-[var(--shadow-dropdown)]',
       )}
     >
@@ -989,7 +988,7 @@ function ProviderTestResultLines({ result }: { result: ProviderTestResult }) {
               line.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]',
             )}
           >
-            <Icon size={12} strokeWidth={2} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <Icon size={12} strokeWidth={1.75} aria-hidden="true" className="mt-[3px] shrink-0" />
             <span className="min-w-0">{line.text}</span>
           </span>
         )
@@ -2069,7 +2068,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       {presetLabel(preset)}
       {SPONSOR_LOGOS[preset.id] && <Star size={12} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
       {preset.isNew && (
-        <Badge tone="warning" size="xs" className="absolute -right-1 -top-2">
+        <Badge tone="warning" size="xs" pill={false} className="absolute -right-1 -top-2">
           {t('settings.providers.new')}
         </Badge>
       )}
@@ -2293,7 +2292,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             </label>
             <Tooltip content={t('settings.providers.baseUrlTooltip')} placement="bottom-start">
               <IconButton
-                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('settings.providers.baseUrlHelp')}
                 showTooltip={false}
                 size="2xs"
@@ -2349,9 +2348,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 onClick={() => openExternalUrl(apiKeyUrl)}
                 className="group inline-flex h-6 w-fit cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 text-[11px] font-medium leading-none text-[var(--color-text-accent)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
               >
-                <KeyRound size={12} strokeWidth={2} aria-hidden="true" />
+                <KeyRound size={12} strokeWidth={1.75} aria-hidden="true" />
                 {t('settings.providers.getApiKey')}
-                <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                <ArrowUpRight size={11} strokeWidth={1.75} aria-hidden="true" className="opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
               </button>
             )}
             {promoText && (
@@ -2362,7 +2361,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                   className="group inline-flex min-w-0 cursor-pointer items-start gap-1 text-left text-[11px] leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-accent)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
                 >
                   <span>{promoText}</span>
-                  <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="mt-1 shrink-0 opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                  <ArrowUpRight size={11} strokeWidth={1.75} aria-hidden="true" className="mt-1 shrink-0 opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </button>
               ) : (
                 <span className="text-[11px] leading-5 text-[var(--color-text-tertiary)]">{promoText}</span>
@@ -2534,7 +2533,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               />
               <Tooltip content={option.description} placement="top-start" className="[overflow-wrap:anywhere]">
                 <IconButton
-                  icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                  icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                   label={t(`settings.providers.${option.key}`)}
                   showTooltip={false}
                   size="2xs"
@@ -2746,7 +2745,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             }}
             rows={16}
             spellCheck={false}
-            className={`w-full text-xs px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] border font-mono leading-relaxed resize-y text-[var(--color-text-secondary)] outline-none ${
+            className={`w-full text-xs px-3 py-3 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] border font-mono leading-relaxed resize-y text-[var(--color-text-secondary)] outline-none ${
               settingsJsonError
                 ? 'border-[var(--color-error)] focus:border-[var(--color-error)]'
                 : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)]'
@@ -2769,7 +2768,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             <span className={FORM_FIELD_LABEL}>{t('settings.providers.proxyMode')}</span>
             <Tooltip content={t('settings.providers.proxyModeTooltip')} placement="bottom-start">
               <IconButton
-                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('settings.providers.proxyModeHelp')}
                 showTooltip={false}
                 size="2xs"

@@ -26,6 +26,13 @@ function phaseTone(phase: WorkbenchPhase): Tone {
   return phase === 'ended' ? 'neutral' : 'info'
 }
 
+function phaseRing(phase: WorkbenchPhase, notStarted = false): string {
+  if (notStarted || phase === 'ended') return ''
+  if (phase === 'completed') return 'v6c-ring-success'
+  if (phase === 'interrupted') return 'v6c-ring-waiting'
+  return 'v6c-ring-running'
+}
+
 function AvatarStack({
   members,
   leadAgentId,
@@ -102,11 +109,12 @@ export function AgentTeamsStrip({
         ? snapshot.team.description
         : snapshot.team.name}
       className={[
-        'mt-2 flex min-w-0 w-full max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-left transition-colors',
+        'v6c-glass-card v6c-pressable mt-2 flex min-w-0 w-full max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-2.5 py-1.5 text-left transition-colors',
+        phaseRing(phase),
         'hover:border-[var(--color-outline)]',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
         compact ? 'text-[11px]' : 'text-xs',
-      ].join(' ')}
+      ].filter(Boolean).join(' ')}
     >
       <UsersRound size={compact ? 12 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
       <span className="shrink-0 font-medium text-[var(--color-text-primary)]">
@@ -124,7 +132,7 @@ export function AgentTeamsStrip({
       ) : null}
       <span className="ml-auto flex shrink-0 items-center gap-0.5 text-[var(--color-text-secondary)]">
         {t('agentTeams.inline.open')}
-        <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />
+        <ChevronRight size={12} strokeWidth={1.75} aria-hidden="true" />
       </span>
     </button>
   )
@@ -166,7 +174,10 @@ export function AgentTeamsInlineCard({
         data-testid="agent-teams-inline-card"
         onClick={onOpen}
         disabled={!canOpen}
-        className="flex min-w-0 w-full max-w-full flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5 text-left transition-colors enabled:hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        className={[
+          'v6c-glass-card v6c-pressable flex min-w-0 w-full max-w-full flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-3 py-2.5 text-left transition-colors enabled:hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+          phaseRing(phase, notStarted),
+        ].filter(Boolean).join(' ')}
       >
         {members.length > 0 ? (
           <AvatarStack members={members} leadAgentId={snapshot?.team.leadAgentId} size={30} />

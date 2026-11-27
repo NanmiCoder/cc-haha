@@ -342,7 +342,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                   ? snapshot.team.description
                   : snapshot.team.name}
               </span>
-              <span className="shrink-0 rounded-full bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
+              <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
                 {t('agentTeams.experimental')}
               </span>
             </div>
@@ -368,7 +368,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
 
           {followingLive ? (
             <div data-testid="agent-teams-live-controls" className="flex min-w-0 flex-[1_1_480px] items-center gap-3.5">
-              <div className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--color-info-container)] px-2.5 py-1">
+              <div className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] bg-[var(--color-info-container)] px-2.5 py-1">
                 <span className="agent-teams-live-dot h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" aria-hidden="true" />
                 <span className="whitespace-nowrap text-xs font-medium text-[var(--color-on-info-container)]">
                   {t('agentTeams.live.following')}
@@ -393,7 +393,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 variant="primary"
                 size="base"
                 className="w-[86px] shrink-0 whitespace-nowrap"
-                icon={playing ? <Pause size={13} aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
+                icon={playing ? <Pause size={13} strokeWidth={1.75} aria-hidden="true" /> : <Play size={13} strokeWidth={1.75} aria-hidden="true" />}
                 onClick={togglePlayback}
               >
                 {playing
@@ -405,7 +405,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
               <div
                 role="group"
                 aria-label={t('agentTeams.replay.speed')}
-                className="flex shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]"
+                className="v6c-track flex shrink-0 items-center gap-0.5 rounded-[var(--radius-control)] p-[3px]"
               >
                 {REPLAY_SPEEDS.map((speed) => {
                   const selected = replaySpeed === speed
@@ -416,10 +416,10 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                       aria-pressed={selected}
                       onClick={() => setReplaySpeed(speed)}
                       className={[
-                        'h-7 border-r border-[var(--color-border)] px-2.5 font-mono text-[11px] font-medium outline-none transition-colors last:border-r-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                        'v6c-pressable h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] px-2 font-mono text-[11px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                         selected
-                          ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                          : 'bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
+                          ? 'v6c-raised text-[var(--color-text-primary)]'
+                          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
                       ].join(' ')}
                     >
                       {speed}×
@@ -452,7 +452,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                   <span
                     aria-hidden="true"
                     data-testid="agent-teams-replay-thumb"
-                    className="absolute top-1 h-3 w-3 -translate-x-1/2 rounded-full border-[3px] border-[var(--color-brand)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]"
+                    className="absolute top-1 h-3 w-3 -translate-x-1/2 rounded-full border-[3px] border-[var(--color-brand)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-raised)]"
                     style={{ left: `${timelinePosition}%` }}
                   />
                   <input
@@ -481,7 +481,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                   variant="secondary"
                   size="sm"
                   className="shrink-0 whitespace-nowrap"
-                  icon={<Radio size={12} aria-hidden="true" />}
+                  icon={<Radio size={12} strokeWidth={1.75} aria-hidden="true" />}
                   onClick={returnToLive}
                 >
                   {t('agentTeams.backToLive')}
@@ -543,7 +543,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 />
                 <div className="absolute right-3 top-2.5 z-[var(--z-raised)]">
                   <IconButton
-                    icon={<ChevronRight aria-hidden="true" />}
+                    icon={<ChevronRight strokeWidth={1.75} aria-hidden="true" />}
                     label={t('agentTeams.communication.close')}
                     size="sm"
                     tone="muted"
@@ -562,13 +562,13 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
             onClick={() => setCommunicationOpen(true)}
             className="flex h-full w-14 shrink-0 flex-col items-center gap-3 border-l border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-3 outline-none transition-colors hover:bg-[var(--color-surface-container-low)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
-            <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-outline)] text-[var(--color-text-secondary)]">
-              <ChevronLeft size={14} strokeWidth={2.4} aria-hidden="true" />
+            <span className="v6c-raised flex h-[30px] w-[30px] items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+              <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span className="text-[11px] font-semibold text-[var(--color-text-secondary)] [writing-mode:vertical-rl]">
               {t('agentTeams.communication.title')}
             </span>
-            <span className="rounded-full bg-[var(--color-surface-container)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+            <span className="rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               {snapshot.messages.length}
             </span>
             <span
@@ -618,7 +618,7 @@ function TaskDetailPanel({
     <aside
       data-testid="agent-teams-task-detail"
       data-task-id={task.id}
-      className="agent-teams-drawer absolute bottom-4 z-[var(--z-drawer)] w-[360px] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-dropdown)]"
+      className="agent-teams-drawer dropdown-glass absolute bottom-4 z-[var(--z-drawer)] w-[360px] rounded-[var(--radius-xl)] p-4"
       style={{ right: communicationOpen ? 416 : 72 }}
     >
       <div className="flex items-start gap-3">
@@ -629,7 +629,7 @@ function TaskDetailPanel({
           <h3 className="mt-1 text-[13px] font-semibold leading-snug">{task.subject}</h3>
         </div>
         <IconButton
-          icon={<X aria-hidden="true" />}
+          icon={<X strokeWidth={1.75} aria-hidden="true" />}
           label={t('agentTeams.task.closeDetail')}
           size="sm"
           tone="muted"

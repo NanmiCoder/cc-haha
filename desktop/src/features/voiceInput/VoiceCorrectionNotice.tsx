@@ -103,7 +103,7 @@ export function VoiceCorrectionNotice({ dictation, onOpenSettings }: Props) {
           role="dialog"
           aria-label={t('voice.correction.panel.title')}
           data-testid="voice-correction-panel"
-          className="w-[26rem] max-w-[calc(100vw-2rem)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1.5 shadow-[var(--shadow-overlay)]"
+          className="dropdown-glass popover-motion w-[26rem] max-w-[calc(100vw-2rem)] rounded-[var(--radius-xl)] p-[5px]"
         >
           <p className="px-2.5 py-2 text-xs text-[var(--color-text-tertiary)]">
             {[
@@ -117,7 +117,7 @@ export function VoiceCorrectionNotice({ dictation, onOpenSettings }: Props) {
               <li
                 key={`${change.start}:${change.to}`}
                 data-testid="voice-correction-change"
-                className="flex items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-2 hover:bg-[var(--color-surface-hover)]"
+                className="flex items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-2 hover:bg-[var(--color-surface-hover)]"
               >
                 <div className="min-w-0 flex-1">
                   <p className="flex min-w-0 flex-wrap items-center gap-x-2 text-[13px]">
@@ -177,7 +177,7 @@ export function VoiceCorrectionNotice({ dictation, onOpenSettings }: Props) {
 
       <div
         role="status"
-        className="inline-flex min-h-[30px] max-w-full items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 pl-3 pr-1 text-xs text-[var(--color-text-secondary)] shadow-[var(--shadow-overlay)]"
+        className="dropdown-glass inline-flex min-h-[30px] max-w-full items-center gap-2 rounded-[var(--radius-xl)] py-1 pl-3 pr-1 text-xs text-[var(--color-text-secondary)]"
       >
         <NoticeIcon kind={notice.kind} />
         <span className="min-w-0 flex-1">

@@ -578,7 +578,7 @@ export function PetSettings() {
               <p className="text-xs leading-5 text-[var(--color-text-secondary)]">
                 {t('settings.pets.guide.step1Body')}
               </p>
-              <div className="mt-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]">
+              <div className="mt-2 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]">
                 {/* Body face, not mono: the prompt is prose (Chinese in zh), and
                     CJK set in a monospace face picks up typewriter gaps. */}
                 <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2.5 text-xs leading-5 text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-body)' }}>
@@ -622,7 +622,7 @@ export function PetSettings() {
               </ul>
               <button
                 type="button"
-                className="mt-2.5 block w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                className="mt-2.5 block w-full overflow-hidden rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                 onClick={() => setGuideExpanded((current) => !current)}
                 aria-label={t('settings.pets.guide.templateAlt')}
               >
@@ -676,7 +676,7 @@ export function PetSettings() {
                 ? t('settings.pets.guide.backToSteps')
                 : t('settings.pets.createBack')}
             </Button>
-            <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3.5 py-3">
+            <div className="rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3.5 py-3">
               <h3 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
                 {createMethod === 'image' ? t('settings.pets.createImageTitle')
                   : createMethod === 'guided' ? t('settings.pets.createAiTitle')
@@ -691,7 +691,7 @@ export function PetSettings() {
             <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createId')}</span>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
+                className="v6c-field w-full rounded-[var(--radius-card-inner)] border border-[var(--color-outline)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createId')}
                 value={createForm.slug}
                 maxLength={73}
@@ -703,7 +703,7 @@ export function PetSettings() {
             <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createName')}</span>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
+                className="v6c-field w-full rounded-[var(--radius-card-inner)] border border-[var(--color-outline)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createName')}
                 value={createForm.displayName}
                 maxLength={80}
@@ -713,7 +713,7 @@ export function PetSettings() {
             <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createDescription')}</span>
               <textarea
-                className="min-h-24 w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
+                className="v6c-field min-h-24 w-full resize-y rounded-[var(--radius-card-inner)] border border-[var(--color-outline)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createDescription')}
                 value={createForm.description}
                 maxLength={500}
@@ -738,9 +738,9 @@ function GuideStep({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-3.5">
+    <section className="v6c-glass-card rounded-[var(--radius-lg)] border border-[var(--color-border)] p-3.5">
       <div className="flex items-center gap-2">
-        <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-[var(--color-surface-container)] text-[11px] font-medium tabular-nums text-[var(--color-text-secondary)]">
+        <span className="flex h-5 w-5 flex-none items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] text-[11px] font-medium tabular-nums text-[var(--color-text-secondary)]">
           {index}
         </span>
         <h4 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
@@ -772,7 +772,7 @@ function CreationMethodCard({
   return (
     <button
       type="button"
-      className="group flex w-full items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 text-left transition-[border-color,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] enabled:hover:border-[var(--color-outline)] enabled:hover:bg-[var(--color-surface-hover)] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-55"
+      className="v6c-glass-card group flex w-full items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4 text-left transition-[border-color,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] enabled:hover:border-[var(--color-outline)] enabled:hover:bg-[var(--color-surface-hover)] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-55"
       disabled={disabled}
       onClick={onClick}
     >
@@ -782,7 +782,7 @@ function CreationMethodCard({
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-2">
           <span className="text-[13px] font-medium text-[var(--color-text-primary)]">{title}</span>
-          {badge && <Badge tone="neutral" size="sm">{badge}</Badge>}
+          {badge && <Badge tone="neutral" size="sm" pill={false}>{badge}</Badge>}
         </span>
         <span className="mt-1 block text-xs leading-5 text-[var(--color-text-secondary)]">{description}</span>
         <span className="mt-0.5 block text-xs leading-4 text-[var(--color-text-tertiary)]">{detail}</span>
@@ -817,7 +817,7 @@ function PetCatalog({
             className={`flex items-center gap-3 rounded-[var(--radius-lg)] p-3 transition-[background-color,border-color] duration-150 ease-out ${
               selected
                 ? 'border-[1.5px] border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-hover)]'
-                : 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
+                : 'v6c-glass-card border border-[var(--color-border)]'
             }`}
           >
             <PetPreview pet={pet} />
@@ -847,7 +847,7 @@ function PetCatalog({
 function PetPreview({ pet }: { pet: PetDescriptor }) {
   return (
     <div
-      className="flex h-16 w-16 flex-none items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)]"
+      className="flex h-16 w-16 flex-none items-center justify-center rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]"
       // A built-in pet keeps its own faint tint: the accent is part of the
       // pet's identity data, not a chrome color.
       style={{ backgroundColor: pet.source === 'builtin' ? `${pet.accent}18` : undefined }}

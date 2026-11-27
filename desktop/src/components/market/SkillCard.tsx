@@ -53,10 +53,9 @@ export function SkillCard({
     <Card
       as="article"
       radius="lg"
-      surface="container"
-      shadow="bevel"
+      surface="none"
       padding="none"
-      className="group relative isolate flex min-h-[200px] min-w-0 flex-col p-4 transition-[border-color,box-shadow] duration-150 hover:border-[var(--color-outline)] hover:shadow-[var(--shadow-card)]"
+      className="v6c-glass-card group relative isolate flex min-h-[200px] min-w-0 flex-col p-4 transition-[border-color,box-shadow] duration-150 hover:border-[var(--color-outline)]"
     >
       <button
         type="button"
@@ -74,7 +73,7 @@ export function SkillCard({
               {skill.name}
             </h3>
             {skill.version && (
-              <Badge variant="outline" size="xs" mono>
+              <Badge variant="outline" size="xs" pill={false} mono>
                 v{skill.version}
               </Badge>
             )}
@@ -101,17 +100,17 @@ export function SkillCard({
       >
         <SecurityBadge status={skill.securityStatus} short />
         {skill.featured && (
-          <Badge tone="info" size="xs" data-testid="market-card-featured">
+          <Badge tone="info" size="xs" pill={false} data-testid="market-card-featured">
             {t('market.featured')}
           </Badge>
         )}
         {tags.slice(0, MAX_VISIBLE_TAGS).map((tag) => (
-          <Badge key={tag} size="xs">
+          <Badge key={tag} size="xs" pill={false}>
             {tag}
           </Badge>
         ))}
         {extraTags > 0 && (
-          <Badge size="xs">
+          <Badge size="xs" pill={false}>
             {t('market.card.moreTags', { count: String(extraTags) })}
           </Badge>
         )}

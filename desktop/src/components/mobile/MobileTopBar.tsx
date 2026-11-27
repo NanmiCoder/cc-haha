@@ -26,7 +26,7 @@ export function MobileTopBar({ title, subtitle, onBack, backLabel, activeSession
   return (
     <div
       data-testid="mobile-top-bar"
-      className="flex min-h-14 shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface)] py-1 pl-1 pr-2"
+      className="surface-glass flex min-h-14 shrink-0 items-center gap-1 border-b border-[var(--color-border)] py-1 pl-1.5 pr-2 shadow-[var(--glass-top-rim)]"
     >
       {onBack ? (
         <span className="relative inline-flex shrink-0">
@@ -34,6 +34,7 @@ export function MobileTopBar({ title, subtitle, onBack, backLabel, activeSession
             data-testid="mobile-back"
             size="2xl"
             tone="secondary"
+            className="rounded-[var(--radius-control)]! v6c-pressable"
             icon={<ChevronLeft size={22} strokeWidth={1.75} aria-hidden="true" />}
             label={backLabel ?? t('mobile.nav.back')}
             onClick={onBack}

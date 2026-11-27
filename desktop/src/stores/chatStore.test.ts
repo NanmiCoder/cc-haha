@@ -3822,16 +3822,40 @@ describe('chatStore history mapping', () => {
   // forwards a finished block. Concatenating the first is required; concatenating the
   // second glued words together on screen.
   describe('thinking blocks merge by granularity, not by content', () => {
-    it('concatenates stream fragments with nothing between them', () => {
-      useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
-      const store = useChatStore.getState()
-      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the ' })
-      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'fix' })
+    it('batches rapid stream fragments on a 50ms timer and concatenates them with nothing between', async () => {
+      vi.useFakeTimers()
+      try {
+        useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
+        const store = useChatStore.getState()
+        const updates: string[] = []
+        let prevMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+        const unsubscribe = useChatStore.subscribe((state) => {
+          const messages = state.sessions[TEST_SESSION_ID]?.messages
+          if (messages === prevMessages) return
+          prevMessages = messages
+          const content = messages?.find((message) => message.type === 'thinking')?.content
+          if (content !== undefined) updates.push(content)
+        })
+        try {
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the ' })
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'fix' })
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: ' cleanly' })
 
-      const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
-        .filter((message) => message.type === 'thinking')
-      expect(thinking).toHaveLength(1)
-      expect(thinking?.[0]).toMatchObject({ content: 'plan the fix' })
+          // First chunk commits synchronously; subsequent chunks coalesce in one 50ms flush.
+          expect(updates).toEqual(['plan the '])
+          vi.advanceTimersByTime(50)
+
+          const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+            .filter((message) => message.type === 'thinking')
+          expect(thinking).toHaveLength(1)
+          expect(thinking?.[0]).toMatchObject({ content: 'plan the fix cleanly' })
+          expect(updates).toEqual(['plan the ', 'plan the fix cleanly'])
+        } finally {
+          unsubscribe()
+        }
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('separates two finished blocks so their words do not run together', () => {

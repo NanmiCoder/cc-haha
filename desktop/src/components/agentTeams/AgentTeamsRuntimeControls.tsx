@@ -176,7 +176,7 @@ export function AgentTeamsRuntimeControls({ team, readOnly = false }: { team: Te
         </div>}
       </div>
       <div className="mt-4 space-y-3">
-        {editableMembers.map(member => <div key={member.sessionId} className="flex min-w-0 flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+        {editableMembers.map(member => <div key={member.sessionId} className="v6c-glass-card flex min-w-0 flex-wrap items-center gap-3 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-3">
           <Checkbox label={member.name || member.agentId} checked={selected.includes(member.agentId)} disabled={!canEdit || saving} containerClassName="min-w-0 flex-1" onChange={event => setSelected(ids => event.target.checked ? [...ids, member.agentId] : ids.filter(id => id !== member.agentId))} />
           {drafts[member.agentId] && <div className="min-w-[180px] flex-[1_1_280px]">
             <ModelSelector appearance="field" fluid effortEditable ariaLabel={`${member.name || member.agentId} · ${t('teamPlan.model')}`} runtimeSelection={drafts[member.agentId]} disabled={!canEdit || saving} onRuntimeSelectionChange={runtime => updateDraft(member.agentId, runtime)} />

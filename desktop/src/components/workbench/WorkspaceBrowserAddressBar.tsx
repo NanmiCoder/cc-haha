@@ -91,7 +91,7 @@ export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, Workspace
   return (
     <form
       ref={formRef}
-      className={`group/address relative mx-1 flex h-7 min-w-0 flex-1 items-center rounded-[var(--radius-sm)] pl-2.5 transition-colors ${editing ? 'bg-[var(--color-surface-container-lowest)] ring-1 ring-inset ring-[var(--color-outline)]' : 'bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-hover)]'}`}
+      className={`group/address relative mx-1 flex h-7 min-w-0 flex-1 items-center rounded-[var(--radius-control)] pl-2.5 transition-colors ${editing ? 'bg-[var(--color-surface-container-lowest)] ring-1 ring-inset ring-[var(--color-outline)]' : 'v6c-field hover:bg-[var(--color-surface-hover)]'}`}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) finishEditing()
       }}
@@ -102,8 +102,8 @@ export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, Workspace
     >
       {/* Only a committed https page earns the lock; anything else is a globe. */}
       {!editing && currentAddress.startsWith('https:')
-        ? <Lock size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-        : <Globe size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
+        ? <Lock size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        : <Globe size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
       <input
         ref={inputRef}
         value={draft}
@@ -198,7 +198,7 @@ function AddressSuggestions({ id, items, query, selectedIndex, onHighlight, onSe
       id={id}
       role="listbox"
       aria-label={t('workspace.browser.suggestions')}
-      className="absolute inset-x-0 top-full z-[var(--z-dropdown)] mt-1 max-h-[min(280px,60dvh)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+      className="dropdown-glass popover-motion absolute inset-x-0 top-full z-[var(--z-dropdown)] mt-1 max-h-[min(280px,60dvh)] overflow-y-auto rounded-[var(--radius-xl)] p-[5px]"
     >
       {items.map((item, index) => (
         <div
@@ -209,7 +209,7 @@ function AddressSuggestions({ id, items, query, selectedIndex, onHighlight, onSe
           onPointerDown={(event) => event.preventDefault()}
           onPointerMove={() => onHighlight(index)}
           onClick={() => onSelect(item.input)}
-          className={`flex h-8 cursor-pointer items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-[13px] ${selectedIndex === index ? 'bg-[var(--color-surface-hover)]' : ''}`}
+          className={`flex h-8 cursor-pointer items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-[13px] ${selectedIndex === index ? 'v6c-row-highlight' : ''}`}
         >
           {item.action === 'search'
             ? <Search size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />

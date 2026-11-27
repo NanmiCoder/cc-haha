@@ -291,10 +291,10 @@ export function AgentTeamsCommunicationFeed({
                 aria-pressed={selected}
                 onClick={() => setFilter(option.key)}
                 className={[
-                  'inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold outline-none transition-[transform,background-color,border-color,color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+                  'v6c-pressable inline-flex shrink-0 items-center rounded-[var(--radius-control)] border px-2.5 py-1 text-[11px] font-semibold outline-none transition-[transform,background-color,border-color,color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
                   selected
-                    ? 'control-bevel-cta border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-surface)]'
-                    : 'control-bevel border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+                    ? 'v6c-raised border-[var(--color-outline)] text-[var(--color-text-primary)]'
+                    : 'border-[var(--color-border)] bg-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
                 ].join(' ')}
               >
                 {option.label}
@@ -397,14 +397,14 @@ const FeedRow = memo(function FeedRow({
             {text}
           </p>
           {message.taskId ? (
-            <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+            <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
               #{message.taskId}
             </span>
           ) : null}
           {repeats > 1 ? (
             <span
               data-testid={`agent-teams-message-${message.id}-repeats`}
-              className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
+              className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
             >
               ×{repeats}
             </span>
@@ -440,15 +440,15 @@ const FeedRow = memo(function FeedRow({
       <div className="flex min-w-0 items-center gap-2">
         <span
           className={[
-            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+            'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] border px-2 py-0.5 text-[11px] font-semibold',
             categoryTagClass(category),
           ].join(' ')}
         >
-          <Icon size={12} strokeWidth={2} aria-hidden="true" />
+          <Icon size={12} strokeWidth={1.75} aria-hidden="true" />
           {categoryLabel(category, t)}
         </span>
         {message.taskId ? (
-          <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+          <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
             #{message.taskId}
           </span>
         ) : null}
@@ -470,7 +470,7 @@ const FeedRow = memo(function FeedRow({
           nameTestId={`agent-teams-message-${message.id}-from`}
           avatarTestId={`agent-teams-message-${message.id}-from-avatar`}
         />
-        <ArrowRight size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <ArrowRight size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         {recipientParticipant ? (
           <ParticipantFigure
             participant={recipientParticipant}
@@ -485,7 +485,7 @@ const FeedRow = memo(function FeedRow({
             title={recipient}
           >
             <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
-              <Megaphone size={11} strokeWidth={2} aria-hidden="true" />
+              <Megaphone size={11} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--color-text-secondary)]">
               {recipient}
@@ -518,7 +518,7 @@ const FeedRow = memo(function FeedRow({
         <button
           type="button"
           onClick={() => setExpanded((current) => !current)}
-          className="relative mt-2 rounded-[var(--radius-sm)] text-[11px] font-medium text-[var(--color-text-accent)] outline-none transition-[transform,color] duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]"
+          className="relative mt-2 rounded-[var(--radius-control)] text-[11px] font-medium text-[var(--color-text-accent)] outline-none transition-[transform,color] duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]"
         >
           {t(expanded ? 'agentTeams.communication.collapse' : 'agentTeams.communication.expand')}
         </button>
@@ -550,7 +550,7 @@ function ParticipantFigure({
           src={MEMBER_AVATARS[participant.avatarKey]}
           alt=""
           draggable={false}
-          className="h-full w-full select-none object-contain drop-shadow-[0_1px_1px_rgba(0,0,0,0.14)]"
+          className="h-full w-full select-none object-contain"
         />
         <span
           className="absolute bottom-0 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full border border-[var(--color-surface)]"

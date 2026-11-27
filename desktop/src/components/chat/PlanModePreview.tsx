@@ -72,7 +72,7 @@ export function PlanPreviewCard({
       data-testid="plan-preview-card"
       className={embedded
         ? 'min-w-0'
-        : 'overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--shadow-card)]'}
+        : 'v6c-glass-card overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]'}
     >
       <div className={`flex min-w-0 items-center gap-2 ${embedded ? 'pb-2' : 'border-b border-[var(--color-border)] px-4 py-3'}`}>
         <FileText size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />

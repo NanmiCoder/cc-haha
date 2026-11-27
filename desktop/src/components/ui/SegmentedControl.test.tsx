@@ -105,7 +105,8 @@ describe('SegmentedControl', () => {
       expect(group.className).toContain('flex-wrap')
       expect(group.className).not.toMatch(/\bh-8\b/)
       for (const radio of screen.getAllByRole('radio')) {
-        expect(radio.className).toContain('rounded-full')
+        expect(radio.className).toContain('rounded-[var(--radius-sm)]')
+        expect(radio.className).not.toContain('rounded-full')
         expect(radio.className).toMatch(/\bh-8\b/)
       }
     })

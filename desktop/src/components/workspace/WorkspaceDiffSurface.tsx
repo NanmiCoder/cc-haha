@@ -256,7 +256,7 @@ function isStructuralMetadata(row: WorkspaceDiffRow, compact = false) {
 export function WorkspaceDiffSurface({
   value,
   path,
-  className = 'min-h-0 flex-1 overflow-auto bg-[var(--color-surface)]',
+  className = 'min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface)]',
   lineLimit = WORKSPACE_PREVIEW_LINE_LIMIT,
   hideSingleFileHeader = false,
   mode = 'unified',
@@ -564,7 +564,7 @@ export function WorkspaceDiffSurface({
   const renderEditor = () => review.selection && (
     <div
       data-diff-editor=""
-      className="sticky z-[var(--z-raised)] my-1.5 min-w-[280px] max-w-3xl overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]"
+      className="v6c-glass-card sticky z-[var(--z-raised)] my-1.5 min-w-[280px] max-w-3xl overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]"
       style={{
         left: 'var(--workspace-diff-gutter-width)',
         width: 'min(48rem, calc(100cqi - var(--workspace-diff-gutter-width) - 0.75rem))',
@@ -607,7 +607,7 @@ export function WorkspaceDiffSurface({
           aria-label={t('workspace.diffReview.submitAria')}
           disabled={!review.draft.trim()}
           onClick={submitComment}
-          className="inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-info)] px-3 font-body text-[13px] font-medium text-[var(--color-surface)] transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-low)] disabled:cursor-not-allowed disabled:opacity-35"
+          className="v6c-pressable inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-[var(--radius-control)] bg-[var(--color-info)] px-3 font-body text-[13px] font-medium text-[var(--color-surface)] transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-low)] disabled:cursor-not-allowed disabled:opacity-35"
         >
           <CornerDownLeft aria-hidden="true" size={14} strokeWidth={1.75} />
           <span>{t('workspace.diffReview.submit')}</span>
@@ -767,7 +767,7 @@ export function WorkspaceDiffSurface({
                                   selectionFocus ? 'bg-[var(--color-info)] text-[var(--color-surface)] opacity-100' : 'text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100 focus:opacity-100'
                                 }`}
                               >
-                                {selected ? <MessageSquare aria-hidden="true" size={12} strokeWidth={2} /> : <Plus aria-hidden="true" size={12} strokeWidth={2} />}
+                                {selected ? <MessageSquare aria-hidden="true" size={12} strokeWidth={1.75} /> : <Plus aria-hidden="true" size={12} strokeWidth={1.75} />}
                               </button>
                             </span>
                           )}

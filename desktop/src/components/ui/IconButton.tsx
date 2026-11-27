@@ -88,10 +88,10 @@ export type IconButtonProps =
 const SIZE_CLASSES: Record<IconButtonSize, string> = {
   '2xs': 'h-5 w-5 rounded-[var(--radius-sm)]',
   xs: 'h-6 w-6 rounded-[var(--radius-sm)]',
-  sm: 'h-7 w-7 rounded-[var(--radius-md)]',
-  md: 'h-8 w-8 rounded-[var(--radius-md)]',
-  lg: 'h-9 w-9 rounded-[var(--radius-lg)]',
-  xl: 'h-10 w-10 rounded-[var(--radius-lg)]',
+  sm: 'h-7 w-7 rounded-[var(--radius-control)]',
+  md: 'h-8 w-8 rounded-[var(--radius-control)]',
+  lg: 'h-9 w-9 rounded-[var(--radius-control)]',
+  xl: 'h-10 w-10 rounded-[var(--radius-card-inner)]',
   '2xl': 'h-11 w-11 rounded-[var(--radius-lg)]',
 }
 
@@ -159,10 +159,12 @@ const HOVER_BG: Record<IconButtonSurface, Record<IconButtonTone, string>> = {
     brand: 'hover:bg-[var(--color-lightbox-control-hover)]',
     danger: 'hover:bg-[var(--color-lightbox-control-hover)]',
   },
+  // V6C: a hovered icon key picks up the glass rim as well as the fill, so it
+  // reads as a pressable object rather than a tinted square.
   default: {
-    default: 'hover:bg-[var(--color-surface-hover)]',
-    secondary: 'hover:bg-[var(--color-surface-hover)]',
-    muted: 'hover:bg-[var(--color-surface-hover)]',
+    default: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
+    secondary: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
+    muted: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
     brand: 'hover:bg-[var(--color-brand-soft)]',
     danger: 'hover:bg-[var(--color-error-soft)]',
   },
@@ -239,7 +241,7 @@ const SOFT_CLASSES = 'bg-[var(--color-btn-soft-bg)] hover:bg-[var(--color-btn-so
 
 const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
   lightbox: 'bg-[var(--color-lightbox-control-hover)] text-[var(--color-lightbox-control-fg)]',
-  default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
+  default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-[var(--glass-rim)]',
   // The sidebar's hover fill is the faintest step on its ground; a toggle that
   // is on must not look like one the pointer is merely over, so it takes the
   // theme accent.

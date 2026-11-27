@@ -217,7 +217,7 @@ export function WorkspaceSurface({
       ref={surfaceRef}
       data-testid={`workspace-surface-${dock}`}
       aria-label={t('workspace.panelLabel')}
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface)]"
+      className="v6c-main-canvas flex h-full min-h-0 w-full flex-col"
     >
       {watchError ? <p role="status" className="shrink-0 px-3 py-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.files.watchFailed', { reason: watchError })}</p> : null}
       {tabStrip}

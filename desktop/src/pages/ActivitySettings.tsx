@@ -51,7 +51,7 @@ function StatsRow({ tiles }: { tiles: StatTile[] }) {
       {tiles.map((tile) => (
         <div
           key={tile.label}
-          className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-3.5 shadow-[var(--bevel-surface-rest)]"
+          className="v6c-glass-card min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3.5"
         >
           <dt className="truncate text-xs text-[var(--color-text-tertiary)]">{tile.label}</dt>
           <dd className="m-0 mt-1.5 text-[22px] font-semibold leading-tight tabular-nums text-[var(--color-text-primary)]">{tile.value}</dd>
@@ -73,9 +73,9 @@ function LoadingSkeleton() {
             <div className="h-3 w-40 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] @[560px]:w-48" />
           </div>
         </div>
-        <div className="h-28 w-64 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
+        <div className="h-28 w-64 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)]" />
       </div>
-      <div className="mt-14 h-[240px] rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
+      <div className="mt-14 h-[240px] rounded-[var(--radius-lg)] bg-[var(--color-surface-container)]" />
     </div>
   )
 }

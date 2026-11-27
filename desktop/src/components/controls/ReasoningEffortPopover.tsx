@@ -148,7 +148,7 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
         aria-valuemax={maxIndex}
         aria-valuenow={selectedIndex >= 0 ? selectedIndex : undefined}
         aria-valuetext={value === null ? undefined : labels[value]}
-        className="mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] p-0.5 shadow-[var(--bevel-surface-pressed)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        className="v6c-track mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-control)] p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
         onClick={(event) => selectFromClientX(event.clientX)}
         onPointerDown={(event) => {
@@ -194,12 +194,11 @@ export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>(
               data-testid="reasoning-effort-stop"
               data-selected={selected || undefined}
               title={labels[option]}
-              // The lifted segment of `SegmentedControl`: the selected step sits
-              // on the popover's own white with the segment shadow; the rest are
-              // tertiary type on the sunken track.
-              className={`flex min-w-0 items-center justify-center truncate rounded-[var(--radius-xs)] px-1 text-xs transition-colors ${
+              // The V6C raised glass segment of `SegmentedControl`: 6px corner on
+              // the 9px track, raised glass fill + rim when selected.
+              className={`flex min-w-0 items-center justify-center truncate rounded-[var(--radius-sm)] px-1 text-xs transition-colors ${
                 selected
-                  ? 'control-bevel bg-[var(--color-surface-container)] font-medium text-[var(--color-text-primary)] shadow-[var(--bevel-surface-rest)]'
+                  ? 'v6c-raised font-medium text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
               }`}
             >

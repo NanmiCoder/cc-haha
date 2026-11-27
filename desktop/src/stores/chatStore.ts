@@ -1219,12 +1219,54 @@ function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
   return changed ? stoppedMessages : messages
 }
 
-// Streaming throttle for content_delta. Buffers must be per-session because
-// multiple desktop tabs can stream at the same time.
+// Streaming throttle for content_delta and thinking deltas. Buffers must be
+// per-session because multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
 const flushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
 const pendingToolInputDeltaBySession = new Map<string, string>()
 const toolInputFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
+const pendingThinkingDeltaBySession = new Map<string, string>()
+const thinkingFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
+
+function consumePendingThinkingDelta(sessionId: string): string {
+  const flushTimer = thinkingFlushTimerBySession.get(sessionId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    thinkingFlushTimerBySession.delete(sessionId)
+  }
+  const text = pendingThinkingDeltaBySession.get(sessionId) ?? ''
+  pendingThinkingDeltaBySession.delete(sessionId)
+  return text
+}
+
+function appendPendingThinkingDelta(sessionId: string, text: string): void {
+  pendingThinkingDeltaBySession.set(
+    sessionId,
+    `${pendingThinkingDeltaBySession.get(sessionId) ?? ''}${text}`,
+  )
+}
+
+function clearPendingThinkingDelta(sessionId: string): void {
+  const flushTimer = thinkingFlushTimerBySession.get(sessionId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    thinkingFlushTimerBySession.delete(sessionId)
+  }
+  pendingThinkingDeltaBySession.delete(sessionId)
+}
+
+function applyPendingThinkingDeltaToMessages(messages: UIMessage[], text: string): UIMessage[] {
+  if (!text) return messages
+  const lastIndex = findStreamMergeTargetIndex(messages)
+  const last = lastIndex >= 0 ? messages[lastIndex] : undefined
+  if (!last || last.type !== 'thinking') return messages
+  const updated = [...messages]
+  updated[lastIndex] = {
+    ...last,
+    content: joinThinkingContent(last.content, text, false),
+  }
+  return updated
+}
 
 function consumePendingDelta(sessionId: string): string {
   const flushTimer = flushTimerBySession.get(sessionId)
@@ -3564,6 +3606,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         // normal cold REST remains useful even while the socket is unavailable.
         clearPendingDelta(sessionId)
         clearPendingToolInputDelta(sessionId)
+        clearPendingThinkingDelta(sessionId)
         clearPendingTaskToolUseIds(sessionId)
         clearPendingToolParentUseIds(sessionId)
       }
@@ -3652,6 +3695,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     if (pendingDeltaBySession.has(sessionId)) {
       const text = consumePendingDelta(sessionId)
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
+    }
+    if (pendingThinkingDeltaBySession.has(sessionId)) {
+      const thinkingText = consumePendingThinkingDelta(sessionId)
+      if (thinkingText) {
+        set((s) => ({
+          sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+            messages: applyPendingThinkingDeltaToMessages(sess.messages, thinkingText),
+            streamingResponseChars: sess.streamingResponseChars + thinkingText.length,
+          })),
+        }))
+      }
     }
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
@@ -3745,13 +3799,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     historyPageControllers.delete(sessionId)
     set((s) => {
       const session = s.sessions[sessionId] ?? createDefaultSessionState()
+      const bufferedThinking = consumePendingThinkingDelta(sessionId)
       const bufferedDelta = consumePendingDelta(sessionId)
       const pendingAssistantText = `${session.streamingText}${bufferedDelta}`
       const now = Date.now()
 
+      const baseMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
       const newMessages = pendingAssistantText.trim()
-        ? appendAssistantTextMessage(session.messages, pendingAssistantText, now)
-        : [...session.messages]
+        ? appendAssistantTextMessage(baseMessages, pendingAssistantText, now)
+        : [...baseMessages]
       if (!isDirectAgentSession && allTasksDone) {
         newMessages.push({
           id: nextId(),
@@ -4051,6 +4107,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     ) {
       void (sessionsApi as { stopChat?: (id: string) => Promise<unknown> }).stopChat?.(sessionId)?.catch(() => {})
     }
+    const bufferedThinking = consumePendingThinkingDelta(sessionId)
     const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
@@ -4067,10 +4124,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           stoppingBackgroundTaskIds[task.taskId] = true
         }
       }
+      const messagesWithThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
       const pendingAssistantText = `${session.streamingText}${bufferedText}`
       const messagesWithFlushedText = pendingAssistantText.trim()
-        ? appendAssistantTextMessage(session.messages, pendingAssistantText, Date.now())
-        : session.messages
+        ? appendAssistantTextMessage(messagesWithThinking, pendingAssistantText, Date.now())
+        : messagesWithThinking
       const stoppedMessages = pendingAssistantText.trim()
         ? [...messagesWithFlushedText, {
             id: nextId(),
@@ -5129,6 +5187,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     clearPendingToolInputDelta(sessionId)
+    clearPendingThinkingDelta(sessionId)
     pendingOwnedTaskEvents.delete(sessionId)
     pendingAgentRunEvents.delete(sessionId)
     activeAgentStreamIdBySession.delete(sessionId)
@@ -5302,6 +5361,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // messages are merged back below while the turn remains running.
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
+          clearPendingThinkingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
           clearPendingToolParentUseIds(sessionId)
           update((current) => {
@@ -5391,14 +5451,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
 
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
         clearPendingToolInputDelta(sessionId)
         clearPendingTaskToolUseIds(sessionId)
         clearPendingToolParentUseIds(sessionId)
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        const messagesWithThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
         const messagesWithText = text.trim()
-          ? appendAssistantTextMessage(session.messages, text, Date.now())
-          : session.messages
+          ? appendAssistantTextMessage(messagesWithThinking, text, Date.now())
+          : messagesWithThinking
         update(() => ({
           messages: markPendingToolUseMessagesStopped(messagesWithText),
           chatState: preserveDelegatedPermissions ? 'permission_pending' : 'idle',
@@ -5448,6 +5510,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         // retried, so its task bar change is no longer undoable.
         if (msg.attemptStart) taskBarBeforeAttemptBySession.delete(sessionId)
         update((session) => {
+          const bufferedThinking = (msg.state === 'idle' || msg.state === 'compacting')
+            ? consumePendingThinkingDelta(sessionId)
+            : ''
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           const hasPendingStreamText =
             session.chatState === 'streaming' && pendingText.trim().length > 0
@@ -5457,7 +5522,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // across separate bubbles.
           const preserveStreamingTurn = hasPendingStreamText && msg.state !== 'idle' && msg.state !== 'compacting'
           const shouldFlush = hasPendingStreamText && (msg.state === 'idle' || msg.state === 'compacting')
-          let nextMessages = session.messages
+          let nextMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
           if (shouldFlush) {
             nextMessages = appendAssistantTextMessage(nextMessages, pendingText, Date.now())
           }
@@ -5565,12 +5630,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (session.stopAllSubagentsRequested) {
           update(() => ({ stopAllSubagentsRequested: false }))
         }
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
-        if (msg.blockType !== 'text' && pendingText.trim()) {
-          update((s) => ({
-            messages: appendAssistantTextMessage(s.messages, pendingText, Date.now()),
-            streamingText: '',
-          }))
+        if (bufferedThinking || (msg.blockType !== 'text' && pendingText.trim())) {
+          update((s) => {
+            const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
+            const nextMessages = msg.blockType !== 'text' && pendingText.trim()
+              ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+              : withThinking
+            return {
+              messages: nextMessages,
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+              ...(msg.blockType !== 'text' && pendingText.trim() ? { streamingText: '' } : {}),
+            }
+          })
         }
         if (msg.blockType === 'text') {
           update((s) => ({
@@ -5649,6 +5722,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const taskBarBeforeAttempt = taskBarBeforeAttemptBySession.get(sessionId)
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
+          clearPendingThinkingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
           clearPendingToolParentUseIds(sessionId)
           update((session) => {
@@ -5780,15 +5854,56 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'thinking': {
-        if (get().sessions[sessionId]?.awaitingStopIdle) break
+        const currentSession = get().sessions[sessionId]
+        if (!currentSession || currentSession.awaitingStopIdle) break
+        // Coalesce rapid streaming thinking deltas on a 50ms timer (mirroring
+        // `content_delta`) once the thinking block is already open. The opening
+        // chunk and `complete: true` blocks still commit synchronously so the
+        // live thinking indicator appears on the first token with zero latency.
+        if (
+          msg.complete !== true &&
+          currentSession.activeThinkingId &&
+          !currentSession.streamingText.trim() &&
+          !(pendingDeltaBySession.get(sessionId) ?? '').trim()
+        ) {
+          const lastIndex = findStreamMergeTargetIndex(currentSession.messages)
+          const last = lastIndex >= 0 ? currentSession.messages[lastIndex] : undefined
+          if (
+            last &&
+            last.type === 'thinking' &&
+            last.id === currentSession.activeThinkingId &&
+            !currentSession.messages.some((message) => message.type === 'thinking' && message.content === msg.text)
+          ) {
+            appendPendingThinkingDelta(sessionId, msg.text)
+            if (!thinkingFlushTimerBySession.has(sessionId)) {
+              const timer = setTimeout(() => {
+                const text = consumePendingThinkingDelta(sessionId)
+                if (!text) return
+                update((s) => {
+                  const updatedMessages = applyPendingThinkingDeltaToMessages(s.messages, text)
+                  if (updatedMessages === s.messages) return {}
+                  return {
+                    messages: updatedMessages,
+                    streamingResponseChars: s.streamingResponseChars + text.length,
+                  }
+                })
+              }, 50)
+              thinkingFlushTimerBySession.set(sessionId, timer)
+            }
+            ensureElapsedTimer()
+            break
+          }
+        }
         // 重放/空块都不该冒出一个新的「已思考」气泡，也不该把会话拖回 thinking 态
         // 或者启动计时器 —— 那正是"打开一个早就结束的会话，它自己开始输出"的观感。
         let skippedThinkingBlock = false
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
+          const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           const base = pendingText.trim()
-            ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
-            : s.messages
+            ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+            : withThinking
           const lastIndex = findStreamMergeTargetIndex(base)
           const last = lastIndex >= 0 ? base[lastIndex] : undefined
           // 服务端两个 thinking 发射点都做了非空过滤，但 `&& delta.thinking` 是真值
@@ -5797,7 +5912,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // 增量是正文的一部分，丢掉它会让实时内容和 transcript 对不上（#1476）。
           if (!msg.text.trim() && (msg.complete === true || last?.type !== 'thinking')) {
             skippedThinkingBlock = true
-            return { messages: base, streamingText: '' }
+            return {
+              messages: base,
+              streamingText: '',
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+            }
           }
           // 真正的重放源已在服务端按 uuid 挡掉（conversationService.isReplayedSdkMessage）。
           // 这里再兜一道：thinking 没有 transcriptMessageId 之类的身份，任何漏网的
@@ -5805,7 +5924,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // 不会命中；命中的必然是被整块重发的同一段思考。
           if (base.some((message) => message.type === 'thinking' && message.content === msg.text)) {
             skippedThinkingBlock = true
-            return { messages: base, streamingText: '' }
+            return {
+              messages: base,
+              streamingText: '',
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+            }
           }
           if (last && last.type === 'thinking') {
             const updated = [...base]
@@ -5819,7 +5942,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               restoreIdleAfterPermissions: false,
               activeThinkingId: last.id,
               streamingText: '',
-              streamingResponseChars: s.streamingResponseChars + msg.text.length,
+              streamingResponseChars: s.streamingResponseChars + bufferedThinking.length + msg.text.length,
             }
           }
           const id = nextId()
@@ -5829,7 +5952,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             restoreIdleAfterPermissions: false,
             activeThinkingId: id,
             streamingText: '',
-            streamingResponseChars: s.streamingResponseChars + msg.text.length,
+            streamingResponseChars: s.streamingResponseChars + bufferedThinking.length + msg.text.length,
           }
         })
         if (!skippedThinkingBlock) ensureElapsedTimer()
@@ -5845,14 +5968,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const parentToolUseId = msg.parentToolUseId ?? getPendingToolParentUseId(sessionId, toolUseId)
         rememberPendingToolParentUseId(sessionId, toolUseId, parentToolUseId)
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           // 流式路径上，工具块的 content_start 已经把待定正文冲刷成一条消息了
           // （见 case 'content_start' 里 blockType !== 'text' 的分支）。但整块兜底
           // 路径只发 tool_use_complete、不发 content_start —— 不在这里补一次冲刷，
           // 工具调用前后的两段正文就会跨消息粘成一条。
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
+          const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           const base = pendingText.trim()
-            ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
-            : s.messages
+            ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+            : withThinking
           return {
             messages: toolUseId
               ? upsertToolUseMessage(base, toolUseId, (existing) => ({
@@ -6198,16 +6323,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const completedAt = Date.now()
         const wasAgentRunning = session.chatState !== 'idle'
         const wasScheduledTaskTurn = validScheduledTaskTrigger(msg.scheduledTask) || isScheduledTaskTurn(session)
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
-        let completionMessages = session.messages
+        let completionMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
         if (text.trim()) {
-          completionMessages = appendAssistantTextMessage(session.messages, text, completedAt)
+          completionMessages = appendAssistantTextMessage(completionMessages, text, completedAt)
           update(() => ({
             messages: completionMessages,
             streamingText: '',
           }))
-        } else if (text !== session.streamingText) {
-          update(() => ({ streamingText: text }))
+        } else if (completionMessages !== session.messages || text !== session.streamingText) {
+          update(() => ({
+            ...(completionMessages !== session.messages ? { messages: completionMessages } : {}),
+            streamingText: text,
+          }))
         }
         const appendedCompletionMessage = completionMessages !== session.messages
         const finalMessages = markPendingToolUseMessagesStopped(completionMessages)
@@ -6267,12 +6396,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'user_message_replay': {
         update((session) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           // Another client's prompt reaches this one only as the CLI's attempt
           // and then this replay, so a notice shown for that attempt was wrong.
+          const withThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
           const withoutNotice = session.backgroundContinueNoticeId
-            ? session.messages.filter((message) => message.id !== session.backgroundContinueNoticeId)
-            : session.messages
+            ? withThinking.filter((message) => message.id !== session.backgroundContinueNoticeId)
+            : withThinking
           const baseMessages = pendingText.trim()
             ? appendAssistantTextMessage(withoutNotice, pendingText, Date.now())
             : withoutNotice
@@ -6395,8 +6526,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
-          let newMessages = s.messages
+          let newMessages = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           if (pendingText.trim()) {
             newMessages = appendAssistantTextMessage(newMessages, pendingText, Date.now())
           }

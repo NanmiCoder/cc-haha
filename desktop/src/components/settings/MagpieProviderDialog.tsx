@@ -230,9 +230,9 @@ export function MagpieProviderDialog({
                         aria-checked={isSelected}
                         onClick={() => setMain(model.runtimeId)}
                         className={cx(
-                          'flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors duration-150',
+                          'flex w-full items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left transition-colors duration-150',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
-                          isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]',
+                          isSelected ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]',
                         )}
                       >
                         <span className="min-w-0 flex-1">
@@ -243,7 +243,7 @@ export function MagpieProviderDialog({
                         <Check
                           aria-hidden="true"
                           size={14}
-                          strokeWidth={2}
+                          strokeWidth={1.75}
                           className={cx('shrink-0 text-[var(--color-brand)]', !isSelected && 'invisible')}
                         />
                       </button>

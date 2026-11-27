@@ -48,7 +48,7 @@ const SURFACE = {
   lowest: 'bg-[var(--color-surface-container-lowest)]',
   high: 'bg-[var(--color-surface-container-high)]',
   container: 'bg-[var(--color-surface-container)]',
-  glass: 'surface-glass',
+  glass: 'surface-glass v6c-glass-card',
   group: 'bg-[var(--color-surface-container-low)] bg-clip-padding',
   none: '',
 } as const

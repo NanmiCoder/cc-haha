@@ -130,7 +130,7 @@ export function FilePreview({
     // column rather than shrink to its content.
     return (
       <EmptyState
-        icon={<FolderX size={20} strokeWidth={1.6} aria-hidden="true" />}
+        icon={<FolderX size={20} strokeWidth={1.75} aria-hidden="true" />}
         title={t('market.file.noFiles')}
         className="min-h-0 flex-1"
       />
@@ -144,7 +144,7 @@ export function FilePreview({
       className="grid min-h-0 min-w-0 flex-1 gap-4 @3xl:h-full @3xl:grid-cols-[minmax(0,260px)_minmax(0,1fr)]"
       data-testid="market-file-preview"
     >
-      <div className="flex max-h-[40vh] min-h-0 flex-col gap-px overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 @3xl:max-h-none">
+      <div className="v6c-glass-card flex max-h-[40vh] min-h-0 flex-col gap-px overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] p-1 @3xl:max-h-none">
         {files.map((file) => {
           const active = file.path === activePath
           const Icon = LANG_ICONS[file.language] ?? File
@@ -154,11 +154,11 @@ export function FilePreview({
               type="button"
               data-testid={`market-file-item-${file.path}`}
               onClick={() => void open(file.path)}
-              className={`flex items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
-                // The list's selected row: the neutral selected fill, with the
-                // brand reserved for the selected item's icon.
+              className={`flex items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+                // The list's selected row: the raised glass row highlight, with
+                // the brand reserved for the selected item's icon.
                 active
-                  ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                  ? 'v6c-row-highlight text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
               }`}
             >
@@ -179,7 +179,7 @@ export function FilePreview({
         })}
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+      <div className="v6c-glass-card flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
         {activeFile && (
           <div className="flex min-h-10 flex-shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
             <span className="font-mono text-xs text-[var(--color-text-primary)]">{activeFile.path}</span>

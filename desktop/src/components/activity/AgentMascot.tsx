@@ -82,11 +82,11 @@ export function resolveAgentMascotSpec({
 }
 
 function ringClassName(tone: AgentMascotSpec['tone']): string {
-  if (tone === 'danger') return 'border-[color-mix(in_srgb,var(--color-error)_42%,transparent)]'
-  if (tone === 'success') return 'border-[color-mix(in_srgb,var(--color-success)_34%,transparent)]'
-  if (tone === 'muted') return 'border-[color-mix(in_srgb,var(--color-text-tertiary)_24%,transparent)]'
-  // Running is information, not brand: the app reads blue as "in progress".
-  return 'border-[color-mix(in_srgb,var(--color-info)_42%,transparent)]'
+  if (tone === 'danger') return 'v6c-ring-error'
+  if (tone === 'success') return 'v6c-ring-success'
+  if (tone === 'muted') return 'border border-[var(--color-border)] shadow-[var(--glass-rim)]'
+  // Running is information, not brand: the app reads info blue as "in progress".
+  return 'v6c-ring-running'
 }
 
 export function AgentMascot({ seed, status }: { seed: string; status: ActivityStatus }) {
@@ -103,13 +103,13 @@ export function AgentMascot({ seed, status }: { seed: string; status: ActivitySt
       data-agent-mascot-motion={spec.motion}
       data-agent-mascot-tone={spec.tone}
       data-agent-mascot-src={imageSrc}
-      className={`relative inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] border bg-[var(--color-surface-container)] ${ringClassName(spec.tone)}`}
+      className={`relative inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-container)] ${ringClassName(spec.tone)}`}
       aria-hidden="true"
     >
       {isActive ? (
         <span
           data-testid="agent-mascot-motion-ring"
-          className="absolute -inset-0.5 rounded-[var(--radius-lg)] border border-transparent border-t-[var(--color-info)] opacity-80 motion-safe:animate-spin motion-reduce:animate-none"
+          className="pointer-events-none absolute inset-0 rounded-full border-[1.5px] border-transparent border-t-[var(--color-info)] motion-safe:animate-spin motion-reduce:animate-none"
           aria-hidden="true"
         />
       ) : null}
@@ -117,7 +117,7 @@ export function AgentMascot({ seed, status }: { seed: string; status: ActivitySt
         src={imageSrc}
         alt=""
         draggable={false}
-        className="relative h-[34px] w-[34px] max-w-none select-none object-contain"
+        className="relative h-[24px] w-[24px] select-none object-contain"
       />
     </span>
   )

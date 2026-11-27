@@ -61,8 +61,8 @@ export function PanelMessage({
       {glyph ? (
         <span
           aria-hidden="true"
-          className={`flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] ${tone === 'error'
-            ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+          className={`flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] ${tone === 'error'
+            ? 'v6c-ring-error bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
             : 'bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]'}`}
         >
           {glyph}

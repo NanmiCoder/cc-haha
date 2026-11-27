@@ -66,7 +66,7 @@ export function OfficialLoginRiskDialog({
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
             {t('settings.officialLoginRisk.levelLabel')}
-            <Badge tone={copy.tone} size="sm">{t(copy.level)}</Badge>
+            <Badge tone={copy.tone} size="sm" pill={false}>{t(copy.level)}</Badge>
           </div>
           <p className="text-[13px] leading-6 text-[var(--color-text-secondary)]">
             {t(copy.body)}

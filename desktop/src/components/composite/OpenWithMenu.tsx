@@ -61,7 +61,7 @@ export function OpenWithMenu({ items, anchor, onClose, triggerEl }: Props) {
     <div
       ref={ref}
       role="menu"
-      className="min-w-[min(220px,calc(100vw-16px))] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+      className="min-w-[min(220px,calc(100vw-16px))] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto overscroll-contain dropdown-glass rounded-[var(--radius-xl)] p-[5px]"
       style={{ ...positionStyle, zIndex: 'var(--z-dropdown)' }}
     >
       {items.map((item) => (
@@ -73,7 +73,7 @@ export function OpenWithMenu({ items, anchor, onClose, triggerEl }: Props) {
             type="button"
             role="menuitem"
             onClick={() => { item.onSelect(); onClose() }}
-            className="flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none"
+            className="flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none"
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]"><ItemIcon item={item} /></span>
             <span className="min-w-0 truncate">{item.label}</span>

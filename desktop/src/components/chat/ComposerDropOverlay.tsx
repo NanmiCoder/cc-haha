@@ -16,8 +16,8 @@ export function ComposerDropOverlay({ title, description, testId }: ComposerDrop
       className="composer-drop-overlay pointer-events-none absolute inset-0 z-[var(--z-scrim)] flex items-center justify-center rounded-[inherit] border border-dashed border-[var(--color-outline)] bg-[var(--color-surface-glass)] p-4 backdrop-blur-[2px]"
       aria-hidden="true"
     >
-      <div className="flex max-w-[280px] items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3 text-left shadow-[var(--shadow-dropdown)]">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
+      <div className="v6c-glass-card flex max-w-[280px] items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-surface-glass-border)] px-4 py-3 text-left">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
           <Upload size={16} strokeWidth={1.75} />
         </span>
         <span className="min-w-0">

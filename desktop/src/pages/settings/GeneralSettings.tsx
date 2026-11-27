@@ -893,7 +893,7 @@ export function GeneralSettings() {
                 setUiZoomDraft(UI_ZOOM_DEFAULT)
                 setUiZoom(UI_ZOOM_DEFAULT)
               }}
-              icon={<RotateCw size={12} strokeWidth={2} aria-hidden="true" />}
+              icon={<RotateCw size={12} strokeWidth={1.75} aria-hidden="true" />}
             >
               100%
             </Button>
@@ -1115,9 +1115,9 @@ export function GeneralSettings() {
             footer={(
               <div className="space-y-1.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge size="sm">{outputStyleScopeLabel}</Badge>
+                  <Badge size="sm" pill={false}>{outputStyleScopeLabel}</Badge>
                   {selectedOutputStyle && (
-                    <Badge size="sm">{getOutputStyleSourceLabel(selectedOutputStyle.source, t)}</Badge>
+                    <Badge size="sm" pill={false}>{getOutputStyleSourceLabel(selectedOutputStyle.source, t)}</Badge>
                   )}
                   <span className="min-w-0">{outputStyleScopeHint}</span>
                 </div>

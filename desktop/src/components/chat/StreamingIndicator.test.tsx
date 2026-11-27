@@ -125,7 +125,7 @@ describe('StreamingIndicator', () => {
     expect(screen.queryByText('network error')).toBeNull()
   })
 
-  it('draws the live line as a running ring, a sweeping verb and monospaced meta', () => {
+  it('draws the live line as a calm borderless shimmer verb and monospaced meta without inline styles', () => {
     useChatStore.setState({
       sessions: {
         [ACTIVE_TAB]: makeSession({ chatState: 'thinking', elapsedSeconds: 12, streamingResponseChars: 8976 }),
@@ -135,19 +135,54 @@ describe('StreamingIndicator', () => {
     render(<StreamingIndicator />)
 
     const status = screen.getByTestId('turn-status-indicator')
-    // The spinner a running tool shows, in the running colour — not the
-    // generic "AI" sparkle, which said nothing about the turn's state.
-    const ring = status.querySelector('svg.lucide-loader-circle')
-    expect(ring).toHaveClass('motion-safe:animate-spin', 'text-[var(--color-info)]')
     expect(status.querySelector('svg.lucide-sparkles')).toBeNull()
-    expect(status.querySelector('svg')?.getAttribute('class')).not.toContain('--color-brand')
     expect(status.textContent).not.toContain('✦')
-    expect(screen.getByText('Thinking...')).toHaveClass('turn-status-shimmer')
+    expect(screen.getByText('Thinking...')).toHaveClass('codex-shimmer-text')
     // Elapsed time and tokens are numbers that tick: mono, tabular, tertiary.
     const tokens = screen.getByText(/↓ 2\.2k tokens/)
     expect(tokens).toHaveClass('font-mono', 'tabular-nums', 'text-[11px]')
-    // The keyframes ship beside the line, not inside the live region.
+    // No inline <style> tag injected into DOM.
     expect(status.querySelector('style')).toBeNull()
+  })
+
+  it('renders early short retries as a quiet inline status line and escalates rate-limit or high retries', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSession({
+          chatState: 'thinking',
+          apiRetry: {
+            attempt: 1,
+            maxRetries: 5,
+            retryDelayMs: 4000,
+            errorStatus: 503,
+            errorType: 'server_error',
+            receivedAt: Date.now(),
+          },
+        }),
+      },
+    })
+
+    const { rerender } = render(<StreamingIndicator />)
+    expect(screen.getByTestId('api-retry-indicator')).toHaveAttribute('data-retry-tone', 'quiet')
+    expect(screen.getByTestId('api-retry-indicator').className).not.toContain('bg-[var(--color-warning-container)]')
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSession({
+          chatState: 'thinking',
+          apiRetry: {
+            attempt: 3,
+            maxRetries: 5,
+            retryDelayMs: 4000,
+            errorStatus: 503,
+            errorType: 'server_error',
+            receivedAt: Date.now(),
+          },
+        }),
+      },
+    })
+    rerender(<StreamingIndicator />)
+    expect(screen.getByTestId('api-retry-indicator')).toHaveAttribute('data-retry-tone', 'escalated')
   })
 
   it('hides the token estimate until this turn has streamed output', () => {

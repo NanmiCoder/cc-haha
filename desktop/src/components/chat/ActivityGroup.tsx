@@ -10,11 +10,16 @@ import {
   activityDurationMs,
   activityStepToolCalls,
   buildActivitySegments,
-  countFailedToolCalls,
+  countBlockingFailedToolCalls,
+  describeLiveActivityStep,
+  describeToolStep,
   formatActivitySummary,
   hasUnresolvedToolCalls,
+  resolveToolErrorSeverity,
+  singleMutatedFileBasename,
   toolCallDurationMs,
   type ActivityStep,
+  type ToolErrorSeverity,
 } from './activityGroupModel'
 import { useTranslation } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
@@ -26,6 +31,8 @@ type Props = {
   steps: ActivityStep[]
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+  /** Turn-scoped error classification distinguishing recovered vs blocking failures. */
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>
   activeThinkingId?: string | null
   /** When true, the last step is still executing. */
   isStreaming?: boolean
@@ -54,8 +61,6 @@ type Props = {
   presentation?: 'inline' | 'sheet'
 }
 
-const MAX_HEADER_ICONS = 3
-
 function isAwaiting(toolCall: ToolCall, awaiting?: ReadonlySet<string>): boolean {
   if (!awaiting || awaiting.size === 0) return false
   return awaiting.has(toolCall.toolUseId) ||
@@ -80,26 +85,22 @@ export function ToolTimeline({ children, className = '' }: { children: ReactNode
 }
 
 /**
- * One contiguous run of thinking + tool calls.
+ * One contiguous run of thinking + tool calls (Codex calm work row).
  *
- * It plays open while it runs, so the reader can watch the work, then folds
- * itself into a single counted line the moment it finishes: `思考 2 次、读取
- * 1 个文件、运行 1 条命令`. Standing rows open forever flattened the transcript —
- * machinery took as much room as the sentences it produced, and nothing looked
- * more important than anything else. A counted digest is small enough to skip
- * and specific enough to be worth reading, which a vaguer "ran some commands"
- * never was.
+ * Defaults collapsed even while live so active work stays a single quiet
+ * borderless shimmer line (`Reading foo.ts`, `Running bun test`, `Thinking`)
+ * with zero live-to-collapsed layout cliff. Clicking toggles the full step
+ * timeline on demand, and clicking pins the reader's choice across rerenders.
  *
- * Clicking pins the reader's choice: from then on that run stays as they left
- * it, instead of snapping shut under them when the next step resolves.
- *
- * A run holding exactly one tool call never summarises: "Read 1 file" over a
- * hidden `Read MessageList.tsx` row is strictly less than the row itself.
+ * Intermediate tool errors that the agent self-recovers from never trigger red
+ * rings or `"N failed"` badges; only terminal blocking errors surface a subtle
+ * failure indicator.
  */
 export const ActivityGroup = memo(function ActivityGroup({
   steps,
   resultMap,
   childToolCallsByParent,
+  errorSeverityByToolUseId,
   activeThinkingId,
   isStreaming,
   isLive = false,
@@ -110,7 +111,7 @@ export const ActivityGroup = memo(function ActivityGroup({
 }: Props) {
   const t = useTranslation()
   const [sheetOpen, setSheetOpen] = useState(false)
-  /** null = follow the run's own state; set = the reader decided. */
+  /** null = default collapsed (Codex calm rhythm); set = the reader decided. */
   const [pinnedCollapsedLocal, setPinnedCollapsedLocal] = useState<boolean | null>(null)
   const pinnedCollapsed = disclosureKey
     ? (getDisclosure(disclosureKey) ?? pinnedCollapsedLocal)
@@ -127,7 +128,7 @@ export const ActivityGroup = memo(function ActivityGroup({
     // Pin once per request; `setPinnedCollapsed` is recreated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealsHere, revealToolUseId])
-  const failedCount = countFailedToolCalls(toolCalls, resultMap, childToolCallsByParent)
+
   const hasActiveThinking = Boolean(activeThinkingId) && steps.some(
     (step) => step.kind === 'thinking' && step.message.id === activeThinkingId,
   )
@@ -139,72 +140,105 @@ export const ActivityGroup = memo(function ActivityGroup({
   // transcript whose last call never got a result (the process died) is
   // unresolved forever, and a spinner on it would be a lie.
   const showsProgress = isRunning && (isLive || Boolean(isStreaming) || hasActiveThinking)
-  const awaitingCount = toolCalls.filter((toolCall) => !resultMap.has(toolCall.toolUseId) && isAwaiting(toolCall, awaitingToolUseIds)).length
-  // Keyed off "still being written to", never off "a tool is executing right
-  // now". The latter flickers: a run of six tools resolves and restarts six
-  // times, and folding on each gap made the whole block open and shut under the
-  // reader while they were trying to watch it.
-  // Open in the same render the request arrives in, so the row is in the DOM
-  // for the scroll that follows; the effect above makes it stick.
-  const collapsed = revealsHere ? false : (pinnedCollapsed ?? !isLive)
-  const rowProps = {
+  const blockingFailedCount = countBlockingFailedToolCalls(
+    steps,
     resultMap,
     childToolCallsByParent,
+    errorSeverityByToolUseId,
+    showsProgress || isLive,
+  )
+  const awaitingCount = toolCalls.filter((toolCall) => !resultMap.has(toolCall.toolUseId) && isAwaiting(toolCall, awaitingToolUseIds)).length
+  // Always default collapsed (even while live) to avoid the live-to-collapsed
+  // layout cliff and keep the transcript calm. Readers can click to expand
+  // live or settled runs at any time.
+  const collapsed = revealsHere ? false : (pinnedCollapsed ?? true)
+
+  const [liveNow, setLiveNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!showsProgress) return undefined
+    setLiveNow(Date.now())
+    const timer = window.setInterval(() => setLiveNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [showsProgress])
+
+  const firstStepTimestamp = useMemo(() => {
+    let min = Number.POSITIVE_INFINITY
+    for (const step of steps) {
+      const ts = step.kind === 'thinking' ? step.message.timestamp : step.toolCall.timestamp
+      if (Number.isFinite(ts) && ts > 0) min = Math.min(min, ts)
+    }
+    return Number.isFinite(min) ? min : undefined
+  }, [steps])
+
+  const rowBaseProps = {
+    resultMap,
+    childToolCallsByParent,
+    errorSeverityByToolUseId,
     revealToolUseId,
     awaitingToolUseIds,
     live: showsProgress,
   }
 
-  const soleToolCall = steps.length === 1 && steps[0]?.kind === 'tool' ? steps[0].toolCall : null
-  if (soleToolCall && presentation === 'inline') {
-    return (
-      <div>
-        <div
-          data-testid="activity-group"
-          data-single-step="true"
-        >
-          <ToolTimeline>
-            <ActivityToolRow toolCall={soleToolCall} {...rowProps} />
-          </ToolTimeline>
-        </div>
-      </div>
-    )
-  }
-
   const segments = buildActivitySegments(steps, t)
   const elapsed = activityDurationMs(steps, resultMap)
-  const durationLabel = !isRunning && typeof elapsed === 'number' ? formatDuration(elapsed) : ''
-  const summaryText = formatActivitySummary(segments, t)
-  // One glyph per kind of work: searching the web and reading a page share the
-  // globe, and two globes side by side read as a rendering glitch.
-  const headerIcons = segments
-    .filter((segment, index) => segments.findIndex((other) => other.icon === segment.icon) === index)
-    .slice(0, MAX_HEADER_ICONS)
+  const liveElapsedMs = showsProgress && firstStepTimestamp !== undefined
+    ? Math.max(0, liveNow - firstStepTimestamp)
+    : undefined
+  const durationLabel = !isRunning && typeof elapsed === 'number'
+    ? formatDuration(elapsed)
+    : liveElapsedMs !== undefined && liveElapsedMs >= 1000
+      ? formatDuration(liveElapsedMs)
+      : ''
+
+  const soleToolCall = steps.length === 1 && steps[0]?.kind === 'tool' ? steps[0].toolCall : null
+  const soleStepLabel = soleToolCall ? describeToolStep(soleToolCall, t) : null
+  const soleToolStopped = Boolean(
+    soleToolCall && soleToolCall.status === 'stopped' && !resultMap.has(soleToolCall.toolUseId),
+  )
+  const baseSummaryText = formatActivitySummary(segments, t)
+  const mutatedFile = singleMutatedFileBasename(steps)
+  const summaryText = soleStepLabel
+    ? [soleStepLabel.action, soleStepLabel.detail].filter(Boolean).join(' ')
+    : mutatedFile && !baseSummaryText.includes(mutatedFile)
+      ? `${baseSummaryText} · ${mutatedFile}`
+      : baseSummaryText
+
+  const liveStep = showsProgress
+    ? describeLiveActivityStep(steps, resultMap, activeThinkingId, t)
+    : null
+
+  const renderTimeline = () => (
+    <ToolTimeline>
+      {steps.map((step, index) => step.kind === 'thinking' ? (
+        <TimelineThinking
+          key={step.message.id}
+          content={step.message.content}
+          isActive={step.message.id === activeThinkingId}
+        />
+      ) : (
+        <ActivityToolRow
+          key={step.toolCall.id}
+          toolCall={step.toolCall}
+          hasLaterStep={index < steps.length - 1}
+          defaultExpanded={Boolean(soleToolCall)}
+          {...rowBaseProps}
+        />
+      ))}
+    </ToolTimeline>
+  )
 
   if (presentation === 'sheet') {
     const lastToolStep = [...steps].reverse().find((step) => step.kind === 'tool')
     const liveToolCall = showsProgress && lastToolStep?.kind === 'tool' ? lastToolStep.toolCall : null
-    const timeline = (
-      <ToolTimeline>
-        {steps.map((step) => step.kind === 'thinking' ? (
-          <TimelineThinking
-            key={step.message.id}
-            content={step.message.content}
-            isActive={step.message.id === activeThinkingId}
-          />
-        ) : (
-          <ActivityToolRow key={step.toolCall.id} toolCall={step.toolCall} {...rowProps} />
-        ))}
-      </ToolTimeline>
-    )
+    const mobileRingClass = awaitingCount > 0
+      ? 'v6c-ring-waiting'
+      : 'border border-[var(--color-border)]'
     return (
       <div
         data-testid="activity-group"
         data-presentation="sheet"
         data-running={isRunning ? 'true' : 'false'}
-        className={`overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] ${
-          showsProgress ? 'border-[var(--color-info)]' : 'border-[var(--color-border)]'
-        }`}
+        className={`overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-lowest)] ${mobileRingClass}`}
       >
         <button
           type="button"
@@ -219,40 +253,49 @@ export const ActivityGroup = memo(function ActivityGroup({
               awaitingCount > 0
                 ? 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
                 : showsProgress
-                ? 'border-[var(--color-info)] bg-[var(--color-info-container)] text-[var(--color-on-info-container)]'
-                : failedCount > 0
-                ? 'border-[var(--color-error-container)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-                : 'border-[var(--color-success)] bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
+                  ? 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]'
+                  : blockingFailedCount > 0
+                    ? 'border-[var(--color-error-container)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]'
             }`}
           >
-            {awaitingCount > 0 ? <CirclePause size={12} strokeWidth={2} />
-              : showsProgress ? <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
-              : failedCount > 0 ? <CircleX size={12} strokeWidth={2} />
-              : <Check size={12} strokeWidth={2} />}
+            {awaitingCount > 0 ? <CirclePause size={12} strokeWidth={1.75} />
+              : showsProgress ? <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" />
+              : blockingFailedCount > 0 ? <CircleX size={12} strokeWidth={1.75} />
+              : <Check size={12} strokeWidth={1.75} />}
           </span>
-          <span data-activity-summary="" className="min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
-            {summaryText}
+          <span
+            data-activity-summary=""
+            className={`min-w-0 flex-1 truncate font-medium ${
+              showsProgress ? 'codex-shimmer-text' : 'text-[var(--color-text-secondary)]'
+            }`}
+          >
+            {showsProgress && liveStep
+              ? [liveStep.action, liveStep.detail].filter(Boolean).join(' ')
+              : summaryText}
           </span>
-          {failedCount > 0 && (
+          {blockingFailedCount > 0 && (
             <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-error)]">
-              {t('toolGroup.failedCount', { count: failedCount })}
+              {t('toolGroup.failedCount', { count: blockingFailedCount })}
             </span>
           )}
           {awaitingCount > 0 ? (
             <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
               {t('permission.awaitingApproval')}
             </span>
-          ) : showsProgress ? (
-            <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--color-info)]">{t('agentStatus.running')}</span>
           ) : durationLabel ? (
             <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationLabel}</span>
           ) : null}
-          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         </button>
         {liveToolCall ? (
           <div data-testid="activity-live-step" className="border-t border-[var(--color-border)] px-2 pb-1 pt-1">
             <ToolTimeline>
-              <ActivityToolRow toolCall={liveToolCall} {...rowProps} />
+              <ActivityToolRow
+                toolCall={liveToolCall}
+                hasLaterStep={false}
+                {...rowBaseProps}
+              />
             </ToolTimeline>
           </div>
         ) : null}
@@ -266,7 +309,7 @@ export const ActivityGroup = memo(function ActivityGroup({
           tall
           contentClassName="px-3 py-2"
         >
-          {timeline}
+          {renderTimeline()}
         </MobileBottomSheet>
       </div>
     )
@@ -276,14 +319,18 @@ export const ActivityGroup = memo(function ActivityGroup({
     <div>
       <div
         data-testid="activity-group"
+        data-single-step={soleToolCall ? 'true' : undefined}
+        data-tool-use-id={soleToolCall && collapsed ? soleToolCall.toolUseId : undefined}
         data-expanded={collapsed ? 'false' : 'true'}
         data-running={isRunning ? 'true' : 'false'}
+        className={awaitingCount > 0 ? 'rounded-[var(--radius-md)] v6c-ring-waiting px-2 py-0.5' : undefined}
       >
         {/*
-          One quiet line: the families' glyphs, the counted sentence, then what
-          needs the reader — failures in red, a pending approval in amber, live
-          work in blue — and otherwise the run's duration. The counts are what
-          make it worth having at all.
+          Quiet borderless Codex-style work disclosure line:
+          - While running: subtle horizontal shimmer on the active step (`Thinking`,
+            `Read foo.ts`, `Run bun test`) + compact duration.
+          - When settled: low-contrast muted summary (`Read 2 files, ran a command`)
+            + duration, brightening smoothly on hover. Zero glass card or red ring.
         */}
         <button
           type="button"
@@ -291,47 +338,65 @@ export const ActivityGroup = memo(function ActivityGroup({
           onClick={() => setPinnedCollapsed(!collapsed)}
           aria-expanded={!collapsed}
           title={summaryText}
-          className={[
-            'group/activity -mx-1.5 flex min-h-6 w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
-            showsProgress ? 'border-b border-[var(--color-info-container)]' : '',
-          ].filter(Boolean).join(' ')}
+          className="codex-work-row group/activity inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
-          <span aria-hidden="true" className="flex min-w-6 shrink-0 items-center justify-center gap-0.5 text-[var(--color-text-tertiary)]">
-            {headerIcons.map((segment) => {
-              const Icon = segment.icon
-              return <Icon key={segment.key} size={14} strokeWidth={1.75} />
-            })}
-          </span>
-          <span
-            data-activity-summary=""
-            className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)] transition-colors group-hover/activity:text-[var(--color-text-primary)]"
-          >
-            {summaryText}
-          </span>
-          {failedCount > 0 && (
-            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] tabular-nums text-[var(--color-error)]">
-              <CircleX size={12} strokeWidth={1.75} aria-hidden="true" />
-              {t('toolGroup.failedCount', { count: failedCount })}
+          {showsProgress && liveStep ? (
+            <span
+              data-activity-summary=""
+              data-activity-live-label="true"
+              className="inline-flex min-w-0 items-baseline gap-1.5 truncate"
+            >
+              <span className="codex-shimmer-text shrink-0 font-medium">{liveStep.action}</span>
+              {liveStep.detail ? (
+                <span className="min-w-0 truncate font-mono text-[12px] text-[var(--color-text-tertiary)]">
+                  {liveStep.detail}
+                </span>
+              ) : null}
+            </span>
+          ) : soleStepLabel ? (
+            <span
+              data-activity-summary=""
+              className="inline-flex min-w-0 items-baseline gap-1.5 truncate text-[var(--color-text-tertiary)] transition-colors group-hover/activity:text-[var(--color-text-primary)]"
+            >
+              <span className="shrink-0">{soleStepLabel.action}</span>
+              {soleStepLabel.detail ? (
+                <span className="min-w-0 truncate font-mono text-[12px]">{soleStepLabel.detail}</span>
+              ) : null}
+            </span>
+          ) : (
+            <span
+              data-activity-summary=""
+              className="min-w-0 truncate text-[var(--color-text-tertiary)] transition-colors group-hover/activity:text-[var(--color-text-primary)]"
+            >
+              {summaryText}
             </span>
           )}
+          {blockingFailedCount > 0 && (
+            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] tabular-nums text-[var(--color-error)]">
+              <CircleX size={12} strokeWidth={1.75} aria-hidden="true" />
+              {t('toolGroup.failedCount', { count: blockingFailedCount })}
+            </span>
+          )}
+          {soleToolStopped ? (
+            <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--color-text-tertiary)]">
+              {t('tool.stopped')}
+            </span>
+          ) : null}
           {awaitingCount > 0 ? (
             <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
               <CirclePause size={12} strokeWidth={1.75} aria-hidden="true" />
               {t('permission.awaitingApproval')}
             </span>
-          ) : showsProgress ? (
-            <span className="animate-stepped-pulse inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-info)]">
-              <LoaderCircle size={12} strokeWidth={1.75} className="animate-spin" aria-hidden="true" />
-              {t('agentStatus.running')}
-            </span>
           ) : durationLabel ? (
-            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationLabel}</span>
+            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+              {durationLabel}
+            </span>
           ) : null}
           <ChevronRight
             size={14}
             strokeWidth={1.75}
             aria-hidden="true"
-            className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${collapsed ? '' : 'rotate-90'}`}
+            className={`shrink-0 opacity-60 transition-transform duration-150 motion-reduce:transition-none group-hover/activity:opacity-100 ${collapsed ? '' : 'rotate-90'}`}
           />
         </button>
 
@@ -340,17 +405,9 @@ export const ActivityGroup = memo(function ActivityGroup({
         {collapsed ? <CollapsedRunImages toolCalls={toolCalls} resultMap={resultMap} /> : null}
 
         {!collapsed && (
-          <ToolTimeline className="mt-0.5">
-            {steps.map((step) => step.kind === 'thinking' ? (
-              <TimelineThinking
-                key={step.message.id}
-                content={step.message.content}
-                isActive={step.message.id === activeThinkingId}
-              />
-            ) : (
-              <ActivityToolRow key={step.toolCall.id} toolCall={step.toolCall} {...rowProps} />
-            ))}
-          </ToolTimeline>
+          <div className="mt-1 pb-1 pl-0.5">
+            {renderTimeline()}
+          </div>
         )}
       </div>
     </div>
@@ -433,6 +490,9 @@ type ActivityToolRowProps = {
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>
+  hasLaterStep?: boolean
+  defaultExpanded?: boolean
   revealToolUseId?: string
   awaitingToolUseIds?: ReadonlySet<string>
   /** The run is still being written to, so a resultless call is executing. */
@@ -456,6 +516,12 @@ function sameRowInputs(
 ): boolean {
   if (prev.resultMap.get(toolCall.toolUseId) !== next.resultMap.get(toolCall.toolUseId)) return false
   if (isAwaiting(toolCall, prev.awaitingToolUseIds) !== isAwaiting(toolCall, next.awaitingToolUseIds)) return false
+  if (
+    prev.errorSeverityByToolUseId?.get(toolCall.toolUseId) !==
+    next.errorSeverityByToolUseId?.get(toolCall.toolUseId)
+  ) {
+    return false
+  }
   const prevChildren = prev.childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
   const nextChildren = next.childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
   if (prevChildren.length !== nextChildren.length) return false
@@ -469,12 +535,22 @@ const ActivityToolRow = memo(function ActivityToolRow({
   toolCall,
   resultMap,
   childToolCallsByParent,
+  errorSeverityByToolUseId,
+  hasLaterStep = false,
+  defaultExpanded = false,
   revealToolUseId,
   awaitingToolUseIds,
   live = false,
 }: ActivityToolRowProps) {
   const result = resultMap.get(toolCall.toolUseId)
   const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
+  const errorSeverity = resolveToolErrorSeverity(
+    toolCall,
+    resultMap,
+    childToolCallsByParent,
+    errorSeverityByToolUseId,
+    { hasLaterStep, isLive: live },
+  )
 
   return (
     <div data-chat-anchor-id={toolCall.id}>
@@ -485,9 +561,11 @@ const ActivityToolRow = memo(function ActivityToolRow({
         // The transcript's own result object, not a copy: `ToolCallBlock` is
         // memoized, and a fresh `{ content, isError }` here defeated it.
         result={result ?? null}
+        errorSeverity={errorSeverity}
         isPending={toolCall.isPending}
         status={toolCall.status}
         partialInput={toolCall.partialInput}
+        defaultExpanded={defaultExpanded}
         durationMs={toolCallDurationMs(toolCall, result)}
         toolUseId={toolCall.parentToolUseId ? undefined : toolCall.toolUseId}
         navigationHighlighted={revealToolUseId !== undefined && toolCall.toolUseId === revealToolUseId}
@@ -496,12 +574,14 @@ const ActivityToolRow = memo(function ActivityToolRow({
       />
       {childToolCalls.length > 0 && (
         <ToolTimeline className="ml-7">
-          {childToolCalls.map((childToolCall) => (
+          {childToolCalls.map((childToolCall, index) => (
             <ActivityToolRow
               key={childToolCall.id}
               toolCall={childToolCall}
               resultMap={resultMap}
               childToolCallsByParent={childToolCallsByParent}
+              errorSeverityByToolUseId={errorSeverityByToolUseId}
+              hasLaterStep={hasLaterStep || index < childToolCalls.length - 1}
               awaitingToolUseIds={awaitingToolUseIds}
               live={live}
             />
@@ -513,6 +593,8 @@ const ActivityToolRow = memo(function ActivityToolRow({
 }, (prev, next) => (
   prev.toolCall === next.toolCall &&
   prev.live === next.live &&
+  prev.hasLaterStep === next.hasLaterStep &&
+  prev.defaultExpanded === next.defaultExpanded &&
   prev.revealToolUseId === next.revealToolUseId &&
   sameRowInputs(next.toolCall, prev, next)
 ))

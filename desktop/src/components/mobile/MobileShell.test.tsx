@@ -364,4 +364,38 @@ describe('MobileShell', () => {
     await waitFor(() => expect(disconnectSession).toHaveBeenCalledWith('s-login'))
     expect(useTabStore.getState().tabs).toHaveLength(0)
   })
+
+  it('applies V6C ambient shell, glass chrome, raised selected row with active bar, and 16px sheet top', async () => {
+    seed({
+      tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
+      activeTabId: 's-login',
+    })
+    const { unmount } = renderShell('tablet')
+
+    const shell = screen.getByTestId('mobile-shell')
+    expect(shell).toHaveClass('v6c-ambient-shell')
+    expect(screen.getByTestId('mobile-tablet-pane')).toHaveClass('v6c-sidebar-glass')
+    expect(shell.querySelector('#content-area')).toHaveClass('v6c-main-canvas')
+
+    const topBar = screen.getByTestId('mobile-top-bar')
+    expect(topBar).toHaveClass('surface-glass')
+
+    const selectedRow = (await within(screen.getByTestId('mobile-tablet-pane')).findByText('Fix login i18n')).closest('button')!
+    expect(selectedRow).toHaveClass('v6c-raised', 'v6c-active-bar', 'rounded-[var(--radius-control)]')
+
+    act(() => useActivityPanelStore.getState().setMobileSummary('s-login', { visible: true, count: 2 }))
+    const pill = screen.getByTestId('mobile-activity-pill')
+    expect(pill).toHaveClass('h-11', 'rounded-[var(--radius-control)]')
+    expect(pill.firstElementChild).toHaveClass('v6c-ring-running', 'rounded-[var(--radius-control)]')
+    act(() => useActivityPanelStore.getState().close())
+
+    unmount()
+
+    // Phone layout: open the new-task sheet and verify it matches MobileBottomSheet's 16px top.
+    seed({ tabs: [], activeTabId: null })
+    renderShell('phone')
+    fireEvent.click(await screen.findByTestId('mobile-new-task'))
+    const dialog = within(screen.getByTestId('mobile-new-task-sheet')).getByRole('dialog', { name: 'mobile.newTask.title' })
+    expect(dialog).toHaveClass('rounded-t-[var(--radius-2xl)]')
+  })
 })

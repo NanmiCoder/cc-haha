@@ -1093,4 +1093,36 @@ describe('SessionActivityPanel', () => {
 
     expect(screen.queryByRole('dialog', { name: /activity/i })).not.toBeInTheDocument()
   })
+
+  it('renders activity sections flat without nested card boxes and uses circular status tiles', () => {
+    render(
+      <SessionActivityPanel
+        model={model({
+          sections: {
+            ...model().sections,
+            backgroundTasks: {
+              id: 'backgroundTasks',
+              title: 'Background Tasks',
+              emptyLabel: 'No background tasks',
+              rows: [
+                { id: 'bg-run', section: 'backgroundTasks', label: 'Dev server', status: 'running', taskId: 'bg-1', description: 'Running', openable: false },
+              ],
+            },
+          },
+        })}
+        open
+        onClose={vi.fn()}
+        onOpenSubagent={vi.fn()}
+      />,
+    )
+
+    const tasksSection = document.querySelector('section[aria-label="Tasks"]')
+    expect(tasksSection?.className ?? '').not.toContain('v6c-glass-card')
+
+    const bgRow = screen.getByRole('button', { name: /dev server/i })
+    expect(bgRow).toHaveClass('rounded-[var(--radius-card-inner)]')
+
+    const runningTile = screen.getByTestId('activity-row-icon')
+    expect(runningTile).toHaveClass('rounded-full', 'v6c-ring-running')
+  })
 })

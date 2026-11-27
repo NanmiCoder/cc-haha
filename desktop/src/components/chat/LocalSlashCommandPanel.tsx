@@ -614,7 +614,7 @@ function StatusTab({
               <Button
                 variant="ghost"
                 size="sm"
-                icon={<RefreshCw size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<RefreshCw size={12} strokeWidth={1.75} aria-hidden="true" />}
               >
                 {t('slash.inspector.status.refresh')}
               </Button>
@@ -662,7 +662,7 @@ function SessionInspectorShell({
     <div
       ref={roomRef}
       style={{ maxHeight: roomAbove }}
-      className="dropdown-glass popover-motion absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-1.5 flex flex-col overflow-hidden rounded-[var(--radius-2xl)] text-[var(--color-text-primary)]"
+      className="dropdown-glass popover-motion absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-1.5 flex flex-col overflow-hidden rounded-[var(--radius-xl)] text-[var(--color-text-primary)]"
     >
       <div className="grid min-h-12 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--color-border)] px-4 py-2">
         <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{t('slash.inspector.title')}</div>
