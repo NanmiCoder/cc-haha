@@ -117,7 +117,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
   const healthyCount = report?.items.filter((item) => item.status === 'ok').length ?? 0
 
   return (
-    <Card as="section" radius="lg" surface="lowest" padding={compact ? 'sm' : 'md'}>
+    <Card as="section" radius="lg" surface="none" padding={compact ? 'sm' : 'md'} className="v6c-glass-card">
       <div className={`flex ${compact ? 'flex-col gap-3' : 'items-start justify-between gap-4'}`}>
         <div className="min-w-0">
           <div className="text-[13px] font-semibold text-[var(--color-text-primary)]">
@@ -212,7 +212,7 @@ function DoctorFinding({ item }: { item: DoctorReportItem }) {
     <Card radius="md" surface="none" padding="sm" className="text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="break-all font-mono text-[var(--color-text-primary)]">{item.path}</span>
-        <Badge tone="warning" size="sm">{getStatusLabel(t, item.status)}</Badge>
+        <Badge tone="warning" size="sm" pill={false}>{getStatusLabel(t, item.status)}</Badge>
       </div>
       {item.error ? <div className="mt-1 text-[var(--color-text-tertiary)] break-words">{item.error}</div> : null}
     </Card>

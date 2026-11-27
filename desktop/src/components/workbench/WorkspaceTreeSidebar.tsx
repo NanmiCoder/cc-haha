@@ -55,7 +55,7 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
       data-testid="workspace-tree-sidebar"
       data-overlay={overlay}
       hidden={!open}
-      className={`${open ? 'flex' : 'hidden'} min-h-0 shrink-0 flex-col bg-[var(--color-surface)] ${overlay ? 'absolute inset-y-0 right-0 z-[var(--z-drawer)] shadow-[var(--shadow-dropdown)]' : 'relative'}`}
+      className={`${open ? 'flex' : 'hidden'} min-h-0 shrink-0 flex-col ${overlay ? 'v6c-sidebar-glass absolute inset-y-0 right-0 z-[var(--z-drawer)] shadow-[var(--shadow-overlay)]' : 'relative bg-[var(--color-surface-sidebar)]'}`}
       style={{ width: fullWidth ? '100%' : width, maxWidth: fullWidth ? '100%' : overlay ? '85%' : '48%' }}
       onKeyDown={(event) => {
         if (open && overlay && event.key === 'Escape') {

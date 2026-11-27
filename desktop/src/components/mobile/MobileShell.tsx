@@ -89,12 +89,12 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
     <div
       data-testid="mobile-shell"
       data-layout={layout}
-      className="app-shell app-shell-viewport app-shell--mobile flex overflow-hidden bg-[var(--color-surface)]"
+      className="app-shell app-shell-viewport app-shell--mobile v6c-ambient-shell flex overflow-hidden"
     >
       {layout === 'tablet' ? (
         <aside
           data-testid="mobile-tablet-pane"
-          className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-border)]"
+          className="v6c-sidebar-glass flex w-[340px] shrink-0 flex-col border-r border-[var(--color-border)]"
         >
           <MobileSessionBrowser
             variant="pane"
@@ -106,7 +106,7 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
       ) : null}
       <main
         id="content-area"
-        className="app-shell-main--mobile flex min-w-0 flex-1 flex-col overflow-hidden"
+        className="app-shell-main--mobile v6c-main-canvas flex min-w-0 flex-1 flex-col overflow-hidden"
       >
         {route.kind !== 'home' ? (
           <MobileRouteBar route={route} onBack={showBack ? goBack : undefined} />
@@ -167,7 +167,7 @@ function MobileSessionBar({
     )
   } else if (running) {
     subtitle = (
-      <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
+      <span className="flex items-center gap-1.5 font-medium text-[var(--color-on-info-container)]">
         <StatusDot tone="info" pulse />
         {t('mobile.session.running')}
       </span>

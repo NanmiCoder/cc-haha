@@ -213,27 +213,29 @@ export function FindInPageModal({ open, onClose }: Props) {
         ::highlight(${FIND_ACTIVE_HIGHLIGHT}) { background-color: var(--color-search-highlight-active); color: var(--color-on-search-highlight-active); }
       `}</style>
       <div
-        className="animate-overlay-in-top flex h-10 items-center gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-2.5 pr-1.5 shadow-[var(--shadow-dropdown)]"
+        className="dialog-panel animate-overlay-in-top flex items-center gap-1.5 rounded-[var(--radius-xl)] p-[5px]"
         role="dialog"
         aria-label={t('search.findInPage.title')}
       >
-        <Search size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={t('search.findInPage.placeholder')}
-          className="w-52 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
-        />
-        <span className="min-w-[48px] shrink-0 px-1 text-center font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
-          {count > 0 ? `${activeIndex + 1} / ${count}` : (debouncedQuery.trim() ? '0' : '')}
-        </span>
+        <div className="v6c-field flex h-8 items-center gap-2 rounded-[var(--radius-card-inner)] px-2.5 transition-[box-shadow] duration-150 focus-within:ring-2 focus-within:ring-[var(--color-border-focus)]">
+          <Search size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={t('search.findInPage.placeholder')}
+            className="w-48 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+          />
+          <span className="min-w-[44px] shrink-0 text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+            {count > 0 ? `${activeIndex + 1} / ${count}` : (debouncedQuery.trim() ? '0' : '')}
+          </span>
+        </div>
         <IconButton
           icon={<ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.previousMatch')}
-          size="xs"
+          size="sm"
           tone="secondary"
           disabled={count === 0}
           onClick={() => step(false)}
@@ -241,7 +243,7 @@ export function FindInPageModal({ open, onClose }: Props) {
         <IconButton
           icon={<ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.nextMatch')}
-          size="xs"
+          size="sm"
           tone="secondary"
           disabled={count === 0}
           onClick={() => step(true)}
@@ -249,7 +251,7 @@ export function FindInPageModal({ open, onClose }: Props) {
         <IconButton
           icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.close')}
-          size="xs"
+          size="sm"
           tone="secondary"
           onClick={onClose}
         />

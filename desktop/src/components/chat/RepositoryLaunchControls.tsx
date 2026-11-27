@@ -760,7 +760,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // the opaque focus token rather than `--color-brand/35`, whose `/N` modifier
   // Safari 15 drops.
   const pillClassName = [
-    'group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5',
+    'v6c-pressable group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--radius-control)] px-1.5',
     'text-xs leading-none text-[var(--color-text-tertiary)]',
     'transition-[background-color,color] duration-150 ease-out',
     'hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
@@ -773,7 +773,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   ].join(' ')
 
   const rowClassName = [
-    'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left',
+    'flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left',
     'transition-[background-color] duration-150 ease-out',
     'hover:bg-[var(--color-surface-hover)]',
     'focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]',
@@ -783,15 +783,15 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // Both drill-downs head back the same way. The dropdown labels the crumb
   // after the view you are in; the sheet, which has its own title bar, labels
   // it after the view you are going to.
-  const dropdownBackClassName = 'inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
-  const sheetBackClassName = 'inline-flex items-center gap-1 self-start rounded-[var(--radius-sm)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]'
+  const dropdownBackClassName = 'inline-flex h-7 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  const sheetBackClassName = 'inline-flex items-center gap-1 self-start rounded-[var(--radius-control)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]'
 
   // The two modes are a single choice, so they read as radio cards rather than
   // a menu list: a hairline at rest, a 1.5px terracotta edge on a faint
   // terracotta wash once picked. Inset shadows rather than borders so the edge
   // can thicken without nudging the content.
   const worktreeCardClassName = (selected: boolean) => [
-    'flex w-full items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left',
+    'flex w-full items-start gap-2.5 rounded-[var(--radius-card-inner)] px-3 py-2.5 text-left',
     'transition-[background-color,box-shadow] duration-150 ease-out',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
     selected
@@ -822,10 +822,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
             aria-selected={isSelected}
             onMouseEnter={() => setSelectedIndex(index)}
             onClick={() => selectBranch(candidate)}
-            className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-[background-color] duration-150 ease-out focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${
+            className={`flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left transition-[background-color] duration-150 ease-out focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${
               isMobileBrowser ? 'min-h-[56px] py-3' : 'min-h-8 py-1.5'
             } ${
-              index === selectedIndex || isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+              index === selectedIndex || isSelected ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
             }`}
           >
             <GitBranch size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
@@ -843,7 +843,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
                       : t('repoLaunch.localBranch')}
               </span>
             </span>
-            {isSelected && <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />}
+            {isSelected && <Check size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />}
           </button>
         )
       })}
@@ -1101,8 +1101,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       )}
 
       {effectiveUseWorktree && isGitReady && (
-        <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)]">
-          <GitFork size={12} strokeWidth={2} aria-hidden="true" />
+        <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)]">
+          <GitFork size={12} strokeWidth={1.75} aria-hidden="true" />
           {t('repoLaunch.worktreeBadge')}
         </span>
       )}
@@ -1113,7 +1113,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
     </button>
   )
 
-  const menuClassName = 'dropdown-glass popover-motion scrollbar-autohide flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-lg)] p-1'
+  const menuClassName = 'dropdown-glass popover-motion scrollbar-autohide flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-xl)] p-[5px]'
   const menuStyle = {
     position: 'fixed' as const,
     left: menuPos?.left,
@@ -1141,7 +1141,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
               title={warning.message}
               className="inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-warning-container)] px-1.5 text-[11px] font-medium text-[var(--color-on-warning-container)]"
             >
-              <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+              <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
               <span className="hidden 2xl:inline">{warning.compactLabel}</span>
             </div>
           )}
@@ -1150,7 +1150,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
 
       {message && workDir && (
         <div className="flex items-center gap-1.5 px-1.5 text-xs text-[var(--color-text-tertiary)]">
-          <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+          <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
           <span>{message === 'missing' ? t('repoLaunch.missingWorkdir') : message}</span>
         </div>
       )}
@@ -1161,7 +1161,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
           aria-label={warning.message}
           className="flex items-center gap-1.5 px-1.5 text-xs text-[var(--color-on-warning-container)]"
         >
-          <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
+          <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
           <span>{warning.message}</span>
         </div>
       )}

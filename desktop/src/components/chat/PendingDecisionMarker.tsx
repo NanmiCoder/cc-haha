@@ -14,7 +14,7 @@ export function PendingDecisionMarker({ title }: { title: string }) {
       role="group"
       aria-label={title}
       data-testid="pending-decision-marker"
-      className="mb-4 flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-[13px] text-[var(--color-on-warning-container)]"
+      className="v6c-glass-card v6c-ring-waiting mb-4 flex min-h-10 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] px-3 py-2 text-[13px] text-[var(--color-on-warning-container)]"
     >
       <CircleAlert aria-hidden="true" size={16} strokeWidth={1.75} className="shrink-0" />
       <span className="min-w-0 flex-1 truncate font-medium">{title}</span>

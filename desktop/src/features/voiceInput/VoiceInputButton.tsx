@@ -136,7 +136,7 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
           data-testid="voice-input-pending"
           className={[
             'dropdown-glass popover-motion absolute bottom-full right-0 z-[var(--z-popover)] mb-2 flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-2',
-            'rounded-[var(--radius-lg)] p-3',
+            'rounded-[var(--radius-xl)] p-3',
           ].join(' ')}
         >
           <p className="text-xs text-[var(--color-text-tertiary)]">{t('voice.composer.pendingHint')}</p>

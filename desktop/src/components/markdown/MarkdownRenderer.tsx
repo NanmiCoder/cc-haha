@@ -677,7 +677,7 @@ const BASE_PROSE_CLASSES = `markdown-prose prose prose-sm min-w-0 max-w-none bre
   prose-headings:text-[var(--color-text-primary)] prose-headings:font-semibold prose-headings:font-[var(--font-headline)]
   prose-p:my-2 prose-p:leading-relaxed
   prose-p:break-words prose-p:[overflow-wrap:anywhere]
-  prose-code:text-[13px] prose-code:text-[var(--color-code-fg)] prose-code:font-mono prose-code:font-normal prose-code:bg-[var(--color-surface-container)] prose-code:px-[5px] prose-code:py-px prose-code:rounded-[var(--radius-xs)] prose-code:before:hidden prose-code:after:hidden
+  prose-code:text-[13px] prose-code:text-[var(--color-code-fg)] prose-code:font-mono prose-code:font-normal prose-code:bg-[var(--color-surface-container)] prose-code:px-[5px] prose-code:py-px prose-code:rounded-[var(--radius-sm)] prose-code:before:hidden prose-code:after:hidden
   prose-pre:!bg-transparent prose-pre:!p-0 prose-pre:!shadow-none
   prose-a:text-[var(--color-text-accent)] prose-a:[overflow-wrap:anywhere]
   prose-a:underline prose-a:decoration-[1px] prose-a:underline-offset-[3px] prose-a:decoration-[var(--color-text-accent)] prose-a:hover:decoration-[2px]

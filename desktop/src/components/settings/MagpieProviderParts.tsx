@@ -18,18 +18,18 @@ export function MagpieConnectBanner({ modelCount, onConnect }: { modelCount: num
   return (
     <div
       data-testid="magpie-connect-banner"
-      className="mt-4 flex items-center gap-3 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] py-3.5 pl-4 pr-3"
+      className="v6c-glass-card mt-4 flex items-center gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] py-3.5 pl-4 pr-3"
     >
       <span
         aria-hidden="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)]"
+        className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)]"
       >
         <Waypoints size={18} strokeWidth={1.75} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
           {t('settings.providers.magpie.bannerTitle')}
-          <Badge tone="success">{t('settings.providers.magpie.bannerDetected')}</Badge>
+          <Badge tone="success" pill={false}>{t('settings.providers.magpie.bannerDetected')}</Badge>
         </div>
         <p className="mt-0.5 text-xs leading-[18px] text-[var(--color-text-tertiary)]">
           {t('settings.providers.magpie.bannerBody', { count: modelCount })}
@@ -67,7 +67,7 @@ export function MagpieStatusLine() {
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-      <Badge tone="warning">{t('settings.providers.magpie.notRunningBadge')}</Badge>
+      <Badge tone="warning" pill={false}>{t('settings.providers.magpie.notRunningBadge')}</Badge>
       <span className="min-w-0 flex-1">
         {t(openUnsupported ? 'settings.providers.magpie.openAppManually' : 'settings.providers.magpie.notRunningBody')}
       </span>

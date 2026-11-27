@@ -465,6 +465,29 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         }
       }
 
+      if (target.kind === 'background-task') {
+        const existing = dockTabs.find(tab => tab.kind === 'background-task' && tab.taskId === target.taskId)
+        if (existing && existing.kind === 'background-task') {
+          createdId = existing.id
+          const index = current.tabs.findIndex((tab) => tab.id === existing.id)
+          const tabs = [...current.tabs]
+          tabs[index] = {
+            ...existing,
+            ...(target.title ? { title: target.title } : {}),
+            ...(target.toolUseId ? { toolUseId: target.toolUseId } : {}),
+            preview: false,
+          }
+          let next: WorkspaceSessionState = { ...current, tabs }
+          if (activate) {
+            next = withFocus(
+              { ...next, activeSideTabId: existing.id, layout: next.layout === 'hidden' ? 'split' : next.layout },
+              'active-side-tab',
+            )
+          }
+          return { bySession: { ...store.bySession, [sessionId]: next } }
+        }
+      }
+
       // --- Reuse rules -----------------------------------------------------
       if (target.kind === 'file') {
         const existing = dockTabs.find(
@@ -564,6 +587,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       switch (target.kind) {
         case 'side-chat':
           tab = { id: nextId('wt-chat'), kind: 'side-chat', dock: 'side', preview: false, createdAt, sideChatId: target.sideChatId }
+          break
+        case 'background-task':
+          tab = {
+            id: nextId('wt-bgtask'),
+            kind: 'background-task',
+            dock: 'side',
+            preview: false,
+            createdAt,
+            taskId: target.taskId,
+            ...(target.title ? { title: target.title } : {}),
+            ...(target.toolUseId ? { toolUseId: target.toolUseId } : {}),
+          }
           break
         case 'file':
           tab = {
@@ -962,6 +997,7 @@ export function workspaceTabTitle(
   tab: WorkspaceTab,
   labels: {
     sideChat?: string
+    backgroundTask?: string
     newTab: string
     review: string
     files: string
@@ -971,6 +1007,8 @@ export function workspaceTabTitle(
   switch (tab.kind) {
     case 'side-chat':
       return labels.sideChat ?? labels.newTab
+    case 'background-task':
+      return tab.title?.trim() || labels.backgroundTask || tab.taskId
     case 'file':
       // Opening "Files" with nothing selected is a tree waiting for a choice;
       // an empty basename would render as a nameless tab.

@@ -132,7 +132,7 @@ describe('uiStore theme handling', () => {
     restarted.initializeTheme()
     expect(restarted.useUIStore.getState().theme).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
-    expect(readThemeColor()).toBe('#1B1A18')
+    expect(readThemeColor()).toBe('#181818')
 
     restarted.useUIStore.getState().setTheme('white')
     expect(document.documentElement.getAttribute('data-theme')).toBe('white')
@@ -141,7 +141,7 @@ describe('uiStore theme handling', () => {
 
     restarted.useUIStore.getState().setTheme('dark')
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
-    expect(readThemeColor()).toBe('#1B1A18')
+    expect(readThemeColor()).toBe('#181818')
     restarted.teardownTheme()
   })
 
@@ -156,9 +156,9 @@ describe('uiStore theme handling', () => {
       await vi.dynamicImportSettled()
       expect(setApplied).toHaveBeenLastCalledWith({
         isDark: true,
-        background: '#1B1A18',
+        background: '#181818',
         lightBackground: '#FFFFFF',
-        darkBackground: '#1B1A18',
+        darkBackground: '#181818',
         followSystem: false,
       })
     } finally {
@@ -180,7 +180,7 @@ describe('uiStore theme handling', () => {
         isDark: false,
         background: '#FFFFFF',
         lightBackground: '#FFFFFF',
-        darkBackground: '#1B1A18',
+        darkBackground: '#181818',
         followSystem: true,
       })
     } finally {
@@ -330,7 +330,7 @@ describe('uiStore following the system appearance', () => {
     const restarted = await import('./uiStore')
     restarted.initializeTheme()
     expect(restarted.useUIStore.getState()).toMatchObject({ theme: 'dark', darkTheme: 'dark', lightTheme: 'white', followSystemTheme: true })
-    expect(readThemeColor()).toBe('#1B1A18')
+    expect(readThemeColor()).toBe('#181818')
     restarted.teardownTheme()
   })
 

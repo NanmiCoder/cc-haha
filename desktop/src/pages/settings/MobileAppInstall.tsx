@@ -28,7 +28,7 @@ export function MobileAppInstall({ connectionMethodsId, onUseBrowser }: MobileAp
             ? <Button size="base" variant="secondary" onClick={() => openExternal(testFlight)}>{t('mobileApp.joinTestFlight')}</Button>
             : (
               <>
-                <Badge tone="neutral" size="sm">{t('mobileApp.invitePending')}</Badge>
+                <Badge tone="neutral" size="sm" pill={false}>{t('mobileApp.invitePending')}</Badge>
                 <Button size="base" variant="secondary" disabled>{t('mobileApp.joinTestFlight')}</Button>
               </>
             )}

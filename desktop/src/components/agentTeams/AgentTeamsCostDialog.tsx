@@ -36,7 +36,7 @@ export function AgentTeamsCostDialog({ open, allowDismiss = false, onClose, onCo
       width={480}
       body={(
         <div className="space-y-4 text-[13px] leading-[1.6] text-[var(--color-text-secondary)]">
-          <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2.5 text-[var(--color-on-warning-container)]">
+          <div className="v6c-ring-waiting flex items-start gap-2.5 rounded-[var(--radius-card-inner)] bg-[var(--color-warning-container)] px-3 py-2.5 text-[var(--color-on-warning-container)]">
             <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
             <p className="font-medium">{t('agentTeams.notice.intro')}</p>
           </div>

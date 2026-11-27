@@ -40,13 +40,18 @@ import {
   type ResolveAgentActivityTarget,
 } from './ToolCallGroup'
 import { SessionBrowserTakeoverBanner } from './BrowserActivityCard'
-import type { ActivityStep } from './activityGroupModel'
+import {
+  classifyTurnToolErrors,
+  type ActivityStep,
+  type ToolErrorSeverity,
+} from './activityGroupModel'
 import { ToolResultBlock } from './ToolResultBlock'
 import { PermissionDialog } from './PermissionDialog'
 import { MagpieConnectionHint, isCliApiErrorText } from './MagpieConnectionHint'
 import { AskUserQuestion } from './AskUserQuestion'
 import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
+import { BackgroundTasksIndicator } from './BackgroundTasksIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from './turnRewind'
@@ -263,7 +268,7 @@ function ChatSelectionMenu({
   return createPortal(
     <div ref={popoverRef} role="toolbar" aria-label={t('chat.selectionActions')}
       onMouseDown={event => { if (event.button === 0 && !event.ctrlKey) event.preventDefault() }}
-      className="dropdown-glass popover-motion fixed z-[var(--z-popover)] inline-flex max-w-[calc(100vw-24px)] items-center rounded-[var(--radius-lg)] p-1"
+      className="dropdown-glass popover-motion fixed z-[var(--z-popover)] inline-flex max-w-[calc(100vw-24px)] items-center rounded-[var(--radius-xl)] p-[5px]"
       style={{ left: selection.x, top: selection.y }}>
       <Button variant="ghost" onClick={onAdd}>{t('chat.addSelectionToChat')}</Button>
       {onSideChat && <Button variant="ghost" onClick={onSideChat}>{t('chat.askSelectionInSideChat')}</Button>}
@@ -349,9 +354,9 @@ function CompactStatusDivider({ message, state }: { message?: CompactSummaryEven
           className="group inline-flex min-h-8 max-w-[min(78vw,520px)] items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1 text-[13px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] disabled:cursor-default disabled:hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           {state === 'compacting' ? (
-            <LoaderCircle size={16} strokeWidth={2.1} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <LoaderCircle size={16} strokeWidth={1.75} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
           ) : (
-            <FileStack size={16} strokeWidth={2.05} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <FileStack size={16} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
           )}
           <span className="min-w-0 truncate font-medium text-[var(--color-text-primary)]">
             {title}
@@ -382,7 +387,7 @@ function CompactStatusDivider({ message, state }: { message?: CompactSummaryEven
 
 function GoalEventCard({ message }: { message: GoalEvent }) {
   const t = useTranslation()
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const titleKey = `chat.goalEvent.${message.action === 'status' ? 'statusTitle' : message.action}` as TranslationKey
   const title = t(titleKey) === titleKey ? t('chat.goalEvent.message') : t(titleKey)
   const metaDetails = [
@@ -395,7 +400,7 @@ function GoalEventCard({ message }: { message: GoalEvent }) {
     <div className="mb-2">
       <div
         data-testid="goal-event-card"
-        className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)]"
+        className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
       >
         <button
           type="button"
@@ -403,11 +408,11 @@ function GoalEventCard({ message }: { message: GoalEvent }) {
           className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
         >
           {expanded ? (
-            <ChevronDown size={15} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <ChevronDown size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
           ) : (
-            <ChevronRight size={15} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+            <ChevronRight size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
           )}
-          <Target size={15} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={2.25} aria-hidden="true" />
+          <Target size={15} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={1.75} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
             {title}
           </span>
@@ -460,7 +465,7 @@ function GoalContinuationDivider({ message }: { message: GoalEvent }) {
       <div className="flex w-full items-center gap-3">
         <div className="h-px flex-1 bg-[var(--color-border)]" aria-hidden="true" />
         <div className="inline-flex min-h-8 max-w-[min(78vw,620px)] items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1 text-[13px] font-medium text-[var(--color-text-secondary)]">
-          <Target size={16} strokeWidth={2.1} className="shrink-0 text-[var(--color-memory-accent)]" aria-hidden="true" />
+          <Target size={16} strokeWidth={1.75} className="shrink-0 text-[var(--color-memory-accent)]" aria-hidden="true" />
           <span className="shrink-0 font-semibold text-[var(--color-text-primary)]">
             {t('chat.goalEvent.continuing')}
           </span>
@@ -2040,7 +2045,7 @@ function estimateMessageHeight(message: UIMessage): number {
     case 'assistant_text':
       return estimateTextHeight(message.content, 44)
     case 'thinking':
-      return estimateTextHeight(message.content, 40)
+      return 30
     case 'tool_use':
       return clampNumber(92 + Math.ceil(getMessageContentWeight(message) / 120) * 18, 72, 2200)
     case 'tool_result':
@@ -2065,7 +2070,7 @@ function estimateMessageHeight(message: UIMessage): number {
  *  A group only renders its rows while it is still running, and a running group
  *  sits at the scroll anchor where items are mounted and measured — so estimates
  *  are only ever consulted for the settled, collapsed form, which is this line. */
-const ACTIVITY_GROUP_COLLAPSED_HEIGHT = 34
+const ACTIVITY_GROUP_COLLAPSED_HEIGHT = 28
 /** Avatar row plus two text lines, plus the turn's padding-bottom. */
 const TEAM_CARD_HEIGHT = 86
 /** Collapsed coordination disclosure below the card adds one compact row. */
@@ -3140,20 +3145,31 @@ export function MessageList({
     () => buildTurnOutputOwnerIndexes(renderItems, turnChangeCards),
     [renderItems, turnChangeCards],
   )
+  const toolErrorSeverityMap = useMemo(
+    () => classifyTurnToolErrors(messages, toolResultMap, { turnActive: chatState !== 'idle' }),
+    [chatState, messages, toolResultMap],
+  )
   const hasTrailingStreamingItem = streamingText.trim().length > 0
   const turnRailPositions = useMemo(
     () => buildTurnRailPositions(renderItems, { hasTrailingStreamingItem }),
     [renderItems, hasTrailingStreamingItem],
   )
   const streamingRailPosition = trailingStreamingRailPosition(turnRailPositions)
-  // The rail is the progress indicator: whichever segment the turn is currently
-  // working in carries the running state, so it sits next to the work it
-  // describes instead of in a separate strip somewhere else on screen.
+  const tailRenderItem = renderItems[renderItems.length - 1]
+  const hasLiveActivityStrip =
+    chatState !== 'idle' &&
+    !hasTrailingStreamingItem &&
+    tailRenderItem?.kind === 'tool_group' &&
+    !(tailRenderItem.toolCalls.length > 0 && tailRenderItem.toolCalls.every((toolCall) => toolCall.toolName === 'Agent'))
+  // Keep one calm live indicator: when the tail activity group already renders
+  // its live shimmer strip, don't stack a second competing status line beneath it.
   const showsTurnStatusLine = hasApiRetry
     || hasStreamingFallback
     || isPreparingTurn
-    || chatState === 'tool_executing'
-    || (chatState === 'thinking' && !activeThinkingId)
+    || (!hasLiveActivityStrip && (
+      chatState === 'tool_executing' ||
+      (chatState === 'thinking' && !activeThinkingId)
+    ))
   const renderItemKeys = useMemo(
     () => renderItems.map(getRenderItemKey),
     [renderItems],
@@ -4071,6 +4087,7 @@ export function MessageList({
               steps={item.steps}
               resultMap={toolResultMap}
               childToolCallsByParent={childToolCallsByParent}
+              errorSeverityByToolUseId={toolErrorSeverityMap}
               agentTaskNotifications={agentTaskNotifications}
               agentTaskStatuses={agentTaskStatuses}
               activeThinkingId={activeThinkingId}
@@ -4080,8 +4097,7 @@ export function MessageList({
               }
               // Only the tail of a live turn can still grow. Everything above it
               // is finished, whatever any individual tool's state looks like this
-              // instant — which is why this, and not `isStreaming`, decides
-              // whether a run stands open.
+              // instant.
               isLive={chatState !== 'idle' && index === renderItems.length - 1 && !hasTrailingStreamingItem}
               disclosureKey={getRenderItemKey(item)}
               revealToolUseId={navigationToolUseIdFor(item)}
@@ -4126,6 +4142,11 @@ export function MessageList({
                 item.message.type === 'tool_use'
                   ? toolResultByToolUseId.get(item.message.toolUseId) ?? null
                   : null
+              }
+              toolErrorSeverity={
+                item.message.type === 'tool_use'
+                  ? toolErrorSeverityMap.get(item.message.toolUseId)
+                  : undefined
               }
               branchAction={branchActionByMessageId.get(item.message.id)}
               editAction={editActionByMessageId.get(item.message.id)}
@@ -4172,7 +4193,7 @@ export function MessageList({
                   loading={rewindingTurnId === card.target.messageId}
                   disabled={turnUndoBlocked}
                   onClick={openUndoDialog}
-                  icon={<Undo2 size={13} strokeWidth={2} aria-hidden="true" />}
+                  icon={<Undo2 size={13} strokeWidth={1.75} aria-hidden="true" />}
                 >
                   {t('chat.conversationRewindAction')}
                 </Button>
@@ -4332,6 +4353,15 @@ export function MessageList({
             </div>
           )}
 
+          {resolvedSessionId && hasRunningBackgroundTasks && (
+            <BackgroundTasksIndicator
+              sessionId={resolvedSessionId}
+              backgroundTasks={backgroundAgentTasks}
+              messages={messages}
+              onOpenAgentRun={onOpenAgentRun}
+            />
+          )}
+
           {turnChangeLoadError && (
             <div className="mx-auto mb-5 w-full max-w-[var(--chat-content-max-width)] rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3.5 py-2.5 text-xs text-[var(--color-on-error-container)]">
               {turnChangeLoadError}
@@ -4369,10 +4399,11 @@ export function MessageList({
           onClick={handleJumpToLatest}
           title={t('chat.jumpToLatest')}
           aria-label={t('chat.jumpToLatest')}
-          // `surface-glass` is unlayered CSS, so it wins over the variant's
-          // layered background/border utilities without a tailwind-merge.
-          className="surface-glass popover-motion absolute bottom-4 right-5 z-20 rounded-full text-[13px] font-medium shadow-[var(--shadow-dropdown-glass)] hover:-translate-y-px motion-reduce:hover:translate-y-0"
-          icon={<ArrowDown size={15} aria-hidden="true" />}
+          // `dropdown-glass` sits after `.v6c-raised` in `@layer components`,
+          // so its frosted rest surface wins while `@layer utilities` hover and
+          // `focus-visible:ring-2` stay active on keyboard focus.
+          className="dropdown-glass popover-motion absolute bottom-4 right-5 z-20 rounded-[var(--radius-control)] text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
+          icon={<ArrowDown size={15} strokeWidth={1.75} aria-hidden="true" />}
         >
           {t('chat.jumpToLatest')}
         </Button>
@@ -4425,6 +4456,7 @@ export const MessageBlock = memo(function MessageBlock({
   activeThinkingId,
   agentTaskNotifications,
   toolResult,
+  toolErrorSeverity,
   branchAction,
   editAction,
   turnChangedFiles,
@@ -4444,6 +4476,7 @@ export const MessageBlock = memo(function MessageBlock({
   activeThinkingId: string | null
   agentTaskNotifications: Record<string, AgentTaskNotification>
   toolResult?: { content: unknown; isError: boolean } | null
+  toolErrorSeverity?: ToolErrorSeverity
   branchAction?: {
     label: string
     loading?: boolean
@@ -4557,6 +4590,7 @@ export const MessageBlock = memo(function MessageBlock({
           toolName={message.toolName}
           input={message.input}
           result={toolResult}
+          errorSeverity={toolErrorSeverity}
           isPending={message.isPending}
           status={message.status}
           partialInput={message.partialInput}

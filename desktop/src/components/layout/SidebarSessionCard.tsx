@@ -13,9 +13,9 @@ import { isWorktreeSession } from './sidebarTaskGroups'
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
 
-/** Soft editorial active highlight on the sidebar surface without heavy shadow clutter. */
+/** V6C raised glass active highlight on the frosted sidebar surface. */
 const SIDEBAR_ROW_RAISED =
-  'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)]'
+  'v6c-raised text-[var(--color-text-primary)]'
 
 const ICON_STROKE = 1.75
 
@@ -89,9 +89,9 @@ export function SidebarSessionCard({
   const updatedLabel = t('session.lastUpdated', { time: relativeTime })
 
   const stateClass = isSelected
-    ? `sidebar-session-row--selected ${SIDEBAR_ROW_RAISED} font-medium`
+    ? `sidebar-session-row--selected ${SIDEBAR_ROW_RAISED}${isActive ? ' v6c-active-bar' : ''} font-medium`
     : isActive
-      ? `sidebar-session-row--active ${SIDEBAR_ROW_RAISED} font-medium`
+      ? `sidebar-session-row--active ${SIDEBAR_ROW_RAISED} v6c-active-bar font-medium`
       : 'sidebar-session-row--idle text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)]'
 
   const metaSwapClass = showHoverSwap
@@ -161,7 +161,7 @@ export function SidebarSessionCard({
       }`}
       aria-hidden="true"
     >
-      {isSelected && <Check size={12} strokeWidth={2} aria-hidden="true" />}
+      {isSelected && <Check size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />}
     </span>
   ) : null
 
@@ -172,9 +172,9 @@ export function SidebarSessionCard({
         onClick={(event) => onClick(event, session)}
         onContextMenu={(event) => onContextMenu(event, session.id)}
         className={`
-          group/session flex w-full flex-col rounded-[var(--radius-sm)] py-1.5 min-h-[30px] text-left transition-[background,color,box-shadow] duration-150
+          group/session flex w-full flex-col rounded-[var(--radius-control)] py-1.5 min-h-[30px] text-left transition-[background,color,box-shadow] duration-150
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]
-          ${variant === 'project' ? 'pl-8 pr-2' : 'px-2.5'}
+          ${variant === 'project' ? 'pl-8 pr-2' : 'pl-3 pr-2.5'}
           ${stateClass}
         `}
         aria-pressed={isBatchMode ? isSelected : undefined}

@@ -13,6 +13,7 @@ import type { BackgroundAgentTask } from '../../types/chat'
 import type { TeamMember } from '../../types/team'
 import { delegatedSessionStatusLabel, delegatedSessionStatusTone, pendingSwitchLabel } from '../sessionDelegation/delegationLabels'
 import { formatTokenCount } from '../../lib/formatTokenCount'
+import { isShellBackgroundTask } from '../../lib/backgroundTaskOutput'
 
 export type OpenSubagentPayload = {
   sessionId: string
@@ -34,16 +35,16 @@ type TranslationFn = ReturnType<typeof useTranslation>
 
 const ACTIVITY_SCROLLBAR_CLASS = [
   '[scrollbar-width:auto]',
-  '[scrollbar-color:color-mix(in_srgb,var(--color-outline)_62%,transparent)_transparent]',
+  '[scrollbar-color:var(--app-scrollbar-thumb)_transparent]',
   '[&::-webkit-scrollbar]:w-2.5',
   '[&::-webkit-scrollbar-track]:bg-transparent',
   '[&::-webkit-scrollbar-thumb]:rounded-full',
   '[&::-webkit-scrollbar-thumb]:border-[3px]',
   '[&::-webkit-scrollbar-thumb]:border-transparent',
-  '[&::-webkit-scrollbar-thumb]:bg-[color-mix(in_srgb,var(--color-outline)_68%,transparent)]',
+  '[&::-webkit-scrollbar-thumb]:bg-[var(--app-scrollbar-thumb)]',
   '[&::-webkit-scrollbar-thumb]:bg-clip-content',
   '[&::-webkit-scrollbar-thumb:hover]:border-2',
-  '[&::-webkit-scrollbar-thumb:hover]:bg-[color-mix(in_srgb,var(--color-outline)_84%,transparent)]',
+  '[&::-webkit-scrollbar-thumb:hover]:bg-[var(--app-scrollbar-thumb-hover)]',
 ].join(' ')
 
 function fallbackStatusLabel(status: ActivityRow['status']): string {
@@ -177,7 +178,7 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
         aria-label={t('session.activity.task.completed')}
         className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-success-container)] text-[var(--color-on-success-container)]"
       >
-        <Check size={12} strokeWidth={2} aria-hidden="true" />
+        <Check size={12} strokeWidth={1.75} aria-hidden="true" />
       </span>
     )
   }
@@ -188,7 +189,7 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
         aria-label={t('session.activity.status.stopped')}
         className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--color-outline)] text-[var(--color-text-tertiary)]"
       >
-        <X size={12} strokeWidth={2} aria-hidden="true" />
+        <X size={12} strokeWidth={1.75} aria-hidden="true" />
       </span>
     )
   }
@@ -261,27 +262,32 @@ function getTaskProgress(rows: ActivityRow[]): { completed: number; total: numbe
  * (see components/AGENTS.md §3.2) — never a raw accent as foreground on its own
  * container.
  */
-function getRowIconToneClass(status: ActivityRow['status']): string {
-  if (status === 'running' || status === 'in_progress') {
-    return 'bg-[var(--color-info-container)] text-[var(--color-on-info-container)]'
+function getRowIconToneClass(status: ActivityRow['status'], tone?: Tone): string {
+  if (tone === 'warning') {
+    return 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)] v6c-ring-waiting'
   }
-  if (status === 'completed' || status === 'idle') {
-    return 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
+  if (status === 'running' || status === 'in_progress' || tone === 'info') {
+    return 'bg-[var(--color-info-container)] text-[var(--color-on-info-container)] v6c-ring-running'
   }
-  if (status === 'failed' || status === 'error') {
-    return 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+  if (status === 'completed' || status === 'idle' || tone === 'success') {
+    return 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)] v6c-ring-success'
   }
-  return 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+  if (status === 'failed' || status === 'error' || (tone === 'danger' && status !== 'stopped')) {
+    return 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)] v6c-ring-error'
+  }
+  return 'border border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
 }
 
 function ActivityRowIcon({
   row,
   sessionId,
   status = row.status,
+  tone,
 }: {
   row: ActivityRow
   sessionId: string
   status?: ActivityRow['status']
+  tone?: Tone
 }) {
   // Workflow agents get the same mascot as any other subagent — they are the
   // same thing, and giving them a different glyph would imply otherwise.
@@ -297,9 +303,9 @@ function ActivityRowIcon({
     <span
       data-testid="activity-row-icon"
       data-tone-status={status}
-      className={`inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] ${getRowIconToneClass(status)}`}
+      className={`inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full ${getRowIconToneClass(status, tone)}`}
     >
-      <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+      <Icon size={15} strokeWidth={1.75} aria-hidden="true" />
     </span>
   )
 }
@@ -349,7 +355,7 @@ function BackgroundTaskStopButton({
       icon={stopping ? (
         <LoaderCircle size={14} strokeWidth={1.75} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
       ) : (
-        <Square size={12} strokeWidth={2} aria-hidden="true" />
+        <Square size={12} strokeWidth={1.75} aria-hidden="true" />
       )}
       label={label}
       size="md"
@@ -402,6 +408,7 @@ function ActivityRowView({
   onOpenMember,
   onOpenDelegatedSession,
   onOpenBackgroundTask,
+  opensBackgroundTaskInWorkspace,
   onStopBackgroundTask,
   stoppingBackgroundTask,
   selected,
@@ -412,6 +419,7 @@ function ActivityRowView({
   onOpenMember?: (member: TeamMember) => void
   onOpenDelegatedSession?: (sessionId: string, title: string) => void
   onOpenBackgroundTask?: (row: ActivityRow) => void
+  opensBackgroundTaskInWorkspace?: boolean
   onStopBackgroundTask?: (taskId: string) => void
   stoppingBackgroundTask?: boolean
   selected?: boolean
@@ -462,12 +470,13 @@ function ActivityRowView({
         // does which job is the reason these sessions exist.
         : delegated?.modelLabel
   const pendingSwitch = delegated?.pendingSwitch ? pendingSwitchLabel(delegated.pendingSwitch, t) : undefined
+  const delegatedTone = delegated ? delegatedSessionStatusTone(delegated.status) : undefined
   const content = (
     <>
       {isTask ? (
         <TaskStatusMarker status={row.status} t={t} />
       ) : (
-        <ActivityRowIcon row={row} sessionId={sessionId} status={displayStatus} />
+        <ActivityRowIcon row={row} sessionId={sessionId} status={displayStatus} tone={delegatedTone} />
       )}
       <span className="min-w-0 flex-1 truncate text-left">
         <span
@@ -500,16 +509,16 @@ function ActivityRowView({
           status={displayStatus}
           label={statusLabel}
           animated={row.section !== 'subagents'}
-          {...(delegated ? { tone: delegatedSessionStatusTone(delegated.status) } : {})}
+          {...(delegatedTone ? { tone: delegatedTone } : {})}
         />
       )}
-      {!isTask && row.openable ? (
+      {!isTask && (row.openable || opensBackgroundTaskInWorkspace) ? (
         <ChevronRight size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
       ) : null}
     </>
   )
   const interactiveRowClassName =
-    'flex min-w-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px motion-reduce:active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    'v6c-pressable flex min-w-0 items-center gap-2.5 rounded-[var(--radius-card-inner)] px-2 py-1.5 text-left transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
   const stopButton = row.section === 'backgroundTasks' && onStopBackgroundTask ? (
     <BackgroundTaskStopButton
       row={row}
@@ -579,14 +588,14 @@ function ActivityRowView({
     ) : openButton
   }
 
-  if (row.section === 'backgroundTasks' && onOpenBackgroundTask && hasBackgroundTaskDetails(row)) {
+  if (row.section === 'backgroundTasks' && onOpenBackgroundTask && (hasBackgroundTaskDetails(row) || opensBackgroundTaskInWorkspace)) {
     const openButton = (
       <button
         type="button"
         aria-label={t('session.activity.openBackgroundTask', { name: row.label })}
-        aria-expanded={selected}
+        {...(opensBackgroundTaskInWorkspace ? {} : { 'aria-expanded': selected })}
         onClick={() => onOpenBackgroundTask(row)}
-        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'bg-[var(--color-surface-selected)]' : ''}`}
+        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'v6c-row-highlight' : ''}`}
       >
         {content}
       </button>
@@ -603,7 +612,7 @@ function ActivityRowView({
   if (stopButton) {
     return (
       <div className="flex w-full items-center gap-1">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-card-inner)] px-2 py-1.5">
           {content}
         </div>
         {stopButton}
@@ -612,7 +621,7 @@ function ActivityRowView({
   }
 
   return (
-    <div className="flex items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5">
+    <div className="flex items-center gap-2.5 rounded-[var(--radius-card-inner)] px-2 py-1.5">
       {content}
     </div>
   )
@@ -648,7 +657,7 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
   if (details.length === 0) return null
 
   return (
-    <div className="mx-2 mb-1.5 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
+    <div className="v6c-field mx-1 mb-1 mt-1 rounded-[var(--radius-card-inner)] p-3">
       <div className="mb-2 text-[12px] font-semibold text-[var(--color-text-tertiary)]">
         {t('session.activity.details.title')}
       </div>
@@ -673,6 +682,7 @@ export function SessionActivityPanel({
   open,
   onClose,
   onOpenSubagent,
+  onOpenBackgroundTaskOutput,
   onClearFinishedBackgroundTasks,
   onOpenMember,
   onStopBackgroundTask,
@@ -685,6 +695,7 @@ export function SessionActivityPanel({
   open: boolean
   onClose: () => void
   onOpenSubagent: (payload: OpenSubagentPayload) => void
+  onOpenBackgroundTaskOutput?: (row: ActivityRow) => void
   onClearFinishedBackgroundTasks?: (taskKeys: string[]) => void
   onOpenMember?: (member: TeamMember) => void
   onStopBackgroundTask?: (taskId: string) => void
@@ -791,7 +802,21 @@ export function SessionActivityPanel({
                 onOpenDelegatedSession={onOpenDelegatedSession}
                 onStopBackgroundTask={onStopBackgroundTask}
                 stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
+                opensBackgroundTaskInWorkspace={Boolean(
+                  section.id === 'backgroundTasks' &&
+                  onOpenBackgroundTaskOutput &&
+                  row.taskId &&
+                  isShellBackgroundTask(row),
+                )}
                 onOpenBackgroundTask={(backgroundRow) => {
+                  if (
+                    onOpenBackgroundTaskOutput &&
+                    backgroundRow.taskId &&
+                    isShellBackgroundTask(backgroundRow)
+                  ) {
+                    onOpenBackgroundTaskOutput(backgroundRow)
+                    return
+                  }
                   setSelectedBackgroundTaskId((current) => (
                     current === backgroundRow.id ? null : backgroundRow.id
                   ))
@@ -817,7 +842,7 @@ export function SessionActivityPanel({
         title={t('session.activity.title')}
         closeLabel={t('session.activity.close')}
         testId="session-activity-sheet"
-        contentClassName="space-y-3 px-3 pb-4 pt-3"
+        contentClassName="space-y-2.5 px-3 pb-4 pt-3"
       >
         {sections}
       </MobileBottomSheet>
@@ -861,7 +886,7 @@ export function SessionActivityPanel({
       data-placement={placement}
       className={className}
     >
-      <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-3">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--color-border)] pl-4 pr-3">
         <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
           {t('session.activity.title')}
         </h2>
@@ -876,7 +901,7 @@ export function SessionActivityPanel({
 
       <div
         data-testid="session-activity-scroll"
-        className={`min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-4 pt-0.5 ${ACTIVITY_SCROLLBAR_CLASS}`}
+        className={`min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 pt-2.5 ${ACTIVITY_SCROLLBAR_CLASS}`}
       >
         {sections}
       </div>

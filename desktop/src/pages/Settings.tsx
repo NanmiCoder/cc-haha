@@ -250,7 +250,7 @@ export function DesktopSettings() {
             700px cap left explorer-style panes (memory, skills) cramped in the
             middle of an empty page. One width for every pane, so switching
             panes never moves the header. */}
-        <div ref={contentRef} className="scrollbar-autohide flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
+        <div ref={contentRef} className="v6c-main-canvas scrollbar-autohide flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
           <div data-testid="settings-page-frame" className="mx-auto w-full max-w-[1120px] px-10 pt-9 pb-[72px]">
             {activeTab === 'providers' && <ProviderSettings />}
             {activeTab === 'activity' && <ActivitySettings />}
@@ -294,9 +294,9 @@ function TabButton({ icon: Icon, label, active, onClick }: { icon: LucideIcon; l
       type="button"
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      className={`flex h-[30px] w-full shrink-0 items-center gap-2.5 rounded-[var(--radius-sm)] border px-2.5 text-left text-[13px] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+      className={`flex h-[30px] w-full shrink-0 items-center gap-2.5 rounded-[var(--radius-control)] border pl-3 pr-2.5 text-left text-[13px] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
         active
-          ? 'border-[var(--color-border)] bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)] shadow-[var(--bevel-surface-rest)]'
+          ? 'v6c-active-bar v6c-raised border-transparent font-medium text-[var(--color-text-primary)]'
           : 'border-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
       }`}
     >

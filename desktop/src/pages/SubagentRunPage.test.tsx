@@ -3,6 +3,7 @@ import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SubagentRunResponse } from '../api/subagents'
 import { useSettingsStore } from '../stores/settingsStore'
+import { clearDisclosureMemory } from '../lib/disclosureMemory'
 import { setComposerText } from '../components/chat/composerTestUtils'
 import type { ReconstructedWorkflowRun } from '../types/workflow'
 import type { ServerMessage } from '../types/chat'
@@ -150,6 +151,7 @@ function expectSharedSessionSurface(agentRunKind: 'subagent' | 'team-member') {
 
 describe('SubagentRunPage', () => {
   beforeEach(() => {
+    clearDisclosureMemory()
     viewportMocks.isMobile = false
     useSettingsStore.setState({ locale: 'en' })
     useChatStore.setState({ sessions: {} })
@@ -382,9 +384,16 @@ describe('SubagentRunPage', () => {
       })
     })
 
-    expect(conversation).toHaveTextContent(`Live thinking from ${agentId}`)
     expect(conversation).toHaveTextContent(`Live answer from ${agentId}`)
     expect(conversation).toHaveTextContent('live.ts')
+    // Thinking and live tool activity stay collapsed by default until the reader opens them.
+    const thinkingDisclosure = conversation.querySelector<HTMLButtonElement>('[data-thinking-block] [data-chat-disclosure="true"]')
+      ?? conversation.querySelector<HTMLButtonElement>('[data-chat-disclosure="true"]')
+    expect(thinkingDisclosure).toBeTruthy()
+    fireEvent.click(thinkingDisclosure!)
+    expect(conversation).toHaveTextContent(`Live thinking from ${agentId}`)
+    const activityDisclosure = conversation.querySelector<HTMLButtonElement>('[data-testid="activity-group"] [data-chat-disclosure="true"]')!
+    fireEvent.click(activityDisclosure)
     expect(conversation).toHaveTextContent('live file contents')
     expect(useChatStore.getState().sessions['session-1']?.messages ?? []).toEqual([])
     expect(byAgentId ? subagentsApi.getRunByAgent : subagentsApi.getRunByTool)
@@ -1716,9 +1725,13 @@ describe('SubagentRunPage', () => {
         isError: false,
       })
     })
-    expect(transcript).toHaveTextContent('Live teammate thinking')
     expect(transcript).toHaveTextContent('Live teammate answer')
     expect(transcript).toHaveTextContent('member-live.ts')
+    const thinkingDisclosure = transcript.querySelector<HTMLButtonElement>('[data-chat-disclosure="true"]')!
+    fireEvent.click(thinkingDisclosure)
+    expect(transcript).toHaveTextContent('Live teammate thinking')
+    const activityDisclosure = transcript.querySelector<HTMLButtonElement>('[data-testid="activity-group"] [data-chat-disclosure="true"]')!
+    fireEvent.click(activityDisclosure)
     expect(transcript).toHaveTextContent('member live file contents')
     expect(useChatStore.getState().sessions['lead-session']?.messages ?? []).toEqual([])
 
@@ -2492,9 +2505,11 @@ describe('SubagentRunPage', () => {
     await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2), { timeout: 2500 })
 
     expect(screen.getByText('Running')).toBeInTheDocument()
-    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Read')
-    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('example.ts')
-    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('export const ready = true')
+    const conversation = screen.getByTestId('subagent-conversation')
+    expect(conversation).toHaveTextContent('Read')
+    expect(conversation).toHaveTextContent('example.ts')
+    fireEvent.click(conversation.querySelector('[data-testid="activity-group"] [data-chat-disclosure="true"]')!)
+    expect(conversation).toHaveTextContent('export const ready = true')
   })
 
   it('keeps an expanded tool call open after a live run refresh', async () => {
@@ -2549,9 +2564,12 @@ describe('SubagentRunPage', () => {
 
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="SubAgent" />)
 
-    // A running run plays open, so its rows are already there — no need to
-    // unfold the summary first, and clicking it here would fold them away.
-    expect(await screen.findByTestId('activity-group')).toHaveAttribute('data-expanded', 'true')
+    // Live activity runs default collapsed; unfold the summary first, then open
+    // an individual tool row and verify both stay open across a live run refresh.
+    const activityGroup = await screen.findByTestId('activity-group')
+    expect(activityGroup).toHaveAttribute('data-expanded', 'false')
+    fireEvent.click(activityGroup.querySelector('[data-chat-disclosure="true"]')!)
+    expect(activityGroup).toHaveAttribute('data-expanded', 'true')
     fireEvent.click(screen.getByRole('button', { name: /Run.*pwd/i }))
     expect(document.querySelector('[data-shell-output]')).toHaveTextContent('/workspace')
 

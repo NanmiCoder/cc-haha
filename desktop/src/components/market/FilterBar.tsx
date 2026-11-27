@@ -29,12 +29,12 @@ const FilterTrigger = forwardRef<HTMLButtonElement, FilterTriggerProps>(function
     <button
       ref={ref}
       type="button"
-      className={`control-bevel inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[13px] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] motion-reduce:transition-none ${
+      className={`v6c-pressable inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] motion-reduce:transition-none ${
         // A narrowed filter reads as "selected", in the neutral selected fill:
         // the brand wash it used to carry is kept for brand and send only.
         active
           ? 'border-[var(--color-outline)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-primary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
+          : 'v6c-raised border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-outline)]'
       }`}
       {...props}
     >

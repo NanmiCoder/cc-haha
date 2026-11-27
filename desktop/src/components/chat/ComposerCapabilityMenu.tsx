@@ -44,7 +44,7 @@ const FLYOUT_HEADER_HEIGHT = 40
 const VIEWPORT_MARGIN = 8
 /** The full skill list reuses the @ menu's reference browser. */
 const BROWSE_REFERENCES_KEY = 'skills:all'
-const PANEL = 'dropdown-glass popover-motion overflow-hidden rounded-[var(--radius-lg)]'
+const PANEL = 'dropdown-glass popover-motion overflow-hidden rounded-[var(--radius-xl)]'
 
 export function getCapabilityMenuOptionId(id: string, index: number): string {
   return `${id}-option-${index}`
@@ -308,7 +308,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   }
 
   const renderSubList = (listItems: CapabilityMenuItem[]) => <div id={subListId} role="listbox" aria-label={drillParent?.label}
-    className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
+    className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(360px,50vh)] overflow-y-auto p-[5px]'}>
     {listItems.map((item, index) => {
       const previous = listItems[index - 1]
       const heading = item.group && item.group !== previous?.group
@@ -326,7 +326,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     referencesLoading={referencesLoading} referencesError={referencesError} onSelect={selectMention} onActiveChange={setReferenceOptionId} />
 
   let offset = 0
-  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(420px,60vh)] overflow-y-auto p-1'}>
+  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'scrollbar-autohide min-h-0 max-h-[min(420px,60vh)] overflow-y-auto p-[5px]'}>
     {sections.map(section => {
       const start = offset
       offset += section.items.length

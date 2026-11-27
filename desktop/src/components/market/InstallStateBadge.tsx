@@ -36,8 +36,9 @@ export function InstallStateBadge({ state, className = '' }: { state: InstallSta
       data-testid={`install-badge-${state}`}
       tone={TONES[state]}
       size="sm"
+      pill={false}
       className={className}
-      icon={<Icon size={12} strokeWidth={2} aria-hidden="true" />}
+      icon={<Icon size={12} strokeWidth={1.75} aria-hidden="true" />}
     >
       {t(LABEL_KEYS[state])}
     </Badge>

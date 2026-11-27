@@ -310,12 +310,12 @@ export function MarketSkillDetail({
   )
 
   const sideCards = triggers.length > 0 && (
-    <Card radius="lg" surface="lowest" padding="none" className="px-4 py-3.5" data-testid="market-detail-triggers">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card px-4 py-3.5" data-testid="market-detail-triggers">
       <h2 className="text-[13px] font-semibold text-[var(--color-text-primary)]">{t('market.detail.whenToUse')}</h2>
       <ol className="mt-3 flex flex-col gap-2.5">
         {triggers.map((trigger, index) => (
           <li key={trigger} className="flex items-start gap-2 text-[13px] leading-5 text-[var(--color-text-secondary)]">
-            <Badge size="xs" mono className="mt-0.5">
+            <Badge size="xs" pill={false} mono className="mt-0.5">
               {index + 1}
             </Badge>
             <span className="min-w-0 break-words">{trigger}</span>

@@ -145,9 +145,11 @@ describe('DirectoryPicker', () => {
     const trigger = screen.getByRole('button')
     expect(trigger).toHaveTextContent('project')
     // The workbar trigger is a form field in ProjectEditorModal, where it stands
-    // in for a secondary button: the same h-9 hairline-bordered 8px block.
-    expect(trigger.className).toContain('rounded-[var(--radius-md)]')
-    expect(trigger.className).toContain('border-[var(--color-border)]')
+    // in for a secondary button: the same h-9 V6C raised-glass 9px block, with
+    // the glass hairline the secondary `Button` uses.
+    expect(trigger.className).toContain('rounded-[var(--radius-control)]')
+    expect(trigger.className).toContain('border-[var(--color-surface-glass-border)]')
+    expect(trigger.className).toContain('v6c-raised')
     expect(trigger.className).not.toContain('rounded-full')
   })
 

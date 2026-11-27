@@ -44,11 +44,11 @@ export function H5ConnectionView({
   }
 
   return (
-    <div className="animate-screen-pop h-screen flex items-center justify-center bg-[var(--color-surface)] px-6">
+    <div className="animate-screen-pop app-shell-viewport v6c-ambient-shell flex items-center justify-center px-6">
       <Card
         as="section"
         radius="xl"
-        surface="lowest"
+        surface="glass"
         padding="lg"
         shadow="card"
         className="w-full max-w-md"

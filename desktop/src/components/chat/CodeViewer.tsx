@@ -336,7 +336,7 @@ export function CodeViewer({
       className={
         isEmbedded
           ? 'overflow-hidden bg-[var(--color-code-bg)]'
-          : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-code-bg)]'
+          : 'overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)]'
       }
     >
       {/* Header: one quiet 30px line with language icon, wrap toggle, and beveled copy. */}

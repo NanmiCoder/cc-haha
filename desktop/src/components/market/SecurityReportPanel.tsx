@@ -48,7 +48,7 @@ export function SecurityReportPanel({
         </div>
       )}
 
-      <Card radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+      <Card radius="lg" surface="none" padding="none" className="v6c-glass-card overflow-hidden">
         <h2 className="flex h-10 items-center border-b border-[var(--color-border)] px-4 text-[13px] font-medium text-[var(--color-text-primary)]">{t('market.detail.scanReports')}</h2>
         {reports.length > 0 ? (
           <ul className="divide-y divide-[var(--color-border)]">
@@ -62,7 +62,7 @@ export function SecurityReportPanel({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-mono text-xs text-[var(--color-text-primary)]">{report.vendor}</span>
-                    <Badge tone={CLEAN_STATUS.test(report.status) ? 'success' : 'warning'} size="xs" wrap>
+                    <Badge tone={CLEAN_STATUS.test(report.status) ? 'success' : 'warning'} size="xs" pill={false} wrap>
                       {report.statusText}
                     </Badge>
                   </div>

@@ -110,7 +110,7 @@ export function SegmentedControl<T extends string>({
         isChip ? 'flex flex-wrap items-center gap-1.5' : 'inline-flex items-center',
         appearance === 'underline'
           ? 'gap-1 border-b border-[var(--color-border)]'
-          : !isChip && 'gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] p-0.5 shadow-[var(--bevel-surface-pressed)]',
+          : !isChip && 'gap-0.5 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] p-0.5 shadow-[var(--bevel-surface-pressed)]',
         layout === 'fill' && 'flex w-full',
         !isChip && SIZE_CLASSES[size],
         className,
@@ -139,7 +139,9 @@ export function SegmentedControl<T extends string>({
               layout === 'fill' && 'flex-1',
               isChip
                 ? cx(
-                  'rounded-full border',
+                  // V6C chips are 6px tags, not pills: only switches, status
+                  // dots and avatars stay fully round.
+                  'rounded-[var(--radius-sm)] border',
                   // The ink fill of the primary button, so the picked chip
                   // reads as the same "on" state as the page's main action.
                   selected
@@ -159,7 +161,7 @@ export function SegmentedControl<T extends string>({
                   // terracotta-filled segment competed with the send key for
                   // "the one brand-colored thing on screen".
                   selected
-                    ? 'control-bevel bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
+                    ? 'control-bevel v6c-raised text-[var(--color-text-primary)] shadow-[var(--shadow-segment),var(--glass-rim)]'
                     : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
                 ),
             )}

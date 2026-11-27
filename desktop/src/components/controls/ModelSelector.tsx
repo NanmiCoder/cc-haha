@@ -1,7 +1,7 @@
 import { MODEL_SLOTS, type ModelSlot } from '@/lib/providerModelContext'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, ShieldCheck, Zap } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Loader2, Zap } from 'lucide-react'
 import {
   COMPOSER_MENU_ITEM,
   COMPOSER_MENU_ITEM_ACTIVE,
@@ -56,8 +56,6 @@ import { Kbd } from '@/components/ui/Kbd'
 import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { SearchField } from '@/components/ui/SearchField'
-import { SegmentedControl } from '@/components/ui/SegmentedControl'
-import { Switch } from '@/components/ui/Switch'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
@@ -113,10 +111,6 @@ type Props = {
   disabled?: boolean
   compact?: boolean
   fluid?: boolean
-  /** Current permission mode label shown in the unified dropdown quick-switch row. */
-  permissionModeLabel?: string
-  /** Opens the permission selector directly from the unified model dropdown. */
-  onOpenPermissions?: () => void
 }
 
 export type ModelSelectorHandle = {
@@ -398,8 +392,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   disabled = false,
   compact = false,
   fluid = false,
-  permissionModeLabel,
-  onOpenPermissions,
 }: Props = {}, selectorRef) {
   const t = useTranslation()
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
@@ -958,11 +950,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     />
   )
 
-  const showDockedEffort = showEffortPill && !!selectedRuntimeEffort && !disabled && !effortLocked
-  const showDockedFastMode = showDockedEffort && (showOpenAIFastMode || showClaudeFastMode)
-  const showDockedPermissions = Boolean(onOpenPermissions) && !isMobileBrowser
-  const showDockedFooter = showDockedEffort || showDockedPermissions
-
   const antigravityLoadingModels = isAntigravityLocked &&
     antigravityChoice.models.length === 0 &&
     (antigravityDiscovering || antigravity?.status === 'unchecked')
@@ -988,7 +975,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           {searchField}
         </div>
       )}
-      <div className={`scrollbar-autohide overflow-y-auto ${isMobileBrowser ? 'p-1' : 'min-h-0 flex-1 p-1'}`}>
+      <div className={`scrollbar-autohide overflow-y-auto ${isMobileBrowser ? 'p-1' : 'min-h-0 flex-1 p-[5px]'}`}>
         {antigravityLoadingModels && (
           <div
             role="status"
@@ -1144,7 +1131,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                         </div>
 
                         {isSelected && (
-                          <Check aria-hidden="true" size={14} strokeWidth={2} className="flex-shrink-0 text-[var(--color-brand)]" />
+                          <Check aria-hidden="true" size={14} strokeWidth={1.75} className="flex-shrink-0 text-[var(--color-brand)]" />
                         )}
                       </button>
                     )
@@ -1188,7 +1175,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                   </div>
 
                   {isSelected && (
-                    <Check aria-hidden="true" size={14} strokeWidth={2} className="flex-shrink-0 text-[var(--color-brand)]" />
+                    <Check aria-hidden="true" size={14} strokeWidth={1.75} className="flex-shrink-0 text-[var(--color-brand)]" />
                   )}
                 </button>
               )
@@ -1196,76 +1183,6 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           </div>
         )}
       </div>
-      {showDockedFooter && (
-        <div
-          data-testid="model-selector-docked-controls"
-          className="flex-none space-y-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2"
-        >
-          {showDockedEffort && selectedRuntimeEffort && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-                <span>{t('model.effort')}</span>
-                <span className="font-normal tabular-nums text-[var(--color-text-secondary)]">{runtimeEffortLabel}</span>
-              </div>
-              <SegmentedControl
-                size="sm"
-                layout="fill"
-                label={t('model.effort')}
-                value={runtimeEffortUnset ? ('' as ReasoningEffortLevel) : selectedRuntimeEffort}
-                items={runtimeEffortOptions.map((option) => ({
-                  value: option.value,
-                  label: option.label,
-                }))}
-                onChange={(level) => handleRuntimeEffortSelect(level, { closeDropdown: false })}
-              />
-            </div>
-          )}
-          {showDockedFastMode && (
-            <div className="pt-0.5">
-              {showOpenAIFastMode ? (
-                <Switch
-                  size="sm"
-                  checked={activeRuntimeSelection?.openAIFastMode === true}
-                  onChange={(enabled) => handleOpenAIFastModeChange(enabled, { closeDropdown: false })}
-                  label={t('model.openAIFastMode')}
-                  description={t('model.openAIFastModeDescription')}
-                />
-              ) : (
-                <Switch
-                  size="sm"
-                  checked={claudeFastModeActive}
-                  disabled={!claudeFastModeSupported}
-                  onChange={handleClaudeFastModeChange}
-                  label={t('model.claudeFastMode')}
-                  description={claudeFastModeSupported ? t('model.claudeFastModeDescription') : t('model.claudeFastModeUnsupported')}
-                />
-              )}
-            </div>
-          )}
-          {showDockedPermissions && onOpenPermissions && (
-            <button
-              type="button"
-              disabled={disabled}
-              data-testid="model-selector-permissions-shortcut"
-              onClick={() => {
-                if (disabled) return
-                setOpen(false)
-                requestAnimationFrame(() => onOpenPermissions())
-              }}
-              className="flex min-h-7 w-full cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] px-1.5 py-1 text-left text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <span className="flex min-w-0 items-center gap-1.5">
-                <ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-                <span className="truncate">{t('permMode.executionPermissions')}</span>
-              </span>
-              <span className="flex shrink-0 items-center gap-1 text-[11px] text-[var(--color-text-tertiary)]">
-                {permissionModeLabel && <span className="truncate">{permissionModeLabel}</span>}
-                <ChevronRight size={12} strokeWidth={1.75} aria-hidden="true" />
-              </span>
-            </button>
-          )}
-        </div>
-      )}
     </>
   )
 
@@ -1288,7 +1205,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       <div
         ref={dropdownRef}
         data-testid="model-selector-dropdown"
-        className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)]"
+        className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-xl)]"
         style={{
           top: dropdownPosition.top,
           bottom: dropdownPosition.bottom,
@@ -1319,8 +1236,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         ref={ref}
         className={`flex min-w-0 items-stretch transition-colors ${
           appearance === 'field'
-            ? 'control-bevel h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-outline)]'
-            : `h-7 rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] ${open || effortOpen ? 'bg-[var(--color-surface-hover)]' : ''}`
+            ? 'v6c-field h-10 w-full rounded-[var(--radius-card-inner)] border border-[var(--color-border)] hover:border-[var(--color-outline)]'
+            : 'h-7 rounded-[var(--radius-control)]'
         } ${isMobileBrowser ? 'min-h-11' : ''} ${fluid ? 'w-full' : ''} ${disabled ? 'opacity-50' : ''}`}
       >
         <button
@@ -1342,8 +1259,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           // rounded down one side and square down the other.
           className={`flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
             appearance === 'field'
-              ? `h-full min-w-0 flex-1 px-3 text-left ${showEffortPill ? 'rounded-l-[var(--radius-md)] focus-visible:rounded-[var(--radius-md)]' : 'rounded-[var(--radius-md)]'}`
-              : `rounded-l-[var(--radius-sm)] focus-visible:rounded-[var(--radius-sm)] pl-2 ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px]' : 'max-w-[220px]'} ${showEffortPill ? 'pr-1' : 'rounded-r-[var(--radius-sm)] pr-1.5'}`
+              ? `h-full min-w-0 flex-1 px-3 text-left ${showEffortPill ? 'rounded-l-[var(--radius-card-inner)] focus-visible:rounded-[var(--radius-card-inner)]' : 'rounded-[var(--radius-card-inner)]'}`
+              : `rounded-l-[var(--radius-control)] focus-visible:rounded-[var(--radius-control)] pl-2 hover:bg-[var(--color-surface-hover)] ${open ? 'bg-[var(--color-surface-hover)]' : ''} ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px]' : 'max-w-[220px]'} ${showEffortPill ? 'pr-1.5' : 'rounded-r-[var(--radius-control)] pr-1.5'}`
           }`}
         >
           {!needsProviderConfiguration && (selectedRuntimeModel?.id || selectedModel?.id) && (
@@ -1365,38 +1282,43 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             </span>
           )}
           {needsProviderConfiguration
-            ? <ArrowRight aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />
-            : !showEffortPill && <ChevronDown aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />}
+            ? <ArrowRight aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={1.75} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />
+            : <ChevronDown aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={1.75} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />}
         </button>
 
         {showEffortPill && selectedRuntimeEffort && (
-          <button
-            ref={effortButtonRef}
-            type="button"
-            disabled={disabled || effortLocked}
-            aria-label={`${t('model.effort')}: ${runtimeEffortLabel}${showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode ? ` · ${t('model.openAIFastMode')}` : ''}`}
-            aria-expanded={effortOpen}
-            onClick={() => {
-              if (disabled) return
-              setOpen(false)
-              setEffortOpen(!effortOpen)
-            }}
-            // The effort rides on the model name as a small sunken pill; the
-            // chevron moves here so the pair reads "model · effort ⌄".
-            className={`flex shrink-0 items-center gap-1 pl-0.5 text-[var(--color-text-tertiary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
-              appearance === 'field'
-                ? 'rounded-r-[var(--radius-md)] pr-2.5 focus-visible:rounded-[var(--radius-md)]'
-                : 'rounded-r-[var(--radius-sm)] pr-1.5 focus-visible:rounded-[var(--radius-sm)]'
-            }`}
-          >
-            <span className="inline-flex h-[18px] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 text-[11px] tabular-nums">
-              {runtimeEffortLabel}
-            </span>
-            {showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode && (
-              <span className="text-[11px] text-[var(--color-text-secondary)]">{t('model.openAIFastMode')}</span>
-            )}
-            <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="flex-shrink-0" />
-          </button>
+          <>
+            <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-[var(--color-border)]" />
+            <button
+              ref={effortButtonRef}
+              type="button"
+              disabled={disabled || effortLocked}
+              aria-label={`${t('model.effort')}: ${runtimeEffortLabel}${showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode ? ` · ${t('model.openAIFastMode')}` : ''}`}
+              aria-expanded={effortOpen}
+              onClick={() => {
+                if (disabled) return
+                setOpen(false)
+                setEffortOpen(!effortOpen)
+              }}
+              // Standalone effort trigger separated by a hairline so Model and
+              // Reasoning Effort read clearly as two independent 1-click menus.
+              className={`flex shrink-0 items-center gap-1 text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
+                effortOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+              } ${
+                appearance === 'field'
+                  ? 'rounded-r-[var(--radius-card-inner)] px-2.5 focus-visible:rounded-[var(--radius-card-inner)]'
+                  : 'rounded-r-[var(--radius-control)] px-1.5 focus-visible:rounded-[var(--radius-control)]'
+              }`}
+            >
+              <span className="text-[11px] font-medium tabular-nums">
+                {runtimeEffortLabel}
+              </span>
+              {showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode && (
+                <span className="text-[11px] text-[var(--color-text-tertiary)]">{t('model.openAIFastMode')}</span>
+              )}
+              <ChevronDown aria-hidden="true" size={12} strokeWidth={1.75} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />
+            </button>
+          </>
         )}
 
         {appearance === 'toolbar' && showClaudeFastMode && (

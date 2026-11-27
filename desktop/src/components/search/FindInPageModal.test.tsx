@@ -314,4 +314,14 @@ describe('FindInPageModal · match stepping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close find bar' }))
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('renders a V6C dialog-panel bar with a 10px recessed search field', () => {
+    render(<FindInPageModal open onClose={() => {}} />)
+
+    const dialog = screen.getByRole('dialog', { name: 'Find in page' })
+    expect(dialog).toHaveClass('dialog-panel', 'rounded-[var(--radius-xl)]')
+
+    const input = screen.getByPlaceholderText('Find')
+    expect(input.parentElement).toHaveClass('v6c-field', 'rounded-[var(--radius-card-inner)]')
+  })
 })

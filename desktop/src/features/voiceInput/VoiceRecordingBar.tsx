@@ -236,8 +236,8 @@ export function VoiceRecordingBar({ dictation, mobile = false }: VoiceRecordingB
           it; it only differs in waiting for the text first. */}
       <Button
         variant="accent"
-        size="base"
-        shape="circle"
+        size="md"
+        shape="key"
         loading={transcribing && sendRequested}
         // Nothing has been recorded until the microphone opens.
         disabled={starting}
@@ -245,8 +245,8 @@ export function VoiceRecordingBar({ dictation, mobile = false }: VoiceRecordingB
         title={t('voice.composer.sendNow')}
         onMouseDown={keepCaret}
         onClick={dictation.stopAndSend}
-        className={`shrink-0 motion-safe:enabled:hover:scale-105 ${mobile ? 'h-11 w-11' : ''}`}
-        icon={<ArrowUp size={mobile ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
+        className={`shrink-0 ${mobile ? 'h-11 w-11' : ''}`}
+        icon={<ArrowUp size={mobile ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />}
       />
     </div>
   )

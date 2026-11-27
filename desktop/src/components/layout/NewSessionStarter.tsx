@@ -96,7 +96,7 @@ export function NewSessionStarter({
                   type="button"
                   onClick={() => openSession(session)}
                   title={session.title || t('session.untitled')}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-9 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                 >
                   <MessageSquare size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate">{session.title || t('session.untitled')}</span>

@@ -104,3 +104,15 @@ it('retries a transient claim failure using the retained claim when no cookie ha
   expect(remoteAccessApi.claim).toHaveBeenCalledTimes(2)
   expect(remoteAccessApi.pair).toHaveBeenCalledTimes(1)
 })
+
+it('renders the pairing gate on the V6C ambient shell with a glass card and error ring', async () => {
+  vi.mocked(remoteAccessApi.session).mockRejectedValue(new TypeError('Network offline'))
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+
+  const alert = await screen.findByRole('alert')
+  const main = alert.closest('main')!
+  expect(main).toHaveClass('v6c-ambient-shell', 'min-h-[100dvh]')
+  expect(main.className).not.toContain('min-h-screen')
+  expect(main.firstElementChild).toHaveClass('dialog-glass', 'rounded-[var(--radius-2xl)]')
+  expect(alert).toHaveClass('v6c-ring-error', 'rounded-[var(--radius-control)]')
+})

@@ -50,8 +50,9 @@ export function SecurityBadge({
       title={t(`market.securityHint.${status}`)}
       tone={TONES[status]}
       size={short ? 'xs' : 'sm'}
+      pill={false}
       className={className}
-      icon={<Icon size={12} strokeWidth={2} aria-hidden="true" />}
+      icon={<Icon size={12} strokeWidth={1.75} aria-hidden="true" />}
     >
       {short ? t(`market.securityShort.${status}`) : t(`market.security.${status}`)}
     </Badge>

@@ -32,7 +32,7 @@ export function UpdateChecker() {
 
   return (
     <div className="fixed bottom-4 left-1/2 z-[var(--z-toast)] w-[min(360px,calc(100vw-2rem))] -translate-x-1/2">
-      <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-dropdown)]">
+      <div className="dropdown-glass rounded-[var(--radius-xl)] p-4">
         <p className="text-[14px] font-semibold text-[var(--color-text-primary)]">
           {t('update.readyTitle')}
         </p>
@@ -41,7 +41,7 @@ export function UpdateChecker() {
         </p>
 
         {releaseNotes && (
-          <div className="mt-2.5 max-h-28 overflow-y-auto rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2">
+          <div className="mt-2.5 max-h-28 overflow-y-auto rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2">
             <MarkdownRenderer
               content={releaseNotes}
               className="text-xs leading-5 text-[var(--color-text-secondary)] [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:text-xs [&_h2]:font-semibold [&_p]:my-1.5 [&_p]:text-xs [&_p]:leading-5 [&_ul]:my-1.5 [&_ol]:my-1.5"

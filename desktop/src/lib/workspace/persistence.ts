@@ -119,6 +119,7 @@ function asReviewSource(value: unknown): WorkspaceReviewSource | null {
 export function serializeWorkspaceTab(tab: WorkspaceTab): PersistedWorkspaceTab | null {
   switch (tab.kind) {
     case 'side-chat':
+    case 'background-task':
       return null
     case 'file':
       return {
@@ -170,7 +171,7 @@ export function serializeWorkspace(
     const activeSideTabId = sideTabs.some(tab => tab.id === state.activeSideTabId)
       ? state.activeSideTabId : sideTabs[0]?.id ?? null
     sessions[sessionId] = {
-      layout: sideTabs.length === 0 && state.tabs.some(tab => tab.kind === 'side-chat') ? 'hidden' : state.layout,
+      layout: sideTabs.length === 0 && state.tabs.some(tab => tab.kind === 'side-chat' || tab.kind === 'background-task') ? 'hidden' : state.layout,
       bottomOpen: state.bottomOpen,
       activeSideTabId,
       activeBottomTabId: state.activeBottomTabId,

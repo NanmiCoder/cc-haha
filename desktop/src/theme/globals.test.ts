@@ -63,7 +63,7 @@ describe('desktop theme tokens', () => {
    * borders. This list is the contract that makes that a red test.
    */
   const requiredSourceTokens = [
-    '--cc-bg', '--cc-s0', '--cc-s1', '--cc-s2', '--cc-bd', '--cc-bd2',
+    '--cc-bg', '--cc-s0', '--cc-s1', '--cc-s2', '--cc-user-msg', '--cc-bd', '--cc-bd2',
     '--cc-bd-strong', '--cc-tab-edge', '--cc-tab-sep',
     '--cc-t1', '--cc-t2', '--cc-t3',
     '--cc-ac', '--cc-ac2', '--cc-ac-soft', '--cc-ac-soft-hover', '--cc-ac-border',
@@ -190,9 +190,9 @@ describe('desktop theme tokens', () => {
   it('uses dark terminal and syntax colors for every dark palette', () => {
     const selector = DARK_THEME_MODES.map((theme) => `[data-theme="${theme}"]`).join(',\n')
     const block = getThemeBlock(selector)
-    expect(block).toContain('--color-terminal-ansi-red: #FF6D67;')
-    expect(block).toContain('--color-code-comment: #8F8683;')
-    expect(block).toContain('--color-diff-syntax-string: #A8CE8C;')
+    expect(block).toContain('--color-terminal-ansi-red: #F67576;')
+    expect(block).toContain('--color-code-comment: #999999;')
+    expect(block).toContain('--color-diff-syntax-string: #85DF7B;')
   })
 
   it('keeps activity heatmap colors on the app theme accent instead of the old blue ramp', () => {
@@ -660,7 +660,7 @@ describe('terminal palette tokens', () => {
     expect(token('--color-terminal-scrollbar')).toBe(token('--cc-bd2'))
     expect(token('--color-terminal-scrollbar-hover')).toBe(token('--cc-t3'))
     // Image viewing must remain independent when a terminal switches to paper.
-    expect(token('--color-media-bg')).toBe('#191713')
+    expect(token('--color-media-bg')).toBe('#141414')
     expect(contrast(token('--color-media-muted'), token('--color-media-bg'))).toBeGreaterThanOrEqual(4.5)
   })
 })
@@ -709,5 +709,261 @@ describe('pre-paint background constants', () => {
 
   it('covers every palette, so a new one cannot ship without a pre-paint color', () => {
     expect(Object.keys(THEME_BACKGROUNDS).sort()).toEqual([...THEME_MODES].sort())
+  })
+})
+
+/**
+ * V6C Calm Liquid Glass. The approved redesign is a set of decisions that a
+ * later palette tweak can silently undo — a terracotta "running" state, a warm
+ * wash on the wall, an outer brand glow on the send key, a 20px dialog corner —
+ * and none of those breaks contrast or token resolution. These pin them.
+ */
+describe('V6C Calm Liquid Glass contract', () => {
+  const light = getThemeBlock(':root,\n[data-theme="white"]')
+  const dark = getThemeBlock('[data-theme="dark"]')
+  const root = getThemeBlock(':root')
+
+  function hex(block: string, token: string) {
+    const match = new RegExp(`${token}:\\s*(#[0-9A-Fa-f]{6});`).exec(block)
+    expect(match, `${token} should be a hex color`).not.toBeNull()
+    const n = parseInt(match![1]!.slice(1), 16)
+    return { value: match![1]!.toUpperCase(), r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+  }
+
+  it('keeps one concentric low-radius scale in both the static and runtime layers', () => {
+    const scale = {
+      '--radius-xs': '4px',
+      '--radius-sm': '6px',
+      '--radius-md': '8px',
+      '--radius-control': '9px',
+      '--radius-card-inner': '10px',
+      '--radius-key': '11px',
+      '--radius-lg': '12px',
+      '--radius-xl': '14px',
+      '--radius-2xl': '16px',
+      '--radius-3xl': '16px',
+      '--radius-full': '9999px',
+    }
+    for (const block of [getThemeBlock('@theme'), root]) {
+      for (const [token, value] of Object.entries(scale)) {
+        expect(block, `${token} should be ${value}`).toContain(`${token}: ${value};`)
+      }
+    }
+  })
+
+  it('unifies interactive accent on Codex blue with a monochrome primary send key', () => {
+    expect(hex(light, '--cc-ac').value).toBe('#0169CC')
+    expect(hex(dark, '--cc-ac').value).toBe('#339CFF')
+    for (const block of [light, dark]) {
+      for (const token of ['--cc-ac', '--cc-info', '--cc-info-ink']) {
+        const color = hex(block, token)
+        expect(color.b, `${token} must read blue`).toBeGreaterThan(color.r)
+      }
+    }
+    expect(root).toContain('--color-text-accent: var(--cc-info);')
+    expect(root).toContain('--color-info: var(--cc-info);')
+    // Monochrome send key (no colorful gradient CTA).
+    expect(root).toContain('--v6c-send-fill: #1A1C1F;')
+    expect(root).toContain('--v6c-send-fg: #FFFFFF;')
+    expect(dark).toContain('--v6c-send-fill: #FFFFFF;')
+    expect(dark).toContain('--v6c-send-fg: #141414;')
+  })
+
+  it('paints a pure achromatic neutral wall and chrome without blue or warm cast', () => {
+    for (const block of [root, dark]) {
+      const wall = /--v6c-wall:\s*([^;]+);/.exec(block)?.[1] ?? ''
+      expect(wall, 'wall should be declared').not.toBe('')
+      expect(wall, 'wall should be calm flat neutral without radial glare').not.toContain('radial-gradient(')
+    }
+    // Pure achromatic neutral grounds: R === G === B on every raw neutral surface.
+    for (const block of [light, dark]) {
+      for (const token of ['--cc-bg', '--cc-paper', '--cc-s0', '--cc-s1', '--cc-s2', '--cc-user-msg', '--cc-bd', '--cc-bd2']) {
+        const color = hex(block, token)
+        expect(color.r, `${token} should be pure neutral (R === G)`).toBe(color.g)
+        expect(color.g, `${token} should be pure neutral (G === B)`).toBe(color.b)
+      }
+    }
+    // Both themes unify pre-paint ground and reading paper.
+    expect(hex(light, '--cc-paper').value).toBe(hex(light, '--cc-bg').value)
+    expect(hex(dark, '--cc-paper').value).toBe(hex(dark, '--cc-bg').value)
+  })
+
+  it('provides Codex chat stream utilities (shimmer, edge-fade, quiet work row) without color-mix', () => {
+    expect(normalizedCss).toContain('@keyframes codex-activity-shimmer')
+    expect(normalizedCss).toContain('.codex-shimmer-text {')
+    // Shimmer must keep an opaque base fill under the moving highlight band so
+    // glyphs never vanish outside the 50% sweep window.
+    const shimmer = getThemeBlock('.codex-shimmer-text')
+    expect(shimmer).toContain('background-color: var(--shimmer-base);')
+    expect(shimmer).toContain('background-image: linear-gradient(')
+    // Monochrome send key must paint via `background-image` so `@layer utilities`
+    // `bg-[var(--color-brand)]` on `Button variant="accent"` cannot turn it blue.
+    expect(getThemeBlock('.v6c-send-btn')).toContain('background-image: linear-gradient(var(--v6c-send-fill), var(--v6c-send-fill));')
+    expect(getThemeBlock('.v6c-send-btn:disabled')).toContain('background-image: linear-gradient(var(--color-surface-container-high), var(--color-surface-container-high));')
+    // Under-composer strip stays flush on dark canvas without an elevated slab.
+    expect(getThemeBlock('[data-testid="composer-context-strip"].surface-glass')).toContain('background: transparent;')
+    expect(normalizedCss).toContain('.codex-edge-fade {')
+    expect(normalizedCss).toContain('.codex-work-row {')
+    expect(normalizedCss).toContain('.thinking-cursor {')
+    expect(normalizedCss).toContain('.turn-status-shimmer {')
+  })
+
+  it('reads on cool paper while <html> keeps the pre-paint ground', () => {
+    expect(root).toContain('--color-background: var(--cc-bg);')
+    expect(root).toContain('--color-surface: var(--cc-paper);')
+    expect(root).toContain('--color-surface-container-lowest: var(--cc-paper);')
+    expect(hex(light, '--cc-paper').value).toBe(hex(light, '--cc-bg').value)
+    for (const block of [light, dark]) {
+      const paper = hex(block, '--cc-paper')
+      const rgb = /--cc-paper-rgb:\s*([^;]+);/.exec(block)?.[1]
+      expect(rgb).toBe(`${paper.r}, ${paper.g}, ${paper.b}`)
+    }
+  })
+
+  it('casts only neutral shadows: no elevation token is tinted by the brand', () => {
+    const shadowTokens = [
+      '--cc-shadow-card', '--cc-shadow-composer', '--cc-shadow-overlay',
+      '--shadow-dialog-glass', '--shadow-dropdown-glass', '--shadow-button-primary',
+      '--shadow-raised', '--shadow-segment', '--bevel-cta-rest', '--v6c-send-shadow',
+    ]
+    for (const token of shadowTokens) {
+      for (const match of normalizedCss.matchAll(new RegExp(`${token}:\\s*([^;]+);`, 'g'))) {
+        expect(match[1], `${token} must not glow in the brand color`).not.toMatch(/--cc-ac|--color-brand|--color-primary/)
+      }
+    }
+  })
+
+  it('keeps every V6C glass fill dense enough that text behind never competes', () => {
+    for (const token of ['--color-surface-composer-glass']) {
+      for (const match of normalizedCss.matchAll(new RegExp(`${token}:\\s*([^;]+);`, 'g'))) {
+        const alpha = Number(/,\s*([0-9.]+)\s*\)\s*$/.exec(match[1]!)?.[1])
+        expect(alpha, `${token} "${match[1]}" is too sheer`).toBeGreaterThanOrEqual(0.8)
+      }
+    }
+    for (const token of ['--glass-rim', '--glass-top-rim', '--color-sidebar-glass']) {
+      expect(root, `${token} light`).toContain(`${token}:`)
+      expect(getThemeBlock('[data-theme="dark"]'), `${token} dark`).toContain(`${token}:`)
+    }
+  })
+
+  it('shields the floating composer with an opaque, Safari-15-safe fade', () => {
+    const shield = getThemeBlock('.composer-fade::before')
+    // `transparent` interpolates through black on Safari 15 and greys the fade.
+    expect(shield).not.toMatch(/\btransparent\b/)
+    expect(shield).toMatch(/linear-gradient\(to bottom, rgba\(var\(--cc-paper-rgb\), 0\)[^;]*var\(--color-surface\) 100%\)/)
+    expect(getThemeBlock('.composer-fade')).toContain('background-color: var(--color-surface);')
+  })
+
+  it('ships the shared V6C utilities inside @layer components', () => {
+    const layered = normalizedCss.slice(normalizedCss.indexOf('/* ─── V6C Calm Liquid Glass utilities'))
+    const layerStart = normalizedCss.lastIndexOf('@layer components {', normalizedCss.indexOf('/* ─── V6C Calm Liquid Glass utilities'))
+    expect(layerStart).toBeGreaterThanOrEqual(0)
+    for (const selector of [
+      '.v6c-ambient-shell {', '.v6c-main-canvas {', '.v6c-sidebar-glass {', '.v6c-glass-card {',
+      '.v6c-raised {', '.v6c-field {', '.v6c-track {', '.v6c-row-highlight {', '.v6c-active-bar::before {',
+      '.v6c-ring-running {', '.v6c-ring-waiting {', '.v6c-ring-success {', '.v6c-ring-error {',
+      '.v6c-pressable {', '.v6c-send-btn {', '.v6c-send-btn:disabled {',
+    ]) {
+      expect(layered, `missing utility ${selector}`).toContain(selector)
+    }
+    expect(getThemeBlock('.v6c-send-btn')).toContain('box-shadow: var(--v6c-send-shadow);')
+  })
+
+  it('drops every glass surface to an opaque fill under reduced transparency', () => {
+    const media = getThemeBlock('@media (prefers-reduced-transparency: reduce)')
+    for (const selector of ['.glass-panel', '.surface-glass', '.dropdown-glass', '.dialog-panel', '.composer-glass', '.v6c-glass-card', '.v6c-sidebar-glass']) {
+      expect(media, `${selector} under prefers-reduced-transparency`).toContain(selector)
+    }
+    expect(media).toContain('backdrop-filter: none;')
+    expect(normalizedCss).toMatch(/html\[data-reduced-transparency="true"\] :is\([^)]*\.composer-glass[^)]*\) \{[^}]*backdrop-filter: none;/)
+    expect(normalizedCss).toContain('html[data-reduced-transparency="true"] .v6c-sidebar-glass {')
+    expect(getThemeBlock('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))')).toContain('.v6c-sidebar-glass')
+  })
+
+  it('draws V6C status rings as inset outlines so overflow-hidden cards never clip them', () => {
+    for (const ring of ['running', 'waiting', 'success', 'error'] as const) {
+      const value = new RegExp(`--v6c-ring-${ring}:\\s*([^;]+);`).exec(root)?.[1] ?? ''
+      expect(value, `--v6c-ring-${ring} should be inset`).toMatch(/^inset\s+0\s+0\s+0\s+1\.5px\b/)
+      const rule = getThemeBlock(`.v6c-ring-${ring}`)
+      expect(rule).toContain(`var(--v6c-ring-${ring})`)
+      expect(rule).toContain('var(--shadow-card)')
+      expect(rule).toContain('var(--glass-rim)')
+    }
+  })
+
+  it('keeps .composer-glass free of backdrop-filter so descendant popovers blur cleanly without text bleed-through', () => {
+    // A `backdrop-filter` on `.composer-glass` creates a Chromium Backdrop Root
+    // that disables blur on descendant `.dropdown-glass` menus.
+    const composer = getThemeBlock('.composer-glass')
+    expect(composer).not.toMatch(/backdrop-filter\s*:/)
+    for (const token of ['--color-surface-glass', '--color-surface-composer-glass']) {
+      for (const match of normalizedCss.matchAll(new RegExp(`${token}:\\s*([^;]+);`, 'g'))) {
+        const alpha = Number(/,\s*([0-9.]+)\s*\)\s*$/.exec(match[1]!)?.[1])
+        expect(alpha, `${token} "${match[1]}" should be >= 0.95 to prevent bleed-through`).toBeGreaterThanOrEqual(0.95)
+      }
+    }
+  })
+
+  it('keeps .dropdown-glass inside @layer components so focus-visible rings and hover utilities win on glass buttons', () => {
+    const componentsStart = normalizedCss.lastIndexOf('@layer components {', normalizedCss.indexOf('.dropdown-glass {'))
+    expect(componentsStart).toBeGreaterThanOrEqual(0)
+    const componentsBlock = getThemeBlock('@layer components')
+    expect(componentsBlock).toContain('.dropdown-glass {')
+    expect(componentsBlock).toContain('.surface-glass {')
+    // Must appear after `.v6c-raised` so floating buttons using both keep the
+    // frosted glass rest surface while utility hover/focus-visible still win.
+    expect(componentsBlock.indexOf('.dropdown-glass {')).toBeGreaterThan(componentsBlock.indexOf('.v6c-raised {'))
+  })
+
+  it('lets .v6c-send-btn:active override .control-bevel-cta:active without a duplicate inset hairline', () => {
+    const componentsBlock = getThemeBlock('@layer components')
+    expect(componentsBlock).toContain('.control-bevel-cta:not(.v6c-send-btn)::before {')
+    const bevelActive = componentsBlock.indexOf('.control-bevel-cta:active:not(:disabled):not([aria-haspopup]) {')
+    const sendActive = componentsBlock.indexOf('.v6c-send-btn:active:not(:disabled):not([aria-haspopup]) {')
+    expect(bevelActive).toBeGreaterThanOrEqual(0)
+    expect(sendActive).toBeGreaterThan(bevelActive)
+  })
+
+  it('keeps dark-mode switch thumbs lit and inspector surfaces on cool paper', () => {
+    expect(root).toContain('--color-inspector-surface: var(--cc-paper);')
+    expect(dark).toContain('--color-switch-thumb: var(--cc-t1);')
+  })
+
+  it('keeps light-mode glass shadows airy and restrained rather than heavy halos', () => {
+    const lightShadowTokens = [
+      '--cc-shadow-card', '--cc-shadow-composer', '--cc-shadow-overlay',
+      '--shadow-dialog-glass', '--shadow-dropdown-glass', '--shadow-raised',
+      '--shadow-segment', '--v6c-row-highlight-shadow',
+    ]
+    for (const token of lightShadowTokens) {
+      const value = new RegExp(`${token}:\\s*([^;]+);`).exec(`${light}\n${root}`)?.[1] ?? ''
+      expect(value, `${token} should be declared`).not.toBe('')
+      for (const [, alpha] of value.matchAll(/rgba\([^)]*,\s*([0-9.]+)\)/g)) {
+        expect(Number(alpha), `${token} alpha ${alpha} is too heavy for light glass`).toBeLessThanOrEqual(0.14)
+      }
+    }
+  })
+
+  it('keeps --v6c-row-highlight visibly distinct from .dropdown-glass ground in both themes', () => {
+    const parseHex = (hex: string) => {
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim())
+      if (!m) throw new Error(`Expected hex color, got ${hex}`)
+      return [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)] as const
+    }
+    const parseRgba = (rgba: string) => {
+      const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(rgba.trim())
+      if (!m) throw new Error(`Expected rgba color, got ${rgba}`)
+      return [Number(m[1]), Number(m[2]), Number(m[3])] as const
+    }
+    const channelDelta = (a: readonly [number, number, number], b: readonly [number, number, number]) =>
+      Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+
+    const lightHighlight = /--v6c-row-highlight:\s*([^;]+);/.exec(root)?.[1] ?? ''
+    const lightGlass = /--color-surface-glass:\s*([^;]+);/.exec(root)?.[1] ?? ''
+    expect(channelDelta(parseHex(lightHighlight), parseRgba(lightGlass))).toBeGreaterThanOrEqual(15)
+
+    const darkHighlight = /--v6c-row-highlight:\s*([^;]+);/.exec(dark)?.[1] ?? ''
+    const darkGlass = /--color-surface-glass:\s*([^;]+);/.exec(dark)?.[1] ?? ''
+    expect(channelDelta(parseHex(darkHighlight), parseRgba(darkGlass))).toBeGreaterThanOrEqual(15)
   })
 })

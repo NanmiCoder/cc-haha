@@ -713,6 +713,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }, [slashFilter])
 
   useEffect(() => {
+    setSlashSelectedIndex((prev) =>
+      filteredCommands.length === 0 ? 0 : Math.min(prev, filteredCommands.length - 1),
+    )
+  }, [filteredCommands.length])
+
+  useEffect(() => {
     const activeItem = slashMenuOpen ? slashItemRefs.current[slashSelectedIndex] : null
     if (activeItem && typeof activeItem.scrollIntoView === 'function') {
       activeItem.scrollIntoView({ block: 'nearest' })
@@ -1247,7 +1253,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         return true
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           event.key === 'Enter' &&
           exactSlashCommand &&
@@ -1623,9 +1629,9 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         <div
           ref={panelRef}
           data-testid="empty-session-composer-panel"
-          // Kept identical to ChatInput's floating studio card:
-          // `.composer-glass` + `--radius-2xl` (16px) + crisp `--color-brand` focus ring.
-          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 transition-[border-color,box-shadow] duration-150 ease-out focus-within:border-[var(--color-brand)] focus-within:ring-2 focus-within:ring-[var(--color-brand-soft)] ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          // Kept identical to ChatInput's floating V6C studio card:
+          // `.composer-glass` + `--radius-2xl` (16px) + calm `--color-outline` focus edge.
+          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 transition-[border-color,box-shadow] duration-150 ease-out focus-within:border-[var(--color-outline)] ${isDragActive ? 'composer-drop-target-active' : ''}`}
           {...dragHandlers}
         >
           {isDragActive && (
@@ -1760,8 +1766,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                     aria-label={t('chat.composerTools')}
                     aria-haspopup="menu"
                     aria-expanded={plusMenuOpen}
-                    className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-                      plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+                    className={`v6c-pressable inline-flex items-center justify-center rounded-[var(--radius-card-inner)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                      plusMenuOpen ? 'v6c-raised text-[var(--color-text-primary)]' : ''
                     } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
                   >
                     <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
@@ -1838,20 +1844,18 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   lockedProviderId={isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : undefined}
                   disabled={isSubmitting}
                   compact={isMobileComposer}
-                  permissionModeLabel={t(PERMISSION_MODE_LABEL_KEYS[draftPermissionMode])}
-                  onOpenPermissions={() => permissionSelectorRef.current?.open()}
                 />
                 <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                 <Button
                   variant="accent"
-                  size="base"
-                  shape="circle"
+                  size="md"
+                  shape="key"
                   onClick={handleSubmit}
                   disabled={!canSubmit}
                   aria-label={t('common.run')}
                   title={t('common.run')}
-                  className={`shrink-0 motion-safe:enabled:hover:scale-[1.03] motion-safe:enabled:active:scale-[0.98] ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                  icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
+                  className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
+                  icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />}
                 />
               </div>
             </div>
@@ -1891,7 +1895,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     // viewport-clamped top inset so typing multiline drafts or toggling
     // attachments never jumps the hero upward. On a phone the composer stays
     // docked to the bottom above the keyboard and the project stays at the top.
-    <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
+    <div className="v6c-main-canvas relative flex flex-1 flex-col overflow-hidden">
       {isMobileComposer ? (
         <>
           <div data-testid="empty-session-mobile-launch" className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-4 pt-1">

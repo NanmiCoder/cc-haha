@@ -957,6 +957,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [slashFilter])
 
   useEffect(() => {
+    setSlashSelectedIndex((prev) =>
+      filteredCommands.length === 0 ? 0 : Math.min(prev, filteredCommands.length - 1),
+    )
+  }, [filteredCommands.length])
+
+  useEffect(() => {
     const activeItem = slashMenuOpen ? slashItemRefs.current[slashSelectedIndex] : null
     if (activeItem && typeof activeItem.scrollIntoView === 'function') {
       activeItem.scrollIntoView({ block: 'nearest' })
@@ -1471,7 +1477,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         return true
       }
       if (event.key === 'Enter') {
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           exactSlashCommand &&
           !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
@@ -1489,7 +1495,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       }
       if (event.key === 'Tab') {
         event.preventDefault()
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (selected) selectSlashCommand(selected.name)
         return true
       }
@@ -1889,7 +1895,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   key={message.id}
                   data-testid="pending-user-message"
                   className={[
-                    'flex min-h-9 min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] py-1 pl-3 pr-1',
+                    'flex min-h-9 min-w-0 items-center gap-2.5 rounded-[var(--radius-card-inner)] py-1 pl-3 pr-1',
                     'border border-dashed border-[var(--color-outline)] bg-[var(--color-surface-container-low)]',
                     'text-[13px] text-[var(--color-text-secondary)]',
                   ].join(' ')}
@@ -1913,7 +1919,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                           }
                         }}
                         aria-label={t('chat.pendingMessageEditInput')}
-                        className="min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
+                        className="v6c-field min-w-0 flex-1 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
                         autoFocus
                       />
                       <Button
@@ -1977,9 +1983,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         <div
           ref={panelRef}
           data-testid="chat-input-panel"
-          // Floating studio composer shell: hairline border, ambient shadow,
-          // `--radius-2xl` (16px) corners, and crisp `--color-brand` focus ring.
-          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 transition-[border-color,box-shadow] duration-150 ease-out focus-within:border-[var(--color-brand)] focus-within:ring-2 focus-within:ring-[var(--color-brand-soft)] ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          // Floating V6C liquid-glass composer shell: hairline glass rim, neutral
+          // elevation, `--radius-2xl` (16px) corners, calm focus edge (no glow).
+          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 transition-[border-color,box-shadow] duration-150 ease-out focus-within:border-[var(--color-outline)] ${isDragActive ? 'composer-drop-target-active' : ''}`}
           onFocusCapture={handlePanelFocusCapture}
           onBlurCapture={handlePanelBlurCapture}
           {...dragHandlers}
@@ -2179,11 +2185,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       aria-label={t('chat.composerTools')}
                       aria-haspopup="menu"
                       aria-expanded={plusMenuOpen}
-                      // A quiet 28px square like every other toolbar control;
-                      // the open state keeps the hover fill so the menu reads as
-                      // anchored to it.
-                      className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-                        plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+                      // V6C 10px card-inner square for the "+" launcher; the open
+                      // state lifts onto the raised glass face.
+                      className={`v6c-pressable inline-flex items-center justify-center rounded-[var(--radius-card-inner)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                        plusMenuOpen ? 'v6c-raised text-[var(--color-text-primary)]' : ''
                       } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
                     >
                       <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
@@ -2278,8 +2283,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   disabled={isActive}
                   compact={useCompactControls}
                   fluid={isMobileComposer}
-                  permissionModeLabel={t(PERMISSION_MODE_LABEL_KEYS[resolvedPermissionMode])}
-                  onOpenPermissions={() => permissionSelectorRef.current?.open()}
                 />
               )}
               {memberRuntimeSelection && (
@@ -2302,25 +2305,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               )}
               {stopOffer === 'background' || (stopOffer === 'turn' && canSubmit && !isMemberSession) ? (
                 // Stopping background work, or stopping a running turn while a
-                // follow-up message is ready to queue: crisp circular stop beside the primary CTA.
+                // follow-up message is ready to queue: 36px 11px-radius stop key beside the primary CTA.
                 <Button
                   variant="primary"
-                  size="base"
-                  shape="circle"
+                  size="md"
+                  shape="key"
                   onClick={() => stopGeneration(activeTabId!)}
                   aria-label={t('common.stop')}
                   title={t('chat.stopTitle')}
-                  className={`shrink-0 hover:bg-[var(--color-error)] hover:text-[var(--color-on-error)] motion-safe:enabled:hover:scale-[1.03] motion-safe:enabled:active:scale-[0.98] ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                  icon={<Square data-icon="stop" size={isMobileComposer ? 12 : 10} strokeWidth={2} fill="currentColor" aria-hidden="true" />}
+                  className={`shrink-0 hover:bg-[var(--color-error)] hover:text-[var(--color-on-error)] ${isMobileComposer ? 'h-11 w-11' : ''}`}
+                  icon={<Square data-icon="stop" size={isMobileComposer ? 12 : 11} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />}
                 />
               ) : null}
-              {/* Morphing 32px circular CTA (44px on mobile touch): switches cleanly
-                  between Send (up-arrow), Queue/Steer (when a turn is running and draft is ready),
-                  and Stop (ink circle turning destructive on hover when a turn is running with empty draft). */}
+              {/* Morphing 36px 11px-radius V6C send key (44px on mobile touch): switches cleanly
+                  between Send (up-arrow, sculptural `.v6c-send-btn`), Queue/Steer (when a turn is
+                  running and draft is ready), and Stop (ink key turning destructive on hover when
+                  a turn is running with empty draft). */}
               <Button
                 variant={stopOffer === 'turn' && (!canSubmit || isMemberSession) ? 'primary' : 'accent'}
-                size="base"
-                shape="circle"
+                size="md"
+                shape="key"
                 onClick={stopOffer === 'turn' && (!canSubmit || isMemberSession) ? () => stopGeneration(activeTabId!) : handleSubmit}
                 disabled={stopOffer === 'turn' && (!canSubmit || isMemberSession) ? false : !canSubmit}
                 aria-label={stopOffer === 'turn' && (!canSubmit || isMemberSession) ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run')}
@@ -2332,15 +2336,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       : t('common.run')
                 }
                 // 44px on touch is the platform minimum for a primary target;
-                // the desktop circle stays at the size's own 32px.
-                className={`shrink-0 motion-safe:enabled:hover:scale-[1.03] motion-safe:enabled:active:scale-[0.98] ${
+                // the desktop key sits at 36×36 (`size="md" shape="key"`).
+                className={`shrink-0 ${
                   stopOffer === 'turn' && (!canSubmit || isMemberSession)
                     ? 'hover:bg-[var(--color-error)] hover:text-[var(--color-on-error)]'
                     : ''
                 } ${isMobileComposer ? 'h-11 w-11' : ''}`}
                 icon={stopOffer === 'turn' && (!canSubmit || isMemberSession)
-                  ? <Square data-icon="stop" size={isMobileComposer ? 12 : 10} strokeWidth={2} fill="currentColor" aria-hidden="true" />
-                  : <ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
+                  ? <Square data-icon="stop" size={isMobileComposer ? 12 : 11} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />
+                  : <ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />}
               />
             </div>
           </div>

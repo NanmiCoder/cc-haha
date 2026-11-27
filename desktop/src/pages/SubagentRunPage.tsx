@@ -861,6 +861,7 @@ function AgentSessionView({
               <Badge
                 tone="neutral"
                 size="xs"
+                pill={false}
                 bordered
                 mono
                 title={t('subagentRun.model')}
@@ -873,6 +874,7 @@ function AgentSessionView({
               <Badge
                 tone="neutral"
                 size="xs"
+                pill={false}
                 bordered
                 title={t('model.effort')}
                 aria-label={`${t('model.effort')}: ${runEffort}`}
@@ -912,7 +914,7 @@ function AgentSessionView({
         <div role="status" className="flex flex-1 items-center justify-center text-sm text-[var(--color-text-tertiary)]">{loadingLabel}</div>
       ) : null}
       {error ? (
-        <div role="alert" className="mx-auto mt-4 w-[calc(100%-40px)] max-w-[var(--chat-content-max-width)] rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
+        <div role="alert" className="v6c-glass-card v6c-ring-error mx-auto mt-4 w-[calc(100%-40px)] max-w-[var(--chat-content-max-width)] rounded-[var(--radius-lg)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
           {error}
         </div>
       ) : null}
@@ -970,7 +972,7 @@ function effortLabel(effort: string | null, t: TranslationFn): string {
 
 function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationFn }) {
   return (
-    <Badge tone={statusTone(status)} size="xs" bordered>
+    <Badge tone={statusTone(status)} size="xs" pill={false} bordered>
       {getSubagentStatusLabel(status, t)}
     </Badge>
   )

@@ -23,6 +23,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
   const t = useTranslation()
   const openTaskEditor = useTaskStore(state => state.openTaskEditor)
   const [showMenu, setShowMenu] = useState(false)
+  const [activeMenuItem, setActiveMenuItem] = useState<'edit' | 'toggle' | 'delete' | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
   const [logsRefreshKey, setLogsRefreshKey] = useState(0)
@@ -34,7 +35,10 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
   // `mousedown`, which does not fire reliably for touch — on the H5 build
   // tapping outside left this menu open. Escape now closes them too; neither
   // overlay lives inside a dialog, so no propagation guard is needed.
-  const closeMenu = useCallback(() => setShowMenu(false), [])
+  const closeMenu = useCallback(() => {
+    setShowMenu(false)
+    setActiveMenuItem(null)
+  }, [])
   const closeConfirm = useCallback(() => setConfirmAction(null), [])
 
   useDismissable({ open: showMenu, refs: [menuRef], onDismiss: closeMenu })
@@ -77,7 +81,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
     }
   }
 
-  const menuItem = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors'
+  const menuItem = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-left text-[13px] transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none'
 
   // One meta line rather than three stacked fragments, per the handoff: the
   // row is scanned for its name and its schedule, and the rest reads as a
@@ -117,7 +121,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
 
         {/* Right: schedule + actions. The schedule is a sentence, not code, so
             it is not set in mono; the raw cron stays on hover. */}
-        <Badge tabularNums title={task.cron} icon={<Clock size={11} strokeWidth={1.75} aria-hidden="true" />}>
+        <Badge pill={false} tabularNums title={task.cron} icon={<Clock size={11} strokeWidth={1.75} aria-hidden="true" />}>
           {describeTaskSchedule(task, t)}
         </Badge>
 
@@ -173,12 +177,18 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
             />
 
             {showMenu && !confirmAction && (
-              <div className="dropdown-glass popover-motion absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-lg)] p-1">
+              <div
+                onMouseLeave={() => setActiveMenuItem(null)}
+                className="dropdown-glass popover-motion absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-xl)] p-[5px]"
+              >
                 {/* Edit */}
                 <button
                   type="button"
-                  onClick={() => { setShowMenu(false); openTaskEditor(task.id) }}
-                  className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
+                  onMouseEnter={() => setActiveMenuItem('edit')}
+                  onFocus={() => setActiveMenuItem('edit')}
+                  onBlur={() => setActiveMenuItem((cur) => (cur === 'edit' ? null : cur))}
+                  onClick={() => { closeMenu(); openTaskEditor(task.id) }}
+                  className={`${menuItem} text-[var(--color-text-primary)] ${activeMenuItem === 'edit' ? 'v6c-row-highlight' : ''}`}
                 >
                   <Pencil size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
                   {t('tasks.edit')}
@@ -188,8 +198,11 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                 {!finished && (
                   <button
                     type="button"
-                    onClick={() => setConfirmAction('toggle')}
-                    className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
+                    onMouseEnter={() => setActiveMenuItem('toggle')}
+                    onFocus={() => setActiveMenuItem('toggle')}
+                    onBlur={() => setActiveMenuItem((cur) => (cur === 'toggle' ? null : cur))}
+                    onClick={() => { setActiveMenuItem(null); setConfirmAction('toggle') }}
+                    className={`${menuItem} text-[var(--color-text-primary)] ${activeMenuItem === 'toggle' ? 'v6c-row-highlight' : ''}`}
                   >
                     {task.enabled
                       ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
@@ -205,8 +218,11 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                     token for exactly this. */}
                 <button
                   type="button"
-                  onClick={() => setConfirmAction('delete')}
-                  className={`${menuItem} text-[var(--color-error)] hover:bg-[var(--color-error-soft)]`}
+                  onMouseEnter={() => setActiveMenuItem('delete')}
+                  onFocus={() => setActiveMenuItem('delete')}
+                  onBlur={() => setActiveMenuItem((cur) => (cur === 'delete' ? null : cur))}
+                  onClick={() => { setActiveMenuItem(null); setConfirmAction('delete') }}
+                  className={`${menuItem} text-[var(--color-error)] ${activeMenuItem === 'delete' ? 'bg-[var(--color-error-soft)]' : 'hover:bg-[var(--color-error-soft)]'}`}
                 >
                   <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
                   {t('common.delete')}

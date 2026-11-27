@@ -94,7 +94,7 @@ export function UserMessageEditor({
       // The keys typed here belong to the editor; the message list reads arrows
       // and Space as scroll intent.
       onKeyDown={(event) => event.stopPropagation()}
-      className="relative flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
+      className="v6c-glass-card relative flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-2.5"
     >
       {triggers.menus}
       {draft.agentTeam ? (

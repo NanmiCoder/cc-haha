@@ -625,7 +625,7 @@ describe('AppShell boot flow', () => {
     expect(screen.queryByTestId('mobile-shell-stub')).not.toBeInTheDocument()
   })
 
-  it('frames the desktop workspace as a full-bleed split separated by a hairline border without grain', async () => {
+  it('frames the desktop workspace with the V6C ambient wall and calm reading canvas without grain', async () => {
     mocks.layout = 'desktop'
 
     const { container } = render(<AppShell />)
@@ -633,11 +633,11 @@ describe('AppShell boot flow', () => {
     await screen.findByText('content loaded')
     const shell = container.querySelector('.app-shell')
     const main = screen.getByRole('main')
-    expect(shell).toHaveClass('bg-[var(--color-surface-sidebar)]')
+    expect(shell).toHaveClass('v6c-ambient-shell')
     expect(shell).not.toHaveClass('surface-grain')
     expect(main).toHaveAttribute('data-canvas-inset', 'false')
     expect(main).toHaveClass(
-      'bg-[var(--color-surface)]',
+      'v6c-main-canvas',
       'border-l',
       'border-[var(--color-border)]',
     )

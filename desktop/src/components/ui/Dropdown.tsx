@@ -258,10 +258,10 @@ export function Dropdown<T extends string>({
       tabIndex={-1}
       onKeyDown={handleListKeyDown}
       className={cx(
-        // Menus are frosted cards (12px) with padded rows; one recipe here
-        // settles the corner, hairline glass border, and motion for every
-        // Dropdown menu in the app.
-        'dropdown-glass popover-motion z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1 focus:outline-none',
+        // Menus are frosted V6C popovers (14px, 5px inset) with 9px rows, so
+        // row and sheet corners stay concentric; one recipe here settles the
+        // corner, glass rim, and motion for every Dropdown menu in the app.
+        'dropdown-glass popover-motion z-[var(--z-dropdown)] rounded-[var(--radius-xl)] p-[5px] focus:outline-none',
         portal || maxHeight ? 'overflow-y-auto scrollbar-autohide' : 'overflow-hidden',
         !portal && '[-webkit-app-region:no-drag]',
         !portal && (align === 'right' ? 'right-0' : 'left-0'),
@@ -284,9 +284,13 @@ export function Dropdown<T extends string>({
           }}
           onMouseEnter={() => setActiveIndex(index)}
           className={cx(
-            'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors',
+            'flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 py-2 text-left transition-[background-color,box-shadow] duration-150 ease-out',
             item.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-            (index === activeIndex || item.value === value) && !item.disabled && 'bg-[var(--color-surface-hover)]',
+            // The keyboard/pointer row is lifted glass; the chosen value keeps
+            // only a quiet fill so the two never read as the same state.
+            index === activeIndex && !item.disabled
+              ? 'v6c-row-highlight'
+              : item.value === value && !item.disabled && 'bg-[var(--color-surface-hover)]',
           )}
         >
           {item.icon && (

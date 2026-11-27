@@ -11,13 +11,14 @@ import { describe, expect, it } from 'vitest'
  * shipped at `--radius-lg` in one and `--radius-xl` in the other, and only a
  * walkthrough that opened both in the same session caught it.
  *
- * Every popover above the composer row (「素」: model, effort, permission
- * mode, the + menu, slash commands, references, context) is a menu sheet at
- * the card corner, `--radius-lg`; only the composer card itself is `xl`. The
- * shared recipe lives in `composerMenuStyles.ts`, so a component may either
- * use `COMPOSER_POPOVER` or spell the panel inline — both are held here.
+ * Every popover above the composer row (V6C: model, effort, permission
+ * mode, the + menu, slash commands, references, context) is a 14px frosted
+ * glass sheet at `--radius-xl`, concentric with the 16px (`--radius-2xl`)
+ * composer card itself. The shared recipe lives in `composerMenuStyles.ts`,
+ * so a component may either use `COMPOSER_POPOVER` or spell the panel
+ * inline — both are held here.
  */
-const OVERLAY_RADIUS = 'rounded-[var(--radius-lg)]'
+const OVERLAY_RADIUS = 'rounded-[var(--radius-xl)]'
 
 function source(relativePath: string): string {
   return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8')

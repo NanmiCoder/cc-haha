@@ -41,6 +41,24 @@ export const workspaceOpen = {
   sideChat(sessionId: string, sideChatId: string) {
     return openWorkspaceTarget({ sessionId, target: { kind: 'side-chat', sideChatId } })
   },
+  backgroundTask(sessionId: string, taskId: string, options?: {
+    title?: string
+    toolUseId?: string
+    background?: boolean
+    origin?: WorkspaceOrigin
+  }) {
+    return openWorkspaceTarget({
+      sessionId,
+      target: {
+        kind: 'background-task',
+        taskId,
+        ...(options?.title ? { title: options.title } : {}),
+        ...(options?.toolUseId ? { toolUseId: options.toolUseId } : {}),
+      },
+      ...(options?.background ? { background: true } : {}),
+      ...(options?.origin ? { origin: options.origin } : {}),
+    })
+  },
   file(sessionId: string, path: string, options?: {
     line?: number
     column?: number

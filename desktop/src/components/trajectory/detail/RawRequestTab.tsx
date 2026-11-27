@@ -43,7 +43,7 @@ export function RawRequestTab({ sessionId, agentId, row }: { sessionId: string; 
   }, [agentId, matchKey, sessionId])
 
   const captureSwitch = (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5">
+    <div className="v6c-glass-card rounded-[var(--radius-lg)] border border-[var(--color-border)] px-3 py-2.5">
       <Switch
         checked={captureEnabled}
         onChange={(enabled) => void setCaptureEnabled(enabled)}

@@ -520,3 +520,14 @@ it('does not restore an empty side panel when only a temporary chat and bottom t
   expect(saved.sessions.parent?.bottomOpen).toBe(true)
   expect(saved.sessions.parent?.activeSideTabId).toBeNull()
 })
+
+it('omits ephemeral background-task tabs during serialization without leaving an empty side panel', () => {
+  const store = useWorkspaceStore.getState()
+  store.openTarget('parent', { kind: 'terminal', dock: 'bottom', cwd: '/repo' })
+  store.openTarget('parent', { kind: 'background-task', taskId: 'ci-1', title: 'Watch CI' })
+  const state = useWorkspaceStore.getState()
+  const saved = serializeWorkspace(state.bySession, state)
+  expect(JSON.stringify(saved)).not.toContain('ci-1')
+  expect(saved.sessions.parent?.layout).toBe('hidden')
+  expect(saved.sessions.parent?.activeSideTabId).toBeNull()
+})

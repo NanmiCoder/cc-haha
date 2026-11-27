@@ -98,9 +98,8 @@ export type SettingsGroupProps = {
 /**
  * The grouped card that holds a section's rows, with a hairline between each.
  *
- * Uses `--color-surface-container` (`#FFFFFF` on Cold Porcelain, `#111111` on
- * True OLED Black) plus the subtle 1px tactile bevel so rows sit cleanly lifted
- * above the page canvas.
+ * Uses the V6C 14px grouped glass card (`.v6c-glass-card` + `--radius-xl`) so
+ * rows sit cleanly lifted above the page canvas with crisp hairline dividers.
  *
  * Deliberately not `overflow-hidden`: rows host `Dropdown`s, whose menus are
  * absolutely positioned inside the row and would be clipped by the card.
@@ -111,7 +110,7 @@ export function SettingsGroup({ title, description, action, className, children,
     <div
       {...rest}
       className={cx(
-        'rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] shadow-[var(--bevel-surface-rest)]',
+        'v6c-glass-card rounded-[var(--radius-xl)] border border-[var(--color-border)]',
         'divide-y divide-[var(--color-border)]',
         className,
       )}
@@ -290,12 +289,12 @@ export type SettingsPillProps = {
 } & Pick<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'disabled'>
 
 const PILL_SELECTED = {
-  ink: 'control-bevel-cta bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] border-transparent',
+  ink: 'v6c-pressable bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-raised)]',
   terracotta:
-    'control-bevel bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] border-[var(--color-primary-fixed-dim)]',
+    'v6c-pressable bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] border-[var(--color-primary-fixed-dim)]',
 } as const
 
-/** A `rounded-full` single-choice chip, for option sets that wrap onto several lines. */
+/** A 6px single-choice chip, for option sets that wrap onto several lines. */
 export function SettingsPill({
   selected,
   tone = 'ink',
@@ -311,13 +310,13 @@ export function SettingsPill({
       onClick={onClick}
       aria-pressed={selected}
       className={cx(
-        'inline-flex h-7 items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-medium',
+        'inline-flex h-7 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border px-3 text-xs font-medium',
         'transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
           ? PILL_SELECTED[tone]
-          : 'control-bevel border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+          : 'v6c-raised v6c-pressable border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]',
         className,
       )}
     >
@@ -338,7 +337,7 @@ export function SettingsStat({ label, value, hint, className }: SettingsStatProp
   return (
     <div
       className={cx(
-        'grid min-w-0 gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-3.5 shadow-[var(--bevel-surface-rest)]',
+        'v6c-glass-card grid min-w-0 gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3.5',
         className,
       )}
     >

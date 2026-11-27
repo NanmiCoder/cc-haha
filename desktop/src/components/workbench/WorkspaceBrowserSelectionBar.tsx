@@ -14,7 +14,7 @@ export function WorkspaceBrowserSelectionBar({ sessionId, browserTabId }: { sess
       <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{t('browser.selection.draftCount', { count: draft.items.length })}</span>
       <IconButton icon={<Undo2 size={14} strokeWidth={1.75} />} label={t('browser.selection.undo')} size="xs" onClick={() => { void undoBrowserSelection(browserTabId) }} />
       <IconButton icon={<Trash2 size={14} strokeWidth={1.75} />} label={t('browser.selection.clear')} size="xs" onClick={() => { void discardBrowserSelections(browserTabId) }} />
-      <Button size="sm" icon={<Send size={12} strokeWidth={2} />} onClick={() => { void sendBrowserSelections(sessionId, browserTabId) }}>{t('browser.selection.sendBatch', { count: draft.items.length })}</Button>
+      <Button size="sm" icon={<Send size={12} strokeWidth={1.75} />} onClick={() => { void sendBrowserSelections(sessionId, browserTabId) }}>{t('browser.selection.sendBatch', { count: draft.items.length })}</Button>
     </div>
   )
 }

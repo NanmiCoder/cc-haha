@@ -171,7 +171,7 @@ export function CodeSurface({
     return (
       <div className="grid grid-cols-[32px_minmax(0,720px)] gap-4 bg-[var(--color-info-container)] px-3 py-2 font-body">
         <span aria-hidden="true" />
-        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]">
+        <div className="v6c-glass-card rounded-[var(--radius-lg)] border border-[var(--color-border)]">
           <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-3">
             <MessageSquare size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
             <span className="text-[13px] font-medium text-[var(--color-text-primary)]">{t('workspace.localComment')}</span>
@@ -262,7 +262,7 @@ export function CodeSurface({
     <div
       ref={surfaceRef}
       data-workspace-scroll-surface=""
-      className="min-h-0 flex-1 overflow-auto bg-[var(--color-surface)]"
+      className="min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface)]"
       onMouseUp={handleSelectionMouseUp}
       onKeyDown={(event) => {
         if (event.key === 'Escape') setSelectionMenu(null)

@@ -40,7 +40,7 @@ export function WorkspaceLayoutControls({
   return (
     <div
       data-testid="workspace-layout-controls"
-      className="tab-bar-interactive inline-flex items-center gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-0.5 [-webkit-app-region:no-drag]"
+      className="tab-bar-interactive v6c-track inline-flex items-center gap-0.5 rounded-[var(--radius-control)] p-0.5 [-webkit-app-region:no-drag]"
     >
       {leadingSlot}
       {isVisible && (

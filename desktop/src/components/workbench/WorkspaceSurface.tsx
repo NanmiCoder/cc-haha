@@ -25,6 +25,7 @@ import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
 import { WorkspaceAddMenu } from './WorkspaceAddMenu'
 import { WorkspaceBrowserTab } from './WorkspaceBrowserTab'
+import { WorkspaceBackgroundTaskTab } from './WorkspaceBackgroundTaskTab'
 import { WorkspaceTerminalTab } from './WorkspaceTerminalTab'
 import { useWorkspaceFileWatch } from '@/lib/workspace/useWorkspaceFileWatch'
 import { WorkspaceFileTab } from './WorkspaceFileTab'
@@ -225,7 +226,7 @@ export function WorkspaceSurface({
       ref={surfaceRef}
       data-testid={`workspace-surface-${dock}`}
       aria-label={t('workspace.panelLabel')}
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface)]"
+      className="v6c-main-canvas flex h-full min-h-0 w-full flex-col"
     >
       {watchError ? <p role="status" className="shrink-0 px-3 py-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.files.watchFailed', { reason: watchError })}</p> : null}
       {tabStrip}
@@ -249,6 +250,8 @@ export function WorkspaceSurface({
           />
         ) : activeTab === null ? null : activeTab.kind === 'side-chat' ? (
           <SideChatSurface parentSessionId={sessionId} sideChatId={activeTab.sideChatId} visible={visible} />
+        ) : activeTab.kind === 'background-task' ? (
+          <WorkspaceBackgroundTaskTab sessionId={sessionId} tab={activeTab} active={visible} />
         ) : activeTab.kind === 'browser' ? (
           <WorkspaceBrowserTab sessionId={sessionId} tab={activeTab} active={visible} />
         ) : activeTab.kind === 'terminal' ? (

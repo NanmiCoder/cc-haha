@@ -286,7 +286,7 @@ export function AppShell() {
 
   if (!ready || (shellLayout !== 'desktop' && mobileHandoff !== 'unavailable')) {
     return (
-      <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[13px] text-[var(--color-text-tertiary)]">
+      <div className="app-shell-viewport v6c-main-canvas flex items-center justify-center text-[13px] text-[var(--color-text-tertiary)]">
         {t('app.launching')}
       </div>
     )
@@ -297,7 +297,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface-sidebar)]">
+    <div className="app-shell app-shell-viewport v6c-ambient-shell flex overflow-hidden">
       <div
         id="sidebar-shell"
         ref={sidebarResize.shellRef}
@@ -306,6 +306,14 @@ export function AppShell() {
         data-mobile="false"
         className="sidebar-shell"
       >
+        {/* Render the frosted backdrop as a non-wrapping sibling so `<aside>` and
+            its macOS `[data-desktop-drag-region]` header are not wrapped inside a
+            `backdrop-filter` compositor layer / fixed containing block. */}
+        <div
+          aria-hidden="true"
+          data-testid="sidebar-glass-backdrop"
+          className="v6c-sidebar-glass pointer-events-none absolute inset-0"
+        />
         <Sidebar
           desktopUiPreferencesRequest={desktopUiPreferencesRequest}
           onDesktopUiPreferencesConsumed={consumeDesktopUiPreferencesRequest}
@@ -325,7 +333,7 @@ export function AppShell() {
         id="content-area"
         data-sidebar-state={sidebarOpen ? 'open' : 'closed'}
         data-canvas-inset="false"
-        className={`min-w-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)] ${
+        className={`min-w-0 flex-1 flex flex-col overflow-hidden v6c-main-canvas ${
           isWorkspaceFullscreen
             ? ''
             : 'border-l border-[var(--color-border)]'

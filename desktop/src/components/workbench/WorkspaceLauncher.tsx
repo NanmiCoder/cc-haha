@@ -83,7 +83,7 @@ export function WorkspaceLauncher({
                 disabled={disabledReason !== null}
                 title={disabledReason ?? undefined}
                 onClick={() => onSelect(kind)}
-                className={`group flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${menu || compact ? 'h-8' : 'h-9'}`}
+                className={`group flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${menu || compact ? 'h-8' : 'h-9'}`}
               >
                 <Icon
                   size={16}

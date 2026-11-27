@@ -93,7 +93,7 @@ export function MobileBottomSheet({
         aria-label={ariaLabel ?? (typeof title === 'string' ? title : undefined)}
         data-testid={testId}
         tabIndex={-1}
-        className={`absolute inset-x-0 bottom-0 flex ${tall ? 'max-h-[92dvh]' : 'max-h-[min(78dvh,640px)]'} min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-xl)] border-x-0 border-y border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)] focus:outline-none ${panelClassName}`}
+        className={`absolute inset-x-0 bottom-0 flex ${tall ? 'max-h-[92dvh]' : 'max-h-[min(78dvh,640px)]'} min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-2xl)] border-x-0 border-y border-[var(--color-surface-glass-border)] bg-[var(--color-surface-dialog)] shadow-[var(--glass-top-rim),var(--shadow-overlay)] focus:outline-none ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-3">
@@ -105,7 +105,7 @@ export function MobileBottomSheet({
               type="button"
               aria-label={closeLabel}
               onClick={onClose}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card-inner)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <X size={18} strokeWidth={1.75} aria-hidden="true" />
             </button>

@@ -739,6 +739,41 @@ export function ComponentGallery() {
         </div>
       </Section>
 
+      <Section
+        title="V6C surfaces"
+        note="Calm Liquid Glass utilities from globals.css: the ambient wall, paper canvas, frosted sidebar, glass card, raised/field/track controls, menu highlight, active bar, status rings and the terracotta send key. No colored outer glow anywhere."
+      >
+        <div className="v6c-ambient-shell grid gap-3 rounded-[var(--radius-2xl)] p-4 sm:grid-cols-[180px_1fr]">
+          <div className="v6c-sidebar-glass flex flex-col gap-1 rounded-[var(--radius-xl)] p-2">
+            <div className="v6c-raised v6c-active-bar flex h-[34px] items-center rounded-[var(--radius-control)] pl-4 text-[13px] text-[var(--color-text-primary)]">Active row</div>
+            <div className="flex h-[34px] items-center rounded-[var(--radius-control)] pl-4 text-[13px] text-[var(--color-text-secondary)]">Idle row</div>
+            <div className="v6c-field flex h-8 items-center rounded-[var(--radius-card-inner)] px-3 text-[12px] text-[var(--color-text-tertiary)]">Search field</div>
+          </div>
+          <div className="v6c-main-canvas flex flex-col gap-3 rounded-[var(--radius-xl)] p-4">
+            <div className="flex flex-wrap gap-3">
+              <div className="v6c-glass-card rounded-[var(--radius-lg)] px-3 py-2 text-[13px]">glass card</div>
+              <div className="v6c-glass-card v6c-ring-running rounded-[var(--radius-lg)] px-3 py-2 text-[13px]">running</div>
+              <div className="v6c-glass-card v6c-ring-waiting rounded-[var(--radius-lg)] px-3 py-2 text-[13px]">waiting</div>
+              <div className="v6c-glass-card v6c-ring-success rounded-[var(--radius-lg)] px-3 py-2 text-[13px]">success</div>
+              <div className="v6c-glass-card v6c-ring-error rounded-[var(--radius-lg)] px-3 py-2 text-[13px]">error</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="v6c-track flex h-8 items-center gap-0.5 rounded-[var(--radius-control)] p-[3px] text-[12px]">
+                <span className="v6c-raised rounded-[var(--radius-sm)] px-3 py-1">On track</span>
+                <span className="px-3 py-1 text-[var(--color-text-secondary)]">Off</span>
+              </div>
+              <div className="v6c-row-highlight rounded-[var(--radius-control)] px-3 py-1.5 text-[13px]">Menu highlight</div>
+              <button type="button" className="v6c-send-btn v6c-pressable grid h-9 w-9 place-items-center rounded-[var(--radius-key)]" aria-label="Send (demo)">
+                <Check size={16} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+              <button type="button" disabled className="v6c-send-btn grid h-9 w-9 place-items-center rounded-[var(--radius-key)]" aria-label="Send disabled (demo)">
+                <Check size={16} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </Section>
+
       <Section title="Kbd / ScrollArea" note="Physical keycap hints and single-node auto-hiding scroll containers with optional 24px edge fades.">
         <div className="flex flex-wrap items-center gap-4">
           <KbdGroup>

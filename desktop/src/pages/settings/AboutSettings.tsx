@@ -255,7 +255,7 @@ export function AboutSettings() {
                   {version || t('update.currentVersionUnknown')}
                 </span>
                 {availableVersion && (
-                  <Badge tone="info" size="sm">
+                  <Badge tone="info" size="sm" pill={false}>
                     {t('update.availableLabel')} {availableVersion}
                   </Badge>
                 )}

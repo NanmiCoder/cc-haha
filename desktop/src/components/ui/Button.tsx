@@ -57,12 +57,18 @@ export type ButtonSize = 'xs' | 'sm' | 'base' | 'md' | 'lg'
  * `DISABLED_FILL` exists below. Reproducing primary's colors on `IconButton`
  * would have forked that definition in two, past the token contrast guards.
  */
-export type ButtonShape = 'default' | 'circle'
+/**
+ * `key` is the V6C square send key: the same square footprint as `circle`
+ * (width matches the size's height, no horizontal padding) at the 11px
+ * `--radius-key` corner instead of fully round. Like `circle`, it requires
+ * `aria-label`.
+ */
+export type ButtonShape = 'default' | 'circle' | 'key'
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant
   size?: ButtonSize
-  /** `circle` requires `aria-label`: it renders the icon alone, with no text. */
+  /** `circle` and `key` require `aria-label`: they render the icon alone, with no text. */
   shape?: ButtonShape
   /** Swaps `icon` for a spinner and disables the button. Also sets `aria-busy`. */
   loading?: boolean
@@ -97,10 +103,20 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // competition and has to be found instantly — the composer's send key. Using
   // it anywhere terracotta already marks something else is what `primary`
   // exists to avoid.
+  //
+  // V6C: the face is the sculptural terracotta key (`.v6c-send-btn` — lit
+  // from the upper left, neutral drop shadow, never an outer glow). Its
+  // gradient is a background-image, so the flat brand color utilities below
+  // only paint underneath it as the fallback; `disabled:bg-none` drops the
+  // gradient so the opaque disabled block shows. The glyph is white in both
+  // themes, as on the approved key.
   accent:
-    `control-bevel-cta bg-[var(--color-brand)] text-[var(--color-on-primary)] hover:bg-[var(--color-brand-hover)] ${DISABLED_FILL}`,
+    `control-bevel-cta v6c-send-btn bg-[var(--color-brand)] text-[var(--v6c-send-fg)] hover:bg-[var(--color-brand-hover)] [&:active:not(:disabled):not([aria-haspopup])]:scale-100 ${DISABLED_FILL} disabled:bg-none`,
+  // V6C raised glass: a top-lit fill, a 0.5px contact ring and the glass rim
+  // instead of a drawn border. The border stays (transparent) so swapping a
+  // variant never moves the label by a pixel.
   secondary:
-    `control-bevel bg-[var(--color-surface)] text-[var(--color-text-primary)] border border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] ${DISABLED_FILL}`,
+    `control-bevel v6c-raised text-[var(--color-text-primary)] border border-[var(--color-surface-glass-border)] hover:[background:var(--v6c-raised-fill-hover)] ${DISABLED_FILL} disabled:bg-none`,
   tonal:
     // Text is the darkened pair, not `--color-brand`: the raw accent only makes
     // 4.3:1 on its own soft fill under the two ink palettes.
@@ -175,9 +191,22 @@ const SPINNER_SIZE: Record<ButtonSize, number> = { xs: 11, sm: 12, base: 14, md:
  * the shape that was asked for (see components/AGENTS.md §3.6). Exactly one
  * radius may ever be emitted.
  */
-const SHAPE_RADIUS: Record<ButtonShape, string> = {
-  default: 'rounded-[var(--radius-md)]',
-  circle: 'rounded-full',
+const DEFAULT_SIZE_RADIUS: Record<ButtonSize, string> = {
+  // Compact 20px/24px buttons use 6px corners so a 9px radius does not round
+  // them into visual pills (matching IconButton's 2xs/xs scale).
+  xs: 'rounded-[var(--radius-sm)]',
+  sm: 'rounded-[var(--radius-sm)]',
+  // V6C control corner (9px), concentric with the 14px menus and 16px
+  // composer/dialogs that buttons sit in.
+  base: 'rounded-[var(--radius-control)]',
+  md: 'rounded-[var(--radius-control)]',
+  lg: 'rounded-[var(--radius-control)]',
+}
+
+function radiusFor(shape: ButtonShape, size: ButtonSize): string {
+  if (shape === 'circle') return 'rounded-full'
+  if (shape === 'key') return 'rounded-[var(--radius-key)]'
+  return DEFAULT_SIZE_RADIUS[size]
 }
 
 const BASE_CLASSES = [
@@ -236,12 +265,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       aria-busy={loading || undefined}
       className={cx(
         BASE_CLASSES,
-        SHAPE_RADIUS[shape],
+        radiusFor(shape, size),
         VARIANT_CLASSES[variant],
         SIZE_CLASSES[size],
-        // A circle carries no label, so it takes a matching width instead of
-        // horizontal padding.
-        shape === 'circle' ? SIZE_SQUARE[size] : variant !== 'link' && SIZE_PX[size],
+        // A circle or key carries no label, so it takes a matching width
+        // instead of horizontal padding.
+        shape !== 'default' ? SIZE_SQUARE[size] : variant !== 'link' && SIZE_PX[size],
         block && 'w-full',
         className,
       )}

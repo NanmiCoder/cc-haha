@@ -750,4 +750,27 @@ describe('large directory windowing and truncation', () => {
     expect(useWorkspaceContentStore.getState().treeViewBySession[SESSION]?.scrollTop).toBeGreaterThan(0)
     expect(screen.getByRole('tree').scrollTop).toBeGreaterThan(0)
   })
+
+  it('portals the file context menu to document.body so a narrow glass overlay sidebar cannot offset or clip it', async () => {
+    mocks.getWorkspaceTree.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      truncated: false,
+      totalCount: 1,
+      entries: [{ name: 'index.ts', path: 'index.ts', isDirectory: false }],
+    })
+
+    const { container } = render(
+      <div className="v6c-sidebar-glass">
+        <WorkspaceFileTreePane sessionId={SESSION} selectedPath={null} onOpen={vi.fn()} />
+      </div>,
+    )
+
+    const row = await screen.findByTestId('workspace-tree-row-index.ts')
+    fireEvent.contextMenu(row, { clientX: 820, clientY: 180 })
+
+    const menu = screen.getByRole('menu')
+    expect(container).not.toContainElement(menu)
+    expect(document.body).toContainElement(menu)
+  })
 })

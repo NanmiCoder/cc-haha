@@ -69,24 +69,34 @@ describe('ThinkingBlock', () => {
     expect(screen.getByRole('button')).toHaveTextContent('Thought')
   })
 
-  it('draws one upright row whose chevron turns and whose preview yields to the body when open', () => {
-    // CJK has no italic: the old slanted row was the browser shearing glyphs.
+  it('draws a quiet borderless row whose chevron turns and reveals a flush edge-faded body when open', () => {
     const { container } = render(<ThinkingBlock content={'Checking the retry path first'} />)
     const row = screen.getByRole('button')
     expect(container.querySelector('.italic')).toBeNull()
+    expect(container.querySelector('style')).toBeNull()
+    expect(row.className).toContain('codex-work-row')
     expect(row.textContent).not.toMatch(/[▸▾]/)
+    // No noisy live tail preview in the collapsed row.
+    expect(screen.queryByText('Checking the retry path first')).toBeNull()
     const chevron = row.querySelector('.lucide-chevron-right')
     expect(chevron).not.toBeNull()
     expect(chevron).not.toHaveClass('rotate-90')
-    const preview = screen.getByText('Checking the retry path first')
-    expect(preview).not.toHaveClass('invisible')
 
     fireEvent.click(row)
 
     expect(row.querySelector('.lucide-chevron-right')).toHaveClass('rotate-90')
-    // Hidden but kept, so the row does not reflow when it opens.
-    expect(preview).toHaveClass('invisible')
-    expect(container.querySelector('[data-thinking-content="expanded"]')).toHaveClass('border-l')
+    const expandedBody = container.querySelector('[data-thinking-content="expanded"]')
+    expect(expandedBody).not.toBeNull()
+    expect(expandedBody).toHaveClass('codex-edge-fade', 'max-h-[8.75rem]')
+    expect(expandedBody).not.toHaveClass('border-l')
+    expect(expandedBody?.textContent).toContain('Checking the retry path first')
+  })
+
+  it('applies subtle shimmer only while thinking is active', () => {
+    const { rerender } = render(<ThinkingBlock content="reasoning..." isActive />)
+    expect(screen.getByText('思考中')).toHaveClass('codex-shimmer-text')
+    rerender(<ThinkingBlock content="reasoning..." isActive={false} durationLabel="4s" />)
+    expect(screen.getByText('已思考 · 4s')).not.toHaveClass('codex-shimmer-text')
   })
 
   it('leaves settled segments untouched while an expanded block streams', () => {
@@ -120,7 +130,6 @@ describe('ThinkingBlock', () => {
     const { container, rerender } = render(<ThinkingBlock content={content} isActive />)
     fireEvent.click(screen.getByRole('button'))
     expect(container.querySelectorAll('.markdown-prose').length).toBeGreaterThan(1)
-    expect(container.querySelector('.thinking-cursor')).not.toBeNull()
 
     rerender(<ThinkingBlock content={content} isActive={false} />)
 
@@ -128,7 +137,6 @@ describe('ThinkingBlock', () => {
     expect(bodies).toHaveLength(1)
     expect(bodies[0]).toHaveClass('thinking-markdown')
     expect(bodies[0]).toHaveTextContent('Done.')
-    expect(container.querySelector('.thinking-cursor')).toBeNull()
   })
 
   it('keeps the expanded state across a virtualized row unmount and remount', () => {

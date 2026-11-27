@@ -165,4 +165,16 @@ describe('global idle power status', () => {
     expect(screen.queryByText(/Sleep in/)).not.toBeInTheDocument()
     expect(listen).not.toHaveBeenCalled()
   })
+
+  it('uses low-radius V6C glass surface with crisp semantic status rings', () => {
+    const { rerender } = render(<IdlePowerStatus />)
+    const section = screen.getByRole('region', { name: 'After-task system action' })
+    expect(section).toHaveClass('surface-glass', 'v6c-glass-card', 'v6c-ring-waiting', 'rounded-[var(--radius-lg)]')
+
+    act(() => {
+      useIdlePowerStore.setState({ snapshot: { ...nativeState, countdown: null, notice: 'failed' } })
+    })
+    rerender(<IdlePowerStatus />)
+    expect(screen.getByRole('region', { name: 'After-task system action' })).toHaveClass('v6c-ring-error')
+  })
 })

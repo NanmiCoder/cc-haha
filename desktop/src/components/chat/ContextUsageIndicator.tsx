@@ -540,7 +540,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
         // side by side. The phone shell keeps a 44px square touch target and
         // leaves the number to the accessible name — it sits between two
         // other 44px buttons and has no width to spare.
-        className={`inline-flex shrink-0 items-center rounded-[var(--radius-sm)] bg-transparent transition-colors duration-150 ease-out hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+        className={`v6c-pressable inline-flex shrink-0 items-center rounded-[var(--radius-control)] bg-transparent transition-colors duration-150 ease-out hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
           isMobileBrowser ? 'h-11 w-11 justify-center' : 'h-7 gap-1.5 px-1.5'
         } ${detailsOpen ? 'bg-[var(--color-surface-hover)]' : ''}`}
       >
@@ -565,7 +565,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
           role="dialog"
           aria-label={t('contextIndicator.title')}
           data-testid="context-usage-popover"
-          className="dropdown-glass popover-motion scrollbar-autohide fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-lg)] p-4 text-left"
+          className="dropdown-glass popover-motion scrollbar-autohide fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] p-4 text-left"
           style={{
             top: popoverPosition.top,
             bottom: popoverPosition.bottom,

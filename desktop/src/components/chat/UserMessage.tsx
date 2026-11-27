@@ -200,7 +200,7 @@ export const UserMessage = memo(function UserMessage({
                 />
               </span>
             ) : (
-              <UsersRound size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+              <UsersRound size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
             )}
             <span className="min-w-0 truncate font-mono font-medium text-[var(--color-text-secondary)]">
               {teammateFrom}
@@ -215,7 +215,7 @@ export const UserMessage = memo(function UserMessage({
             {hasText && (
               <div
                 data-message-body="teammate"
-                className="min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)]"
+                className="min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)]"
                 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
               >
                 <MarkdownRenderer
@@ -287,9 +287,9 @@ export const UserMessage = memo(function UserMessage({
             <div
               data-message-body="user"
               className={[
-                'min-w-0 max-w-full rounded-[var(--radius-2xl)] bg-[var(--color-surface-user-msg)] px-4 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words',
+                'min-w-0 max-w-full rounded-[var(--radius-xl)] rounded-br-[var(--radius-xs)] bg-[var(--color-surface-user-msg)] px-4 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words',
                 consecutiveBefore ? 'rounded-tr-[var(--radius-sm)]' : '',
-                consecutiveAfter ? 'rounded-br-[var(--radius-sm)]' : '',
+                consecutiveAfter ? 'rounded-br-[var(--radius-xs)]' : '',
               ].filter(Boolean).join(' ')}
               style={{
                 overflowWrap: 'anywhere',

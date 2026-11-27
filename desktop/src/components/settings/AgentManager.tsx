@@ -310,7 +310,7 @@ export function AgentManager() {
                                 {agent.modelDisplay && <MetaPill mono>{agent.modelDisplay}</MetaPill>}
                                 {agent.provider && <MetaPill>{agent.providerName ?? agent.provider}</MetaPill>}
                                 {agent.effort !== undefined && <MetaPill>{agent.effort}</MetaPill>}
-                                <Badge tone={agent.isActive ? 'success' : 'neutral'}>
+                                <Badge tone={agent.isActive ? 'success' : 'neutral'} pill={false}>
                                   {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
                                 </Badge>
                                 {agent.overriddenBy && (
@@ -423,7 +423,7 @@ function AgentDetailView({
             )}
             {/* Kept alongside the button: the prompt and tools really are fixed,
                 and only the model and effort are not. */}
-            <Badge tone="neutral" icon={<LockKeyhole size={11} strokeWidth={2} aria-hidden="true" />}>
+            <Badge tone="neutral" pill={false} icon={<LockKeyhole size={11} strokeWidth={1.75} aria-hidden="true" />}>
               {t('settings.agents.readOnly')}
             </Badge>
           </div>
@@ -444,7 +444,7 @@ function AgentDetailView({
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           <MetaPill>{sourceLabel}</MetaPill>
-          <Badge tone={agent.isActive ? 'success' : 'neutral'}>
+          <Badge tone={agent.isActive ? 'success' : 'neutral'} pill={false}>
             {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
           </Badge>
           {agent.overriddenBy && (
@@ -496,7 +496,7 @@ function AgentDetailView({
       </SettingsSection>
 
       <SettingsSection title={t('settings.agents.systemPrompt')} description={t('settings.agents.promptHint')}>
-        <div className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+        <div className="v6c-glass-card min-w-0 rounded-[var(--radius-xl)] border border-[var(--color-border)]">
           <div className="flex min-h-9 items-center border-b border-[var(--color-border)] px-4 py-2">
             <span className="min-w-0 break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">
               {agent.target || agent.baseDir || sourceLabel}
@@ -875,7 +875,7 @@ function ToolPicker({
             {t('settings.agents.form.builtInToolsHint')}
           </p>
         </div>
-        <Badge tone="neutral" className="tabular-nums">
+        <Badge tone="neutral" pill={false} className="tabular-nums">
           {t('settings.agents.form.toolsSelectedCount', { count: selectedTools.length })}
         </Badge>
       </div>
@@ -912,7 +912,7 @@ function ToolPicker({
                         aria-label={`${tool} — ${description}`}
                         onClick={() => toggleTool(tool)}
                         className={cx(
-                          'flex min-h-14 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors',
+                          'flex min-h-14 items-start gap-2.5 rounded-[var(--radius-card-inner)] border px-3 py-2.5 text-left transition-colors',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
                           selected
                             ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
@@ -928,7 +928,7 @@ function ToolPicker({
                               : 'border-[var(--color-border-strong)] bg-[var(--color-surface-container-lowest)]',
                           )}
                         >
-                          {selected && <Check size={12} strokeWidth={2.5} />}
+                          {selected && <Check size={12} strokeWidth={1.75} />}
                         </span>
                         <span className="min-w-0">
                           <span className="block font-mono text-xs font-medium text-[var(--color-text-primary)]">{tool}</span>
@@ -1480,7 +1480,7 @@ function AgentEffortField({
         )}
       >
         <span className="min-w-0 flex-1 truncate">{triggerLabel}</span>
-        <ChevronDown aria-hidden="true" size={16} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <ChevronDown aria-hidden="true" size={16} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
       </button>
       <ReasoningEffortPopover
         open={open}
@@ -1562,7 +1562,7 @@ function Field({ label, error, required, children }: { label: string; error?: st
  */
 function MetaPill({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
   return (
-    <Badge tone="neutral" mono={mono}>
+    <Badge tone="neutral" mono={mono} pill={false}>
       {children}
     </Badge>
   )
