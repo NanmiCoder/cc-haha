@@ -72,6 +72,7 @@ let currentEffort = 'high'
 let currentMode = 'default'
 let sessionId = mode === 'fresh' ? 'native-session-fresh-2' : 'native-session-1'
 let pendingPermission = null
+let activeSlowPrompt = null
 
 const buildConfigOptions = () => [
   {
@@ -200,6 +201,33 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       break
     case 'session/prompt': {
       const promptText = rpc.params?.prompt?.[0]?.text ?? ''
+      if (activeSlowPrompt) {
+        // Matches real agy acp v1.5.18 steering handoff: immediately resolves the
+        // superseded prompt with stopReason: 'end_turn' (no usage), continues
+        // streaming, and settles the turn on the steering prompt with final usage.
+        const prev = activeSlowPrompt
+        clearTimeout(prev.timer)
+        activeSlowPrompt = null
+        reply(prev.id, { stopReason: 'end_turn' })
+        update(sessionId, 'usage_update', { used: 20_791, size: 200_000 })
+        if (promptText.includes('[hold-steer]')) {
+          update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'SteerStep:' + promptText } })
+          const timer = setTimeout(() => {
+            if (activeSlowPrompt?.id !== rpc.id) return
+            activeSlowPrompt = null
+            update(sessionId, 'usage_update', { used: 22_000, size: 200_000 })
+            reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 250, outputTokens: 60 } })
+          }, 250)
+          activeSlowPrompt = { id: rpc.id, timer }
+        } else {
+          setTimeout(() => {
+            update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Steered:' + promptText } })
+            update(sessionId, 'usage_update', { used: 22_500, size: 200_000 })
+            reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 250, outputTokens: 60, cachedReadTokens: 80 } })
+          }, 30)
+        }
+        break
+      }
       if (/^\/compact(?:\s|$)/i.test(promptText.trim())) {
         if (promptText.includes('[fail]')) {
           reply(rpc.id, { stopReason: 'refusal' })
@@ -515,9 +543,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       }
       if (promptText.includes('[slow-turn]')) {
         update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Working...' } })
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          if (activeSlowPrompt?.id !== rpc.id) return
+          activeSlowPrompt = null
           reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 15, outputTokens: 5 } })
-        }, 200)
+        }, 250)
+        activeSlowPrompt = { id: rpc.id, timer }
         break
       }
       if (mode === 'fixed-options') {
@@ -551,6 +582,12 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       break
     }
     case 'session/cancel':
+      if (activeSlowPrompt) {
+        const prev = activeSlowPrompt
+        clearTimeout(prev.timer)
+        activeSlowPrompt = null
+        reply(prev.id, { stopReason: 'cancelled' })
+      }
       break
   }
 }
@@ -1337,11 +1374,11 @@ describe('Antigravity ACP server core & integration', () => {
       const bypassPid = enterBypassSpawn!.pid
       expect(wire.filter(w => w.pid === bypassPid && w.method === 'session/set_config_option' && w.params?.configId === 'mode')).toHaveLength(0)
 
-      // #12c steerAntigravitySwarmMember returns busy while responding, and routes + emits session_state_changed when idle
+      // #12c steerAntigravitySwarmMember steers mid-turn while responding, returns busy while a permission prompt is pending, and routes + emits session_state_changed when idle
       const busyTurnDoneBefore = received.filter(m => m.type === 'message_complete').length
       send({ type: 'user_message', content: 'hold [slow-turn]' })
       await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
-      const busyRes = await conversationService.steerAntigravitySwarmMember({
+      const midTurnSteerRes = await conversationService.steerAntigravitySwarmMember({
         teamName: 'agy-swarm-native-session-1',
         nativeSessionId: 'native-session-1',
         sessionId,
@@ -1350,8 +1387,27 @@ describe('Antigravity ACP server core & integration', () => {
         content: 'ping',
         formattedPrompt: '@reader ping',
       })
-      expect(busyRes).toEqual({ routed: false, reason: 'busy' })
+      expect(midTurnSteerRes).toEqual({ routed: true, delivery: 'steering', formattedPrompt: '@reader ping' })
       await waitUntil(() => received.filter(m => m.type === 'message_complete').length > busyTurnDoneBefore)
+      expect(received.some(m => m.type === 'content_delta' && typeof m.text === 'string' && m.text.includes('Steered:@reader ping'))).toBe(true)
+
+      const permBusyBefore = received.filter(m => m.type === 'permission_request').length
+      const permDoneBefore = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Edit file [edit-perm]' })
+      await waitUntil(() => received.filter(m => m.type === 'permission_request').length > permBusyBefore)
+      const busyPermRes = await conversationService.steerAntigravitySwarmMember({
+        teamName: 'agy-swarm-native-session-1',
+        nativeSessionId: 'native-session-1',
+        sessionId,
+        memberName: 'reader',
+        agentId: 'reader@agy-swarm-native-session-1',
+        content: 'blocked while perm open',
+        formattedPrompt: '@reader blocked while perm open',
+      })
+      expect(busyPermRes).toEqual({ routed: false, reason: 'busy' })
+      const permBusyReq = received.filter(m => m.type === 'permission_request').at(-1) as Extract<ServerMessage, { type: 'permission_request' }>
+      send({ type: 'permission_response', requestId: permBusyReq.requestId, allowed: true })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > permDoneBefore)
 
       const steerRes = await conversationService.steerAntigravitySwarmMember({
         teamName: 'agy-swarm-native-session-1',
@@ -1965,6 +2021,193 @@ describe('Antigravity ACP server core & integration', () => {
       { name: 'Messages', tokens: 25_000, color: '#7c3aed' },
       { name: 'Free space', tokens: 155_000, color: '#a1a1aa' },
     ])
+  })
+
+  test('supports mid-turn steering over WS, preserves transcript order, rejects blocked states without ending the turn, and accounts superseded-prompt usage', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-steer-project')
+    await mkdir(workDir, { recursive: true })
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    const received: ServerMessage[] = []
+    let ws: WebSocket | undefined
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws!.onopen = () => resolve()
+        ws!.onerror = () => reject(new Error('ws open failed'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws!.send(JSON.stringify(msg))
+
+      // 1. Mid-turn WS steering: send slow turn, then steer with "怎么样了"
+      send({ type: 'user_message', content: 'Deploy release [slow-turn]' })
+      await waitUntil(() =>
+        conversationService.isAntigravityResponding(sessionId) &&
+        received.some(m => m.type === 'content_delta' && m.text.includes('Working...')),
+      )
+
+      const completesBeforeSteer = received.filter(m => m.type === 'message_complete').length
+      const errorsBeforeSteer = received.filter(m => m.type === 'error').length
+      send({ type: 'user_message', content: '怎么样了' })
+
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completesBeforeSteer)
+      // Must NOT emit ANTIGRAVITY_TURN_BUSY or premature message_complete
+      expect(received.filter(m => m.type === 'error').slice(errorsBeforeSteer)).toHaveLength(0)
+      expect(received.filter(m => m.type === 'message_complete')).toHaveLength(completesBeforeSteer + 1)
+      expect(received.some(m => m.type === 'user_message_replay' && m.content === '怎么样了')).toBe(true)
+      expect(received.some(m => m.type === 'content_delta' && m.text.includes('Steered:怎么样了'))).toBe(true)
+
+      const completeMsg = received.filter(m => m.type === 'message_complete').at(-1) as Extract<ServerMessage, { type: 'message_complete' }>
+      expect(completeMsg.usage).toMatchObject({ input_tokens: 250, output_tokens: 60, cache_read_tokens: 80 })
+
+      // Verify wire sent two session/prompt RPCs and transcript preserved visual order
+      const wire = await fake.readWire()
+      const promptTexts = wire
+        .filter(w => w.method === 'session/prompt')
+        .map(w => ((w.params?.prompt as Array<{ text?: string }> | undefined)?.[0]?.text ?? ''))
+      expect(promptTexts).toEqual(['Deploy release [slow-turn]', '怎么样了'])
+
+      const detailRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`)
+      expect(detailRes.status).toBe(200)
+      const detail = await detailRes.json() as { messages?: Array<{ type: string; content: unknown }> }
+      const transcriptSummary = (detail.messages ?? []).map(entry => {
+        const blocks = Array.isArray(entry.content) ? entry.content : []
+        const text = typeof entry.content === 'string'
+          ? entry.content
+          : blocks.map(b => (typeof b === 'object' && b && 'text' in b ? String((b as { text?: unknown }).text ?? '') : '')).join('')
+        return `${entry.type}:${text}`
+      })
+      expect(transcriptSummary).toEqual([
+        'user:Deploy release [slow-turn]',
+        'assistant:Working...',
+        'user:怎么样了',
+        'assistant:Steered:怎么样了',
+      ])
+
+      // 2. Mid-turn /compact is rejected with ANTIGRAVITY_TURN_BUSY without cancelling the active turn
+      const completesBeforeCompactReject = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Keep working [slow-turn]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      const errorsBeforeCompactReject = received.filter(m => m.type === 'error').length
+      send({ type: 'user_message', content: '/compact' })
+      await waitUntil(() => received.filter(m => m.type === 'error').length > errorsBeforeCompactReject)
+      const busyErr = received.filter(m => m.type === 'error').at(-1) as Extract<ServerMessage, { type: 'error' }>
+      expect(busyErr.code).toBe('ANTIGRAVITY_TURN_BUSY')
+      // Active slow turn still completes naturally afterwards
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completesBeforeCompactReject)
+
+      // 3. Steering while a permission prompt is pending returns ANTIGRAVITY_TURN_BUSY and leaves the permission intact
+      const permsBefore = received.filter(m => m.type === 'permission_request').length
+      const completesBeforePerm = received.filter(m => m.type === 'message_complete').length
+      const errorsBeforePerm = received.filter(m => m.type === 'error').length
+      send({ type: 'user_message', content: 'Needs edit approval [edit-perm]' })
+      await waitUntil(() => received.filter(m => m.type === 'permission_request').length > permsBefore)
+      send({ type: 'user_message', content: 'Steer during perm' })
+      await waitUntil(() => received.filter(m => m.type === 'error').length > errorsBeforePerm)
+      expect((received.filter(m => m.type === 'error').at(-1) as Extract<ServerMessage, { type: 'error' }>).code).toBe('ANTIGRAVITY_TURN_BUSY')
+      const permReq = received.filter(m => m.type === 'permission_request').at(-1) as Extract<ServerMessage, { type: 'permission_request' }>
+      send({ type: 'permission_response', requestId: permReq.requestId, allowed: true })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completesBeforePerm)
+    } finally {
+      ws?.close()
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+
+    // 4. Direct unit test: double steering + superseded prompt finishing naturally with usage + cancel after steer
+    const resolvers: Array<(value: Record<string, unknown>) => void> = []
+    const emitted: Array<Record<string, unknown>> = []
+    const appended: Array<Record<string, unknown>> = []
+    const unitAcp = {
+      sessionId: 'native-steer-unit',
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      onMessage: undefined as ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined,
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvers.push(resolve) }),
+      reply: () => true,
+      cancel: () => {
+        const last = resolvers.at(-1)
+        if (last) setTimeout(() => last({ stopReason: 'cancelled' }), 5)
+        return true
+      },
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      unitAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      (msg) => emitted.push(msg),
+      async (entries) => { appended.push(...entries) },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'First prompt' }], 'u-1')).toBe(true)
+    await waitUntil(() => resolvers.length === 1)
+    // First steer while prompt 1 is still in flight
+    expect(conv.steer([{ type: 'text', text: 'Steer 1' }], 'u-2')).toBe(true)
+    await waitUntil(() => resolvers.length === 2)
+    // Prompt 1 finished naturally with its own usage just before steer 1 landed
+    resolvers[0]!({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20, cachedReadTokens: 10 } })
+    await new Promise(resolve => setTimeout(resolve, 15))
+    expect(conv.isResponding).toBe(true)
+    expect(emitted.filter(m => m.type === 'result')).toHaveLength(0)
+
+    // Second steer while steer 1 is in flight
+    expect(conv.steer([{ type: 'text', text: 'Steer 2' }], 'u-3')).toBe(true)
+    await waitUntil(() => resolvers.length === 3)
+    // Prompt 2 superseded immediately with no usage (matching real agy acp)
+    resolvers[1]!({ stopReason: 'end_turn' })
+    await new Promise(resolve => setTimeout(resolve, 15))
+    expect(conv.isResponding).toBe(true)
+    expect(emitted.filter(m => m.type === 'result')).toHaveLength(0)
+
+    // Prompt 3 completes with combined usage -> total = 100+300, 20+50, 10+40
+    resolvers[2]!({ stopReason: 'end_turn', usage: { inputTokens: 300, outputTokens: 50, cachedReadTokens: 40 } })
+    await conv.pendingTurnCompletion
+    expect(conv.isResponding).toBe(false)
+    const results = emitted.filter(m => m.type === 'result')
+    expect(results).toHaveLength(1)
+    expect(results[0]?.usage).toEqual({
+      input_tokens: 400,
+      output_tokens: 70,
+      cache_read_input_tokens: 50,
+    })
+
+    // Cancel after steer settles cleanly without dangling timers
+    resolvers.length = 0
+    expect(conv.send([{ type: 'text', text: 'Run before cancel' }], 'u-4')).toBe(true)
+    await waitUntil(() => resolvers.length === 1)
+    expect(conv.steer([{ type: 'text', text: 'Steer before cancel' }], 'u-5')).toBe(true)
+    await waitUntil(() => resolvers.length === 2)
+    resolvers[0]!({ stopReason: 'end_turn' })
+    expect(conv.cancel()).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(conv.isResponding).toBe(false)
   })
 })
 
