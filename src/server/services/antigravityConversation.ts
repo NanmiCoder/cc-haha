@@ -1,6 +1,7 @@
-import { closeSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import {
   ASK_USER_QUESTION_CLARIFY_MESSAGE,
   ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
@@ -22,6 +23,8 @@ import {
 
 const CANCEL_TIMEOUT_MS = 3_000
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
+const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024
+const TRANSCRIPT_TAIL_MAX_READ_BYTES = 4 * 1024 * 1024
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,256}$/
 const ELICITATION_SELECT_KEY_RE = /^q([1-9]\d*)$/
 const ELICITATION_OTHER_KEY_RE = /^q([1-9]\d*)_other$/
@@ -88,7 +91,6 @@ function readPromptUsage(rawUsage: unknown): AccumulatedUsage {
   const inputTokens = typeof usage?.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0
   const rawOutputTokens = typeof usage?.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0
   const thoughtTokens = typeof usage?.thoughtTokens === 'number' && Number.isFinite(usage.thoughtTokens) ? usage.thoughtTokens : 0
-  const outputTokens = rawOutputTokens + thoughtTokens
   const cacheReadTokens = typeof usage?.cachedReadTokens === 'number' && Number.isFinite(usage.cachedReadTokens)
     ? usage.cachedReadTokens
     : typeof usage?.cacheReadTokens === 'number' && Number.isFinite(usage.cacheReadTokens)
@@ -99,6 +101,19 @@ function readPromptUsage(rawUsage: unknown): AccumulatedUsage {
     : typeof usage?.cacheCreationTokens === 'number' && Number.isFinite(usage.cacheCreationTokens)
       ? usage.cacheCreationTokens
       : 0
+  const totalTokens = typeof usage?.totalTokens === 'number' && Number.isFinite(usage.totalTokens) ? usage.totalTokens : undefined
+  // Real `agy acp` reports `outputTokens` inclusive of `thoughtTokens` (matching SQLite
+  // ModelUsageStats field 3 = thinking + response), with `totalTokens = input + cached + output`.
+  // When `totalTokens` proves inclusive semantics, do not add `thoughtTokens` twice.
+  const promptSum = inputTokens + cacheReadTokens + cacheCreationTokens
+  const thoughtIncludedInOutput =
+    thoughtTokens > 0 &&
+    rawOutputTokens >= thoughtTokens &&
+    totalTokens !== undefined &&
+    totalTokens > 0 &&
+    Math.abs(totalTokens - (promptSum + rawOutputTokens)) <
+      Math.abs(totalTokens - (promptSum + rawOutputTokens + thoughtTokens))
+  const outputTokens = thoughtIncludedInOutput ? rawOutputTokens : rawOutputTokens + thoughtTokens
   return {
     inputTokens,
     outputTokens,
@@ -137,6 +152,11 @@ type Turn = {
   detached: boolean
   promptSeq: number
   accumulatedUsage: AccumulatedUsage
+  liveTranscriptUsage: AccumulatedUsage
+  transcriptByteOffset: number
+  transcriptPendingLine: string
+  transcriptDecoder: StringDecoder
+  seenTranscriptSteps: Set<number>
   nativeEnd?: { result: Frame; error?: AntigravityError }
   replyOpen: boolean
   finishing: boolean
@@ -680,10 +700,10 @@ export class AntigravityConversation {
     return this.availableCommands
   }
 
-  private readBaselineFromAntigravityTranscript(): number | undefined {
+  private resolveAntigravityTranscriptPath(): string | undefined {
     const nativeSessionId = this.acp.sessionId
     if (!nativeSessionId || !SAFE_SESSION_ID_RE.test(nativeSessionId)) return undefined
-    const transcriptPath = join(
+    return join(
       this.antigravityAppDataDir,
       'brain',
       nativeSessionId,
@@ -691,6 +711,158 @@ export class AntigravityConversation {
       'logs',
       'transcript.jsonl',
     )
+  }
+
+  private getCurrentTranscriptByteSize(): number {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return 0
+    try {
+      const size = statSync(transcriptPath).size
+      return Number.isFinite(size) && size > 0 ? size : 0
+    } catch {
+      return 0
+    }
+  }
+
+  private processLiveTranscriptLine(turn: Turn, rawLine: string): void {
+    const line = rawLine.trim()
+    if (!line) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      return
+    }
+    const step = acpObject(parsed)
+    if (!step) return
+    const stepType = typeof step.type === 'string' ? step.type.toUpperCase() : ''
+    if (stepType !== 'PLANNER_RESPONSE') return
+    const status = typeof step.status === 'string' ? step.status.toUpperCase() : ''
+    if (status && status !== 'DONE' && status !== 'COMPLETED' && status !== 'SUCCESS') return
+    const stepIndex = typeof step.step_index === 'number' && Number.isFinite(step.step_index)
+      ? step.step_index
+      : undefined
+    if (stepIndex !== undefined) {
+      if (turn.seenTranscriptSteps.has(stepIndex)) return
+      turn.seenTranscriptSteps.add(stepIndex)
+    }
+    const stepIn = typeof step.input_tokens === 'number' && Number.isFinite(step.input_tokens) && step.input_tokens > 0
+      ? step.input_tokens
+      : 0
+    const stepOut = typeof step.output_tokens === 'number' && Number.isFinite(step.output_tokens) && step.output_tokens > 0
+      ? step.output_tokens
+      : 0
+    const stepCache = typeof step.cache_read_tokens === 'number' && Number.isFinite(step.cache_read_tokens) && step.cache_read_tokens > 0
+      ? step.cache_read_tokens
+      : 0
+    const stepCacheWrite = typeof step.cache_creation_tokens === 'number' && Number.isFinite(step.cache_creation_tokens) && step.cache_creation_tokens > 0
+      ? step.cache_creation_tokens
+      : 0
+    if (stepIn === 0 && stepOut === 0 && stepCache === 0 && stepCacheWrite === 0) return
+    turn.liveTranscriptUsage.inputTokens += stepIn
+    turn.liveTranscriptUsage.outputTokens += stepOut
+    turn.liveTranscriptUsage.cacheReadTokens += stepCache
+    turn.liveTranscriptUsage.cacheCreationTokens += stepCacheWrite
+  }
+
+  /**
+   * Read-only incremental byte-offset tailer over Antigravity's live `transcript.jsonl`.
+   * Each completed internal LLM step (`PLANNER_RESPONSE`) is flushed to disk immediately
+   * by `agy`, allowing mid-turn usage & tok/s snapshots before `session/prompt` resolves.
+   */
+  private pollLiveTurnTranscriptUsage(turn: Turn): void {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return
+    let size: number
+    try {
+      size = statSync(transcriptPath).size
+    } catch {
+      return
+    }
+    if (!Number.isFinite(size) || size <= 0) return
+    if (size < turn.transcriptByteOffset) {
+      turn.transcriptByteOffset = 0
+      turn.transcriptPendingLine = ''
+      turn.transcriptDecoder = new StringDecoder('utf8')
+      turn.seenTranscriptSteps.clear()
+      turn.liveTranscriptUsage = createEmptyUsage()
+    }
+    if (size === turn.transcriptByteOffset) return
+    let fd: number | undefined
+    try {
+      fd = openSync(transcriptPath, 'r')
+      let position = turn.transcriptByteOffset
+      const readLimit = Math.min(size, position + TRANSCRIPT_TAIL_MAX_READ_BYTES)
+      const buffer = Buffer.allocUnsafe(Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, readLimit - position))
+      while (position < readLimit) {
+        const toRead = Math.min(buffer.length, readLimit - position)
+        const bytesRead = readSync(fd, buffer, 0, toRead, position)
+        if (bytesRead <= 0) break
+        position += bytesRead
+        turn.transcriptByteOffset = position
+        let chunk = turn.transcriptDecoder.write(buffer.subarray(0, bytesRead))
+        while (chunk.length > 0) {
+          const newlineIndex = chunk.indexOf('\n')
+          if (newlineIndex < 0) {
+            turn.transcriptPendingLine += chunk
+            break
+          }
+          const line = turn.transcriptPendingLine + chunk.slice(0, newlineIndex)
+          turn.transcriptPendingLine = ''
+          this.processLiveTranscriptLine(turn, line)
+          chunk = chunk.slice(newlineIndex + 1)
+        }
+      }
+    } catch {
+      // Best-effort read-only poll; ignore transient filesystem errors.
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd)
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  private resolveLiveUsageTotals(): CumulativeUsageState {
+    const turn = this.turn
+    if (!turn || turn.finishing) {
+      return this.cumulativeUsage
+    }
+    this.pollLiveTurnTranscriptUsage(turn)
+    // `liveTranscriptUsage` accumulates every completed step since `beginTurn()`,
+    // while `accumulatedUsage` holds settled usage from any steered prompt in the
+    // same turn; taking the per-bucket max avoids double-counting after a steer.
+    const inFlightInput = Math.max(turn.accumulatedUsage.inputTokens, turn.liveTranscriptUsage.inputTokens)
+    const inFlightOutput = Math.max(turn.accumulatedUsage.outputTokens, turn.liveTranscriptUsage.outputTokens)
+    const inFlightCacheRead = Math.max(turn.accumulatedUsage.cacheReadTokens, turn.liveTranscriptUsage.cacheReadTokens)
+    const inFlightCacheCreation = Math.max(turn.accumulatedUsage.cacheCreationTokens, turn.liveTranscriptUsage.cacheCreationTokens)
+    // Pair completed-step output tokens with completed model-phase API time so an
+    // active prefill/thinking phase whose tokens have not landed yet never dilutes tok/s.
+    // Fall back to elapsed modelPhaseStart only if step 1 flushed to disk just before
+    // the corresponding tool_call paused the phase.
+    const inFlightApiDuration = inFlightOutput > 0
+      ? (turn.apiDurationMs > 0
+        ? turn.apiDurationMs
+        : turn.modelPhaseStart !== undefined
+          ? Math.max(0, Date.now() - turn.modelPhaseStart)
+          : 0)
+      : 0
+    return {
+      inputTokens: this.cumulativeUsage.inputTokens + inFlightInput,
+      outputTokens: this.cumulativeUsage.outputTokens + inFlightOutput,
+      cacheReadTokens: this.cumulativeUsage.cacheReadTokens + inFlightCacheRead,
+      cacheCreationTokens: this.cumulativeUsage.cacheCreationTokens + inFlightCacheCreation,
+      totalAPIDuration: this.cumulativeUsage.totalAPIDuration + inFlightApiDuration,
+      totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration + (inFlightOutput > 0 ? turn.decodeDurationMs : 0),
+      totalTtftDuration: this.cumulativeUsage.totalTtftDuration + (inFlightOutput > 0 ? (turn.ttftMs ?? 0) : 0),
+      totalDuration: this.cumulativeUsage.totalDuration + Math.max(0, Date.now() - turn.started),
+    }
+  }
+
+  private readBaselineFromAntigravityTranscript(): number | undefined {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return undefined
     let fd: number | undefined
     try {
       fd = openSync(transcriptPath, 'r')
@@ -797,6 +969,7 @@ export class AntigravityConversation {
       ]
     }
 
+    const liveUsage = this.resolveLiveUsageTotals()
     return {
       categories,
       totalTokens: used,
@@ -810,38 +983,39 @@ export class AntigravityConversation {
       mcpTools: [],
       agents: [],
       apiUsage: {
-        input_tokens: this.cumulativeUsage.inputTokens,
-        output_tokens: this.cumulativeUsage.outputTokens,
-        cache_creation_input_tokens: this.cumulativeUsage.cacheCreationTokens,
-        cache_read_input_tokens: this.cumulativeUsage.cacheReadTokens,
+        input_tokens: liveUsage.inputTokens,
+        output_tokens: liveUsage.outputTokens,
+        cache_creation_input_tokens: liveUsage.cacheCreationTokens,
+        cache_read_input_tokens: liveUsage.cacheReadTokens,
       },
     }
   }
 
   getSessionUsageSnapshot(): Record<string, unknown> {
     const model = this.acp.modelId ?? 'Antigravity'
+    const totals = this.resolveLiveUsageTotals()
     return {
       totalCostUSD: 0,
       costDisplay: '$0.00',
       hasUnknownModelCost: true,
-      totalAPIDuration: this.cumulativeUsage.totalAPIDuration,
-      totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration,
-      totalTtftDuration: this.cumulativeUsage.totalTtftDuration,
-      totalDuration: this.cumulativeUsage.totalDuration,
+      totalAPIDuration: totals.totalAPIDuration,
+      totalDecodeDuration: totals.totalDecodeDuration,
+      totalTtftDuration: totals.totalTtftDuration,
+      totalDuration: totals.totalDuration,
       totalLinesAdded: 0,
       totalLinesRemoved: 0,
-      totalInputTokens: this.cumulativeUsage.inputTokens,
-      totalOutputTokens: this.cumulativeUsage.outputTokens,
-      totalCacheReadInputTokens: this.cumulativeUsage.cacheReadTokens,
-      totalCacheCreationInputTokens: this.cumulativeUsage.cacheCreationTokens,
+      totalInputTokens: totals.inputTokens,
+      totalOutputTokens: totals.outputTokens,
+      totalCacheReadInputTokens: totals.cacheReadTokens,
+      totalCacheCreationInputTokens: totals.cacheCreationTokens,
       totalWebSearchRequests: 0,
       models: [{
         model,
         displayName: model,
-        inputTokens: this.cumulativeUsage.inputTokens,
-        outputTokens: this.cumulativeUsage.outputTokens,
-        cacheReadInputTokens: this.cumulativeUsage.cacheReadTokens,
-        cacheCreationInputTokens: this.cumulativeUsage.cacheCreationTokens,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        cacheReadInputTokens: totals.cacheReadTokens,
+        cacheCreationInputTokens: totals.cacheCreationTokens,
         webSearchRequests: 0,
         costUSD: 0,
         costDisplay: '$0.00',
@@ -1356,6 +1530,11 @@ export class AntigravityConversation {
       detached,
       promptSeq: 0,
       accumulatedUsage: createEmptyUsage(),
+      liveTranscriptUsage: createEmptyUsage(),
+      transcriptByteOffset: this.getCurrentTranscriptByteSize(),
+      transcriptPendingLine: '',
+      transcriptDecoder: new StringDecoder('utf8'),
+      seenTranscriptSteps: new Set(),
       nativeEnd: detached ? { result: {} } : undefined,
       replyOpen: false, finishing: false, cancelled: false, resolve,
     }

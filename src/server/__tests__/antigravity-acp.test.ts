@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -2683,6 +2683,235 @@ describe('Antigravity ACP server core & integration', () => {
     } finally {
       server.stop(true)
     }
+  })
+  test('streams mid-turn usage and tok/s incrementally from Antigravity transcript.jsonl without double-counting prior turns or turn finish', async () => {
+    const appDataDir = join(sandboxDir, 'live-usage-appdata')
+    const nativeId = 'native-live-usage-1'
+    const logsDir = join(appDataDir, 'brain', nativeId, '.system_generated', 'logs')
+    await mkdir(logsDir, { recursive: true })
+    const transcriptPath = join(logsDir, 'transcript.jsonl')
+
+    // Pre-existing turn from an earlier/resumed session: MUST be ignored by the new turn's live tailer.
+    await writeFile(
+      transcriptPath,
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        input_tokens: 9_999,
+        cache_read_tokens: 8_888,
+        output_tokens: 7_777,
+      }) + '\n',
+      'utf8',
+    )
+
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let releaseStep1!: () => void
+    let releaseStep2!: () => void
+    const step1Ready = new Promise<void>(resolve => { releaseStep1 = resolve })
+    const step2Ready = new Promise<void>(resolve => { releaseStep2 = resolve })
+    let finishTurn!: (result: Record<string, unknown>) => void
+    const turnRelease = new Promise<Record<string, unknown>>(resolve => { finishTurn = resolve })
+
+    const fakeAcp = {
+      sessionId: nativeId,
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined) {
+        onMessage = fn
+      },
+      get onMessage() {
+        return onMessage
+      },
+      async prompt() {
+        // Step 1: model active ~60ms, then tool call pauses model phase and agy flushes PLANNER_RESPONSE
+        await new Promise(resolve => setTimeout(resolve, 60))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Inspecting...' } },
+        })
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call_live_1',
+            name: 'run_command',
+            status: 'in_progress',
+            rawInput: { CommandLine: 'ls' },
+            title: 'ls',
+          },
+        })
+        // Simulate partial line write followed by completion newline (mid-write safety)
+        const step1Line = JSON.stringify({
+          step_index: 5,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          input_tokens: 1_200,
+          cache_read_tokens: 3_600,
+          output_tokens: 400,
+        })
+        await appendFile(transcriptPath, step1Line.slice(0, 40), 'utf8')
+        await appendFile(transcriptPath, step1Line.slice(40) + '\n', 'utf8')
+        releaseStep1()
+
+        // Complete tool 1 and enter Step 2 (~60ms active)
+        await new Promise(resolve => setTimeout(resolve, 30))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'call_live_1',
+            status: 'completed',
+            rawOutput: { output: 'ok' },
+          },
+        })
+        await new Promise(resolve => setTimeout(resolve, 60))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call_live_2',
+            name: 'run_command',
+            status: 'in_progress',
+            rawInput: { CommandLine: 'pwd' },
+            title: 'pwd',
+          },
+        })
+        await appendFile(
+          transcriptPath,
+          JSON.stringify({
+            step_index: 9,
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            input_tokens: 800,
+            cache_read_tokens: 4_400,
+            output_tokens: 600,
+          }) + '\n',
+          'utf8',
+        )
+        releaseStep2()
+
+        const result = await turnRelease
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'call_live_2',
+            status: 'completed',
+            rawOutput: { output: '/tmp' },
+          },
+        })
+        return result
+      },
+      reply: () => true,
+      cancel: () => true,
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      () => {},
+      async () => {},
+      { antigravityAppDataDir: appDataDir },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'Investigate' }], 'u-live-1')).toBe(true)
+
+    await step1Ready
+    const mid1 = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid1.totalInputTokens).toBe(1_200)
+    expect(mid1.totalCacheReadInputTokens).toBe(3_600)
+    expect(mid1.totalOutputTokens).toBe(400)
+    expect(mid1.totalAPIDuration as number).toBeGreaterThanOrEqual(45)
+
+    // Repeat poll with no new bytes must stay idempotent
+    const mid1Again = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid1Again.totalOutputTokens).toBe(400)
+
+    await step2Ready
+    const mid2 = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid2.totalInputTokens).toBe(2_000)
+    expect(mid2.totalCacheReadInputTokens).toBe(8_000)
+    expect(mid2.totalOutputTokens).toBe(1_000)
+    expect(mid2.totalAPIDuration as number).toBeGreaterThan(mid1.totalAPIDuration as number)
+
+    // Settle turn with authoritative ACP result (inclusive thoughtTokens proven by totalTokens)
+    finishTurn({
+      stopReason: 'end_turn',
+      usage: {
+        inputTokens: 2_100,
+        cachedReadTokens: 8_200,
+        outputTokens: 1_150,
+        thoughtTokens: 700,
+        totalTokens: 11_450,
+      },
+    })
+    await conv.pendingTurnCompletion
+
+    const finalSnap = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(finalSnap.totalInputTokens).toBe(2_100)
+    expect(finalSnap.totalCacheReadInputTokens).toBe(8_200)
+    expect(finalSnap.totalOutputTokens).toBe(1_150)
+    expect(finalSnap.totalAPIDuration as number).toBeGreaterThanOrEqual(mid2.totalAPIDuration as number)
+  })
+
+  test('avoids double-counting thoughtTokens when ACP totalTokens proves outputTokens already includes thinking', async () => {
+    const runTurn = async (usage: Record<string, number>) => {
+      const emitted: Array<Record<string, unknown>> = []
+      const fakeAcp = {
+        sessionId: 'native-thought-dedup',
+        modelId: 'gemini-4-neon',
+        supportsImages: true,
+        isOpen: true,
+        initialAvailableCommands: [],
+        launchedWithBypassPermissions: false,
+        permissionMode: 'default' as const,
+        drained: Promise.resolve(),
+        onMessage: undefined as ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined,
+        async prompt() {
+          return { stopReason: 'end_turn', usage }
+        },
+        reply: () => true,
+        cancel: () => true,
+        end: () => {},
+        close: () => {},
+      }
+      const conv = new AntigravityConversation(
+        fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+        msg => emitted.push(msg),
+        async () => {},
+        { antigravityAppDataDir: join(sandboxDir, 'empty-thought-appdata') },
+      )
+      expect(conv.send([{ type: 'text', text: 'hi' }], 'u-thought')).toBe(true)
+      await conv.pendingTurnCompletion
+      return emitted.find(m => m.type === 'result') as { usage: { output_tokens: number } }
+    }
+
+    // Real agy acp shape: outputTokens (300) already includes thoughtTokens (180); totalTokens = 1000 + 500 + 300 = 1800
+    const inclusive = await runTurn({
+      inputTokens: 1_000,
+      cachedReadTokens: 500,
+      outputTokens: 300,
+      thoughtTokens: 180,
+      totalTokens: 1_800,
+    })
+    expect(inclusive.usage.output_tokens).toBe(300)
+
+    // Exclusive shape: outputTokens (120) excludes thoughtTokens (180); totalTokens = 1000 + 500 + 120 + 180 = 1800
+    const exclusive = await runTurn({
+      inputTokens: 1_000,
+      cachedReadTokens: 500,
+      outputTokens: 120,
+      thoughtTokens: 180,
+      totalTokens: 1_800,
+    })
+    expect(exclusive.usage.output_tokens).toBe(300)
   })
 })
 

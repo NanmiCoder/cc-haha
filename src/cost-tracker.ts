@@ -284,11 +284,18 @@ ${modelUsageDisplay}`,
 }
 
 export function getSessionUsageSnapshot(): SessionUsageSnapshot {
+  // Prefer request-only API duration over retry-inclusive duration so 429/529
+  // backoff sleeps do not artificially depress reported tokens/sec. Fall back
+  // to totalAPIDuration when restoring legacy snapshots without that field.
+  const apiDurationWithoutRetries = getTotalAPIDurationWithoutRetries()
   return {
     totalCostUSD: getTotalCostUSD(),
     costDisplay: formatCost(getTotalCostUSD()),
     hasUnknownModelCost: hasUnknownModelCost(),
-    totalAPIDuration: getTotalAPIDuration(),
+    totalAPIDuration:
+      apiDurationWithoutRetries > 0
+        ? apiDurationWithoutRetries
+        : getTotalAPIDuration(),
     totalDecodeDuration: getTotalDecodeDuration(),
     totalTtftDuration: getTotalTtftDuration(),
     totalDuration: getTotalDuration(),

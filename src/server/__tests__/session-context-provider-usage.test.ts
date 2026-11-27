@@ -304,4 +304,34 @@ describe('transcript context after switching providers', () => {
     expect((await new SessionService().getTranscriptContextEstimate(sessionId))?.totalTokens)
       .toBe(tokenCountWithEstimation(messages))
   })
+
+  it('reports transcript fallback totalDuration in milliseconds to match live usage snapshots', async () => {
+    const entries = [
+      { type: 'session-meta', workDir: join(configDir, 'project') },
+      {
+        type: 'assistant',
+        uuid: 'dur-1',
+        timestamp: '2026-11-27T10:00:00.000Z',
+        message: {
+          id: 'dur-msg-1', role: 'assistant', model: 'deepseek-flash',
+          content: [{ type: 'text', text: 'first' }],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+      {
+        type: 'assistant',
+        uuid: 'dur-2',
+        timestamp: '2026-11-27T10:02:05.500Z',
+        message: {
+          id: 'dur-msg-2', role: 'assistant', model: 'deepseek-flash',
+          content: [{ type: 'text', text: 'second' }],
+          usage: { input_tokens: 150, output_tokens: 75 },
+        },
+      },
+    ]
+    await writeFile(filePath, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n')
+
+    const snapshot = await new SessionService().getInspectionTranscriptSnapshot(sessionId)
+    expect(snapshot.usage?.totalDuration).toBe(125_500)
+  })
 })

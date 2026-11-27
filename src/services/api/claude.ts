@@ -123,6 +123,7 @@ import {
 } from "@anthropic-ai/sdk/error";
 import { feature } from "bun:bundle";
 import {
+  addToTotalDurationState,
   getAfkModeHeaderLatched,
   getCacheEditingHeaderLatched,
   getFastModeHeaderLatched,
@@ -2151,6 +2152,7 @@ async function* queryModel(
     }
   }
 
+  let recordedApiDuration = false;
   try {
     queryCheckpoint("query_client_creation_start");
     const generator = withRetry(
@@ -3589,6 +3591,18 @@ async function* queryModel(
         options.model,
       );
     }
+
+    // Record API duration synchronously beside token/cost accounting so live
+    // usage polls never observe new output tokens with stale API duration, and
+    // early-aborted streams that already accrued tokens still account for time.
+    if (hasStreamingUsage || fallbackMessage) {
+      const now = Date.now();
+      addToTotalDurationState(
+        Math.max(0, now - startIncludingRetries),
+        Math.max(0, now - start),
+      );
+      recordedApiDuration = true;
+    }
   }
 
   // Mark all registered tools as sent to API so they become eligible for deletion
@@ -3645,6 +3659,7 @@ async function* queryModel(
       fastMode: isFastModeRequest,
       previousRequestId,
       betas: lastRequestBetas,
+      skipDurationStateUpdate: recordedApiDuration,
     });
   });
 
