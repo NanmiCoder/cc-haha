@@ -19,12 +19,21 @@ import {
   OPENAI_CODEX_ORIGINATOR,
   OPENAI_CODEX_TOKEN_USER_AGENT,
 } from '../../services/openaiAuth/client.js'
+import {
+  DeepSeekAuthError,
+  fetchDeepSeekBalance,
+  resolveDeepSeekClientIdentity,
+} from '../../services/deepseekAuth/client.js'
+import type {
+  DeepSeekBalanceSummary,
+  DeepSeekOAuthTokens,
+} from '../../services/deepseekAuth/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import { getNetworkProxyUrl, loadNetworkSettings } from './networkSettings.js'
 import { hahaOAuthService, type ClaudePlanUsageResult } from './hahaOAuthService.js'
 import { hahaOpenAIOAuthService, type StoredOpenAIOAuthTokens } from './hahaOpenAIOAuthService.js'
 import { hahaGrokOAuthService, type StoredGrokOAuthTokens } from './hahaGrokOAuthService.js'
-import { hahaDeepSeekOAuthService, type DeepSeekOAuthStatus } from './hahaDeepSeekOAuthService.js'
+import { hahaDeepSeekOAuthService } from './hahaDeepSeekOAuthService.js'
 import {
   aggregateRollingLocalTokens,
   type RollingLocalTokenSummary,
@@ -56,6 +65,8 @@ export type OfficialProviderUsageStatus =
   | 'unavailable'
   | 'not_logged_in'
 
+export type OfficialProviderNoticeCode = 'grok_team_no_personal_quota'
+
 export type OfficialProviderUsageSummary = {
   providerId: OfficialUsageProviderId
   signedIn: boolean
@@ -66,6 +77,9 @@ export type OfficialProviderUsageSummary = {
   rateLimitedUntil: string | null
   httpStatus?: number
   windows: OfficialUsageWindow[]
+  balance?: DeepSeekBalanceSummary | null
+  onDemandCapCents?: number | null
+  noticeCode?: OfficialProviderNoticeCode | null
   source: 'official_api' | 'local_only'
 }
 
@@ -123,7 +137,11 @@ export type OfficialUsageServiceDeps = {
   getClaudePlanUsage?: () => Promise<ClaudePlanUsageResult>
   getOpenAITokens?: () => Promise<StoredOpenAIOAuthTokens | null>
   getGrokTokens?: () => Promise<StoredGrokOAuthTokens | null>
-  getDeepSeekStatus?: () => Promise<DeepSeekOAuthStatus>
+  getDeepSeekTokens?: () => Promise<DeepSeekOAuthTokens | null>
+  fetchDeepSeekBalanceImpl?: (
+    token: string,
+    proxyUrl: string | null,
+  ) => Promise<DeepSeekBalanceSummary>
   aggregateLocalTokens?: (now: Date) => Promise<RollingLocalTokenSummary>
 }
 
@@ -373,57 +391,81 @@ function mapOpenAIWhamResponse(
   }
 }
 
-function parseGrokBillingPayload(payload: unknown): OfficialUsageWindow[] {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return []
-  const record = payload as Record<string, unknown>
+const GROK_WEEKLY_PERIOD_TYPE = 'USAGE_PERIOD_TYPE_WEEKLY'
 
-  // Support both snake_case and camelCase JSON shapes reported by cli-chat-proxy.grok.com/v1/billing.
-  const nested = (record.credits_config && typeof record.credits_config === 'object'
-    ? record.credits_config
-    : record.creditsConfig && typeof record.creditsConfig === 'object'
-      ? record.creditsConfig
-      : record) as Record<string, unknown>
+type ParsedGrokBilling = {
+  windows: OfficialUsageWindow[]
+  onDemandCapCents: number | null
+}
 
-  const directUsed = parseFiniteNumber(nested.used_percent ?? nested.usedPercent)
-  const limit = parseFiniteNumber(nested.limit ?? nested.weekly_limit ?? nested.weeklyLimit ?? nested.total)
-  const used = parseFiniteNumber(nested.used ?? nested.consumed ?? nested.spent)
-  const remaining = parseFiniteNumber(nested.remaining ?? nested.available)
+function parseIsoTimestampMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const ms = Date.parse(trimmed)
+  return Number.isFinite(ms) ? ms : null
+}
 
-  let usedPercent: number | null = null
-  if (directUsed !== null) {
-    usedPercent = clampPercent(directUsed <= 1 && directUsed > 0 ? directUsed * 100 : directUsed)
-  } else if (limit !== null && limit > 0) {
-    if (used !== null) {
-      usedPercent = clampPercent((used / limit) * 100)
-    } else if (remaining !== null) {
-      usedPercent = clampPercent(((limit - remaining) / limit) * 100)
-    }
+/**
+ * Decodes `cli-chat-proxy.grok.com/v1/billing?format=credits` proto-JSON payloads:
+ *   `{ config: { currentPeriod: { type, start, end }, creditUsagePercent?, onDemandCap?: { val } } }`
+ * Proto-JSON omits zero-valued fields, so an absent `creditUsagePercent` is a genuine 0%,
+ * whereas a present non-numeric value or missing/reversed period is rejected.
+ */
+export function parseGrokBillingPayload(payload: unknown): ParsedGrokBilling | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const body = payload as Record<string, unknown>
+  const config = body.config
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null
+  const configRecord = config as Record<string, unknown>
+
+  const period = configRecord.currentPeriod
+  if (!period || typeof period !== 'object' || Array.isArray(period)) return null
+  const periodRecord = period as Record<string, unknown>
+
+  const periodType = typeof periodRecord.type === 'string' ? periodRecord.type.trim() : ''
+  const startMs = parseIsoTimestampMs(periodRecord.start)
+  const endMs = parseIsoTimestampMs(periodRecord.end)
+  if (!periodType || startMs === null || endMs === null || endMs <= startMs) {
+    return null
   }
 
-  if (usedPercent === null) return []
-
-  const rawPeriodEnd = nested.period_end ?? nested.periodEnd ?? nested.resets_at ?? nested.resetsAt
-  let resetsAt: string | null = null
-  if (typeof rawPeriodEnd === 'string' && rawPeriodEnd.trim() && !Number.isNaN(Date.parse(rawPeriodEnd))) {
-    resetsAt = new Date(rawPeriodEnd).toISOString()
-  } else {
-    const epoch = parseFiniteNumber(rawPeriodEnd)
-    if (epoch !== null && epoch > 0) {
-      resetsAt = new Date(epoch > 1e12 ? epoch : epoch * 1000).toISOString()
-    }
+  let rawPercent = 0
+  if (configRecord.creditUsagePercent !== undefined) {
+    const parsed = parseFiniteNumber(configRecord.creditUsagePercent)
+    if (parsed === null) return null
+    rawPercent = parsed
   }
 
-  return [
-    {
+  let onDemandCapCents: number | null = null
+  if (configRecord.onDemandCap !== undefined) {
+    const capObject = configRecord.onDemandCap
+    if (!capObject || typeof capObject !== 'object' || Array.isArray(capObject)) {
+      return null
+    }
+    const rawCap = (capObject as Record<string, unknown>).val
+    const cap = rawCap === undefined ? 0 : parseFiniteNumber(rawCap)
+    if (cap === null || !Number.isInteger(cap) || cap < 0) {
+      return null
+    }
+    onDemandCapCents = cap > 0 ? cap : null
+  }
+
+  const windows: OfficialUsageWindow[] = []
+  if (periodType === GROK_WEEKLY_PERIOD_TYPE) {
+    const usedPercent = clampPercent(rawPercent)
+    windows.push({
       id: 'seven_day',
       metricKey: 'grok-official:seven_day',
       kind: 'seven_day',
       usedPercent,
       remainingPercent: 100 - usedPercent,
-      resetsAt,
-      periodMs: SEVEN_DAYS_MS,
-    },
-  ]
+      resetsAt: new Date(endMs).toISOString(),
+      periodMs: Math.round(endMs - startMs),
+    })
+  }
+
+  return { windows, onDemandCapCents }
 }
 
 export class OfficialUsageService {
@@ -440,7 +482,11 @@ export class OfficialUsageService {
   private readonly getClaudePlanUsage: () => Promise<ClaudePlanUsageResult>
   private readonly getOpenAITokens: () => Promise<StoredOpenAIOAuthTokens | null>
   private readonly getGrokTokens: () => Promise<StoredGrokOAuthTokens | null>
-  private readonly getDeepSeekStatus: () => Promise<DeepSeekOAuthStatus>
+  private readonly getDeepSeekTokens: () => Promise<DeepSeekOAuthTokens | null>
+  private readonly fetchDeepSeekBalanceImpl: (
+    token: string,
+    proxyUrl: string | null,
+  ) => Promise<DeepSeekBalanceSummary>
   private readonly aggregateLocalTokens: (now: Date) => Promise<RollingLocalTokenSummary>
 
   constructor(deps: OfficialUsageServiceDeps = {}) {
@@ -451,7 +497,14 @@ export class OfficialUsageService {
     this.getClaudePlanUsage = deps.getClaudePlanUsage ?? (() => hahaOAuthService.getPlanUsage())
     this.getOpenAITokens = deps.getOpenAITokens ?? (() => hahaOpenAIOAuthService.ensureFreshTokens().catch(() => null))
     this.getGrokTokens = deps.getGrokTokens ?? (() => hahaGrokOAuthService.ensureFreshTokens().catch(() => null))
-    this.getDeepSeekStatus = deps.getDeepSeekStatus ?? (() => hahaDeepSeekOAuthService.getStatus().catch(() => ({ loggedIn: false as const })))
+    this.getDeepSeekTokens = deps.getDeepSeekTokens ?? (() => hahaDeepSeekOAuthService.loadTokens().catch(() => null))
+    this.fetchDeepSeekBalanceImpl = deps.fetchDeepSeekBalanceImpl ?? ((token, proxyUrl) =>
+      fetchDeepSeekBalance(token, {
+        identity: resolveDeepSeekClientIdentity(),
+        fetchOverride: this.fetchImpl,
+        proxyUrl,
+        timeoutMs: UPSTREAM_TIMEOUT_MS,
+      }))
     this.aggregateLocalTokens = deps.aggregateLocalTokens ?? ((now) => aggregateRollingLocalTokens({ windowHours: 5, now }))
   }
 
@@ -472,7 +525,7 @@ export class OfficialUsageService {
       this.readClaude(force),
       this.readOpenAI(force),
       this.readGrok(force),
-      this.readDeepSeek(),
+      this.readDeepSeek(force),
       this.readLocalTokens(nowDate, nowMs, force),
     ])
 
@@ -575,12 +628,23 @@ export class OfficialUsageService {
         const nextFailures = previousFailures + 1
         const waitMs = outcome.rateLimitedRetryAfterMs ?? computeExponentialBackoffMs(nextFailures)
         const backoffUntilMs = finishedAtMs + waitMs
+        const sameAccount = cached && cached.tokenIdentity === tokenIdentity
         const summary: OfficialProviderUsageSummary = {
           ...outcome.summary,
-          // Keep last known good windows if we had them for the same account.
+          // Keep last known good windows/balance if we had them for the same account.
           windows: outcome.summary.windows.length > 0
             ? outcome.summary.windows
-            : (cached && cached.tokenIdentity === tokenIdentity ? cached.summary.windows : []),
+            : (sameAccount ? cached.summary.windows : []),
+          ...(outcome.summary.balance !== undefined
+            ? { balance: outcome.summary.balance }
+            : sameAccount && cached.summary.balance
+              ? { balance: cached.summary.balance }
+              : {}),
+          ...(outcome.summary.onDemandCapCents !== undefined
+            ? { onDemandCapCents: outcome.summary.onDemandCapCents }
+            : sameAccount && cached.summary.onDemandCapCents !== undefined
+              ? { onDemandCapCents: cached.summary.onDemandCapCents }
+              : {}),
           rateLimitedUntil: new Date(backoffUntilMs).toISOString(),
         }
         this.cache.set(providerId, {
@@ -596,11 +660,22 @@ export class OfficialUsageService {
       if (outcome.failed) {
         const nextFailures = previousFailures + 1
         const backoffUntilMs = finishedAtMs + computeExponentialBackoffMs(nextFailures)
+        const sameAccount = cached && cached.tokenIdentity === tokenIdentity
         const summary: OfficialProviderUsageSummary = {
           ...outcome.summary,
-          windows: cached && cached.tokenIdentity === tokenIdentity && cached.summary.windows.length > 0
+          windows: sameAccount && cached.summary.windows.length > 0
             ? cached.summary.windows
             : outcome.summary.windows,
+          ...(outcome.summary.balance !== undefined && outcome.summary.balance !== null
+            ? { balance: outcome.summary.balance }
+            : sameAccount && cached.summary.balance
+              ? { balance: cached.summary.balance }
+              : {}),
+          ...(outcome.summary.onDemandCapCents !== undefined && outcome.summary.onDemandCapCents !== null
+            ? { onDemandCapCents: outcome.summary.onDemandCapCents }
+            : sameAccount && cached.summary.onDemandCapCents !== undefined
+              ? { onDemandCapCents: cached.summary.onDemandCapCents }
+              : {}),
         }
         this.cache.set(providerId, {
           summary,
@@ -893,19 +968,39 @@ export class OfficialUsageService {
         }
 
         if (response.status === 412) {
-          // Team accounts have no personal quota.
+          const errorBody = await response.json().catch(() => null) as Record<string, unknown> | null
+          const errorMessage = typeof errorBody?.error === 'string' ? errorBody.error : ''
+          if (errorMessage.toLowerCase().includes('no personal team')) {
+            // Team accounts have no personal quota.
+            return {
+              summary: {
+                providerId: 'grok-official',
+                signedIn: true,
+                status: 'local_only',
+                planLabel,
+                accountLabel: tokens.email,
+                fetchedAt,
+                rateLimitedUntil: null,
+                windows: [],
+                noticeCode: 'grok_team_no_personal_quota',
+                source: 'official_api',
+              },
+            }
+          }
           return {
             summary: {
               providerId: 'grok-official',
               signedIn: true,
-              status: 'local_only',
+              status: 'unavailable',
               planLabel,
               accountLabel: tokens.email,
               fetchedAt,
               rateLimitedUntil: null,
+              httpStatus: 412,
               windows: [],
-              source: 'local_only',
+              source: 'official_api',
             },
+            failed: true,
           }
         }
 
@@ -928,20 +1023,37 @@ export class OfficialUsageService {
         }
 
         const payload = await response.json().catch(() => null)
-        const windows = parseGrokBillingPayload(payload)
+        const parsed = parseGrokBillingPayload(payload)
+        if (!parsed) {
+          return {
+            summary: {
+              providerId: 'grok-official',
+              signedIn: true,
+              status: 'unavailable',
+              planLabel,
+              accountLabel: tokens.email,
+              fetchedAt,
+              rateLimitedUntil: null,
+              windows: [],
+              source: 'official_api',
+            },
+            failed: true,
+          }
+        }
         return {
           summary: {
             providerId: 'grok-official',
             signedIn: true,
-            status: windows.length > 0 ? 'ok' : 'unavailable',
+            status: parsed.windows.length > 0 || parsed.onDemandCapCents !== null ? 'ok' : 'unavailable',
             planLabel,
             accountLabel: tokens.email,
             fetchedAt,
             rateLimitedUntil: null,
-            windows,
+            windows: parsed.windows,
+            onDemandCapCents: parsed.onDemandCapCents,
             source: 'official_api',
           },
-          failed: windows.length === 0,
+          failed: parsed.windows.length === 0 && parsed.onDemandCapCents === null,
         }
       } catch {
         return {
@@ -997,9 +1109,10 @@ export class OfficialUsageService {
     }
   }
 
-  private async readDeepSeek(): Promise<OfficialProviderUsageSummary> {
-    const status = await this.getDeepSeekStatus()
-    if (!status.loggedIn) {
+  private async readDeepSeek(force: boolean): Promise<OfficialProviderUsageSummary> {
+    const tokens = await this.getDeepSeekTokens()
+    if (!tokens) {
+      this.cache.delete('deepseek-account')
       return {
         providerId: 'deepseek-account',
         signedIn: false,
@@ -1009,20 +1122,53 @@ export class OfficialUsageService {
         fetchedAt: null,
         rateLimitedUntil: null,
         windows: [],
-        source: 'local_only',
+        balance: null,
+        source: 'official_api',
       }
     }
-    return {
-      providerId: 'deepseek-account',
-      signedIn: true,
-      status: 'local_only',
-      planLabel: null,
-      accountLabel: status.name ?? status.contact ?? null,
-      fetchedAt: new Date(this.now()).toISOString(),
-      rateLimitedUntil: null,
-      windows: [],
-      source: 'local_only',
-    }
+
+    const accountLabel = tokens.name ?? tokens.contact ?? null
+    const tokenIdentity = `deepseek:${tokens.issuer}:${hashToken(tokens.token)}`
+    return this.runWithCache('deepseek-account', tokenIdentity, force, async () => {
+      const nowMs = this.now()
+      const fetchedAt = new Date(nowMs).toISOString()
+      const proxyUrl = await this.getProxyUrl()
+      try {
+        const balance = await this.fetchDeepSeekBalanceImpl(tokens.token, proxyUrl)
+        return {
+          summary: {
+            providerId: 'deepseek-account',
+            signedIn: true,
+            status: 'ok',
+            planLabel: null,
+            accountLabel,
+            fetchedAt,
+            rateLimitedUntil: null,
+            windows: [],
+            balance,
+            source: 'official_api',
+          },
+        }
+      } catch (error) {
+        const unauthorized = error instanceof DeepSeekAuthError && error.code === 'unauthorized'
+        return {
+          summary: {
+            providerId: 'deepseek-account',
+            signedIn: true,
+            status: 'unavailable',
+            planLabel: null,
+            accountLabel,
+            fetchedAt,
+            rateLimitedUntil: null,
+            ...(unauthorized ? { httpStatus: 401 } : {}),
+            windows: [],
+            balance: null,
+            source: 'official_api',
+          },
+          failed: true,
+        }
+      }
+    })
   }
 }
 

@@ -9,6 +9,7 @@ import {
   type OfficialUsageWindow,
   type UnifiedUsageSummaryResponse,
 } from '../api/usageSummary'
+import { formatWalletAmount } from '../components/usage/usageFormatting'
 import { getDesktopHost } from '../lib/desktopHost'
 
 const DEFAULT_USAGE_WIDGET_PREFERENCES: DesktopUsageWidgetPreferences = {
@@ -61,20 +62,6 @@ export function selectPrimaryUsageHighlight(
   return fiveHour ?? candidates[0] ?? null
 }
 
-/**
- * Computes whether the Version A sidebar capsule should occupy space.
- * Default `'auto'` stays completely hidden for API-key-only users and appears
- * automatically once at least one official subscription is signed in.
- */
-export function shouldShowSidebarUsageWidget(
-  preferences: DesktopUsageWidgetPreferences,
-  summary: UnifiedUsageSummaryResponse | null,
-): boolean {
-  if (preferences.sidebarVisibility === 'hidden') return false
-  if (preferences.sidebarVisibility === 'always') return true
-  return summary?.hasSignedInOfficial === true
-}
-
 function buildMenuBarPayload(
   preferences: DesktopUsageWidgetPreferences,
   summary: UnifiedUsageSummaryResponse | null,
@@ -83,8 +70,33 @@ function buildMenuBarPayload(
     return { enabled: false }
   }
   const highlight = selectPrimaryUsageHighlight(summary, preferences.pinnedMetricKeys)
+  const tooltipParts = (summary?.providers ?? [])
+    .filter((p) => p.signedIn)
+    .map((p) => {
+      const first = p.windows[0]
+      if (first && first.remainingPercent !== null) {
+        const pct = preferences.displayMode === 'used' ? `${first.usedPercent}% used` : `${first.remainingPercent}% left`
+        return `${p.providerId.replace(/-official|-account/g, '')}: ${pct}`
+      }
+      const primaryWallet = p.balance?.normalWallets[0] ?? p.balance?.bonusWallets[0]
+      if (primaryWallet) {
+        return `${p.providerId.replace(/-official|-account/g, '')}: ${formatWalletAmount(primaryWallet.currency, primaryWallet.balance)}`
+      }
+      return null
+    })
+    .filter((part): part is string => part !== null)
+  const tooltip = tooltipParts.length > 0 ? tooltipParts.join(' · ') : 'cc-haha Usage'
+
   if (!highlight || highlight.window.remainingPercent === null) {
-    return { enabled: true, title: '', tooltip: 'cc-haha Usage' }
+    const balanceProvider = (summary?.providers ?? []).find(
+      (p) => p.signedIn && (p.balance?.normalWallets[0] || p.balance?.bonusWallets[0]),
+    )
+    const primaryWallet = balanceProvider?.balance?.normalWallets[0] ?? balanceProvider?.balance?.bonusWallets[0]
+    return {
+      enabled: true,
+      title: primaryWallet ? formatWalletAmount(primaryWallet.currency, primaryWallet.balance) : '',
+      tooltip,
+    }
   }
   const value = preferences.displayMode === 'used'
     ? highlight.window.usedPercent
@@ -93,19 +105,10 @@ function buildMenuBarPayload(
     ? '5h'
     : '7d'
   const title = value !== null ? `${windowShort} ${value}%` : ''
-  const tooltipParts = (summary?.providers ?? [])
-    .filter((p) => p.signedIn && p.windows.length > 0)
-    .map((p) => {
-      const first = p.windows[0]
-      if (!first || first.remainingPercent === null) return null
-      const pct = preferences.displayMode === 'used' ? `${first.usedPercent}% used` : `${first.remainingPercent}% left`
-      return `${p.providerId.replace(/-official|-account/g, '')}: ${pct}`
-    })
-    .filter((part): part is string => part !== null)
   return {
     enabled: true,
     title,
-    tooltip: tooltipParts.length > 0 ? tooltipParts.join(' · ') : 'cc-haha Usage',
+    tooltip,
   }
 }
 

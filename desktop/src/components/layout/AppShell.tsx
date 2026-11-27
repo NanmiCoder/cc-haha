@@ -210,6 +210,8 @@ export function AppShell() {
   }, [])
 
   // Keep usage widget visibility and cross-window preference changes in sync with the main window.
+  const usageMenuBarEnabled = useUsageSummaryStore((s) => s.preferences.menuBarEnabled)
+  const usagePreferencesLoaded = useUsageSummaryStore((s) => s.preferencesLoaded)
   useEffect(() => {
     const host = getDesktopHost()
     if (!host.isDesktop || !host.usageWidget) return
@@ -241,6 +243,17 @@ export function AppShell() {
       unlistenPrefs?.()
     }
   }, [])
+
+  // Keep macOS menu bar / tray usage title fresh while menuBarEnabled is active.
+  useEffect(() => {
+    if (!desktopRuntime || !ready || !usagePreferencesLoaded || !usageMenuBarEnabled) return
+    void useUsageSummaryStore.getState().fetchSummary()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void useUsageSummaryStore.getState().fetchSummary()
+    }, 5 * 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [desktopRuntime, ready, usageMenuBarEnabled, usagePreferencesLoaded])
 
   useEffect(() => {
     const host = getDesktopHost()

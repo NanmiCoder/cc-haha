@@ -5439,4 +5439,13 @@ export const jp: Record<TranslationKey, string> = {
   'usageWidget.settingsSnapTopDesc': "独立ウィンドウをスリムなミニバーとして画面上端にドッキングします。",
   'usageWidget.settingsMenuBarTitle': "メニューバー / トレイに表示",
   'usageWidget.settingsMenuBarDesc': "macOS メニューバーやシステムトレイに簡易表示し、クリックでウィンドウを切り替えられます。",
+  'usageWidget.officialToolbarTitle': "公式クォータと残高",
+  'usageWidget.openFloatingButton': "フローティング窓",
+  'usageWidget.balanceTitle': "アカウント残高",
+  'usageWidget.rechargeBalance': "チャージ残高",
+  'usageWidget.bonusBalance': "ボーナス残高",
+  'usageWidget.payAsYouGoLabel': "従量課金",
+  'usageWidget.payAsYouGoCap': "上限 {amount}",
+  'usageWidget.grokTeamNoPersonalQuota': "Grok チームアカウントには個人クォータがありません。",
+  'usageWidget.statusAuthExpired': "認証の有効期限が切れました。再度ログインしてください。",
 }

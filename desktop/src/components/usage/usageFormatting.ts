@@ -1,5 +1,8 @@
 import type {
+  OfficialUsageBalanceSummary,
   OfficialUsageProviderId,
+  OfficialUsageWallet,
+  OfficialUsageWalletCurrency,
   OfficialUsageWindow,
   OfficialUsageWindowKind,
 } from '@/api/usageSummary'
@@ -112,4 +115,46 @@ export function computePaceMarkerPercent(
   if (elapsedFraction < 0.02 || elapsedFraction > 0.98) return null
   const pct = mode === 'remaining' ? (1 - elapsedFraction) * 100 : elapsedFraction * 100
   return Math.round(Math.max(2, Math.min(98, pct)))
+}
+
+function currencySymbol(currency: OfficialUsageWalletCurrency): string {
+  return currency === 'CNY' ? '¥' : '$'
+}
+
+export function parseWalletAmount(rawBalance: string): number | null {
+  const numeric = Number(rawBalance.trim())
+  if (!Number.isFinite(numeric)) return null
+  return Math.abs(numeric) < 1e-9 ? 0 : numeric
+}
+
+export function formatWalletAmount(
+  currency: OfficialUsageWalletCurrency,
+  rawBalance: string,
+): string {
+  const numeric = parseWalletAmount(rawBalance)
+  if (numeric === null) return `${currencySymbol(currency)}${rawBalance}`
+  const sign = numeric < 0 ? '-' : ''
+  return `${sign}${currencySymbol(currency)}${Math.abs(numeric).toFixed(2)}`
+}
+
+export function formatWalletList(wallets: readonly OfficialUsageWallet[]): string {
+  return wallets.map((wallet) => formatWalletAmount(wallet.currency, wallet.balance)).join(' · ')
+}
+
+export function hasNonZeroWallet(wallets: readonly OfficialUsageWallet[]): boolean {
+  return wallets.some((wallet) => {
+    const amount = parseWalletAmount(wallet.balance)
+    return amount !== null && amount > 0
+  })
+}
+
+export function hasUsableBalance(balance: OfficialUsageBalanceSummary | null | undefined): boolean {
+  if (!balance) return false
+  return balance.normalWallets.length > 0 || balance.bonusWallets.length > 0
+}
+
+export function formatCentsAsDollars(cents: number): string {
+  if (!Number.isFinite(cents) || cents <= 0) return '$0'
+  const dollars = cents / 100
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`
 }

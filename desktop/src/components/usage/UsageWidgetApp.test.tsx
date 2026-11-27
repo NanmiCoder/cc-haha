@@ -98,9 +98,11 @@ import { UsageSummaryPanel } from './UsageSummaryPanel'
 import {
   computePaceMarkerPercent,
   displayPercentForWindow,
+  formatCentsAsDollars,
   formatCompactTokenCount,
   formatExactResetTime,
   formatResetCountdown,
+  formatWalletAmount,
   providerTitleKey,
   toneForRemainingPercent,
   windowLabelKey,
@@ -195,13 +197,17 @@ const RICH_SUMMARY: UnifiedUsageSummaryResponse = {
     {
       providerId: 'deepseek-account',
       signedIn: true,
-      status: 'local_only',
+      status: 'ok',
       planLabel: null,
       accountLabel: 'ds@example.com',
       fetchedAt: '2026-11-26T18:00:00.000Z',
       rateLimitedUntil: null,
-      source: 'local_only',
+      source: 'official_api',
       windows: [],
+      balance: {
+        normalWallets: [{ currency: 'CNY', balance: '88.50' }],
+        bonusWallets: [{ currency: 'CNY', balance: '10.00' }],
+      },
     },
   ],
   localWindow: {
@@ -264,9 +270,10 @@ describe('UsageWidgetApp', () => {
     expect(win).toBeInTheDocument()
     await waitFor(() => expect(getSummaryMock).toHaveBeenCalledTimes(1))
 
-    // Running-out section renders the unpinned low-quota Claude 7d window.
+    // Running-out section renders the unpinned low-quota Claude 7d window and DeepSeek balance row.
     expect(screen.getByText('Running low')).toBeInTheDocument()
     expect(screen.getByText('12% left')).toBeInTheDocument()
+    expect(screen.getByTestId('usage-priority-balance-deepseek-account')).toHaveTextContent('¥88.50')
 
     // Drag header triggers start -> move -> end IPC calls.
     const dragHeader = screen.getByText('Usage monitor').closest('div')!.parentElement!
@@ -443,6 +450,12 @@ describe('usageFormatting, usageSummaryStore, and browserHost', () => {
     expect(formatCompactTokenCount(12_400)).toBe('12K')
     expect(formatCompactTokenCount(2_500_000)).toBe('2.50M')
     expect(formatCompactTokenCount(1_250_000_000)).toBe('1.25B')
+
+    expect(formatWalletAmount('CNY', '0E-16')).toBe('¥0.00')
+    expect(formatWalletAmount('CNY', '123.45')).toBe('¥123.45')
+    expect(formatWalletAmount('USD', '6.7')).toBe('$6.70')
+    expect(formatCentsAsDollars(5000)).toBe('$50')
+    expect(formatCentsAsDollars(2550)).toBe('$25.50')
 
     expect(computePaceMarkerPercent({ ...sampleWindow, resetsAt: null }, 'remaining', now)).toBeNull()
     expect(computePaceMarkerPercent({ ...sampleWindow, resetsAt: 'bad' }, 'remaining', now)).toBeNull()

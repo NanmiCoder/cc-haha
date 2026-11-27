@@ -76,7 +76,7 @@ import {
   type ProviderSearchMatch,
 } from './providerListSearch'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
-import { OfficialProviderPlanUsage } from '../../components/settings/OfficialProviderPlanUsage'
+import { OfficialProviderPlanUsage, OfficialUsageToolbar } from '../../components/settings/OfficialProviderPlanUsage'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { DeepSeekAccountLogin } from '../../components/settings/DeepSeekAccountLogin'
@@ -494,18 +494,9 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           ) : null}
           details={!browserMode ? (
             <div className="flex flex-col gap-3">
-              {isActive ? (
-                <>
-                  <official.Login />
-                  <OfficialProviderModelSettings providerId={item.id} />
-                </>
-              ) : item.kind === 'claude-official' ? <ClaudeOfficialLogin usageOnly /> : null}
-              {(item.kind === 'openai-official' || item.kind === 'grok-official') && (
-                <OfficialProviderPlanUsage providerId={item.kind} />
-              )}
-              {item.kind === 'deepseek-account' && (
-                <p className="text-xs text-[var(--color-text-secondary)]">{t('settings.providers.officialUsageNotIntegrated')}</p>
-              )}
+              {isActive ? <official.Login /> : null}
+              <OfficialProviderPlanUsage providerId={item.kind} isActive={isActive} />
+              {isActive ? <OfficialProviderModelSettings providerId={item.id} /> : null}
             </div>
           ) : null}
         />
@@ -660,6 +651,8 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           onConnect={() => setMagpieDialog({})}
         />
       )}
+
+      {!browserMode && !searching && tab === 'official' && <OfficialUsageToolbar />}
 
       {visibleEntries.length > 0 && (
         <DndContext

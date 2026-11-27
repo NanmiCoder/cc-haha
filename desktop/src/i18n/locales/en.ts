@@ -5438,6 +5438,15 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'usageWidget.settingsSnapTopDesc': "Dock the standalone usage window as a compact bar at the top of your screen.",
   'usageWidget.settingsMenuBarTitle': "Show in menu bar / tray",
   'usageWidget.settingsMenuBarDesc': "Show quick quota status in the macOS menu bar or system tray to toggle the usage window.",
+  'usageWidget.officialToolbarTitle': "Official quotas & balances",
+  'usageWidget.openFloatingButton': "Floating window",
+  'usageWidget.balanceTitle': "Account balance",
+  'usageWidget.rechargeBalance': "Recharge balance",
+  'usageWidget.bonusBalance': "Bonus balance",
+  'usageWidget.payAsYouGoLabel': "Pay as you go",
+  'usageWidget.payAsYouGoCap': "{amount} cap",
+  'usageWidget.grokTeamNoPersonalQuota': "Grok team accounts have no personal quota.",
+  'usageWidget.statusAuthExpired': "Session expired. Please sign in again.",
 } as const
 
 export type TranslationKey = keyof typeof en

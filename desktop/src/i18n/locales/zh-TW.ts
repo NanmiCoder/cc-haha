@@ -5438,4 +5438,13 @@ export const zh: Record<TranslationKey, string> = {
   'usageWidget.settingsSnapTopDesc': "將獨立小窗摺疊為精簡迷你條，吸附在螢幕頂部邊緣。",
   'usageWidget.settingsMenuBarTitle': "系統頂欄 / 托盤顯示",
   'usageWidget.settingsMenuBarDesc': "在 macOS 頂部選單列或系統托盤顯示快捷用量，點擊即可開關獨立小窗。",
+  'usageWidget.officialToolbarTitle': "官方額度與餘額",
+  'usageWidget.openFloatingButton': "懸浮小窗",
+  'usageWidget.balanceTitle': "帳號餘額",
+  'usageWidget.rechargeBalance': "儲值餘額",
+  'usageWidget.bonusBalance': "贈送餘額",
+  'usageWidget.payAsYouGoLabel': "按量計費",
+  'usageWidget.payAsYouGoCap': "上限 {amount}",
+  'usageWidget.grokTeamNoPersonalQuota': "Grok 團隊帳號沒有個人額度。",
+  'usageWidget.statusAuthExpired': "登入憑證已失效，請重新登入。",
 }

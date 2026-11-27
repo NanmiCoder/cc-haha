@@ -8,7 +8,7 @@ import {
   SettingsSection,
   SettingsSwitchRow,
 } from '@/components/settings/SettingsSection'
-import type { UsageDisplayMode, UsageSidebarVisibility } from '@/api/desktopUiPreferences'
+import type { UsageDisplayMode } from '@/api/desktopUiPreferences'
 import { useTranslation } from '@/i18n'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { useUsageSummaryStore } from '@/stores/usageSummaryStore'
@@ -32,23 +32,6 @@ export function UsageWidgetSettings() {
   return (
     <SettingsSection title={t('usageWidget.settingsTitle')}>
       <SettingsGroup>
-        <SettingsRow
-          title={t('usageWidget.settingsSidebarVisibilityTitle')}
-          description={t('usageWidget.settingsSidebarVisibilityDesc')}
-        >
-          <SegmentedControl<UsageSidebarVisibility>
-            size="sm"
-            label={t('usageWidget.settingsSidebarVisibilityTitle')}
-            value={preferences.sidebarVisibility}
-            onChange={(value) => void updatePreferences({ sidebarVisibility: value })}
-            items={[
-              { value: 'auto', label: t('usageWidget.visibilityAuto') },
-              { value: 'always', label: t('usageWidget.visibilityAlways') },
-              { value: 'hidden', label: t('usageWidget.visibilityHidden') },
-            ]}
-          />
-        </SettingsRow>
-
         <SettingsRow
           title={t('usageWidget.settingsDisplayModeTitle')}
           description={t('usageWidget.settingsDisplayModeDesc')}

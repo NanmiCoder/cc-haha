@@ -5441,4 +5441,13 @@ export const kr: Record<TranslationKey, string> = {
   'usageWidget.settingsSnapTopDesc': "독립 창을 컴팩트 미니바로 접어 화면 상단 가장자리에 고정합니다.",
   'usageWidget.settingsMenuBarTitle': "메뉴 막대 / 트레이 표시",
   'usageWidget.settingsMenuBarDesc': "macOS 메뉴 막대 또는 시스템 트레이에 요약 사용량을 표시하고 클릭으로 창을 엽니다.",
+  'usageWidget.officialToolbarTitle': "공식 한도 및 잔액",
+  'usageWidget.openFloatingButton': "플로팅 창",
+  'usageWidget.balanceTitle': "계정 잔액",
+  'usageWidget.rechargeBalance': "충전 잔액",
+  'usageWidget.bonusBalance': "보너스 잔액",
+  'usageWidget.payAsYouGoLabel': "종량제",
+  'usageWidget.payAsYouGoCap': "상한 {amount}",
+  'usageWidget.grokTeamNoPersonalQuota': "Grok 팀 계정에는 개인 한도가 없습니다.",
+  'usageWidget.statusAuthExpired': "로그인이 만료되었습니다. 다시 로그인해 주세요.",
 }

@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
-import { OfficialUsageService, officialUsageService } from './officialUsageService.js'
+import { OfficialUsageService, officialUsageService, parseGrokBillingPayload } from './officialUsageService.js'
 import { aggregateRollingLocalTokens } from './rollingTokenUsage.js'
 import { handleApiRequest } from '../router.js'
 import { handleUsageSummaryApi } from '../api/usage-summary.js'
@@ -41,7 +41,7 @@ describe('OfficialUsageService', () => {
       getClaudePlanUsage: claudeUsageMock,
       getOpenAITokens: async () => null,
       getGrokTokens: async () => null,
-      getDeepSeekStatus: async () => ({ loggedIn: false }),
+      getDeepSeekTokens: async () => null,
       aggregateLocalTokens: async () => ({
         windowHours: 5,
         since: '2026-11-26T13:00:00.000Z',
@@ -91,8 +91,32 @@ describe('OfficialUsageService', () => {
       }
       if (url.includes('/v1/billing')) {
         return new Response(JSON.stringify({
-          used_percent: 25,
-          period_end: '2026-12-01T00:00:00.000Z',
+          config: {
+            currentPeriod: {
+              type: 'USAGE_PERIOD_TYPE_WEEKLY',
+              start: '2026-11-24T00:00:00.000Z',
+              end: '2026-12-01T00:00:00.000Z',
+            },
+            creditUsagePercent: 25,
+            onDemandCap: { val: 5000 },
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/api/v0/users/get_user_summary')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              normal_wallets: [
+                { currency: 'CNY', balance: '123.45' },
+                { currency: 'USD', balance: '6.78' },
+              ],
+              bonus_wallets: [
+                { currency: 'CNY', balance: '10.00' },
+              ],
+            },
+          },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       return new Response('{}', { status: 404 })
@@ -126,7 +150,13 @@ describe('OfficialUsageService', () => {
         expiresAt: currentTimeMs + 3_600_000,
         email: 'grok@example.com',
       }),
-      getDeepSeekStatus: async () => ({ loggedIn: true, name: 'DeepSeek User', contact: 'ds@example.com' }),
+      getDeepSeekTokens: async () => ({
+        token: 'ds-tok-123456',
+        issuer: 'https://platform.deepseek.com',
+        deviceId: 'dev-1',
+        name: 'DeepSeek User',
+        contact: 'ds@example.com',
+      }),
       aggregateLocalTokens: async () => ({
         windowHours: 5,
         since: '2026-11-26T13:00:00.000Z',
@@ -160,10 +190,23 @@ describe('OfficialUsageService', () => {
     expect(grok.status).toBe('ok')
     expect(grok.planLabel).toBe('SuperGrok')
     expect(grok.windows[0]).toMatchObject({ id: 'seven_day', usedPercent: 25, remainingPercent: 75 })
+    expect(grok.onDemandCapCents).toBe(5000)
 
     const deepseek = first.providers.find((p) => p.providerId === 'deepseek-account')!
     expect(deepseek.signedIn).toBe(true)
-    expect(deepseek.status).toBe('local_only')
+    expect(deepseek.status).toBe('ok')
+    expect(deepseek.windows).toEqual([])
+    expect(deepseek.balance).toEqual({
+      normalWallets: [
+        { currency: 'CNY', balance: '123.45' },
+        { currency: 'USD', balance: '6.78' },
+      ],
+      bonusWallets: [{ currency: 'CNY', balance: '10.00' }],
+    })
+
+    const deepseekCall = fetchCalls.find((c) => c.url.includes('/api/v0/users/get_user_summary'))!
+    expect(deepseekCall.redirect).toBe('error')
+    expect(deepseekCall.headers.get('x-dsh-auth-token')).toBe('ds-tok-123456')
 
     const openaiCall = fetchCalls.find((c) => c.url.includes('/backend-api/wham/usage'))!
     expect(openaiCall.redirect).toBe('error')
@@ -186,7 +229,7 @@ describe('OfficialUsageService', () => {
     currentTimeMs += 60_000
     await service.getSummary()
     expect(claudeUsageMock).toHaveBeenCalledTimes(1)
-    expect(fetchCalls.length).toBe(3)
+    expect(fetchCalls.length).toBe(4)
 
     // Force refresh within 15s of initial fetch is blocked; after 60s it refreshes (but Grok settings stay hourly-cached).
     await service.getSummary({ force: true })
@@ -226,7 +269,7 @@ describe('OfficialUsageService', () => {
         accountId: 'acct_429',
       }),
       getGrokTokens: async () => null,
-      getDeepSeekStatus: async () => ({ loggedIn: false }),
+      getDeepSeekTokens: async () => null,
       aggregateLocalTokens: async () => ({
         windowHours: 5,
         since: '2026-11-26T13:00:00.000Z',
@@ -299,7 +342,7 @@ describe('OfficialUsageService', () => {
       getClaudePlanUsage: claudeUsageMock,
       getOpenAITokens: async () => null,
       getGrokTokens: async () => null,
-      getDeepSeekStatus: async () => ({ loggedIn: false }),
+      getDeepSeekTokens: async () => null,
       aggregateLocalTokens: localScanMock,
     })
 
@@ -323,6 +366,180 @@ describe('OfficialUsageService', () => {
     const rotated = await service.getSummary()
     expect(claudeUsageMock).toHaveBeenCalledTimes(2)
     expect(rotated.providers.find((p) => p.providerId === 'claude-official')?.status).toBe('ok')
+  })
+
+  it('decodes Grok proto-JSON credits with omitted zero fields, rejects malformed payloads, and handles team 412', async () => {
+    const zeroUsed = parseGrokBillingPayload({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          start: '2026-11-24T00:00:00.000Z',
+          end: '2026-12-01T00:00:00.000Z',
+        },
+      },
+    })
+    expect(zeroUsed).toEqual({
+      windows: [
+        {
+          id: 'seven_day',
+          metricKey: 'grok-official:seven_day',
+          kind: 'seven_day',
+          usedPercent: 0,
+          remainingPercent: 100,
+          resetsAt: '2026-12-01T00:00:00.000Z',
+          periodMs: 7 * 24 * 60 * 60 * 1000,
+        },
+      ],
+      onDemandCapCents: null,
+    })
+
+    expect(parseGrokBillingPayload({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          start: '2026-12-01T00:00:00.000Z',
+          end: '2026-11-24T00:00:00.000Z',
+        },
+      },
+    })).toBeNull()
+    expect(parseGrokBillingPayload({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          start: '2026-11-24T00:00:00.000Z',
+          end: '2026-12-01T00:00:00.000Z',
+        },
+        creditUsagePercent: 'high',
+      },
+    })).toBeNull()
+    expect(parseGrokBillingPayload({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          start: '2026-11-24T00:00:00.000Z',
+          end: '2026-12-01T00:00:00.000Z',
+        },
+        onDemandCap: { val: 'lots' },
+      },
+    })).toBeNull()
+
+    const teamService = new OfficialUsageService({
+      now: () => Date.parse('2026-11-26T18:00:00.000Z'),
+      fetchImpl: (async (input: string | URL) => {
+        const url = String(input)
+        if (url.includes('/v1/settings')) {
+          return new Response(JSON.stringify({ subscription_tier_display: 'SuperGrok Business' }), { status: 200 })
+        }
+        if (url.includes('/v1/billing')) {
+          return new Response(JSON.stringify({ error: 'no personal team found' }), { status: 412 })
+        }
+        return new Response('{}', { status: 404 })
+      }) as unknown as typeof fetch,
+      getProxyUrl: async () => null,
+      getClaudeTokens: async () => null,
+      getOpenAITokens: async () => null,
+      getGrokTokens: async () => ({
+        accessToken: 'gk-team-tok',
+        refreshToken: null,
+        expiresAt: null,
+        email: 'team@example.com',
+      }),
+      getDeepSeekTokens: async () => null,
+      aggregateLocalTokens: async () => ({
+        windowHours: 5,
+        since: '2026-11-26T13:00:00.000Z',
+        until: '2026-11-26T18:00:00.000Z',
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        turnCount: 0,
+        sessionCount: 0,
+        byModel: [],
+      }),
+    })
+
+    const summary = await teamService.getSummary()
+    const grok = summary.providers.find((p) => p.providerId === 'grok-official')!
+    expect(grok.status).toBe('local_only')
+    expect(grok.planLabel).toBe('SuperGrok Business')
+    expect(grok.noticeCode).toBe('grok_team_no_personal_quota')
+    expect(grok.windows).toEqual([])
+  })
+
+  it('preserves last known DeepSeek wallet balance on transient failure and flags 401 unauthorized', async () => {
+    let currentTimeMs = Date.parse('2026-11-26T18:00:00.000Z')
+    let mode: 'ok' | 'fail' | 'unauthorized' = 'ok'
+    const service = new OfficialUsageService({
+      now: () => currentTimeMs,
+      fetchImpl: (async () => {
+        if (mode === 'ok') {
+          return new Response(JSON.stringify({
+            code: 0,
+            data: {
+              biz_code: 0,
+              biz_data: {
+                normal_wallets: [{ currency: 'CNY', balance: '0E-16' }],
+                bonus_wallets: [{ currency: 'CNY', balance: '5.50' }],
+              },
+            },
+          }), { status: 200 })
+        }
+        if (mode === 'unauthorized') {
+          return new Response(JSON.stringify({ code: 40003 }), { status: 200 })
+        }
+        return new Response('upstream error', { status: 503 })
+      }) as unknown as typeof fetch,
+      getProxyUrl: async () => null,
+      getClaudeTokens: async () => null,
+      getOpenAITokens: async () => null,
+      getGrokTokens: async () => null,
+      getDeepSeekTokens: async () => ({
+        token: 'ds-tok-balance',
+        issuer: 'https://platform.deepseek.com',
+        deviceId: 'dev-1',
+        name: 'Alice',
+        contact: 'a***@example.com',
+      }),
+      aggregateLocalTokens: async () => ({
+        windowHours: 5,
+        since: '2026-11-26T13:00:00.000Z',
+        until: '2026-11-26T18:00:00.000Z',
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        turnCount: 0,
+        sessionCount: 0,
+        byModel: [],
+      }),
+    })
+
+    const first = await service.getSummary()
+    const ds1 = first.providers.find((p) => p.providerId === 'deepseek-account')!
+    expect(ds1.status).toBe('ok')
+    expect(ds1.balance).toEqual({
+      normalWallets: [{ currency: 'CNY', balance: '0E-16' }],
+      bonusWallets: [{ currency: 'CNY', balance: '5.50' }],
+    })
+
+    // Transient failure after TTL preserves the previously known wallet balance.
+    mode = 'fail'
+    currentTimeMs += 6 * 60 * 1000
+    const second = await service.getSummary()
+    const ds2 = second.providers.find((p) => p.providerId === 'deepseek-account')!
+    expect(ds2.status).toBe('unavailable')
+    expect(ds2.balance).toEqual(ds1.balance)
+
+    // Unauthorized rejection sets httpStatus 401.
+    mode = 'unauthorized'
+    service.clearCache()
+    const third = await service.getSummary()
+    const ds3 = third.providers.find((p) => p.providerId === 'deepseek-account')!
+    expect(ds3.status).toBe('unavailable')
+    expect(ds3.httpStatus).toBe(401)
   })
 })
 
