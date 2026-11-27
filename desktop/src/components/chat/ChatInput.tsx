@@ -52,7 +52,6 @@ import {
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
-import { ProjectContextChip } from '@/components/chat/ProjectContextChip'
 import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from '@/components/chat/RepositoryLaunchControls'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from './ComposerReferenceMenu'
 import { ComposerReferenceDetail } from './ComposerReferenceDetail'
@@ -549,12 +548,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     setSlashMenuOpen(false)
   }, [referenceContext])
 
-  // Run location now renders in the quiet bare `.surface-glass` under-card
-  // context strip below the floating composer card so the toolbar stays
-  // uncluttered; `useCompactControls` still controls compact vs full density.
-  const hasUnderCardContext = !isMemberSession &&
-    !(isMobileComposer && messageCount > 0) &&
-    (showLaunchControls || Boolean(resolvedWorkDir || gitInfo?.repoName || activeSession?.projectRoot))
+  // The under-card strip only holds interactive launch controls for an empty
+  // session; once messages exist, the sticky SessionChatHeader owns project,
+  // branch, and worktree context so the composer footer stays uncluttered.
+  const hasUnderCardContext = showLaunchControls
   const rawPendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
     : null
@@ -2340,8 +2337,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
         </div>
 
-        {/* Bare under-card context strip sitting cleanly below the floating
-            composer card without overlapping its rounded corners. */}
+        {/* Bare under-card launch strip sitting cleanly below the floating
+            composer card on empty sessions; live sessions surface project and
+            branch in the sticky session header instead. */}
         {hasUnderCardContext && (
           <div
             data-testid="composer-context-strip"
@@ -2349,41 +2347,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               useCompactControls ? 'px-2' : 'px-2.5'
             }`}
           >
-            {showLaunchControls ? (
-              <RepositoryLaunchControls
-                // One instance per chat: what it holds (which branch it chose
-                // itself, the context it read) belongs to this chat, and
-                // ChatInput is reused as the user moves between empty chats.
-                key={activeTabId}
-                ref={launchControlsRef}
-                visible={visible}
-                workDir={activeLaunchWorkDir}
-                onWorkDirChange={handleLaunchWorkDirChange}
-                branch={launchBranch}
-                onBranchChange={setLaunchBranch}
-                branchAutomatic={launchBranchAutomatic}
-                onBranchAutomaticChange={setLaunchBranchAutomatic}
-                useWorktree={launchUseWorktree}
-                onUseWorktreeChange={setLaunchUseWorktree}
-                onLaunchReadyChange={setLaunchReady}
-                worktreeSupported={!isAntigravity}
-                disabled={isActive || launchTransitioning}
-                placement={useCompactControls ? 'outside' : 'toolbar'}
-              />
-            ) : (
-              <ProjectContextChip
-                workDir={resolvedWorkDir}
-                projectRoot={activeSession?.projectRoot}
-                repoName={gitInfo?.repoName || null}
-                branch={gitInfo?.branch || null}
-                sourceWorkDir={gitInfo?.worktree?.sourceWorkDir || null}
-                isWorktree={!!gitInfo?.worktree?.enabled}
-                worktreeSlug={gitInfo?.worktree?.slug || null}
-                worktreePath={gitInfo?.worktree?.path || gitInfo?.worktree?.plannedPath || null}
-                compact={useCompactControls}
-                variant={useCompactControls ? 'chip' : 'toolbar'}
-              />
-            )}
+            <RepositoryLaunchControls
+              // One instance per chat: what it holds (which branch it chose
+              // itself, the context it read) belongs to this chat, and
+              // ChatInput is reused as the user moves between empty chats.
+              key={activeTabId}
+              ref={launchControlsRef}
+              visible={visible}
+              workDir={activeLaunchWorkDir}
+              onWorkDirChange={handleLaunchWorkDirChange}
+              branch={launchBranch}
+              onBranchChange={setLaunchBranch}
+              branchAutomatic={launchBranchAutomatic}
+              onBranchAutomaticChange={setLaunchBranchAutomatic}
+              useWorktree={launchUseWorktree}
+              onUseWorktreeChange={setLaunchUseWorktree}
+              onLaunchReadyChange={setLaunchReady}
+              worktreeSupported={!isAntigravity}
+              disabled={isActive || launchTransitioning}
+              placement={useCompactControls ? 'outside' : 'toolbar'}
+            />
           </div>
         )}
 

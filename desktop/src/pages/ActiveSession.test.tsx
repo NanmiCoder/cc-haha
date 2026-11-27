@@ -140,6 +140,10 @@ import { useSessionDelegationStore } from '../stores/sessionDelegationStore'
 import { sessionCollaborationApi, type SessionDelegationSnapshot } from '../api/sessionCollaboration'
 import { useTrajectoryViewStore } from '../stores/trajectoryViewStore'
 import {
+  captureProjectDisplayNameHydrationRevision,
+  hydrateProjectDisplayNames,
+} from '../stores/projectDisplayNameStore'
+import {
   WORKSPACE_BOTTOM_DEFAULT_HEIGHT,
   WORKSPACE_BOTTOM_MAX_HEIGHT,
   WORKSPACE_BOTTOM_MIN_HEIGHT,
@@ -148,6 +152,7 @@ import {
 } from '../stores/workspaceStore'
 
 beforeEach(() => {
+  hydrateProjectDisplayNames({}, Number.MAX_SAFE_INTEGER)
   vi.mocked(openSideChat).mockClear()
   sessionApiMocks.getGitInfo.mockReset()
   sessionApiMocks.getGitInfo.mockResolvedValue({
@@ -3347,12 +3352,82 @@ describe('ActiveSession header', () => {
     // The branch arrives with the git info request.
     const branch = await screen.findByTestId('session-header-branch')
     expect(branch).toHaveTextContent('main')
+    expect(branch).toHaveClass('max-w-[260px]', 'shrink')
     expect(branch.querySelector('svg.lucide-git-branch')).toHaveAttribute('aria-hidden', 'true')
 
     const metaRow = project.parentElement as HTMLElement
     const order = [...metaRow.children].map((child) => child.getAttribute('data-testid'))
     expect(order.indexOf('session-header-project')).toBe(0)
     expect(order.indexOf('session-header-branch')).toBeGreaterThan(0)
+  })
+
+  it('reactively updates the header project alias and includes the real project root in the worktree tooltip', async () => {
+    const sessionId = 'header-alias-worktree-session'
+    const worktreePath = '/repo/.claude/worktrees/desktop-main-12345678'
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Project',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        modifiedAt: '2026-05-01T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: worktreePath,
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Project', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          messages: [{ id: 'm1', type: 'assistant_text', content: 'ready', timestamp: 1 }],
+        },
+      },
+    })
+    sessionApiMocks.getGitInfo.mockResolvedValue({
+      branch: 'feat/desktop-ui-redesign-and-bg-task-output',
+      repoName: 'repo',
+      workDir: worktreePath,
+      changedFiles: 0,
+      worktree: {
+        enabled: true,
+        path: worktreePath,
+        plannedPath: null,
+        sourceWorkDir: '/repo',
+        slug: 'desktop-main-12345678',
+        branch: 'feat/desktop-ui-redesign-and-bg-task-output',
+      },
+    })
+
+    render(<ActiveSession />)
+
+    const project = screen.getByTestId('session-header-project')
+    expect(project).toHaveTextContent('repo')
+
+    const indicator = await screen.findByTestId('session-worktree-indicator')
+
+    act(() => {
+      hydrateProjectDisplayNames(
+        { '/repo': 'Personal repo' },
+        captureProjectDisplayNameHydrationRevision(),
+      )
+    })
+
+    expect(project).toHaveTextContent('Personal repo')
+
+    fireEvent.mouseEnter(indicator)
+    const tooltip = await screen.findByRole('tooltip')
+    expect(within(tooltip).getByText('/repo')).toBeInTheDocument()
+    expect(within(tooltip).getByText(worktreePath)).toBeInTheDocument()
   })
 
   it('keeps the separators between metadata items, never in front of them', () => {

@@ -230,7 +230,7 @@ describe('worktree metadata across the live session lifecycle', () => {
     cleanup()
   })
 
-  it('keeps header and composer on the actual cwd after create, materialize, and a regular-session switch', async () => {
+  it('keeps header on the actual cwd after create, materialize, and a regular-session switch without duplicating the footer chip', async () => {
     let sessionId = ''
     await act(async () => {
       sessionId = await useSessionStore.getState().createSession(SOURCE_WORK_DIR, {
@@ -247,6 +247,8 @@ describe('worktree metadata across the live session lifecycle', () => {
       expect(server.getGitInfo).toHaveBeenCalledWith(sessionId)
     })
     expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument()
+    // Empty draft session keeps the interactive launch strip under the composer.
+    expect(screen.getByTestId('composer-context-strip')).toBeInTheDocument()
 
     const callsBeforeMaterialize = server.getGitInfo.mock.calls.length
     server.materialized = true
@@ -254,11 +256,11 @@ describe('worktree metadata across the live session lifecycle', () => {
 
     await waitFor(() => {
       expect(server.getGitInfo.mock.calls.length).toBeGreaterThan(callsBeforeMaterialize)
-      expect(screen.getByTestId('worktree-details-trigger')).toBeInTheDocument()
+      expect(screen.getByTestId('session-worktree-indicator')).toBeInTheDocument()
     })
 
     await expectTooltipPath(screen.getByTestId('session-worktree-indicator'), ACTUAL_WORKTREE_CWD)
-    await expectTooltipPath(screen.getByTestId('worktree-details-trigger'), ACTUAL_WORKTREE_CWD)
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
 
     let regularSessionId = ''
     await act(async () => {
@@ -271,11 +273,11 @@ describe('worktree metadata across the live session lifecycle', () => {
 
     await waitFor(() => {
       expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('worktree-details-trigger')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     })
   })
 
-  it('synchronizes both header and composer branch badges when a regular checkout switches branches', async () => {
+  it('synchronizes the header branch badge when a regular checkout switches branches and focus returns to the composer', async () => {
     let liveBranch = 'master'
     server.getGitInfo.mockImplementation(async () => ({
       branch: liveBranch,
@@ -303,8 +305,8 @@ describe('worktree metadata across the live session lifecycle', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('session-header-branch')).toHaveTextContent('master')
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('master')
     })
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
 
     liveBranch = 'dev_xxxx'
     const callsBeforeWindowFocus = server.getGitInfo.mock.calls.length
@@ -313,7 +315,6 @@ describe('worktree metadata across the live session lifecycle', () => {
     })
     await waitFor(() => {
       expect(screen.getByTestId('session-header-branch')).toHaveTextContent('dev_xxxx')
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('dev_xxxx')
     })
     expect(server.getGitInfo).toHaveBeenCalledTimes(callsBeforeWindowFocus + 1)
 
@@ -325,7 +326,6 @@ describe('worktree metadata across the live session lifecycle', () => {
     fireEvent.focus(within(screen.getByTestId('chat-input-panel')).getByRole('textbox'), { relatedTarget: terminalFocus })
     await waitFor(() => {
       expect(screen.getByTestId('session-header-branch')).toHaveTextContent('feat/synced-header')
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('feat/synced-header')
     })
     expect(server.getGitInfo).toHaveBeenCalledTimes(callsBeforeComposerFocus + 1)
   })
