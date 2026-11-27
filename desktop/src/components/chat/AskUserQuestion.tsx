@@ -250,6 +250,7 @@ export function AskUserQuestion({
   const questions = useMemo(() => parseInput(input), [input])
   const inputObject = isRecord(input) ? input : {}
   const allowFreeText = inputObject.allowFreeText !== false
+  const allowImages = allowFreeText && inputObject.allowImages !== false
   // Read once instead of subscribing: this card writes the draft on every
   // change, and a subscription would feed its own writes back as re-renders.
   const storedDraft = targetSessionId
@@ -265,7 +266,7 @@ export function AskUserQuestion({
   const [sentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
   // Fixed-choice questions cannot restore free-text, image, or chat-handoff drafts.
   const freeTexts = allowFreeText ? draftFreeTexts : EMPTY_FREE_TEXTS
-  const imagesByQuestion = allowFreeText ? draftImages : EMPTY_QUESTION_IMAGES
+  const imagesByQuestion = allowImages ? draftImages : EMPTY_QUESTION_IMAGES
   const hasRequestedChat = allowFreeText && handedOff
   const hasSentAsMessage = allowFreeText && sentAsMessage
   const composingRef = useRef(false)
@@ -397,7 +398,7 @@ export function AskUserQuestion({
   // Direct team-member messages (`sendMessageToMember`) are text-only; live
   // member questions still support images because they route through the lead
   // session's `permission_response`.
-  const canAttachImages = allowFreeText && !(memberLeadSessionId && expired)
+  const canAttachImages = allowImages && !(memberLeadSessionId && expired)
 
   const allLocalImages = useMemo(
     () => questions.flatMap((_, index) => imagesByQuestion[index] ?? []),

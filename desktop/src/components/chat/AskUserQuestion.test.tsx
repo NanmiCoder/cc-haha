@@ -2253,4 +2253,73 @@ describe('AskUserQuestion', () => {
       expect(screen.queryByRole('button', { name: /chat about this/i })).toBeNull()
     })
   })
+
+  describe('text-only free-form questions (allowFreeText: true, allowImages: false)', () => {
+    const elicitationInput = {
+      allowFreeText: true,
+      allowImages: false,
+      questions: [
+        {
+          question: 'Choose implementation plan',
+          header: 'Q1',
+          multiSelect: false,
+          options: [{ label: '(Recommended) Plan A' }, { label: 'Plan B' }],
+        },
+        {
+          question: 'Enable extra features',
+          header: 'Q2',
+          multiSelect: true,
+          options: [{ label: 'Strict TypeScript' }, { label: 'Unit tests' }],
+        },
+      ],
+    }
+
+    it('keeps free-text, multi-select, and Chat about this enabled while hiding image attachments and ignoring stale image drafts', () => {
+      useChatStore.setState({
+        askUserQuestionDrafts: {
+          [ACTIVE_TAB]: {
+            'tool-1': {
+              activeTab: 0,
+              selections: {},
+              freeTexts: {},
+              images: {
+                0: [{ id: 'stale-img', type: 'image', name: 'stale.png', data: 'abc', mimeType: 'image/png' }],
+              },
+            },
+          },
+        },
+      })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={elicitationInput} />)
+
+      expect(screen.getByPlaceholderText(/type/i)).toBeTruthy()
+      expect(screen.getByRole('button', { name: /chat about this/i })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+      expect(screen.queryByAltText('stale.png')).toBeNull()
+
+      // Answer Q1 with option + additional note, then navigate to Q2 and pick multiple options
+      fireEvent.change(screen.getByPlaceholderText(/type/i), { target: { value: 'Keep it lean' } })
+      fireEvent.click(screen.getByRole('button', { name: /^\(Recommended\) Plan A$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Q2/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^Strict TypeScript$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^Unit tests$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...elicitationInput,
+          answers: {
+            'Choose implementation plan': '(Recommended) Plan A',
+            'Enable extra features': 'Strict TypeScript, Unit tests',
+          },
+          annotations: {
+            'Choose implementation plan': { notes: 'Keep it lean' },
+          },
+        },
+      })
+    })
+  })
 })
