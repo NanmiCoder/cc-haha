@@ -178,10 +178,7 @@ import { browserHost } from '../../lib/desktopHost/browserHost'
 import { settingsApi } from '../../api/settings'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import type { SlashCommandOption } from '../../types/slashCommand'
-import {
-  captureProjectDisplayNameHydrationRevision,
-  hydrateProjectDisplayNames,
-} from '../../stores/projectDisplayNameStore'
+import { hydrateProjectDisplayNames } from '../../stores/projectDisplayNameStore'
 
 /**
  * Opens the run-location pill's menu. Directory, branch and worktree all live
@@ -1527,52 +1524,23 @@ describe('ChatInput file mentions', () => {
     expect(within(menu).getByRole('menuitemradio', { name: /Isolated worktree/ })).toBeInTheDocument()
   })
 
-  // Sending the first message used to move the run location from inside the
-  // panel to a chip below it. It stays in the toolbar now and only loses its
-  // affordances, so nothing shifts under the cursor.
-  //
-  // The variant here is `default` on purpose: ActiveSession renders the hero
-  // composer only while the session is empty, so a live session is always the
-  // default one. Asserting this against `hero` passed while the shipped
-  // composer still dropped the chip below the panel.
-  it('swaps the pill for a read-only chip in the bare under-card strip once the session has messages', async () => {
+  it('omits the under-card context strip once the session has messages, leaving shell bottom padding', async () => {
     // beforeEach seeds one message, so this is a live session, not a draft.
     render(<ChatInput variant="default" />)
 
-    const strip = screen.getByTestId('composer-context-strip')
-    expect(strip).toHaveClass('surface-glass', 'pt-2')
-    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(chip).toHaveTextContent('repo')
-    expect(chip).toHaveTextContent('main')
-
-    expect(strip).toContainElement(chip)
-    expect(screen.getByTestId('chat-input-toolbar')).not.toContainElement(chip)
-    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(chip)
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Location/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-shell')).toHaveClass('pb-5')
   })
 
-  it('refreshes the composer worktree after a cwd notification and ignores an older Git response', async () => {
-    const oldInfo = { branch: 'main', repoName: 'repo', workDir: '/repo', changedFiles: 0, worktree: null }
-    let resolveOld!: (info: typeof oldInfo) => void
-    const oldRequest = new Promise<typeof oldInfo>(resolve => { resolveOld = resolve })
-    mocks.getGitInfo.mockReturnValue(oldRequest)
-    render(<ChatInput />)
-    await waitFor(() => expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId))
-    const worktreePath = '/repo/.claude/worktrees/entered'
-    mocks.getGitInfo.mockResolvedValue({ ...oldInfo, workDir: worktreePath,
-      worktree: { enabled: true, path: worktreePath, plannedPath: null, sourceWorkDir: '/repo', slug: 'entered', branch: 'worktree-entered' },
-    })
-    act(() => useSessionStore.getState().updateSessionWorkDir(sessionId, worktreePath))
-    expect(await screen.findByTestId('worktree-details-trigger')).toBeInTheDocument()
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); resolveOld(oldInfo); await oldRequest })
-    expect(screen.getByTestId('worktree-details-trigger')).toBeInTheDocument()
-    fireEvent.mouseEnter(screen.getByTestId('worktree-details-trigger'))
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(worktreePath)
+  it('keeps compact shell bottom padding when the under-card context strip is omitted', () => {
+    render(<ChatInput compact />)
+
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-shell')).toHaveClass('pb-4')
   })
 
-  it('refreshes the composer branch chip on window focus, visibility return, and focus returning from the terminal', async () => {
+  it('refreshes session git info on window focus, visibility return, and focus returning from the terminal', async () => {
     let currentBranch = 'master'
     mocks.getGitInfo.mockImplementation(async () => ({
       branch: currentBranch,
@@ -1590,7 +1558,7 @@ describe('ChatInput file mentions', () => {
       </div>,
     )
 
-    expect(await screen.findByTestId('run-location-readonly')).toHaveTextContent('master')
+    await waitFor(() => expect(mocks.getGitInfo).toHaveBeenCalledTimes(1))
     // Programmatic mount auto-focus does not trigger a back-to-back duplicate /git-info fetch.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -1602,19 +1570,19 @@ describe('ChatInput file mentions', () => {
       window.dispatchEvent(new Event('focus'))
     })
     await waitFor(() => {
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('dev_xxxx')
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(2)
     })
 
-    // Switching branches in the docked bottom terminal and focusing back into the composer refreshes the chip.
+    // Switching branches in the docked bottom terminal and focusing back into the composer refreshes shared git info.
     const terminalInput = screen.getByTestId('docked-terminal-input')
     fireEvent.focus(terminalInput)
     currentBranch = 'feat/from-terminal'
     fireEvent.focus(getComposerElement(), { relatedTarget: terminalInput })
     await waitFor(() => {
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('feat/from-terminal')
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(3)
     })
 
-    // Returning from a hidden state (e.g. Trajectory view) also refreshes the live branch once.
+    // Returning from a hidden state (e.g. Trajectory view) also refreshes live git info once.
     rerender(
       <div>
         <button data-testid="prior-tab-button" type="button">Tab</button>
@@ -1633,98 +1601,29 @@ describe('ChatInput file mentions', () => {
       </div>,
     )
     await waitFor(() => {
-      expect(screen.getByTestId('run-location-readonly')).toHaveTextContent('hotfix/after-trajectory')
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(callsBeforeVisibleReturn + 1)
     })
-    expect(mocks.getGitInfo).toHaveBeenCalledTimes(callsBeforeVisibleReturn + 1)
   })
 
-  it('reactively uses the active session project root display name while retaining the active worktree path in context', async () => {
-    const worktreePath = '/repo/.claude/worktrees/desktop-main-12345678'
-    useSessionStore.setState({
-      sessions: [{
-        id: sessionId,
-        title: 'Project',
-        createdAt: '2026-05-01T00:00:00.000Z',
-        modifiedAt: '2026-05-01T00:00:00.000Z',
-        messageCount: 1,
-        projectPath: '/repo',
-        projectRoot: '/repo',
-        workDir: worktreePath,
-        workDirExists: true,
-      }],
-      activeSessionId: sessionId,
-    })
-    mocks.getGitInfo.mockResolvedValue({
-      branch: 'main',
-      repoName: 'repo',
-      workDir: worktreePath,
-      changedFiles: 0,
-      worktree: {
-        enabled: true,
-        path: worktreePath,
-        plannedPath: null,
-        sourceWorkDir: '/repo',
-        slug: 'desktop-main-12345678',
-        branch: 'main',
-      },
-    })
-
-    render(<ChatInput />)
-
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(chip).toHaveTextContent('repo')
-
-    act(() => {
-      hydrateProjectDisplayNames(
-        { '/repo': 'Personal repo' },
-        captureProjectDisplayNameHydrationRevision(),
-      )
-    })
-
-    expect(chip).toHaveTextContent('Personal repo')
-
-    // Once the alias takes over the label, the worktree details tooltip is the
-    // only place still naming the real project root and the active worktree
-    // path — the toolbar variant carries no `title` for a worktree.
-    expect(chip).not.toHaveAttribute('title')
-    fireEvent.mouseEnter(screen.getByTestId('worktree-details-trigger'))
-
-    const tooltip = await screen.findByRole('tooltip')
-    // Exact-text lookups: '/repo' is a prefix of the worktree path, so a
-    // substring assertion would pass even if the project root row went missing.
-    expect(within(tooltip).getByText('/repo')).toBeInTheDocument()
-    expect(within(tooltip).getByText(worktreePath)).toBeInTheDocument()
-  })
-
-  // The narrow layouts never adopted the in-toolbar pill: there is no room for
-  // it beside the model selector, so they keep the location on its own line
-  // below the panel.
-  it('keeps the run location below the panel when the composer column is narrow', async () => {
+  it('uses compact permission controls when the composer column is narrow', () => {
     stubComposerColumnWidth(360)
 
     render(<ChatInput compact />)
 
-    const chip = await screen.findByTestId('run-location-outside')
-    expect(chip).toHaveTextContent('repo')
-    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(chip)
-    expect(screen.queryByTestId('run-location-readonly')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'true')
   })
 
   // The bug this replaces: `compact` is wired to "is the workspace panel open",
-  // so opening the panel dropped the location to a second line and shrank the
-  // permission mode to a bare icon even on a column with room to spare — the
-  // panel is resizable and the window is not fixed, so its open state says
-  // nothing about the width the composer actually got.
-  it('keeps the full read-only location in the under-card strip when a workspace panel leaves the column wide', async () => {
+  // so opening the panel shrank the permission mode to a bare icon even on a
+  // column with room to spare — the panel is resizable and the window is not
+  // fixed, so its open state says nothing about the width the composer got.
+  it('keeps the labelled permission pill when a workspace panel leaves the column wide', () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(screen.getByTestId('composer-context-strip')).toContainElement(chip)
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
-
-    // The same width buys back the labelled permission pill.
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
   })
 
@@ -1893,62 +1792,52 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 
-  // This used to assert that the run button shed its label before the location
-  // moved. The button has no label to shed any more — it is one round icon at
-  // every width — so what needs pinning is that it does *not* change with the
-  // column, leaving the location as the only thing that degrades (next test).
-  it('keeps the send button a fixed circle as the column narrows', async () => {
+  it('keeps the send button a fixed circle as the column narrows', () => {
     const column = stubComposerColumnWidth(700)
 
     render(<ChatInput compact />)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
     const wide = screen.getByRole('button', { name: 'Run' })
     expect(wide).not.toHaveTextContent('Run')
     expect(wide).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
 
     column.resizeTo(580)
 
-    expect(screen.getByTestId('run-location-readonly')).toBeInTheDocument()
     const narrow = screen.getByRole('button', { name: 'Run' })
     expect(narrow).not.toHaveTextContent('Run')
     expect(narrow).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
   })
 
-  it('moves the run location out of the toolbar as the column is dragged narrow', async () => {
+  it('switches toolbar controls to compact density as the column is dragged narrow', () => {
     const column = stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
 
     column.resizeTo(360)
 
-    expect(await screen.findByTestId('run-location-outside')).toBeInTheDocument()
-    expect(screen.queryByTestId('run-location-readonly')).not.toBeInTheDocument()
     expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'true')
 
     column.resizeTo(580)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
   })
 
   // The card has one geometry at every width: the old narrow-layout band
   // (`-mx-3` cancelling a `p-3` panel) is gone with the divider it drew, so a
   // wide column beside a panel and a full-width column render the same card.
-  it('keeps one card geometry when a wide column sits beside a panel', async () => {
+  it('keeps one card geometry when a wide column sits beside a panel', () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    await screen.findByTestId('run-location-readonly')
     expect(screen.getByTestId('chat-input-panel')).toHaveClass('p-2')
     expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('pt-1.5')
     expect(screen.getByTestId('chat-input-toolbar').className).not.toMatch(/-m[xy]-\d/)
   })
 
-  it('uses the persisted message count to keep reopened sessions in context mode while history loads', async () => {
+  it('uses the persisted message count to omit draft launch controls while reopened session history loads', async () => {
     useSessionStore.setState({
       sessions: [{
         id: sessionId,
@@ -1988,8 +1877,7 @@ describe('ChatInput file mentions', () => {
 
     render(<ChatInput variant="hero" />)
 
-    expect(await screen.findByText('repo')).toBeInTheDocument()
-    expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Select branch:/ })).not.toBeInTheDocument()
     expect(screen.queryByText('Current worktree')).not.toBeInTheDocument()
   })
@@ -3631,8 +3519,7 @@ describe('ChatInput file mentions', () => {
     stubComposerColumnWidth(width)
     render(<ChatInput compact />)
     expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0')
-    expect(screen.getByTestId('composer-context-strip')).toHaveClass('surface-glass', 'pt-2')
-    expect(screen.getByTestId('composer-context-strip')).not.toHaveClass('composer-seam-below', '-mt-4')
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('shrink-0')
   })

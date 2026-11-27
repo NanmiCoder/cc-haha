@@ -39,7 +39,7 @@ import { Tooltip } from '@/components/ui/Tooltip'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { getSessionProjectKey, getSessionWorkspaceLabel } from '@/components/layout/sidebarTaskGroups'
-import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
+import { resolveProjectDisplayName, useProjectDisplayNameRevision } from '../stores/projectDisplayNameStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { TrajectoryViewSwitch } from '../components/trajectory/TrajectoryViewSwitch'
@@ -377,6 +377,7 @@ function TerminalResizeHandle() {
 }
 
 export function ActiveSession({ sessionId, active = true }: { sessionId?: string; active?: boolean } = {}) {
+  useProjectDisplayNameRevision()
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const workbenchPanelRef = useRef<HTMLElement>(null)
   const selectedTabId = useTabStore((s) => s.activeTabId)
@@ -737,6 +738,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const showNewSessionStarter = isEmpty && !showRightPanel && !compactEmptyHero && !isMobileLayout
   // Where the session runs, first: the project by the name the sidebar shows,
   // then the branch git reports for it (「素」 su-01: folder · branch · …).
+  const headerProjectRoot = session ? getSessionProjectKey(session) : null
+  const headerProjectAlias = headerProjectRoot ? resolveProjectDisplayName(headerProjectRoot) : null
   const headerProjectLabel = session && (session.projectRoot || session.workDir)
     ? getSessionWorkspaceLabel(session, resolveProjectDisplayName)
     : null
@@ -763,7 +766,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           content: (
             <span
               data-testid="session-header-branch"
-              className="flex max-w-[160px] shrink-0 items-center gap-1"
+              className="flex min-w-0 max-w-[260px] shrink items-center gap-1"
               title={headerBranch}
             >
               <GitBranch size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
@@ -789,7 +792,13 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           content: (
             <Tooltip
               placement="bottom-start"
-              content={<WorktreeDetails name={worktreeName} path={worktreePath} />}
+              content={
+                <WorktreeDetails
+                  name={worktreeName}
+                  path={worktreePath}
+                  projectRoot={headerProjectAlias ? headerProjectRoot : null}
+                />
+              }
             >
               <span
                 data-testid="session-worktree-indicator"
