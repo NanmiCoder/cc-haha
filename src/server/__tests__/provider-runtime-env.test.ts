@@ -184,7 +184,7 @@ describe('providerRuntimeEnv', () => {
     })
   })
 
-  test.each(['gemini_native', 'xai_images'])('routes the saved image protocol %s independently of chat format', async protocol => {
+  test.each(['gemini_native', 'xai_images', 'minimax_image'])('routes the saved image protocol %s independently of chat format', async protocol => {
     await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
       activeId: 'provider-images',
       providers: [{
