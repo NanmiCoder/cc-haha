@@ -23,6 +23,7 @@ import {
   isSameOrInsidePathForPlatform,
   normalizeDriveRootPathForPlatform,
 } from '../services/windowsDrivePath.js'
+import { serveFileWithRange } from './previewFs.js'
 
 export type FilesystemEntry = {
   name: string
@@ -74,6 +75,16 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   '.avif': 'image/avif',
 }
 
+const AUDIO_MIME_TYPES: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/ogg',
+}
+
 function isWithinRoot(targetPath: string, rootPath: string): boolean {
   return isSameOrInsidePathForPlatform(targetPath, rootPath)
 }
@@ -104,19 +115,24 @@ export function isAllowedFilesystemPath(targetPath: string): boolean {
   return false
 }
 
-export async function handleFilesystemRoute(pathname: string, url: URL, signal?: AbortSignal): Promise<Response> {
+export async function handleFilesystemRoute(
+  pathname: string,
+  url: URL,
+  signal?: AbortSignal,
+  reqHeaders?: Headers,
+): Promise<Response> {
   if (pathname === '/api/filesystem/browse') {
     return handleBrowse(url, signal)
   }
 
   if (pathname === '/api/filesystem/file') {
-    return handleServeFile(url)
+    return handleServeFile(url, reqHeaders)
   }
 
   return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 })
 }
 
-async function handleServeFile(url: URL): Promise<Response> {
+async function handleServeFile(url: URL, reqHeaders?: Headers): Promise<Response> {
   const filePath = url.searchParams.get('path')
   if (!filePath) {
     return json({ error: 'Missing path parameter' }, 400)
@@ -138,6 +154,14 @@ async function handleServeFile(url: URL): Promise<Response> {
   }
 
   const ext = path.extname(canonicalPath).toLowerCase()
+  if (AUDIO_MIME_TYPES[ext]) {
+    // Stream audio directly from disk with HTTP byte-range support so seeking
+    // and duration metadata work for large lossless files (.wav/.flac) too.
+    return serveFileWithRange(canonicalPath, reqHeaders, {
+      'Cache-Control': 'private, no-cache',
+    })
+  }
+
   const mimeType = IMAGE_MIME_TYPES[ext]
 
   if (!mimeType) {

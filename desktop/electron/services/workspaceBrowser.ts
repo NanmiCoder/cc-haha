@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { basename } from 'node:path'
+import path, { basename } from 'node:path'
 import { matchWorkspaceShortcut } from '../../src/lib/workspace/shortcuts'
 import type {
   PreviewBrowserControlsMessage,
@@ -17,6 +17,11 @@ import { isHttpUrl } from './navigationGuards'
 import { normalizePreviewUrl, resolvePreviewScriptPath } from './preview'
 import { normalizeZoomFactor } from './zoom'
 import { WorkspaceBrowserMenuController, type WorkspaceBrowserMenuFactory } from './workspaceBrowserMenu'
+import {
+  DebuggerLeaseManager,
+  type CdpEventNotice,
+  type WorkspaceBrowserDebuggerLike,
+} from './workspaceBrowserCdp'
 
 export type { WorkspaceBrowserCaptureKind, WorkspaceBrowserEvent, WorkspaceBrowserFindOptions }
 export { WORKSPACE_BROWSER_PARTITION } from '../../src/lib/workspace/browserGuestContract'
@@ -35,11 +40,106 @@ const VIEWPORT_CAPTURE_TIMEOUT_MS = 5_000
 /** Visit log bound. The native back/forward stack is unaffected by this cap. */
 const MAX_HISTORY_ENTRIES = 200
 
-type WorkspaceBrowserDebuggerLike = {
-  isAttached(): boolean
-  attach(protocolVersion?: string): void
-  detach(): void
-  sendCommand(method: string, commandParams?: Record<string, unknown>): Promise<unknown>
+export type WorkspaceBrowserPageInfo = {
+  tabId: string
+  sessionId?: string
+  url: string
+  title: string
+  visible: boolean
+  zoomFactor: number
+  appZoomFactor: number
+}
+
+export type WorkspaceBrowserPageClosedEvent = {
+  tabId: string
+  reason: 'closed' | 'crashed'
+}
+
+export type WorkspaceBrowserInternalPorts = {
+  /** Local cc-haha server port: `/api/*` is blocked while `/preview-fs/*` and `/local-file/*` remain allowed. */
+  serverPort?: number | null
+  /** Internal loopback-only bridge/proxy ports blocked unconditionally for browser guests. */
+  blockedPorts?: number[]
+}
+
+const CLOUD_METADATA_HOSTS = new Set([
+  '169.254.169.254',
+  '169.254.170.2',
+  '100.100.100.200',
+  'fd00:ec2::254',
+  '::ffff:169.254.169.254',
+  '::ffff:a9fe:a9fe',
+  '::ffff:169.254.170.2',
+  '::ffff:a9fe:aa02',
+  '::ffff:100.100.100.200',
+  '::ffff:6464:64c8',
+  'metadata.google.internal',
+  'metadata.goog',
+])
+
+function isLoopbackHost(hostname: string): boolean {
+  if (
+    hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '::ffff:127.0.0.1'
+    || hostname === '::ffff:7f00:1'
+    || hostname === '0.0.0.0'
+    || hostname === '::'
+  ) {
+    return true
+  }
+  if (/^127(?:\.\d{1,3}){3}$/.test(hostname)) return true
+  if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(hostname)) return true
+  return false
+}
+
+function normalizeUrlPathnameForGuard(pathname: string): string {
+  let decoded = pathname
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    decoded = pathname
+  }
+  return path.posix.normalize(decoded.replace(/\/+/g, '/')).toLowerCase()
+}
+
+/**
+ * Defense-in-depth SSRF navigation guard for `<webview>` guests (`will-navigate`,
+ * `will-redirect`, `setWindowOpenHandler`, `navigate`, and `create`).
+ *
+ * Blocks non-HTTP(S) schemes, cloud metadata endpoints, internal loopback
+ * bridge/proxy ports, and the local server's `/api/*` endpoints while still
+ * allowing legitimate `/preview-fs/*`, `/local-file/*`, and normal localhost
+ * developer servers.
+ */
+export function isAllowedWorkspaceBrowserNavigationUrl(
+  rawUrl: string,
+  internalPorts?: WorkspaceBrowserInternalPorts,
+): boolean {
+  if (!isHttpUrl(rawUrl)) return false
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+  if (!hostname) return false
+  if (CLOUD_METADATA_HOSTS.has(hostname)) return false
+
+  if (isLoopbackHost(hostname) && internalPorts) {
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80)
+    if (internalPorts.blockedPorts?.includes(port)) return false
+    if (internalPorts.serverPort && port === internalPorts.serverPort) {
+      const normalizedPath = normalizeUrlPathnameForGuard(parsed.pathname)
+      if (normalizedPath === '/api' || normalizedPath.startsWith('/api/')) {
+        return false
+      }
+    }
+  }
+  return true
 }
 
 export type WorkspaceBrowserDownloadItemLike = {
@@ -113,7 +213,7 @@ export type WorkspaceBrowserWebContentsLike = {
     handler: (event: unknown, result: { activeMatchOrdinal: number, matches: number }) => void,
   ): unknown
   on(
-    event: 'will-navigate',
+    event: 'will-navigate' | 'will-redirect',
     handler: (event: { preventDefault: () => void }, url: string) => void,
   ): unknown
   on(event: 'destroyed', handler: () => void): unknown
@@ -136,11 +236,13 @@ export type WorkspaceBrowserWebContentsLike = {
 export type WorkspaceBrowserParentWindowLike = {
   webContents?: {
     isDestroyed?(): boolean
+    getZoomFactor?(): number
   }
   isDestroyed?(): boolean
 }
 
 export type WorkspaceBrowserCreateOptions = {
+  sessionId?: string
   storageId: string
   url?: string
   /** The `<webview>` guest the renderer created for this page. */
@@ -167,10 +269,19 @@ export type ElectronWorkspaceBrowserServiceOptions = {
   defer?: (task: () => void) => void
   /** Bounds a viewport capture; a hidden guest otherwise stalls for ~30s. */
   captureTimeoutMs?: number
+  /** Reads the host app's zoom factor for coordinate mapping (`Z_page / Z_app`). */
+  getAppZoomFactor?: () => number
+  /** Optional idle grace period (ms) before detaching an unused CDP debugger. */
+  cdpIdleGraceMs?: number
+  /** Optional listener for CDP events forwarded from attached browser guests. */
+  onCdpEvent?: (event: CdpEventNotice) => void
+  /** Optional resolver for internal loopback ports blocked from guest navigation. */
+  getInternalPorts?: () => WorkspaceBrowserInternalPorts
 }
 
 type WorkspaceBrowserPage = {
   tabId: string
+  sessionId?: string
   storageId: string
   webContents: WorkspaceBrowserWebContentsLike
   /** Whether the renderer currently shows this page. Only it can take input. */
@@ -184,6 +295,7 @@ type WorkspaceBrowserPage = {
   persistentPicker: Extract<HostMessage, { type: 'enter-picker' }> | null
   pickerGeneration: number
   supportsPickerGeneration: boolean
+  agentControlActive: boolean
   closed: boolean
   history: WorkspaceBrowserHistoryEntry[]
   fullCapture: Promise<string> | null
@@ -247,6 +359,11 @@ export class ElectronWorkspaceBrowserService {
   private readonly platform: NodeJS.Platform
   private readonly defer: (task: () => void) => void
   private readonly captureTimeoutMs: number
+  private readonly readAppZoomFactor?: () => number
+  private readonly readInternalPorts?: () => WorkspaceBrowserInternalPorts
+  private readonly cdp: DebuggerLeaseManager
+  private cdpEventHandler: ((event: CdpEventNotice) => void) | null
+  private readonly pageClosedListeners = new Set<(event: WorkspaceBrowserPageClosedEvent) => void>()
   private readonly pages = new Map<string, WorkspaceBrowserPage>()
   private readonly hookedSessions = new Set<WorkspaceBrowserSessionLike>()
   /**
@@ -267,7 +384,80 @@ export class ElectronWorkspaceBrowserService {
     this.platform = options.platform ?? process.platform
     this.defer = options.defer ?? (task => { setImmediate(task) })
     this.captureTimeoutMs = options.captureTimeoutMs ?? VIEWPORT_CAPTURE_TIMEOUT_MS
+    this.readAppZoomFactor = options.getAppZoomFactor
+    this.readInternalPorts = options.getInternalPorts
+    this.cdpEventHandler = options.onCdpEvent ?? null
+    this.cdp = new DebuggerLeaseManager({
+      resolveWebContents: tabId => {
+        const page = this.pages.get(tabId)
+        if (!page || page.closed) return null
+        return page.webContents
+      },
+      idleGraceMs: options.cdpIdleGraceMs,
+      onEvent: event => this.cdpEventHandler?.(event),
+    })
     if (options.menuFactory) this.menu = new WorkspaceBrowserMenuController(options.menuFactory)
+  }
+
+  getCdpManager(): DebuggerLeaseManager {
+    return this.cdp
+  }
+
+  setCdpEventHandler(handler: ((event: CdpEventNotice) => void) | null): void {
+    this.cdpEventHandler = handler
+  }
+
+  onPageClosed(listener: (event: WorkspaceBrowserPageClosedEvent) => void): () => void {
+    this.pageClosedListeners.add(listener)
+    return () => {
+      this.pageClosedListeners.delete(listener)
+    }
+  }
+
+  getPageZoomFactor(tabId: string): number {
+    const page = this.requirePage(tabId)
+    const nativeZoom = page.webContents.getZoomFactor?.()
+    if (nativeZoom !== undefined && Number.isFinite(nativeZoom) && nativeZoom > 0) {
+      page.zoomFactor = nativeZoom
+      return nativeZoom
+    }
+    return Number.isFinite(page.zoomFactor) && page.zoomFactor > 0 ? page.zoomFactor : 1
+  }
+
+  getAppZoomFactor(): number {
+    const raw = this.readAppZoomFactor?.() ?? this.parent?.webContents?.getZoomFactor?.()
+    return raw !== undefined && Number.isFinite(raw) && raw > 0 ? raw : 1
+  }
+
+  listPages(options?: { sessionId?: string }): WorkspaceBrowserPageInfo[] {
+    const appZoomFactor = this.getAppZoomFactor()
+    const filterSessionId = options?.sessionId?.trim() || undefined
+    const result: WorkspaceBrowserPageInfo[] = []
+    for (const page of this.pages.values()) {
+      if (page.closed || page.webContents.isDestroyed?.()) continue
+      if (filterSessionId && page.sessionId !== filterSessionId) continue
+      result.push(this.toPageInfo(page, appZoomFactor))
+    }
+    return result
+  }
+
+  getPageInfo(tabId: string): WorkspaceBrowserPageInfo | null {
+    const page = this.pages.get(tabId)
+    if (!page || page.closed || page.webContents.isDestroyed?.()) return null
+    return this.toPageInfo(page, this.getAppZoomFactor())
+  }
+
+  async setAgentControlActive(tabId: string, active: boolean): Promise<void> {
+    const page = this.pages.get(tabId)
+    if (!page || page.closed || page.webContents.isDestroyed?.()) return
+    page.agentControlActive = active
+    if (active && (page.pickerArmed || page.persistentPicker !== null)) {
+      page.pickerArmed = false
+      page.persistentPicker = null
+      page.pickerGeneration += 1
+      this.emitState(page)
+    }
+    await this.syncAgentControlState(page)
   }
 
   async create(
@@ -278,8 +468,12 @@ export class ElectronWorkspaceBrowserService {
     // Validate before anything is registered: a throw after `openPage` would
     // leave a page this service can neither address nor release.
     const url = options.url ? normalizePreviewUrl(options.url) : null
+    if (url && !this.isNavigationUrlAllowed(url)) {
+      throw new Error('navigation to restricted internal or metadata url is blocked')
+    }
     const webContents = this.resolveGuest(options.webContentsId)
 
+    const sessionId = options.sessionId?.trim() || undefined
     this.parent = parent
     const existing = this.pages.get(tabId)
     if (existing) {
@@ -290,13 +484,16 @@ export class ElectronWorkspaceBrowserService {
       if (existing.webContents !== webContents) {
         throw new Error(`workspace browser tab already has a live page: ${tabId}`)
       }
+      if (sessionId && !existing.sessionId) {
+        existing.sessionId = sessionId
+      }
       this.emitState(existing)
       return
     }
     const owner = this.findPageByWebContents(webContents)
     if (owner) throw new Error(`workspace browser guest already belongs to ${owner.tabId}`)
 
-    const page = this.openPage(tabId, options.storageId, webContents)
+    const page = this.openPage(tabId, options.storageId, webContents, sessionId)
     // Resolving means "registered": the renderer may now send visibility,
     // Stop and navigation. The first load is an ordinary navigation, so its
     // failure reaches the tab as a `failed` event like any other — answering
@@ -311,10 +508,14 @@ export class ElectronWorkspaceBrowserService {
 
   async navigate(tabId: string, url: string): Promise<void> {
     const page = this.requirePage(tabId)
+    const normalized = normalizePreviewUrl(url)
+    if (!this.isNavigationUrlAllowed(normalized)) {
+      throw new Error('navigation to restricted internal or metadata url is blocked')
+    }
     page.pickerArmed = false
     page.persistentPicker = null
     page.pickerGeneration += 1
-    await page.webContents.loadURL(normalizePreviewUrl(url))
+    await page.webContents.loadURL(normalized)
   }
 
   async showMenu(
@@ -441,6 +642,12 @@ export class ElectronWorkspaceBrowserService {
     }
     if (isHostPickerMessage(payload)) {
       if (!controls || (controls.type !== 'enter-picker' && controls.type !== 'exit-picker')) return
+      if (controls.type === 'enter-picker' && page.agentControlActive) {
+        page.pickerArmed = false
+        page.persistentPicker = null
+        this.emitState(page)
+        return
+      }
       page.pickerGeneration += 1
       page.pickerArmed = controls.type === 'enter-picker'
       page.persistentPicker = controls.type === 'enter-picker' && controls.persistent ? controls : null
@@ -496,6 +703,8 @@ export class ElectronWorkspaceBrowserService {
     this.pages.delete(tabId)
     page.closed = true
     this.menu?.cancel(page.tabId)
+    this.cdp.handleTabClosed(page.tabId, 'closed')
+    this.notifyPageClosed(page.tabId, 'closed')
     if (!page.webContents.isDestroyed?.()) {
       page.webContents.close?.()
     }
@@ -504,6 +713,7 @@ export class ElectronWorkspaceBrowserService {
   closeAll(): void {
     this.menu?.cancel()
     for (const tabId of [...this.pages.keys()]) this.close(tabId)
+    this.cdp.disposeAll()
     this.parent = null
   }
 
@@ -522,9 +732,11 @@ export class ElectronWorkspaceBrowserService {
     tabId: string,
     storageId: string,
     webContents: WorkspaceBrowserWebContentsLike,
+    sessionId?: string,
   ): WorkspaceBrowserPage {
     const page: WorkspaceBrowserPage = {
       tabId,
+      ...(sessionId ? { sessionId } : {}),
       storageId,
       webContents,
       presented: false,
@@ -536,6 +748,7 @@ export class ElectronWorkspaceBrowserService {
       persistentPicker: null,
       pickerGeneration: 0,
       supportsPickerGeneration: false,
+      agentControlActive: false,
       closed: false,
       history: [],
       fullCapture: null,
@@ -560,11 +773,14 @@ export class ElectronWorkspaceBrowserService {
     // Popups become tabs in this window instead of native child windows, which
     // would escape the workspace and the preload/permission boundary with it.
     webContents.setWindowOpenHandler(({ url }) => {
-      if (isHttpUrl(url)) this.emitFor(page, { type: 'new-window', tabId: page.tabId, url })
+      if (this.isNavigationUrlAllowed(url)) this.emitFor(page, { type: 'new-window', tabId: page.tabId, url })
       return { action: 'deny' }
     })
     webContents.on('will-navigate', (event, url) => {
-      if (!isHttpUrl(url)) event.preventDefault()
+      if (!this.isNavigationUrlAllowed(url)) event.preventDefault()
+    })
+    webContents.on('will-redirect', (event, url) => {
+      if (!this.isNavigationUrlAllowed(url)) event.preventDefault()
     })
     webContents.on('destroyed', () => {
       // A guest dies with its element. Unless the tab closed it, the renderer
@@ -574,6 +790,8 @@ export class ElectronWorkspaceBrowserService {
       this.pages.delete(page.tabId)
       page.closed = true
       this.menu?.cancel(page.tabId)
+      this.cdp.handleTabClosed(page.tabId, 'closed')
+      this.notifyPageClosed(page.tabId, 'closed')
       this.emit({ type: 'destroyed', tabId: page.tabId, reason: 'closed' })
     })
 
@@ -669,6 +887,8 @@ export class ElectronWorkspaceBrowserService {
       })
     })
     webContents.on('render-process-gone', () => {
+      this.cdp.handleTabClosed(page.tabId, 'crashed')
+      this.notifyPageClosed(page.tabId, 'crashed')
       this.emitFor(page, { type: 'destroyed', tabId: page.tabId, reason: 'crashed' })
     })
     webContents.on('found-in-page', (_event, result) => {
@@ -811,6 +1031,19 @@ export class ElectronWorkspaceBrowserService {
     if (navigationId !== page.navigationId) return
     page.controlsSignature = null
     await this.syncBrowserControls(page)
+    if (page.agentControlActive) {
+      await this.syncAgentControlState(page)
+    }
+  }
+
+  private async syncAgentControlState(page: WorkspaceBrowserPage): Promise<void> {
+    if (page.closed || page.webContents.isDestroyed?.()) return
+    const raw = JSON.stringify({ v: 1, type: 'agent-control-state', active: page.agentControlActive })
+    try {
+      await page.webContents.executeJavaScript(`globalThis.__PREVIEW_BRIDGE__?.handleHostRaw(${JSON.stringify(raw)})`)
+    } catch {
+      // The page may navigate while agent control state is synced.
+    }
   }
 
   private async syncBrowserControls(page: WorkspaceBrowserPage): Promise<void> {
@@ -866,17 +1099,10 @@ export class ElectronWorkspaceBrowserService {
   }
 
   private async captureFullPageDataUrlOnce(page: WorkspaceBrowserPage): Promise<string> {
-    const debuggerApi = page.webContents.debugger
-    if (!debuggerApi) throw new Error('full browser capture unavailable')
+    if (!page.webContents.debugger) throw new Error('full browser capture unavailable')
 
-    let attachedHere = false
-    try {
-      if (!debuggerApi.isAttached()) {
-        debuggerApi.attach('1.3')
-        attachedHere = true
-      }
-
-      const metrics = await debuggerApi.sendCommand('Page.getLayoutMetrics')
+    return await this.cdp.withLease(page.tabId, async send => {
+      const metrics = await send('Page.getLayoutMetrics')
       if (!isPlainRecord(metrics)) throw new Error('invalid full capture layout metrics')
       const contentSize = isPlainRecord(metrics.cssContentSize)
         ? metrics.cssContentSize
@@ -896,7 +1122,7 @@ export class ElectronWorkspaceBrowserService {
         throw new Error(`full capture exceeds safety limit: ${width}x${height}`)
       }
 
-      const screenshot = await debuggerApi.sendCommand('Page.captureScreenshot', {
+      const screenshot = await send('Page.captureScreenshot', {
         format: 'png',
         fromSurface: true,
         captureBeyondViewport: true,
@@ -906,15 +1132,7 @@ export class ElectronWorkspaceBrowserService {
         throw new Error('invalid full capture screenshot data')
       }
       return `data:image/png;base64,${screenshot.data}`
-    } finally {
-      if (attachedHere) {
-        try {
-          if (debuggerApi.isAttached()) debuggerApi.detach()
-        } catch {
-          // The page may close while a full-page capture is in flight.
-        }
-      }
-    }
+    })
   }
 
   /**
@@ -992,6 +1210,34 @@ export class ElectronWorkspaceBrowserService {
   private nextDownloadId(): string {
     this.downloadSequence += 1
     return `wbd-${this.downloadSequence}`
+  }
+
+  private isNavigationUrlAllowed(url: string): boolean {
+    return isAllowedWorkspaceBrowserNavigationUrl(url, this.readInternalPorts?.())
+  }
+
+  private toPageInfo(page: WorkspaceBrowserPage, appZoomFactor: number): WorkspaceBrowserPageInfo {
+    const webContents = page.webContents
+    const blank = webContents.getURL() === WORKSPACE_BROWSER_INITIAL_SRC
+    return {
+      tabId: page.tabId,
+      ...(page.sessionId ? { sessionId: page.sessionId } : {}),
+      url: blank ? '' : webContents.getURL(),
+      title: blank ? '' : webContents.getTitle(),
+      visible: page.presented,
+      zoomFactor: this.getPageZoomFactor(page.tabId),
+      appZoomFactor,
+    }
+  }
+
+  private notifyPageClosed(tabId: string, reason: 'closed' | 'crashed'): void {
+    for (const listener of [...this.pageClosedListeners]) {
+      try {
+        listener({ tabId, reason })
+      } catch {
+        // Isolate subscriber errors from tab cleanup.
+      }
+    }
   }
 
   private requirePage(tabId: string): WorkspaceBrowserPage {

@@ -9,29 +9,110 @@
       Home 指示条下面会露出浏览器自己的灰条。
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#F4F3F0" />
+    <meta name="theme-color" content="#FFFFFF" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="format-detection" content="telephone=no" />
     <title>%WEB_TITLE%</title>
+    <script>
+      /*
+        首次绘制前同步解析外观：优先读 cc-haha.mobile.preferences，未设置时
+        回退到同源桌面端 cc-haha-follow-system-theme / cc-haha-theme 与系统
+        prefers-color-scheme，立即写入底色、colorScheme 与 theme-color，避免
+        /m 在深色或固定浅色模式下白屏/黑屏闪烁。
+      */
+      (function () {
+        var resolved = 'white'
+        try {
+          var read = function (key) {
+            try {
+              return window.localStorage.getItem(key)
+            } catch (_) {
+              return null
+            }
+          }
+          var normalizeAppearance = function (value) {
+            if (value === 'light' || value === 'dark' || value === 'system') return value
+            if (value === 'white' || value === 'paper' || value === 'warm-classic' || value === 'celadon') return 'light'
+            if (value === 'ink-blue' || value === 'neutral-dark') return 'dark'
+            return null
+          }
+          var appearance = null
+          var rawPrefs = read('cc-haha.mobile.preferences')
+          if (rawPrefs) {
+            try {
+              var parsed = JSON.parse(rawPrefs)
+              if (parsed && typeof parsed === 'object') {
+                appearance = normalizeAppearance(parsed.appearance)
+              }
+            } catch (_) {
+              /* 忽略损坏的偏好 JSON，继续回退到桌面键或系统外观。 */
+            }
+          }
+          if (!appearance) {
+            var follow = read('cc-haha-follow-system-theme')
+            var desktopTheme = read('cc-haha-theme')
+            if (follow === '1') {
+              appearance = 'system'
+            } else if (follow === '0') {
+              appearance = (desktopTheme === 'dark' || desktopTheme === 'ink-blue' || desktopTheme === 'neutral-dark') ? 'dark' : 'light'
+            } else if (desktopTheme !== null) {
+              appearance = normalizeAppearance(desktopTheme) || 'system'
+            } else {
+              appearance = 'system'
+            }
+          }
+          if (appearance === 'dark') {
+            resolved = 'dark'
+          } else if (appearance === 'light') {
+            resolved = 'white'
+          } else {
+            var prefersDark = false
+            try {
+              prefersDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+            } catch (_) {
+              /* WebView 不支持 matchMedia 时按浅色处理。 */
+            }
+            resolved = prefersDark ? 'dark' : 'white'
+          }
+        } catch (_) {
+          resolved = 'white'
+        }
+        var bg = resolved === 'dark' ? '#181818' : '#FFFFFF'
+        var root = document.documentElement
+        root.setAttribute('data-theme', resolved)
+        root.style.backgroundColor = bg
+        root.style.colorScheme = resolved === 'dark' ? 'dark' : 'light'
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', bg)
+      })()
+    </script>
     <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
     <style id="expo-reset">
       html,
       body {
         height: 100%;
         margin: 0;
-        background: #F4F3F0;
+        background: #FFFFFF;
         /* 整页不滚动：滚动都在应用自己的列表里，避免 iOS 橡皮筋把整页拖走。 */
         overscroll-behavior: none;
         -webkit-text-size-adjust: 100%;
         -webkit-tap-highlight-color: transparent;
       }
       @media (prefers-color-scheme: dark) {
-        html,
-        body {
-          background: #0F0F0E;
+        html:not([data-theme="white"]),
+        html:not([data-theme="white"]) body {
+          background: #181818;
         }
+      }
+      html[data-theme="dark"],
+      html[data-theme="dark"] body {
+        background: #181818;
+      }
+      html[data-theme="white"],
+      html[data-theme="white"] body {
+        background: #FFFFFF;
       }
       body {
         overflow: hidden;

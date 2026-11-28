@@ -4,6 +4,7 @@ import {
   Easing,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   ScrollView,
   View,
@@ -12,7 +13,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from './Text'
 import { KeyboardViewport } from './KeyboardViewport'
-import { type } from './palette'
+import { radius, type } from './palette'
+import { useTheme } from './theme'
 import { useColors } from './kit'
 import { detentHeight, settleDetent, sheetAvailable, type Detent } from './detents'
 
@@ -35,6 +37,10 @@ export type DetentSheetProps = PropsWithChildren<{
   scroll?: boolean
   dismissable?: boolean
   background?: string
+  /** 叠在底单之上的内联子弹层（`<Sheet inline>`），避免嵌套原生 Modal。 */
+  overlay?: ReactNode
+  overlayOpen?: boolean
+  onOverlayClose?(): void
 }>
 
 /**
@@ -59,26 +65,48 @@ export function DetentSheet(props: DetentSheetProps) {
   const close = () => {
     if (props.dismissable !== false) props.onClose()
   }
+  const overlayOpen = Boolean(props.overlayOpen)
+  const webInert = (Platform.OS === 'web' && overlayOpen ? { inert: true } : {}) as object
   return (
-    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
-      <KeyboardViewport style={{ flex: 1 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="关闭"
-          onPress={close}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
-        />
+    <Modal
+      visible={props.visible}
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        if (overlayOpen && props.onOverlayClose) props.onOverlayClose()
+        else close()
+      }}
+      statusBarTranslucent
+    >
+      <View style={{ flex: 1 }}>
         <View
-          style={{ flex: 1, justifyContent: 'flex-end' }}
-          onLayout={(event) => {
-            const next = Math.round(event.nativeEvent.layout.height)
-            setViewportHeight((previous) => (previous === next ? previous : next))
-          }}
+          accessibilityElementsHidden={overlayOpen}
+          importantForAccessibility={overlayOpen ? 'no-hide-descendants' : 'auto'}
+          aria-hidden={overlayOpen}
+          {...webInert}
+          style={{ flex: 1 }}
         >
-          {/* Modal 关闭时子树被卸载，所以每次打开都从 initialDetent 开始。 */}
-          <Panel {...props} onClose={close} viewportHeight={viewportHeight} />
+          <KeyboardViewport style={{ flex: 1 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭"
+              onPress={close}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
+            />
+            <View
+              style={{ flex: 1, justifyContent: 'flex-end' }}
+              onLayout={(event) => {
+                const next = Math.round(event.nativeEvent.layout.height)
+                setViewportHeight((previous) => (previous === next ? previous : next))
+              }}
+            >
+              {/* Modal 关闭时子树被卸载，所以每次打开都从 initialDetent 开始。 */}
+              <Panel {...props} onClose={close} viewportHeight={viewportHeight} />
+            </View>
+          </KeyboardViewport>
         </View>
-      </KeyboardViewport>
+        {props.overlay}
+      </View>
     </Modal>
   )
 }
@@ -144,7 +172,7 @@ function Panel({
   background,
   children,
 }: DetentSheetProps & { viewportHeight: number }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   const available = sheetAvailable(viewportHeight, insets.top)
   const [inner, setInner] = useState<Detent>(initialDetent)
@@ -182,10 +210,10 @@ function Panel({
         height,
         maxHeight: '100%',
         backgroundColor: background ?? colors.sheet,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
+        borderTopLeftRadius: radius.sheet,
+        borderTopRightRadius: radius.sheet,
         overflow: 'hidden',
-        boxShadow: '0 -8px 30px rgba(0,0,0,0.12)',
+        boxShadow: shadows.sheetUp,
       }}
     >
       <View {...gesture.responder.panHandlers}>

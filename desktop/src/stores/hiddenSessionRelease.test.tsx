@@ -40,6 +40,7 @@ vi.mock('../components/layout/OpenProjectMenu', () => ({ OpenProjectMenu: () => 
 vi.mock('../components/layout/WindowControls', () => ({ WindowControls: () => null, showWindowControls: false }))
 
 import { wsManager } from '../api/websocket'
+import { sessionsApi } from '../api/sessions'
 import { useChatStore } from './chatStore'
 import { installHiddenSessionRelease } from './hiddenSessionRelease'
 import { useTabStore, type Tab } from './tabStore'
@@ -236,6 +237,7 @@ describe('releasing sessions that no tab shows (#1485)', () => {
     expect(socket.closedByClient).toBe(true)
     expect(isHeld('busy')).toBe(false)
     expect(useChatStore.getState().sessions.busy).toBeUndefined()
+    expect(useChatStore.getState().unreadCompletions.has('busy')).toBe(true)
     act(() => { vi.advanceTimersByTime(EIGHTEEN_HOURS_MS) })
     expect(socketsFor('busy')).toHaveLength(1)
   })
@@ -269,6 +271,43 @@ describe('releasing sessions that no tab shows (#1485)', () => {
     serverSays(socket, cliRun('idle'))
     await settle()
     expect(isHeld('builder')).toBe(false)
+  })
+
+  it('keeps a closed tab until its missed completion is read from terminal reconnect history', async () => {
+    useTabStore.setState({ tabs: [sessionTab('missed', 'Missed reply')], activeTabId: 'missed' })
+    const socket = connect('missed')
+    serverSays(socket, { type: 'user_message_replay', content: 'Review the change' })
+    serverSays(socket, { type: 'status', state: 'thinking' })
+    act(() => {
+      useChatStore.setState(state => ({ sessions: { missed: {
+        ...state.sessions.missed!, historyBootstrapDisabled: false, historyHydrated: true,
+      } } }))
+      useTabStore.getState().closeTab('missed')
+      socket.close()
+      vi.advanceTimersByTime(1000)
+    })
+    const reconnected = socketsFor('missed').at(-1)!
+    expect(reconnected).not.toBe(socket)
+    act(() => reconnected.open())
+    serverSays(reconnected, {
+      type: 'permission_requests_snapshot', toolRequestIds: [], computerUseRequestIds: [], turnActive: false,
+    })
+    await settle()
+    expect(isHeld('missed')).toBe(true)
+    let returnHistory!: (result: Awaited<ReturnType<typeof sessionsApi.getFullHistory>>) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise(resolve => { returnHistory = resolve }))
+    serverSays(reconnected, { type: 'session_state', turnState: 'idle' })
+    await settle()
+    expect(isHeld('missed')).toBe(true)
+    const timestamp = new Date().toISOString()
+    returnHistory({ messages: [
+      { id: 'durable-input', type: 'user', content: 'Review the change', timestamp },
+      { id: 'durable-output', type: 'assistant', content: 'Review complete', timestamp },
+    ] })
+    await settle()
+    expect(isHeld('missed')).toBe(false)
+    expect(useChatStore.getState().sessions.missed).toBeUndefined()
+    expect(useChatStore.getState().unreadCompletions.get('missed')?.transcriptId).toBe('durable-output')
   })
 
   it('releases at once when the turn finished while the close dialog was open', async () => {

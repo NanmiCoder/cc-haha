@@ -5,12 +5,14 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { Box, Puzzle, SquareSlash, UsersRound } from 'lucide-react'
 import type { UIAttachment } from '../../types/chat'
 import { useTranslation } from '../../i18n'
-import { stripAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { isAntigravitySwarmRequest, stripAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { stripBrowserUseRequest } from '../../lib/browserUseRequest'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { splitTextByUrls } from '../../lib/urlBoundary'
 import { hasCapabilitySentence, parseUserMessageSegments } from '../../lib/userMessageCapabilities'
 import { capabilityKey, useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { extractRestoredUserDisplay } from '../../stores/chatStore'
+import { BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MessageActionBar, type MessageBranchAction, type MessageEditAction } from './MessageActionBar'
@@ -55,6 +57,9 @@ type Props = {
   teammateAvatarSrc?: string
   teammateAvatarKey?: string
   teammateAccent?: string
+  /** Adjacent user messages tighten their facing right-hand corners into a cohesive stack. */
+  consecutiveBefore?: boolean
+  consecutiveAfter?: boolean
 }
 
 export const UserMessage = memo(function UserMessage({
@@ -71,6 +76,8 @@ export const UserMessage = memo(function UserMessage({
   teammateAvatarSrc,
   teammateAvatarKey,
   teammateAccent,
+  consecutiveBefore = false,
+  consecutiveAfter = false,
 }: Props) {
   const t = useTranslation()
   const hasText = content.trim().length > 0
@@ -94,12 +101,16 @@ export const UserMessage = memo(function UserMessage({
   // paths have to stay exactly as typed. Teammate traffic is rendered separately
   // below because agent-to-agent messages intentionally use Markdown.
   const display = useMemo(() => {
-    const agentTeam = modelContent ? stripAgentTeamRequest(modelContent).requested : false
+    const agentTeam = modelContent
+      ? (stripAgentTeamRequest(modelContent).requested || (isAntigravitySwarmRequest(modelContent) && !isAntigravitySwarmRequest(content)))
+      : false
+    const browserRequest = modelContent ? stripBrowserUseRequest(modelContent) : null
+    const browserUse = browserRequest?.requested ? (browserRequest.target ?? 'auto') : null
     // A live bubble shows the composer's `@Label` projection; the model text
     // carries the capability itself, so read pills from it when it has them.
     const restored = modelContent ? extractRestoredUserDisplay(modelContent).content.trim() : ''
     const text = restored && hasCapabilitySentence(restored) ? restored : content
-    return { agentTeam, segments: parseUserMessageSegments(text) }
+    return { agentTeam, browserUse, segments: parseUserMessageSegments(text) }
   }, [content, modelContent])
   const catalog = useCapabilityCatalogStore((state) => state.entries)
 
@@ -193,7 +204,7 @@ export const UserMessage = memo(function UserMessage({
                 />
               </span>
             ) : (
-              <UsersRound size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+              <UsersRound size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
             )}
             <span className="min-w-0 truncate font-mono font-medium text-[var(--color-text-secondary)]">
               {teammateFrom}
@@ -208,7 +219,7 @@ export const UserMessage = memo(function UserMessage({
             {hasText && (
               <div
                 data-message-body="teammate"
-                className="min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)]"
+                className="min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)]"
                 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
               >
                 <MarkdownRenderer
@@ -262,7 +273,7 @@ export const UserMessage = memo(function UserMessage({
       <div
         data-message-shell="user"
         {...actionMenu.pressProps}
-        className={`group relative flex min-w-0 max-w-[82%] flex-col items-end lg:max-w-[640px] ${actionMenu.pressClassName}`}
+        className={`group relative flex min-w-0 max-w-[80%] flex-col items-end lg:max-w-[640px] ${actionMenu.pressClassName}`}
       >
         <div className="flex max-w-full flex-col items-end gap-2">
           {collaboration ? <div className="px-0.5 text-[11px] text-[var(--color-text-tertiary)]">
@@ -271,7 +282,12 @@ export const UserMessage = memo(function UserMessage({
           {sessionReferences?.length ? <div className="flex max-w-full flex-wrap gap-1" aria-label={t('chat.referenceSessions')}>
             {sessionReferences.map(reference => <Button key={reference.sessionId} size="sm" variant="ghost" onClick={() => openSessionSource(reference.sessionId)}>{t('chat.openReferencedSession', { id: sessionSourceTitle(reference.sessionId) })}</Button>)}
           </div> : null}
-          {display.agentTeam ? <AgentTeamChip /> : null}
+          {(display.agentTeam || display.browserUse) ? (
+            <div className="flex max-w-full flex-wrap justify-end gap-1.5">
+              {display.agentTeam ? <AgentTeamChip /> : null}
+              {display.browserUse ? <BrowserUseTargetPill target={display.browserUse} /> : null}
+            </div>
+          ) : null}
           {attachments && attachments.length > 0 && (
             <AttachmentGallery attachments={attachments} variant="message" />
           )}
@@ -279,7 +295,11 @@ export const UserMessage = memo(function UserMessage({
           {hasText && (
             <div
               data-message-body="user"
-              className="min-w-0 max-w-full rounded-[var(--radius-lg)] bg-[var(--color-surface-user-msg)] px-3.5 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words"
+              className={[
+                'min-w-0 max-w-full rounded-[var(--radius-xl)] rounded-br-[var(--radius-xs)] bg-[var(--color-surface-user-msg)] px-4 py-2.5 chat-reading-text text-[var(--color-text-primary)] whitespace-pre-wrap break-words',
+                consecutiveBefore ? 'rounded-tr-[var(--radius-sm)]' : '',
+                consecutiveAfter ? 'rounded-br-[var(--radius-xs)]' : '',
+              ].filter(Boolean).join(' ')}
               style={{
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',

@@ -29,9 +29,11 @@ import {
   SESSION_SUMMARY_PARSER_VERSION,
 } from './sessionProjector.js'
 import { LOCAL_INDEX_SCHEMA_VERSION } from './migrations.js'
-import type {
-  ReconciliationWatcher,
-  ReconciliationWatcherOptions,
+import {
+  createReconciliationWatcher,
+  type ReconciliationBatch,
+  type ReconciliationWatcher,
+  type ReconciliationWatcherOptions,
 } from './reconciliationWatcher.js'
 import { aggregateActivityStatsForMode } from '../../api/activityStats.js'
 
@@ -2963,6 +2965,193 @@ describe('source-scoped index failures', () => {
       expect(restarted.getPublicStatus().lastErrorCode).toBeNull()
     } finally {
       await restarted.stop()
+    }
+  })
+
+  it('reconciles watched subagent transcripts via targeted activity updates without full sweeps', async () => {
+    const configDir = await createTempDir('coordinator-subagent-targeted')
+    const databasePath = join(configDir, 'cc-haha', 'db', 'index-v1.sqlite')
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    await createRealTranscript(configDir, '-repo', sessionId, 'Parent session')
+    const subagentsDir = join(configDir, 'projects', '-repo', sessionId, 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+    const subagentPath = join(subagentsDir, 'agent-sub-1.jsonl')
+    await writeFile(subagentPath, `${JSON.stringify({
+      type: 'assistant',
+      uuid: 'sub-1',
+      timestamp: '2026-11-22T00:00:00.000Z',
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'initial' }],
+        usage: { input_tokens: 100, output_tokens: 20 },
+      },
+    })}\n`)
+
+    const completedBatches: ReconciliationBatch[] = []
+    let realWatcher: ReconciliationWatcher | undefined
+    const listeners = new Map<string, (eventType: string, filename: string | null) => void>()
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => configDir,
+      resolveDatabasePath: () => databasePath,
+      createWatcher: options => {
+        realWatcher = createReconciliationWatcher({
+          ...options,
+          debounceMs: 10,
+          maxWaitMs: 30,
+          safetySweepMs: 60_000,
+          watchDirectory: (directory, listener) => {
+            listeners.set(directory, listener)
+            return { close() {} }
+          },
+          onBatch: async batch => {
+            await options.onBatch(batch)
+            completedBatches.push(batch)
+          },
+        })
+        return realWatcher
+      },
+    })
+
+    try {
+      await coordinator.start()
+      await waitFor(() => coordinator.getPublicStatus().state === 'ready' && coordinator.isActivityScopeReady())
+      const projectDir = join(configDir, 'projects', '-repo')
+      await waitFor(() => listeners.has(projectDir))
+      const queryNow = new Date('2026-11-22T12:00:00.000Z')
+      const before = coordinator.getActivityStats('7d', queryNow)
+      expect(before?.modelUsage['claude-sonnet-4-6']?.inputTokens).toBe(100)
+      expect(before?.modelUsage['claude-sonnet-4-6']?.outputTokens).toBe(20)
+
+      await appendFile(subagentPath, `${JSON.stringify({
+        type: 'assistant',
+        uuid: 'sub-2',
+        timestamp: '2026-11-22T00:00:01.000Z',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'follow up' }],
+          usage: { input_tokens: 200, output_tokens: 40 },
+        },
+      })}\n`)
+      listeners.get(projectDir)?.('change', join(sessionId, 'subagents', 'agent-sub-1.jsonl'))
+
+      await waitFor(() => completedBatches.length === 1)
+      expect(completedBatches).toEqual([{ paths: [subagentPath], fullSweep: false }])
+      expect(coordinator.getPublicStatus().state).toBe('ready')
+      expect(coordinator.listSessions().total).toBe(1)
+      expect(coordinator.isActivityScopeReady()).toBe(true)
+      const after = coordinator.getActivityStats('7d', queryNow)
+      expect(after?.modelUsage['claude-sonnet-4-6']?.inputTokens).toBe(300)
+      expect(after?.modelUsage['claude-sonnet-4-6']?.outputTokens).toBe(60)
+    } finally {
+      await coordinator.stop()
+    }
+  })
+
+  it('degrades activity readiness on subagent retry or error without degrading session list, and recovers on bounded retry', async () => {
+    const configDir = await createTempDir('coordinator-subagent-retry')
+    const databasePath = join(configDir, 'cc-haha', 'db', 'index-v1.sqlite')
+    const sessionId = '22222222-2222-4222-8222-222222222222'
+    await createRealTranscript(configDir, '-repo', sessionId, 'Parent session')
+    const subagentsDir = join(configDir, 'projects', '-repo', sessionId, 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+    const subagentPath = join(subagentsDir, 'agent-sub-retry.jsonl')
+    await writeFile(subagentPath, `${JSON.stringify({
+      type: 'assistant',
+      uuid: 'sub-r1',
+      timestamp: '2026-11-22T00:00:00.000Z',
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'initial' }],
+        usage: { input_tokens: 50, output_tokens: 10 },
+      },
+    })}\n`)
+
+    const completedBatches: ReconciliationBatch[] = []
+    const listeners = new Map<string, (eventType: string, filename: string | null) => void>()
+    let injectMode: 'none' | 'retry-once' | 'throw' = 'none'
+    let activityReadyAfterFirstFailure: boolean | undefined
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => configDir,
+      resolveDatabasePath: () => databasePath,
+      createProjector: options => {
+        const real = createSessionProjector(options)
+        return {
+          ...real,
+          async projectActivitySource(candidate) {
+            if (candidate.path === subagentPath && injectMode === 'retry-once') {
+              injectMode = 'none'
+              return { kind: 'retry', reason: 'changed-during-read' }
+            }
+            if (candidate.path === subagentPath && injectMode === 'throw') {
+              throw new Error('simulated activity projection error')
+            }
+            return real.projectActivitySource(candidate)
+          },
+        }
+      },
+      createWatcher: options => createReconciliationWatcher({
+        ...options,
+        debounceMs: 10,
+        maxWaitMs: 30,
+        safetySweepMs: 60_000,
+        watchDirectory: (directory, listener) => {
+          listeners.set(directory, listener)
+          return { close() {} }
+        },
+        onBatch: async batch => {
+          await options.onBatch(batch)
+          if (completedBatches.length === 0) {
+            activityReadyAfterFirstFailure = coordinator.isActivityScopeReady()
+          }
+          completedBatches.push(batch)
+        },
+      }),
+    })
+
+    try {
+      await coordinator.start()
+      await waitFor(() => coordinator.getPublicStatus().state === 'ready' && coordinator.isActivityScopeReady())
+      const projectDir = join(configDir, 'projects', '-repo')
+      await waitFor(() => listeners.has(projectDir))
+
+      // 1. Transient retry degrades activity immediately, then self-heals via bounded retry.
+      injectMode = 'retry-once'
+      await appendFile(subagentPath, `${JSON.stringify({
+        type: 'assistant',
+        uuid: 'sub-r2',
+        timestamp: '2026-11-22T00:00:01.000Z',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'updated' }],
+          usage: { input_tokens: 150, output_tokens: 30 },
+        },
+      })}\n`)
+      listeners.get(projectDir)?.('change', join(sessionId, 'subagents', 'agent-sub-retry.jsonl'))
+
+      await waitFor(() => completedBatches.length === 2)
+      expect(activityReadyAfterFirstFailure).toBe(false)
+      expect(coordinator.getPublicStatus().state).toBe('ready')
+      expect(coordinator.isActivityScopeReady()).toBe(true)
+      const recovered = coordinator.getActivityStats('7d', new Date('2026-11-22T12:00:00.000Z'))
+      expect(recovered?.modelUsage['claude-sonnet-4-6']?.inputTokens).toBe(200)
+      expect(recovered?.modelUsage['claude-sonnet-4-6']?.outputTokens).toBe(40)
+
+      // 2. Persistent error degrades activity without degrading session list or looping.
+      injectMode = 'throw'
+      listeners.get(projectDir)?.('change', join(sessionId, 'subagents', 'agent-sub-retry.jsonl'))
+      await waitFor(() => completedBatches.length === 3)
+      await Bun.sleep(50)
+      expect(completedBatches).toHaveLength(3)
+      expect(coordinator.isActivityScopeReady()).toBe(false)
+      expect(coordinator.getPublicStatus().state).toBe('ready')
+    } finally {
+      await coordinator.stop()
     }
   })
 })

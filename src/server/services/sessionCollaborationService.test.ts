@@ -29,6 +29,49 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 
 describe('session collaboration', () => {
+  test('lists observed collaboration states without changing the metadata page', async () => {
+    const sessions = [
+      { id: 'finished', title: 'Finished' },
+      { id: 'paused', title: 'Paused' },
+      { id: 'untracked', title: 'Untracked' },
+    ]
+    const page = { sessions, total: 12, truncated: true, totalIsLowerBound: true }
+    deps.sessions.list = async ({ query, limit, offset }) => {
+      expect({ query, limit, offset }).toEqual({ query: 'query', limit: 3, offset: 2 })
+      return page
+    }
+    await service.onSessionState('finished', 'completed')
+    await service.onStopped('paused')
+    await service.onSessionState('off-page', 'running')
+    service.status = async () => { throw new Error('Listing must not clone collaboration history') }
+
+    expect(await service.list({ query: 'query', limit: 3, offset: 2 })).toEqual({
+      ...page,
+      sessions: [
+        { id: 'finished', title: 'Finished', state: 'completed' },
+        { id: 'paused', title: 'Paused', state: 'stopped' },
+        { id: 'untracked', title: 'Untracked', state: 'idle' },
+      ],
+    })
+    expect(sessions.every(session => !('state' in session))).toBe(true)
+  })
+
+  test('send distinguishes a paused target from a consumed handoff on the same message id', async () => {
+    await service.onStopped('target')
+    const queued = await service.send('root', 'target', 'handoff', 'stable-id')
+    expect(queued).toMatchObject({ id: 'stable-id', status: 'queued', targetState: 'stopped' })
+    expect(started).toHaveLength(0)
+    expect(injected).toHaveLength(0)
+
+    await service.onUserInput('target')
+    await service.onMessageConsumed('stable-id', 'target')
+    await service.onSessionState('target', 'completed')
+    const retried = await service.send('root', 'target', 'handoff', 'stable-id')
+    expect(retried).toMatchObject({ id: 'stable-id', status: 'consumed', targetState: 'completed' })
+    expect(injected.map(message => message.id)).toEqual(['stable-id'])
+    expect((await service.status()).messages[0]).not.toHaveProperty('targetState')
+  })
+
   test('suggestions project current member status without materializing message history', async () => {
     await service.onSessionState('root', 'blocked')
     service.status = async () => { throw new Error('Suggestions must not clone the full collaboration history') }

@@ -100,7 +100,7 @@ export function SnapshotDetail({ sessionId, snapshot, tab }: { sessionId: string
 function TruncatedNotice() {
   const t = useTranslation()
   return (
-    <div className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]">
+    <div className="v6c-ring-waiting rounded-[var(--radius-card-inner)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]">
       {t('trajectory.detail.truncated')}
     </div>
   )
@@ -112,7 +112,7 @@ function ToolCatalog({ tools, truncated }: { tools: ToolCatalogEntry[]; truncate
   return (
     <DetailSection title={t('trajectory.table.toolCount', { count: tools.length })}>
       {truncated && <TruncatedNotice />}
-      <ul className="flex flex-col divide-y divide-[var(--color-border)] rounded-[var(--radius-md)] border border-[var(--color-border)]">
+      <ul className="v6c-glass-card flex flex-col divide-y divide-[var(--color-border)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
         {tools.map((tool) => {
           const expanded = open === tool.name
           return (

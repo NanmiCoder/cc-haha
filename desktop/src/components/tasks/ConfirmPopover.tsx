@@ -18,9 +18,9 @@ export function ConfirmPopover({
   confirmVariant = 'primary',
 }: ConfirmPopoverProps) {
   return (
-    // `glass-panel` carries the frosted fill and `--shadow-overlay`; the level
-    // comes from the `--z-*` scale rather than a bare `z-50`.
-    <div className="glass-panel absolute right-0 top-full z-[var(--z-popover)] mt-1.5 w-52 rounded-[var(--radius-lg)] p-3">
+    // `dropdown-glass` carries the frosted fill, rim and `--shadow-dropdown-glass`;
+    // the level comes from the `--z-*` scale rather than a bare `z-50`.
+    <div className="dropdown-glass popover-motion absolute right-0 top-full z-[var(--z-popover)] mt-1.5 w-52 rounded-[var(--radius-xl)] p-3">
       <p className="mb-2.5 text-[13px] leading-[1.5] text-[var(--color-text-secondary)]">{message}</p>
       <div className="flex justify-end gap-1.5">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>

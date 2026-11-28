@@ -7,6 +7,7 @@ import {
   capIdleFailureReason,
   capIdleResult,
   claimMailboxMessages,
+  returnClaimedMailboxMessages,
   clearMailbox,
   createIdleNotification,
   formatTeammateMessage,
@@ -552,4 +553,18 @@ describe('shutdown approvals', () => {
   test('leave a desktop member to the server runtime', () => {
     expect(isShutdownApproved(approval({ paneId: '', backendType: 'process' }))).toBeNull()
   })
+})
+
+
+test('a cancelled mailbox consumer returns only its owned identities without duplicating newer mail or history', async () => {
+  await send(LEAD, 'worker', 'owned report', 1)
+  const unread = await readUnreadMessages(LEAD, TEAM)
+  expect(await claimMailboxMessages(LEAD, TEAM, unread, () => false)).toEqual([])
+  expect(await unreadTexts()).toEqual(['owned report'])
+  const claimed = (await claimMailboxMessages(LEAD, TEAM, unread))!
+  await send(LEAD, 'worker', 'newer report', 2)
+  await returnClaimedMailboxMessages(LEAD, TEAM, claimed)
+  await returnClaimedMailboxMessages(LEAD, TEAM, claimed)
+  expect(await unreadTexts()).toEqual(['owned report', 'newer report'])
+  expect((await readMailboxHistory(LEAD, TEAM)).filter(message => message.text === 'owned report')).toHaveLength(1)
 })

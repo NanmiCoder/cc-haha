@@ -8,6 +8,11 @@ import {
   splitTextByFilePaths,
 } from './filePathBoundary'
 import { isGeneratedArtifactFile, isOutputResourceFile, isShellProducedDeliverable } from './fileCapabilities'
+import {
+  isLocalAudioName,
+  isMarkdownAudioDestination,
+  normalizeMarkdownImageDestination,
+} from './markdownImages'
 import { classifyPreviewLink } from './previewLinkRouter'
 
 export type AssistantOutputTargetKind =
@@ -107,7 +112,9 @@ type LocalhostTargetMatch = {
   href: string
 }
 
-type CandidateTarget = {
+export type AssistantOutputMention = {
+  /** Parsed disk path before normalization, so explicit paths keep their identity. */
+  path?: string
   key: string
   position: number
   order: number
@@ -144,19 +151,25 @@ export function extractAssistantOutputTargets(
   content: string,
   options: ExtractAssistantOutputTargetOptions = {},
 ): AssistantOutputTarget[] {
+  const mentions = collectAssistantOutputMentions(content, options)
+  return selectAssistantOutputTargets(mentions, options)
+}
+
+export function collectAssistantOutputMentions(
+  content: string,
+  options: Pick<ExtractAssistantOutputTargetOptions, 'workDir' | 'includeUnconfirmedNames'>,
+): AssistantOutputMention[] {
   const workDir = options.workDir ? resolveFilePath(options.workDir) : null
-  const limit = options.limit ?? 6
-  const candidates: CandidateTarget[] = []
-  const results: AssistantOutputTarget[] = []
-  const seen = new Set<string>()
+  const candidates: AssistantOutputMention[] = []
   const markdownLinks = extractMarkdownLinks(content)
   const codeBlocks = extractFencedCodeBlocks(content)
   let order = 0
 
-  const queueTarget = (target: AssistantOutputTarget, key: string, position: number) => {
+  const queueTarget = (target: AssistantOutputTarget, key: string, position: number, path?: string) => {
     candidates.push({
       key,
       position,
+      path,
       order,
       target,
     })
@@ -177,7 +190,10 @@ export function extractAssistantOutputTargets(
       continue
     }
 
-    if (!authoredTitle && !(match.isImage && fileTarget?.kind === 'image')) {
+    // Keep audio embeds in mentions so useWorkspacePathAliases can probe and
+    // repair workspace-prefixed paths (e.g. `project/outputs/clip.wav`); the
+    // message component suppresses duplicate output cards for inline players.
+    if (!authoredTitle && !(match.isImage && (fileTarget?.kind === 'image' || isLocalAudioName(filePath)))) {
       continue
     }
 
@@ -208,7 +224,7 @@ export function extractAssistantOutputTargets(
       normalizedPath: fileTarget.normalizedPath,
       confidence: 'high',
       source: 'markdown-link',
-    }, createFileKey(fileTarget), match.start)
+    }, createFileKey(fileTarget), match.start, filePath)
   }
 
   for (const match of content.matchAll(localhostUrlPattern)) {
@@ -254,7 +270,7 @@ export function extractAssistantOutputTargets(
       normalizedPath: fileTarget.normalizedPath,
       confidence: 'high',
       source: 'plain-path',
-    }, createFileKey(fileTarget), treeMatch.position)
+    }, createFileKey(fileTarget), treeMatch.position, treeMatch.href)
   }
 
   const queuePlainPath = (
@@ -281,7 +297,7 @@ export function extractAssistantOutputTargets(
       source: 'plain-path',
       ...(nameCandidates?.length ? { nameCandidates } : {}),
       ...(awaitsConfirmation ? { awaitsConfirmation } : {}),
-    }, createFileKey(fileTarget), position)
+    }, createFileKey(fileTarget), position, href)
   }
 
   // A code span is bounded by its backticks, not by the sentence, so a name in
@@ -290,7 +306,7 @@ export function extractAssistantOutputTargets(
   // verb), and run over `开题报告2.docx` it kept only `2.docx`.
   const codeSpans = extractInlineCodeSpans(content, codeBlocks)
   for (const span of codeSpans) {
-    if (isInMarkdownLink(span.start, markdownLinks)) {
+    if (!span.ref || isInMarkdownLink(span.start, markdownLinks)) {
       continue
     }
 
@@ -352,14 +368,50 @@ export function extractAssistantOutputTargets(
     return left.order - right.order
   })
 
-  for (const candidate of candidates) {
-    if (options.changedFiles === undefined && results.length >= limit) {
-      break
-    }
-    if (seen.has(candidate.key)) {
-      continue
-    }
+  return candidates
+}
 
+/** Use the same confirmed identity for the player, file card, and its open actions. */
+export function resolveAssistantOutputMentions(
+  mentions: AssistantOutputMention[],
+  aliases: ReadonlyMap<string, string>,
+  pending: ReadonlySet<string>,
+  workDir?: string,
+): AssistantOutputMention[] {
+  if (!aliases.size && !pending.size) return mentions
+  return mentions.flatMap((mention) => {
+    if (!mention.path) return [mention]
+    if (pending.has(mention.path)) return []
+    const corrected = aliases.get(mention.path)
+    if (!corrected) return [mention]
+    const target = mention.target
+    return [{
+      ...mention,
+      key: `file:${target.kind}:${corrected}`,
+      target: {
+        ...target,
+        id: createId(target.kind, corrected),
+        // Preserve the confirmed identity through changed-file reconciliation.
+        href: workDir ? resolveFilePath(corrected, workDir) : corrected,
+        normalizedPath: corrected,
+        subtitle: corrected,
+      },
+    }]
+  })
+}
+
+export function selectAssistantOutputTargets(
+  mentions: AssistantOutputMention[],
+  options: ExtractAssistantOutputTargetOptions,
+): AssistantOutputTarget[] {
+  const limit = options.limit ?? 6
+  const workDir = options.workDir ? resolveFilePath(options.workDir) : null
+  const results: AssistantOutputTarget[] = []
+  const seen = new Set<string>()
+  for (const candidate of mentions) {
+    if (options.changedFiles === undefined && results.length >= limit) break
+    if (candidate.target.awaitsConfirmation && !options.includeUnconfirmedNames) continue
+    if (seen.has(candidate.key)) continue
     seen.add(candidate.key)
     results.push(candidate.target)
   }
@@ -392,6 +444,57 @@ export function extractMarkdownImageSources(content: string): string[] {
   return extractMarkdownLinks(content)
     .filter((match) => match.isImage && !isInCodeBlock(match.start, codeBlocks))
     .map((match) => match.href)
+}
+
+const HTML_AUDIO_BLOCK_RE = /<audio\b[^>]*>[\s\S]*?<\/audio>|<audio\b[^>]*>/gi
+const HTML_TAG_SRC_RE = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i
+const HTML_SOURCE_TAG_RE = /<source\b[^>]*>/gi
+
+/**
+ * Local audio sources rendered inline by MarkdownRenderer — both `![label](clip.wav)`
+ * embeds and raw `<audio>` / `<audio><source>` tags outside code blocks/spans — so
+ * callers can suppress duplicate output cards without hiding audio mentions from
+ * workspace-alias resolution.
+ */
+export function extractMarkdownAudioSources(content: string): string[] {
+  const codeBlocks = extractFencedCodeBlocks(content)
+  const codeSpans = extractInlineCodeSpans(content, codeBlocks)
+  const sources: string[] = []
+
+  for (const match of extractMarkdownLinks(content)) {
+    if (!match.isImage || isInCodeBlock(match.start, codeBlocks)) continue
+    const normalized = normalizeMarkdownImageDestination(match.href)
+    if (isMarkdownAudioDestination(normalized)) {
+      sources.push(match.href)
+    }
+  }
+
+  if (/<audio\b/i.test(content)) {
+    for (const match of content.matchAll(HTML_AUDIO_BLOCK_RE)) {
+      const start = match.index ?? 0
+      if (isInCodeBlock(start, codeBlocks)) continue
+      if (codeSpans.some((span) => start >= span.start && start < span.end)) continue
+      const block = match[0]
+      const openEnd = block.indexOf('>')
+      const openTag = openEnd === -1 ? block : block.slice(0, openEnd + 1)
+      const directSrc = HTML_TAG_SRC_RE.exec(openTag)
+      const audioSrc = directSrc?.[1] ?? directSrc?.[2] ?? directSrc?.[3]
+      if (audioSrc && isMarkdownAudioDestination(normalizeMarkdownImageDestination(audioSrc))) {
+        sources.push(audioSrc)
+        continue
+      }
+      for (const sourceTag of block.matchAll(HTML_SOURCE_TAG_RE)) {
+        const nestedSrc = HTML_TAG_SRC_RE.exec(sourceTag[0])
+        const candidate = nestedSrc?.[1] ?? nestedSrc?.[2] ?? nestedSrc?.[3]
+        if (candidate && isMarkdownAudioDestination(normalizeMarkdownImageDestination(candidate))) {
+          sources.push(candidate)
+          break
+        }
+      }
+    }
+  }
+
+  return sources
 }
 
 /**
@@ -772,10 +875,10 @@ function normalizeMarkdownDestination(destination: string): string {
 type InlineCodeSpan = {
   start: number
   end: number
-  ref: NonNullable<ReturnType<typeof parseFilePathRef>>
+  ref: ReturnType<typeof parseFilePathRef>
 }
 
-/** Single-line `code` spans outside fenced blocks whose whole content is one file reference. */
+/** Keep every span's bounds so the prose scan cannot turn part of its content into a file. */
 function extractInlineCodeSpans(content: string, codeBlocks: FencedCodeBlock[]): InlineCodeSpan[] {
   const spans: InlineCodeSpan[] = []
 
@@ -786,9 +889,7 @@ function extractInlineCodeSpans(content: string, codeBlocks: FencedCodeBlock[]):
     }
 
     const ref = parseFilePathRef(match[1] ?? '')
-    if (ref) {
-      spans.push({ start, end: start + match[0].length, ref })
-    }
+    spans.push({ start, end: start + match[0].length, ref })
   }
 
   return spans

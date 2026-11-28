@@ -5,10 +5,14 @@ import {
   GROK_MODEL_CATALOG,
   GROK_MODEL_CATALOG_ENV_KEY,
   getGrokContextWindowForModel,
-  getGrokRuntimeModelCatalog,
+  type GrokModelCatalogEntry,
 } from '../../services/grokAuth/models.js'
 import { GROK_OAUTH_FILE_ENV_KEY } from '../../services/grokAuth/storage.js'
-import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  MODEL_CONTEXT_WINDOW_MAX,
+  MODEL_CONTEXT_WINDOW_MIN,
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+} from '../../utils/model/modelContextWindows.js'
 import {
   GROK_IMAGE_DEFAULT_MODEL,
   IMAGE_GENERATION_MODEL_ENV_KEY,
@@ -53,27 +57,36 @@ export const GROK_OFFICIAL_PROVIDER: SavedProvider = {
   modelContextWindows,
 }
 
+/**
+ * Use the account's default windows when available. Saved overrides take precedence.
+ * Callers with an authenticated account pass its catalog explicitly; omitting it
+ * keeps the bundled catalog so account-specific listings never leak across logout
+ * or persisted settings.
+ */
 export function buildGrokOfficialRuntimeEnv(
   models: SavedProvider['models'] = GROK_OFFICIAL_PROVIDER.models,
+  windowOverrides?: Record<string, number>,
+  catalog: readonly GrokModelCatalogEntry[] = GROK_MODEL_CATALOG,
 ): Record<string, string> {
-  const runtimeCatalog = getGrokRuntimeModelCatalog()
+  const catalogWindows = Object.fromEntries(
+    catalog.flatMap((model) =>
+      typeof model.contextWindow === 'number' &&
+      Number.isInteger(model.contextWindow) &&
+      model.contextWindow >= MODEL_CONTEXT_WINDOW_MIN &&
+      model.contextWindow <= MODEL_CONTEXT_WINDOW_MAX
+        ? [[model.value, model.contextWindow] as const]
+        : [],
+    ),
+  )
   const runtimeModelContextWindows = {
     ...modelContextWindows,
-    ...Object.fromEntries(
-      runtimeCatalog
-        .flatMap((model) =>
-          typeof model.contextWindow === 'number' &&
-          Number.isFinite(model.contextWindow) &&
-          model.contextWindow > 0
-            ? [[model.value, model.contextWindow] as const]
-            : [],
-        ),
-    ),
+    ...catalogWindows,
+    ...windowOverrides,
   }
   return {
     [GROK_OAUTH_PROVIDER_ENV_KEY]: '1',
     [GROK_OAUTH_FILE_ENV_KEY]: getHahaGrokOAuthFilePath(),
-    [GROK_MODEL_CATALOG_ENV_KEY]: JSON.stringify(runtimeCatalog),
+    [GROK_MODEL_CATALOG_ENV_KEY]: JSON.stringify(catalog),
     [IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY]: 'grok_oauth',
     [IMAGE_GENERATION_PROVIDER_ID_ENV_KEY]: GROK_OFFICIAL_PROVIDER_ID,
     [IMAGE_GENERATION_MODEL_ENV_KEY]: GROK_IMAGE_DEFAULT_MODEL,

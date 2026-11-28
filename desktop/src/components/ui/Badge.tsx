@@ -26,11 +26,13 @@ export type BadgeProps = Omit<HTMLAttributes<HTMLSpanElement>, 'children' | 'tit
    * `/20` alpha the hand-rolled badges used, which Safari 15 drops entirely.
    */
   bordered?: boolean
-  /** Set false for counters, which read better with a square-ish corner. */
+  /** Set true for circular pill counters; defaults to false (V6C 6px corner). */
   pill?: boolean
   icon?: ReactNode
   /** Tabular figures for versions, hashes and paths. */
   mono?: boolean
+  /** Tabular numerals without switching to monospace (also enabled automatically for non-pill counters and numeric children). */
+  tabularNums?: boolean
   /**
    * Lets long content wrap and break mid-word. Badges are single-line by
    * default, which overflows for the things that actually go in a `mono` badge
@@ -78,7 +80,7 @@ const SIZE_CLASSES = {
 /** Border colors for `bordered` soft badges, one shade up from the fill. */
 const SOFT_BORDER: Record<Tone, string> = {
   neutral: 'border border-[var(--color-border)]',
-  brand: 'border border-[var(--color-brand-soft-hover)]',
+  brand: 'border border-[var(--color-primary-fixed-dim)]',
   success: 'border border-[var(--color-success)]',
   warning: 'border border-[var(--color-warning)]',
   danger: 'border border-[var(--color-error)]',
@@ -97,9 +99,10 @@ export function Badge({
   variant = 'soft',
   size = 'xs',
   bordered = false,
-  pill = true,
+  pill = false,
   icon,
   mono = false,
+  tabularNums = false,
   wrap = false,
   title,
   className,
@@ -109,18 +112,23 @@ export function Badge({
   // span the moment a test needs to select it.
   ...props
 }: BadgeProps) {
+  const numeric = tabularNums || !pill || typeof children === 'number'
+  const hasBorder = variant === 'outline' || bordered
+
   return (
     <span
       title={title}
       {...props}
       className={cx(
-        'inline-flex shrink-0 items-center font-medium',
+        'inline-flex shrink-0 items-center font-medium bg-clip-padding',
         wrap ? 'break-all' : 'whitespace-nowrap',
         pill ? 'rounded-full' : 'rounded-[var(--radius-sm)]',
         SIZE_CLASSES[size],
         variant === 'soft' ? SOFT_CLASSES[tone] : OUTLINE_CLASSES[tone],
         variant === 'soft' && bordered && SOFT_BORDER[tone],
+        hasBorder && 'shadow-[var(--bevel-surface-rest)]',
         mono && 'font-mono tabular-nums',
+        !mono && numeric && 'tabular-nums',
         className,
       )}
     >

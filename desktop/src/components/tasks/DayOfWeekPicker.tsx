@@ -42,8 +42,8 @@ export function DayOfWeekPicker({ selected, onChange }: Props) {
             onClick={() => toggle(day)}
             aria-pressed={isActive}
             className={`
-              h-8 w-8 cursor-pointer rounded-full border text-xs font-medium
-              transition-[background-color,color,border-color] duration-150 ease-out
+              v6c-pressable h-8 w-8 cursor-pointer rounded-[var(--radius-control)] border text-xs font-medium
+              transition-[background-color,color,border-color,box-shadow] duration-150 ease-out
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]
               focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]
               ${isActive
@@ -52,7 +52,7 @@ export function DayOfWeekPicker({ selected, onChange }: Props) {
                 // terracotta wash made a selected weekday look like the brand
                 // action.
                 ? 'border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]'
+                : 'v6c-raised border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]'
               }
             `}
           >

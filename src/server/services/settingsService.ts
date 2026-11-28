@@ -13,8 +13,13 @@ import { randomBytes } from 'node:crypto'
 import * as path from 'path'
 import * as os from 'os'
 import { ApiError } from '../middleware/errorHandler.js'
+import { ManagedSettingsService } from './managedSettingsService.js'
 import { normalizeJsonObject, readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
+import {
+  isModelReasoningEffort,
+  isSchemaEffortLevel,
+} from '../../shared/modelReasoning.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { addFileGlobRuleToGitignore } from '../../utils/git/gitignore.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
@@ -32,12 +37,25 @@ export const VALID_PERMISSION_MODES = [
 
 export type PermissionMode = (typeof VALID_PERMISSION_MODES)[number]
 
+const CC_HAHA_FALLBACK_KEYS = Symbol('ccHahaFallbackKeys')
+
+export type CcHahaFallbackKey = 'effort' | 'language'
+
+export function getCcHahaFallbackKeys(
+  settings: Record<string, unknown> | null | undefined,
+): CcHahaFallbackKey[] {
+  if (!settings) return []
+  const raw = (settings as Record<symbol, unknown>)[CC_HAHA_FALLBACK_KEYS]
+  return Array.isArray(raw) ? raw.filter((key): key is CcHahaFallbackKey => key === 'effort' || key === 'language') : []
+}
+
 export function isValidPermissionMode(mode: unknown): mode is PermissionMode {
   return typeof mode === 'string' && VALID_PERMISSION_MODES.includes(mode as PermissionMode)
 }
 
 export class SettingsService {
   private static writeLocks = new Map<string, Promise<void>>()
+  private managedSettingsService = new ManagedSettingsService()
   private projectRoot?: string
 
   constructor(projectRoot?: string) {
@@ -101,7 +119,40 @@ export class SettingsService {
 
   /** 获取用户级设置 */
   async getUserSettings(): Promise<Record<string, unknown>> {
-    return this.readJsonFile(this.getUserSettingsPath())
+    const user = await this.readJsonFile(this.getUserSettingsPath())
+    const needsLanguageFallback = !Object.hasOwn(user, 'language')
+    const needsEffortFallback = !Object.hasOwn(user, 'effort') && !Object.hasOwn(user, 'effortLevel')
+    if (!needsLanguageFallback && !needsEffortFallback) {
+      return user
+    }
+
+    const managed = await this.managedSettingsService.readSettings()
+    const fallbackLanguage =
+      needsLanguageFallback && typeof managed.language === 'string' && managed.language.trim().length > 0
+        ? managed.language
+        : undefined
+    const fallbackEffort =
+      needsEffortFallback && typeof managed.defaultEffort === 'string' && isModelReasoningEffort(managed.defaultEffort)
+        ? managed.defaultEffort
+        : undefined
+    if (fallbackLanguage === undefined && fallbackEffort === undefined) {
+      return user
+    }
+
+    const fallbackKeys: CcHahaFallbackKey[] = []
+    if (fallbackLanguage !== undefined) fallbackKeys.push('language')
+    if (fallbackEffort !== undefined) fallbackKeys.push('effort')
+
+    const hydrated: Record<string, unknown> = {
+      ...user,
+      ...(fallbackLanguage !== undefined ? { language: fallbackLanguage } : {}),
+      ...(fallbackEffort !== undefined ? { effort: fallbackEffort } : {}),
+    }
+    Object.defineProperty(hydrated, CC_HAHA_FALLBACK_KEYS, {
+      value: fallbackKeys,
+      enumerable: false,
+    })
+    return hydrated
   }
 
   /** Read-time upgrade for settings written before the desktop update toggle.
@@ -128,6 +179,13 @@ export class SettingsService {
   /** Desktop composer next-prompt suggestions; opt-in because each turn costs an extra request. */
   async getNextPromptSuggestionsEnabled(): Promise<boolean> {
     return (await this.getUserSettings()).nextPromptSuggestionsEnabled === true
+  }
+
+  /** Max output tokens escalation mode; missing means 'auto' (follow GrowthBook). */
+  async getMaxOutputTokensEscalationMode(): Promise<'auto' | 'enabled' | 'disabled'> {
+    const user = await this.getUserSettings()
+    const value = user.maxOutputTokensEscalationMode
+    return value === 'enabled' || value === 'disabled' ? value : 'auto'
   }
 
   /** Read-time upgrade for older settings that only stored the team env flag.
@@ -163,18 +221,20 @@ export class SettingsService {
     filePath: string,
     task: () => Promise<T>,
   ): Promise<T> {
-    const previousWrite = SettingsService.writeLocks.get(filePath) ?? Promise.resolve()
+    const lockKey = path.resolve(filePath)
+    const previousWrite = SettingsService.writeLocks.get(lockKey) ?? Promise.resolve()
     const nextWrite = previousWrite
       .catch(() => {})
       .then(task)
+    const trackedWrite = nextWrite.then(() => {}, () => {})
 
-    SettingsService.writeLocks.set(filePath, nextWrite)
+    SettingsService.writeLocks.set(lockKey, trackedWrite)
 
     try {
       return await nextWrite
     } finally {
-      if (SettingsService.writeLocks.get(filePath) === nextWrite) {
-        SettingsService.writeLocks.delete(filePath)
+      if (SettingsService.writeLocks.get(lockKey) === trackedWrite) {
+        SettingsService.writeLocks.delete(lockKey)
       }
     }
   }
@@ -218,6 +278,9 @@ export class SettingsService {
     if (Object.hasOwn(settings, 'leanModeEnabled') && typeof settings.leanModeEnabled !== 'boolean') {
       throw ApiError.badRequest('leanModeEnabled must be a boolean')
     }
+    if (Object.hasOwn(settings, 'includeCyberRiskInstruction') && typeof settings.includeCyberRiskInstruction !== 'boolean') {
+      throw ApiError.badRequest('includeCyberRiskInstruction must be a boolean')
+    }
     if (Object.hasOwn(settings, 'autoUpdateEnabled') && typeof settings.autoUpdateEnabled !== 'boolean') {
       throw ApiError.badRequest('autoUpdateEnabled must be a boolean')
     }
@@ -230,10 +293,83 @@ export class SettingsService {
         throw ApiError.badRequest('maxConcurrentSubagents must be null or a positive safe integer')
       }
     }
+    if (Object.hasOwn(settings, 'maxOutputTokensEscalationMode')) {
+      const value = settings.maxOutputTokensEscalationMode
+      if (value !== 'auto' && value !== 'enabled' && value !== 'disabled') {
+        throw ApiError.badRequest('maxOutputTokensEscalationMode must be auto, enabled, or disabled')
+      }
+    }
+    if (Object.hasOwn(settings, 'fastMode')) {
+      const value = settings.fastMode
+      if (value !== undefined && value !== null && typeof value !== 'boolean') {
+        throw ApiError.badRequest('fastMode must be a boolean or null')
+      }
+    }
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {
       const current = await this.readJsonFile(filePath)
       const merged = Object.assign({}, current, settings)
+      delete merged.ccHahaFallbackKeys
+
+      if (
+        Object.hasOwn(settings, 'language') &&
+        (settings.language === undefined || settings.language === null)
+      ) {
+        delete merged.language
+      }
+
+      if (
+        Object.hasOwn(settings, 'fastMode') &&
+        (settings.fastMode === undefined || settings.fastMode === null)
+      ) {
+        delete merged.fastMode
+      }
+
+      const hasEffort = Object.hasOwn(settings, 'effort')
+      const hasEffortLevel = Object.hasOwn(settings, 'effortLevel')
+      if (hasEffort) {
+        if (settings.effort === undefined || settings.effort === null || settings.effort === '') {
+          delete merged.effort
+          if (
+            !hasEffortLevel ||
+            settings.effortLevel === undefined ||
+            settings.effortLevel === null ||
+            settings.effortLevel === ''
+          ) {
+            delete merged.effortLevel
+          } else if (typeof settings.effortLevel === 'string' && isModelReasoningEffort(settings.effortLevel)) {
+            merged.effort = settings.effortLevel
+            if (isSchemaEffortLevel(settings.effortLevel)) {
+              merged.effortLevel = settings.effortLevel
+            } else {
+              delete merged.effortLevel
+            }
+          }
+        } else if (typeof settings.effort === 'string' && isModelReasoningEffort(settings.effort)) {
+          merged.effort = settings.effort
+          if (isSchemaEffortLevel(settings.effort)) {
+            merged.effortLevel = settings.effort
+          } else {
+            delete merged.effortLevel
+          }
+        }
+      } else if (hasEffortLevel) {
+        if (
+          settings.effortLevel === undefined ||
+          settings.effortLevel === null ||
+          settings.effortLevel === ''
+        ) {
+          delete merged.effortLevel
+          delete merged.effort
+        } else if (typeof settings.effortLevel === 'string' && isModelReasoningEffort(settings.effortLevel)) {
+          merged.effort = settings.effortLevel
+          if (isSchemaEffortLevel(settings.effortLevel)) {
+            merged.effortLevel = settings.effortLevel
+          } else {
+            delete merged.effortLevel
+          }
+        }
+      }
       const currentDesktopTerminal = normalizeJsonObject(current.desktopTerminal)
       const updatedDesktopTerminal = normalizeJsonObject(settings.desktopTerminal)
       if (currentDesktopTerminal && updatedDesktopTerminal) {
@@ -245,6 +381,58 @@ export class SettingsService {
       }
       await this.writeJsonFile(filePath, merged)
     })
+    await this.syncGeneralPreferencesBackup(settings)
+  }
+
+  private async syncGeneralPreferencesBackup(settings: Record<string, unknown>): Promise<void> {
+    const hasEffort = Object.hasOwn(settings, 'effort')
+    const hasEffortLevel = Object.hasOwn(settings, 'effortLevel')
+    const hasLanguage = Object.hasOwn(settings, 'language')
+    if (!hasEffort && !hasEffortLevel && !hasLanguage) {
+      return
+    }
+
+    const nextDefaultEffort =
+      hasEffort || hasEffortLevel
+        ? hasEffort && typeof settings.effort === 'string' && isModelReasoningEffort(settings.effort)
+          ? settings.effort
+          : hasEffortLevel && typeof settings.effortLevel === 'string' && isModelReasoningEffort(settings.effortLevel)
+            ? settings.effortLevel
+            : null
+        : undefined
+    const nextLanguage = hasLanguage
+      ? (typeof settings.language === 'string' && settings.language.trim().length > 0 ? settings.language : null)
+      : undefined
+
+    const onlyClearing =
+      (nextDefaultEffort === undefined || nextDefaultEffort === null) &&
+      (nextLanguage === undefined || nextLanguage === null)
+    if (onlyClearing) {
+      const managedPath = path.join(this.getConfigDir(), 'cc-haha', 'settings.json')
+      const exists = await fs.access(managedPath).then(() => true, () => false)
+      if (!exists) {
+        return
+      }
+    }
+
+    await this.managedSettingsService.updateSettings((current) => {
+      const next: Record<string, unknown> = { ...current }
+      if (nextDefaultEffort !== undefined) {
+        if (nextDefaultEffort === null) {
+          delete next.defaultEffort
+        } else {
+          next.defaultEffort = nextDefaultEffort
+        }
+      }
+      if (nextLanguage !== undefined) {
+        if (nextLanguage === null) {
+          delete next.language
+        } else {
+          next.language = nextLanguage
+        }
+      }
+      return { settings: next, result: undefined }
+    })
   }
 
   /**
@@ -252,9 +440,16 @@ export class SettingsService {
    * preserving unrelated user env keys. The provider picker writes all aliases
    * as one locked update so two settings actions cannot lose each other's env.
    */
-  async updateOfficialModelMapping(models: ModelMapping): Promise<void> {
+  async updateOfficialModelMapping(
+    modelsOrResolver: ModelMapping | (() => Promise<ModelMapping | null> | ModelMapping | null),
+  ): Promise<void> {
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {
+      const models = typeof modelsOrResolver === 'function'
+        ? await modelsOrResolver()
+        : modelsOrResolver
+      if (!models) return
+
       const current = await this.readJsonFile(filePath)
       const env = {
         ...(normalizeJsonObject(current.env) as Record<string, string> | undefined),

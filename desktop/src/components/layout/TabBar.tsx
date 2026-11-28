@@ -1,4 +1,5 @@
 import { forwardRef, useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import {
   useTabStore,
@@ -21,7 +22,8 @@ import { useCLITaskStore } from '../../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { StatusDot } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
-import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -34,7 +36,6 @@ import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
 import { AppWindow, Bot, CalendarClock, ChevronLeft, ChevronRight, Link, Network, PanelRight, Settings, SquareTerminal, Store, X, type LucideIcon } from 'lucide-react'
 import { WorkspaceLayoutControls } from './WorkspaceLayoutControls'
-import { useWorkspaceHeaderHost } from './WorkspaceHeaderContext'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { getMainSessionActivityModel, hasVisibleSessionActivity } from '../activity/sessionActivityModel'
 import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore } from '../../stores/sessionDelegationStore'
@@ -104,6 +105,14 @@ const isDesktopRuntime = desktopHost.isDesktop
 const EMPTY_DISMISSED_BACKGROUND_TASK_KEYS: readonly string[] = []
 const EMPTY_ACTIVITY_MESSAGES: UIMessage[] = []
 
+/** V6C low-radius raised glass tab (9px corner, neutral glass rim, no border jump). */
+const SESSION_TAB_BASE =
+  'tab-bar-interactive group relative flex h-7 shrink-0 items-center rounded-[var(--radius-control)] pl-2.5 pr-1 min-w-[112px] max-w-[200px] transition-[background-color,box-shadow,color] duration-150 ease-out'
+const SESSION_TAB_ACTIVE =
+  'v6c-raised text-[var(--color-text-primary)]'
+const SESSION_TAB_IDLE =
+  'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+
 type PendingCloseRequest = {
   tabs: Tab[]
   runningSessionIds: string[]
@@ -118,6 +127,14 @@ export function TabBar() {
     () => tabs.filter((tab) => isSessionTab(tab)).map((tab) => tab.sessionId),
     [tabs],
   )
+  const antigravitySessionIds = useSessionStore(useShallow((state) =>
+    sessionTabIds.filter((sessionId) =>
+      state.sessions.some((session) =>
+        session.id === sessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID,
+      ),
+    ),
+  ))
+  const antigravitySessionSet = useMemo(() => new Set(antigravitySessionIds), [antigravitySessionIds])
   const activeChatSessionIds = useChatStore(useShallow((s) =>
     sessionTabIds.filter((sessionId) => {
       const sessionState = s.sessions[sessionId]
@@ -156,8 +173,6 @@ export function TabBar() {
     activeTabId && isActiveSessionTab ? state.bySession[activeTabId]?.layout ?? 'hidden' : 'hidden',
   )
   const isWorkbenchOpen = workspaceLayout !== 'hidden'
-  const workspaceHeader = useWorkspaceHeaderHost(isActiveSessionTab ? activeTabId : null)
-  const hasWorkspaceHeader = workspaceHeader.available && isWorkbenchOpen
   const isTerminalPanelOpen = useWorkspaceStore((state) =>
     activeTabId && isActiveSessionTab ? state.bySession[activeTabId]?.bottomOpen ?? false : false,
   )
@@ -597,7 +612,7 @@ export function TabBar() {
   ) : null
 
   const rightScrollControl = canScrollRight && (
-        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} aria-describedby={attentionOffscreen.right ? `${attentionHintId}-right` : undefined} title={attentionOffscreen.right ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
+        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} aria-describedby={attentionOffscreen.right ? `${attentionHintId}-right` : undefined} title={attentionOffscreen.right ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
           <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
           {attentionHint('right')}
         </button>
@@ -608,27 +623,16 @@ export function TabBar() {
       data-testid="tab-bar"
       data-desktop-drag-region={isDesktopRuntime ? true : undefined}
       /*
-        The strip is frame, not paper: it sits on the sidebar's ground so the
-        active tab can be filled with `--color-surface` and read as a sheet
-        lifted off the desk, continuous with the content below it. Painting the
-        strip `--color-surface` instead collapses strip, active tab and content
-        into one flat plane, which is what #1123 reported as "粗犷".
-
-        Deliberately *not* darkened into a Chrome-style trough: keeping it on
-        the sidebar's exact ground is what stops the titlebar reading as a
-        separate band across the top of the window. The cost is that the
-        selected tab's fill is only 1.05–1.10:1 against it, so the shape has to
-        be carried by `--color-tab-edge` on the tab itself (see TabItem).
-
-        No `border-b`: the selected tab's bottom edge has to run straight into
-        the content below it, and a rule across the whole strip cuts through it.
+        Editorial studio topbar: sits cleanly on the full-bleed canvas with a
+        crisp 1px hairline bottom divider, generous window drag breathing room,
+        and quiet capsule session tabs.
       */
-      className="flex min-h-[52px] items-stretch bg-[var(--color-surface-sidebar)] select-none"
+      className="flex min-h-[52px] items-stretch border-b border-[var(--color-border)] bg-transparent select-none"
     >
 
-      <div data-testid="workspace-session-header" className={hasWorkspaceHeader ? 'flex min-w-0 flex-1 overflow-hidden' : 'contents'}>
+      <div data-testid="workspace-session-header" className="contents">
       {canScrollLeft && (
-        <button type="button" onClick={() => scroll('left')} aria-label={t('tabs.scrollLeft')} aria-describedby={attentionOffscreen.left ? `${attentionHintId}-left` : undefined} title={attentionOffscreen.left ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
+        <button type="button" onClick={() => scroll('left')} aria-label={t('tabs.scrollLeft')} aria-describedby={attentionOffscreen.left ? `${attentionHintId}-left` : undefined} title={attentionOffscreen.left ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
           <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
           {attentionHint('left')}
         </button>
@@ -639,12 +643,7 @@ export function TabBar() {
         ref={scrollRef}
         data-testid="tab-bar-scroll-region"
         data-desktop-drag-region={isDesktopRuntime ? true : undefined}
-        /*
-          The 28px chips sit centred in the 52px strip, as the workspace's
-          resource tabs do. The space around them stays inside the scroll
-          region, which carries the window drag region; the chips do not.
-        */
-        className="tab-strip-scroll flex flex-1 items-center gap-0.5 overflow-x-hidden px-1"
+        className="tab-strip-scroll flex flex-1 items-center gap-1 overflow-x-hidden pl-2.5 pr-4"
         onDragOver={(e) => e.preventDefault()}
       >
         {tabs.map((tab, index) => {
@@ -660,6 +659,8 @@ export function TabBar() {
               closeLabel={t('tabs.closeTab', { title: displayTitle })}
               isRunning={runningSessionIds.has(tab.sessionId)}
               needsAttention={attentionSet.has(tab.sessionId)}
+              isAntigravity={antigravitySessionSet.has(tab.sessionId)}
+              antigravityLabel={t('settings.providers.antigravity.name')}
               isActive={tab.sessionId === activeTabId}
               isDragOver={dragOverIndex === index}
               isDragging={tab.sessionId === draggingSessionId}
@@ -685,59 +686,22 @@ export function TabBar() {
         />
       )}
       </div>
-
-      {hasWorkspaceHeader ? rightScrollControl : null}
       </div>
 
-      {/*
-        Same hairline as the one between two idle tabs, drawn the same way: a
-        16px rule rather than a full-height `border-l`, because a 52px line
-        standing next to a row of 16px ones reads as a different kind of
-        divider. `--color-border` is not an option for either — calibrated
-        against paper, it all but disappears on the trough (1.12:1 on 素白),
-        which left the toolbar looking welded to the last tab.
-      */}
-      {/*
-        The frame owns the ground, not the header inside it. The drag gutter —
-        and, on Windows, the window controls — are the header's siblings in
-        here, and they are transparent, so whichever element paints has to
-        contain them. With the panel open the workspace's own tab strip sits in
-        this frame, and in 「素」 that strip is a trough like the session tabs:
-        the sidebar's ground, with the active resource tab as the paper sheet
-        that runs into the panel below. One ground for everything above it.
-      */}
       <div
         data-testid="workspace-header-frame"
-        style={hasWorkspaceHeader ? { width: workspaceHeader.width, maxWidth: '100%' } : undefined}
-        className={`flex min-w-0 shrink-0 items-stretch ${hasWorkspaceHeader ? 'bg-[var(--color-surface-sidebar)]' : ''}`}
+        className="flex min-w-0 shrink-0 items-stretch"
       >
       <div
         data-testid="workspace-window-header"
-        data-desktop-drag-region={hasWorkspaceHeader && isDesktopRuntime ? true : undefined}
-        className={hasWorkspaceHeader
-          ? 'flex min-w-0 flex-1 items-center gap-1 pr-2'
-          : 'relative flex shrink-0 items-center gap-1 px-2 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-px before:-translate-y-1/2 before:bg-[var(--color-tab-separator)]'}
+        className="relative flex shrink-0 items-center gap-1.5 px-2.5"
       >
-        {hasWorkspaceHeader ? (
-          <div
-            ref={workspaceHeader.ref}
-            data-testid="workspace-header-slot"
-            data-desktop-drag-region={isDesktopRuntime ? true : undefined}
-            // The slot is titlebar chrome: empty space must drag the window.
-            // `tab-bar-interactive` here would also mark every descendant as
-            // no-drag, including the resource strip's leftover flex space.
-            className="flex h-[52px] min-w-0 flex-1"
-          />
-        ) : null}
         {otherAttentionCount > 0 && (
           <TabAttentionJump
             count={otherAttentionCount}
             label={t('tabs.jumpToAttention', { count: otherAttentionCount })}
             onJump={jumpToAttention}
           />
-        )}
-        {showActivityButton && activeTabId && (
-          <SessionActivityButton sessionId={activeTabId} />
         )}
         {isDesktopRuntime && isActiveSessionTab && !isWorkbenchOpen && (
           <OpenProjectMenu path={openProjectPath} />
@@ -749,6 +713,9 @@ export function TabBar() {
           <WorkspaceLayoutControls
             layout={workspaceLayout}
             bottomOpen={isTerminalPanelOpen}
+            leadingSlot={showActivityButton ? (
+              <SessionActivityButton sessionId={activeTabId} size="sm" borderedWhenActive />
+            ) : null}
             onToggleFullscreen={() => useWorkspaceStore.getState().toggleFullscreen(activeTabId)}
             onToggleBottom={() => useWorkspaceStore.getState().toggleBottomPanel(
               activeTabId,
@@ -771,6 +738,7 @@ export function TabBar() {
             onClick={() => useTabStore.getState().openTerminalTab()}
             size="sm"
             tone="muted"
+            className="tab-bar-interactive [-webkit-app-region:no-drag]"
           />
         )}
       </div>
@@ -784,57 +752,70 @@ export function TabBar() {
         />
       )}
 
-
-      {!hasWorkspaceHeader ? rightScrollControl : null}
+      {rightScrollControl}
       <WindowControls />
       </div>
 
-      {contextMenu && (
+      {contextMenu && createPortal(
         <div
           ref={contextMenuRef}
-          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+          role="menu"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
+            type="button"
+            role="menuitem"
             onClick={() => { handleClose(contextMenu.sessionId); setContextMenu(null) }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.close')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseOthers(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeOthers')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseLeft(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeLeft')}
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => handleCloseRight(contextMenu.sessionId)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeRight')}
           </button>
           <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
+            type="button"
+            role="menuitem"
             onClick={handleCloseAll}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {t('tabs.closeAll')}
           </button>
           <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
+            type="button"
+            role="menuitem"
             disabled={!canReopenClosedTab}
             onClick={() => { setContextMenu(null); void reopenClosedSessionTab() }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+            className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
           >
             {t('tabs.reopenClosed')}
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
 
       <ActionDialog
@@ -884,6 +865,8 @@ const TabItem = forwardRef<HTMLDivElement, {
   closeLabel: string
   isRunning: boolean
   needsAttention: boolean
+  isAntigravity: boolean
+  antigravityLabel: string
   isActive: boolean
   isDragOver: boolean
   isDragging: boolean
@@ -894,7 +877,7 @@ const TabItem = forwardRef<HTMLDivElement, {
   onClose: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onMouseDown: (event: React.MouseEvent) => void
-}>(({ tab, displayTitle, closeLabel, isRunning, needsAttention, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, attentionLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
+}>(({ tab, displayTitle, closeLabel, isRunning, needsAttention, isAntigravity, antigravityLabel, isActive, isDragOver, isDragging, dragOffsetX, runningLabel, attentionLabel, onClick, onClose, onContextMenu, onMouseDown }, ref) => {
   // Chat tabs carry no glyph at all; the dot only appears when there is
   // something to say. Everything else identifies its section with one.
   //
@@ -922,11 +905,8 @@ const TabItem = forwardRef<HTMLDivElement, {
       onClick={onClick}
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
-      // The same chip as the workspace's resource tabs (`ui/tabChip`): one tab
-      // style for both strips. The tiers and why hover shares paper with the
-      // active tab are documented there.
       className={`
-        ${tabChipClass(isActive || isDragging)} tab-strip-item
+        ${SESSION_TAB_BASE} ${isActive || isDragging ? SESSION_TAB_ACTIVE : SESSION_TAB_IDLE} tab-strip-item
         ${isDragging ? 'z-[var(--z-sticky)] cursor-grabbing opacity-95' : 'cursor-grab'}
         ${isDragOver ? 'before:absolute before:-left-[3px] before:top-[4px] before:bottom-[4px] before:w-[2px] before:bg-[var(--color-brand)] before:rounded-full' : ''}
       `}
@@ -934,36 +914,29 @@ const TabItem = forwardRef<HTMLDivElement, {
         transform: isDragging ? `translateX(${dragOffsetX}px) scale(1.02)` : undefined,
       }}
     >
-      {/*
-        One slot, not a run of conditional siblings, and it animates its own
-        width rather than appearing. The status dot used to be *inserted* ahead
-        of the label, so a session shoved its own title sideways the moment it
-        started running and pulled it back when it finished. Now that idle chat
-        tabs have no glyph the slot has to collapse, so the jump is spread over
-        150ms instead. That is also why the gap is per-child margin: flex `gap`
-        is charged between children whatever their width, so a zero-width slot
-        would still cost 6px.
-      */}
       <span
         className={`flex h-[14px] flex-shrink-0 items-center justify-center overflow-hidden transition-[width,margin-right] duration-150 ease-out ${leadingGlyph ? 'mr-1.5 w-[14px]' : 'mr-0 w-0'}`}
       >
         {leadingGlyph}
       </span>
 
-      <span className={tabChipLabelClass(isActive)}>
+      <span className={`min-w-0 flex-1 truncate text-[12px] tabular-nums ${isActive ? 'font-medium' : ''}`}>
         {displayTitle}
       </span>
 
-      {/*
-        The fade lives on the wrapper, not on the button: `IconButton` pins
-        `transition-colors`, which does not cover opacity, and a competing
-        `transition-[…]` in `className` would resolve by stylesheet order.
-      */}
-      {/* The active tab keeps its close button in sight, as Chrome does; the
-          rest reveal it on hover so an idle row stays all title. */}
-      <span className={`ml-1.5 flex-shrink-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
+      {isAntigravity && (
+        <span
+          data-testid="tab-antigravity-badge"
+          title={antigravityLabel}
+          className="ml-1 inline-flex shrink-0 items-center text-[var(--color-text-tertiary)]"
+        >
+          <ModelBrandIcon providerId={ANTIGRAVITY_ACP_PROVIDER_ID} size={12} />
+        </span>
+      )}
+
+      <span className={`ml-1.5 flex-shrink-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
         <IconButton
-          icon={<X size={12} strokeWidth={2} aria-hidden="true" />}
+          icon={<X size={12} strokeWidth={1.75} aria-hidden="true" />}
           label={closeLabel}
           onMouseDown={(e) => { e.stopPropagation() }}
           onClick={(e) => { e.stopPropagation(); onClose() }}

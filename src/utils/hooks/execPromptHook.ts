@@ -16,22 +16,53 @@ import type { PromptHook } from '../settings/types.js'
 import { asSystemPrompt } from '../systemPromptType.js'
 import { addArgumentsToPrompt, hookResponseSchema } from './hookHelpers.js'
 
+function formatPromptHookApiErrorDetail(
+  fullResponse: string,
+  fallback?: string,
+): string {
+  const raw = fullResponse || fallback || 'Unknown API error'
+  const jsonStart = raw.indexOf('{')
+  if (jsonStart >= 0) {
+    const parsed = safeParseJSON(raw.slice(jsonStart)) as {
+      error?: { message?: unknown }
+      message?: unknown
+    } | null
+    const extracted =
+      typeof parsed?.error?.message === 'string'
+        ? parsed.error.message.trim()
+        : typeof parsed?.message === 'string'
+          ? parsed.message.trim()
+          : ''
+    if (extracted) {
+      const prefix = raw.slice(0, jsonStart).trim()
+      return prefix ? `${prefix} ${extracted}` : extracted
+    }
+  }
+  return raw
+}
+
 function goalHookFailureResult(
   hook: PromptHook,
+  hookName: string,
+  hookEvent: HookEvent,
+  toolUseID: string,
   reason: string,
+  stdout = '',
 ): HookResult | null {
   if (!isGoalPromptHookCommand(hook.prompt)) return null
 
-  const blockingError = `Goal evaluator failed: ${reason}. Treat the goal as incomplete and continue working toward it.`
   return {
     hook,
-    outcome: 'blocking',
-    blockingError: {
-      blockingError,
-      command: hook.prompt,
-    },
-    preventContinuation: true,
-    stopReason: blockingError,
+    outcome: 'non_blocking_error',
+    message: createAttachmentMessage({
+      type: 'hook_non_blocking_error',
+      hookName,
+      toolUseID,
+      hookEvent,
+      stderr: `Goal evaluator failed: ${reason}`,
+      stdout,
+      exitCode: 1,
+    }),
   }
 }
 
@@ -43,7 +74,7 @@ export async function execPromptHook(
   hookName: string,
   hookEvent: HookEvent,
   jsonInput: string,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
   toolUseContext: ToolUseContext,
   messages?: Message[],
   toolUseID?: string,
@@ -79,6 +110,7 @@ export async function execPromptHook(
       createCombinedAbortSignal(signal, { timeoutMs: hookTimeoutMs })
 
     try {
+      const evaluatorModel = hook.model ?? getSmallFastModel()
       const response = await queryModelWithoutStreaming({
         messages: messagesToQuery,
         systemPrompt: asSystemPrompt([
@@ -96,7 +128,7 @@ Your response must be a JSON object matching one of the following schemas:
             const appState = toolUseContext.getAppState()
             return appState.toolPermissionContext
           },
-          model: hook.model ?? getSmallFastModel(),
+          model: evaluatorModel,
           toolChoice: undefined,
           isNonInteractiveSession: true,
           hasAppendSystemPrompt: false,
@@ -128,6 +160,29 @@ Your response must be a JSON object matching one of the following schemas:
       toolUseContext.setResponseLength(length => length + content.length)
 
       const fullResponse = content.trim()
+      if (response.isApiErrorMessage) {
+        const apiErrorDetail = formatPromptHookApiErrorDetail(
+          fullResponse,
+          response.apiError || response.error,
+        )
+        logForDebugging(`Hooks: Prompt hook API error: ${apiErrorDetail}`)
+        return {
+          hook,
+          outcome: 'non_blocking_error',
+          message: createAttachmentMessage({
+            type: 'hook_non_blocking_error',
+            hookName,
+            toolUseID: effectiveToolUseID,
+            hookEvent,
+            stderr: isGoalPromptHookCommand(hook.prompt)
+              ? `Goal evaluator API error: ${apiErrorDetail}`
+              : `Prompt hook API error: ${apiErrorDetail}`,
+            stdout: fullResponse,
+            exitCode: 1,
+          }),
+        }
+      }
+
       logForDebugging(`Hooks: Model response: ${fullResponse}`)
 
       const json = safeParseJSON(fullResponse)
@@ -137,7 +192,11 @@ Your response must be a JSON object matching one of the following schemas:
         )
         const goalFailure = goalHookFailureResult(
           hook,
+          hookName,
+          hookEvent,
+          effectiveToolUseID,
           'response was not valid JSON',
+          fullResponse,
         )
         if (goalFailure) return goalFailure
 
@@ -163,7 +222,11 @@ Your response must be a JSON object matching one of the following schemas:
         )
         const goalFailure = goalHookFailureResult(
           hook,
+          hookName,
+          hookEvent,
+          effectiveToolUseID,
           `response did not match the expected schema (${parsed.error.message})`,
+          fullResponse,
         )
         if (goalFailure) return goalFailure
 
@@ -216,9 +279,15 @@ Your response must be a JSON object matching one of the following schemas:
       cleanupSignal()
 
       if (combinedSignal.aborted) {
-        const goalFailure = signal.aborted
+        const goalFailure = signal?.aborted
           ? null
-          : goalHookFailureResult(hook, 'evaluation timed out')
+          : goalHookFailureResult(
+              hook,
+              hookName,
+              hookEvent,
+              effectiveToolUseID,
+              'evaluation timed out',
+            )
         if (goalFailure) return goalFailure
 
         return {
@@ -233,6 +302,9 @@ Your response must be a JSON object matching one of the following schemas:
     logForDebugging(`Hooks: Prompt hook error: ${errorMsg}`)
     const goalFailure = goalHookFailureResult(
       hook,
+      hookName,
+      hookEvent,
+      effectiveToolUseID,
       errorMsg || 'evaluation failed',
     )
     if (goalFailure) return goalFailure

@@ -5032,8 +5032,10 @@ describe('Teams API', () => {
     expect(inbox.at(-1)?.text).toBe('Please continue with the failing test')
   })
 
-  it('PATCH /api/teams/:name/members/:id/runtime checks the requested model before touching the team', async () => {
+  it('PATCH /api/teams/:name/members/:id/runtime validates model fields and requires current member identities', async () => {
     await writeTeamConfig('runtime-team', makeTeamConfig({ name: 'runtime-team' }))
+    const configPath = path.join(tmpDir, 'teams', 'runtime-team', 'config.json')
+    const originalConfig = await fs.readFile(configPath, 'utf-8')
     const patch = (body: string) => fetch(
       `${baseUrl}/api/teams/runtime-team/members/${encodeURIComponent('agent-worker@runtime-team')}/runtime`,
       { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body },
@@ -5050,10 +5052,11 @@ describe('Teams API', () => {
       expect(res.status, body).toBe(400)
     }
 
-    // A team written without an approved plan has no running members to switch.
+    // A model-only request cannot bypass the paused member identity/revision contract.
     const res = await patch(JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 'high' }))
-    expect(res.status).toBe(404)
-    expect(((await res.json()) as { message?: string }).message).toContain('is not a member of a running team')
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { message?: string }).message).toContain('identities and revision are required')
+    expect(await fs.readFile(configPath, 'utf-8')).toBe(originalConfig)
   })
 
   it('DELETE /api/teams/:name should delete team', async () => {
@@ -5104,5 +5107,221 @@ describe('Teams API', () => {
   it('POST /api/teams should return 405', async () => {
     const res = await fetch(`${baseUrl}/api/teams`, { method: 'POST' })
     expect(res.status).toBe(405)
+  })
+
+  it('routes Antigravity ACP session workbench, worker transcript, and member steering via /api/teams', async () => {
+    const {
+      antigravitySwarmTeamName,
+      registerAntigravitySwarmResumeHandler,
+      registerAntigravitySwarmRuntimeProbe,
+      registerAntigravitySwarmSteerHandler,
+      resetAntigravitySwarmControlStateForTests,
+    } = await import('../services/antigravitySwarmAdapter.js')
+    const { conversationService } = await import('../services/conversationService.js')
+    const agyAppData = path.join(tmpDir, 'agy-swarm-api-data')
+    const ccSessionId = 'cc-agy-session-001'
+    const nativeSessionId = '0679f85e-556a-45da-82fa-d22c2c16206a'
+    const workerConvId = '4556868f-98b1-4991-a306-a461603b967b'
+    const teamName = antigravitySwarmTeamName(nativeSessionId)
+
+    const swarmDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'swarm')
+    await fs.mkdir(swarmDir, { recursive: true })
+    await fs.writeFile(
+      path.join(swarmDir, 'swarm.json'),
+      JSON.stringify({
+        version: 1,
+        backend: 'local',
+        swarm_id: nativeSessionId,
+        created_at: '2026-11-26T09:33:47Z',
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'members.json'),
+      JSON.stringify({
+        title: 'API Swarm Check',
+        members: {
+          coordinator: {
+            conversation_id: nativeSessionId,
+            role: 'coordinator',
+            phase: 'RUNNING',
+            wake_mode: 'mentions',
+            killed: false,
+            model: 'gemini-3.8-flash-low',
+          },
+          reader: {
+            conversation_id: workerConvId,
+            role: 'worker',
+            phase: 'RUNNING',
+            wake_mode: 'working',
+            killed: false,
+            model: 'gemini-3.8-flash-low',
+          },
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'board.jsonl'),
+      `${JSON.stringify({
+        seq: 1,
+        agent: 'coordinator',
+        text: '@reader Check note.txt',
+        time: '2026-11-26 01:33:47',
+        kind: 'brief',
+        request_id: 'req-1',
+      })}\n`,
+      'utf8',
+    )
+
+    const workerLogDir = path.join(agyAppData, 'brain', workerConvId, '.system_generated', 'logs')
+    await fs.mkdir(workerLogDir, { recursive: true })
+    await fs.writeFile(
+      path.join(workerLogDir, 'transcript.jsonl'),
+      `${JSON.stringify({
+        step_index: 0,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-26T09:33:48Z',
+        model: 'gemini-3.8-flash-low',
+        content: 'Inspecting note.txt',
+      })}\n`,
+      'utf8',
+    )
+
+    const prevAppData = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = agyAppData
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async (id) => {
+      if (id !== ccSessionId) return null
+      return {
+        filePath: path.join(tmpDir, 'projects', 'p', `${ccSessionId}.jsonl`),
+        projectDir: 'p',
+        workDir: '/tmp/agy-work',
+        transcriptMessageCount: 1,
+        customTitle: null,
+        runtimeProviderId: 'antigravity-acp',
+        nativeSessionId,
+      } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>
+    })
+    const steered: Array<{ memberName: string; formattedPrompt: string; sessionId?: string }> = []
+    const resumedPrompts: Array<{ sessionId?: string; prompt: string }> = []
+    let runtimeAlive = false
+    const disposeProbe = registerAntigravitySwarmRuntimeProbe(() => runtimeAlive)
+    const disposeSteer = registerAntigravitySwarmSteerHandler(async (payload) => {
+      steered.push({
+        memberName: payload.memberName,
+        formattedPrompt: payload.formattedPrompt,
+        sessionId: payload.sessionId,
+      })
+      return { routed: true, delivery: 'steering' }
+    })
+    const disposeResume = registerAntigravitySwarmResumeHandler(async (payload) => {
+      resumedPrompts.push({ sessionId: payload.sessionId, prompt: payload.prompt })
+      runtimeAlive = true
+      return { routed: true }
+    })
+    const startSessionSpy = spyOn(conversationService, 'startSession').mockResolvedValue(undefined)
+
+    try {
+      // 1. GET /api/teams/session/:id/workbench
+      const wbRes = await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(ccSessionId)}/workbench`)
+      expect(wbRes.status).toBe(200)
+      const timeline = (await wbRes.json()) as {
+        sessionId: string
+        teamName: string
+        source: string
+        snapshots: TeamWorkbenchSnapshot[]
+      }
+      expect(timeline.sessionId).toBe(ccSessionId)
+      expect(timeline.teamName).toBe(teamName)
+      expect(timeline.source).toBe('live')
+      expect(timeline.snapshots[0]!.team.description).toBe('API Swarm Check')
+      expect(timeline.snapshots[0]!.team.members.map((m) => m.name)).toEqual(['coordinator', 'reader'])
+      expect(timeline.snapshots[0]!.team.members.find((m) => m.name === 'reader')?.activity).toBe('stopped')
+
+      // 1b. GET /api/teams/:name/runtime-control exposes Antigravity Swarm pause/resume control
+      const rcRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(ccSessionId)}&incarnationId=${encodeURIComponent(timeline.snapshots[0]!.team.incarnationId)}`,
+      )
+      expect(rcRes.status).toBe(200)
+      const rcBody = (await rcRes.json()) as {
+        control: { status: string; revision: number; resumeEligibleCount: number; teamName: string }
+      }
+      expect(rcBody.control).toMatchObject({
+        teamName,
+        status: 'paused',
+        resumeEligibleCount: 1,
+      })
+
+      // 1c. POST /api/teams/:name/runtime-control/resume resumes the swarm via coordinator
+      const resumeRes = await fetch(`${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadSessionId: ccSessionId,
+          incarnationId: timeline.snapshots[0]!.team.incarnationId,
+          expectedRevision: rcBody.control.revision,
+          requestId: 'req-agy-api-resume-1',
+        }),
+      })
+      expect(resumeRes.status).toBe(200)
+      const resumeBody = (await resumeRes.json()) as { control: { status: string } }
+      expect(resumeBody.control.status).toBe('running')
+      expect(resumedPrompts).toHaveLength(1)
+      expect(resumedPrompts[0]!.prompt).toContain('@reader')
+
+      // 2. GET /api/teams/:name/members/:id/transcript?incremental=true
+      const trRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(`reader@${teamName}`)}/transcript?incremental=true`,
+      )
+      expect(trRes.status).toBe(200)
+      const trPage = (await trRes.json()) as {
+        messages: Array<{ id: string; type: string }>
+        ownerAgentIds: string[]
+        afterOrdinal: number
+      }
+      expect(trPage.ownerAgentIds).toEqual([workerConvId])
+      expect(trPage.messages).toHaveLength(1)
+      expect(trPage.afterOrdinal).toBe(0)
+
+      // 3. POST /api/teams/:name/members/:id/messages
+      const msgRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(`reader@${teamName}`)}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: 'also check README.md' }),
+        },
+      )
+      expect(msgRes.status).toBe(200)
+      const msgBody = (await msgRes.json()) as {
+        ok: boolean
+        routed: boolean
+        target: string
+        formattedPrompt: string
+      }
+      expect(msgBody).toEqual({
+        ok: true,
+        routed: true,
+        delivery: 'steering',
+        target: 'reader',
+        formattedPrompt: '@reader also check README.md',
+      })
+      expect(steered).toEqual([{
+        memberName: 'reader',
+        formattedPrompt: '@reader also check README.md',
+        sessionId: ccSessionId,
+      }])
+    } finally {
+      disposeSteer()
+      disposeResume()
+      disposeProbe()
+      startSessionSpy.mockRestore()
+      launchSpy.mockRestore()
+      resetAntigravitySwarmControlStateForTests()
+      if (prevAppData === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
+    }
   })
 })

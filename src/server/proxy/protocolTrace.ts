@@ -2,7 +2,7 @@ import type { ResolvedOutputBudget } from './transform/requestCompatibility.js'
 
 export const PROTOCOL_TRACE_FRAME_CHARS = 64 * 1024
 export type ProtocolTraceTransport = 'open' | 'eof' | 'error' | 'cancelled' | 'non_stream'
-type Protocol = 'openai_chat' | 'openai_responses'
+type Protocol = 'openai_chat' | 'openai_responses' | 'gemini' | 'google_vertex' | 'bedrock_converse' | 'azure_openai'
 type Usage = Record<string, number | Record<string, number>>
 
 export type ProtocolTraceSummary = {
@@ -67,6 +67,26 @@ function readUsage(value: unknown): Usage {
   return result
 }
 
+function readGeminiUsage(value: unknown): Usage {
+  const input = record(value)
+  const result: Usage = {}
+  if (!input) return result
+  for (const key of ['promptTokenCount', 'candidatesTokenCount', 'thoughtsTokenCount', 'cachedContentTokenCount', 'totalTokenCount']) {
+    if (count(input[key])) result[key] = input[key]
+  }
+  return result
+}
+
+function readBedrockUsage(value: unknown): Usage {
+  const input = record(value)
+  const result: Usage = {}
+  if (!input) return result
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadInputTokens', 'cacheWriteInputTokens']) {
+    if (count(input[key])) result[key] = input[key]
+  }
+  return result
+}
+
 /** A bounded, content-free summary independent of raw trace body truncation. */
 export class ProtocolTraceObserver {
   private readonly decoder = new TextDecoder()
@@ -83,6 +103,14 @@ export class ProtocolTraceObserver {
     const wireFields: Record<string, number> = {}
     for (const field of ['max_tokens', 'max_completion_tokens', 'max_output_tokens']) {
       if (count(request?.[field])) wireFields[field] = request![field] as number
+    }
+    const generationConfig = record(request?.generationConfig)
+    if (count(generationConfig?.maxOutputTokens)) {
+      wireFields.maxOutputTokens = generationConfig!.maxOutputTokens as number
+    }
+    const inferenceConfig = record(request?.inferenceConfig)
+    if (count(inferenceConfig?.maxTokens)) {
+      wireFields.maxTokens = inferenceConfig!.maxTokens as number
     }
     const fields = Object.keys(wireFields)
     this.summary = {
@@ -164,16 +192,45 @@ export class ProtocolTraceObserver {
     else if (field === 'event') this.event = atom(value) ?? ''
   }
 
+  observeEvent(event: string, value: unknown, byteLength = 0): void {
+    if (this.summary.transport !== 'open') return
+    if (byteLength > 0) this.summary.bytesObserved += byteLength
+    this.observeJson(value, event)
+  }
+
   observeJson(value: unknown, event?: string): void {
     const body = record(value)
     if (!body) return
     const termination = this.summary.termination
-    if (this.summary.protocol === 'openai_chat') {
+    if (this.summary.protocol === 'openai_chat' || this.summary.protocol === 'azure_openai') {
       const choices = Array.isArray(body.choices) ? body.choices.slice(0, 8) : []
       const choice = choices.map(record).find(item => item?.index === 0) ?? record(choices[0])
       const reason = atom(choice?.finish_reason)
       if (reason) termination.finishReason = reason
       Object.assign(this.summary.usage, readUsage(body.usage))
+    } else if (this.summary.protocol === 'gemini' || this.summary.protocol === 'google_vertex') {
+      const payload = body.candidates === undefined && body.error === undefined && body.promptFeedback === undefined && record(body.response)
+        ? record(body.response)!
+        : body
+      const candidates = Array.isArray(payload.candidates) ? payload.candidates.slice(0, 8) : []
+      const candidate = record(candidates[0])
+      const reason = atom(candidate?.finishReason)
+      if (reason) termination.finishReason = reason
+      const blockReason = atom(record(payload.promptFeedback)?.blockReason)
+      if (blockReason && !termination.finishReason) termination.finishReason = blockReason
+      Object.assign(this.summary.usage, readGeminiUsage(payload.usageMetadata))
+      const geminiError = record(payload.error)
+      if (atom(geminiError?.status)) termination.errorType = atom(geminiError!.status)
+      if (count(geminiError?.code)) termination.errorCode = String(geminiError!.code)
+      else if (atom(geminiError?.code)) termination.errorCode = atom(geminiError!.code)
+    } else if (this.summary.protocol === 'bedrock_converse') {
+      const eventType = atom(event)
+      if (eventType && /Exception$/i.test(eventType)) {
+        termination.errorType = eventType
+      }
+      const stopReason = atom(body.stopReason)
+      if (stopReason) termination.finishReason = stopReason
+      Object.assign(this.summary.usage, readBedrockUsage(body.usage))
     } else {
       const response = record(body.response) ?? body
       const eventType = atom(body.type) ?? atom(event)
@@ -216,6 +273,7 @@ export class ProtocolTraceObserver {
 export function observeProtocolStream(
   upstream: ReadableStream<Uint8Array>,
   observer: ProtocolTraceObserver,
+  downstreamSignal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let cancelled = false
@@ -239,7 +297,7 @@ export function observeProtocolStream(
         }
       } catch (error) {
         if (cancelled) return
-        diagnose(() => observer.finish('error'))
+        diagnose(() => observer.finish(downstreamSignal?.aborted ? 'cancelled' : 'error'))
         release()
         controller.error(error)
       }

@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { agentsApi, type AgentDefinition } from '@/api/agents'
+import { browserUseApi, type BrowserPreferredTarget } from '@/api/browserUse'
 import { computerUseApi, type ComputerUseStatus } from '@/api/computerUse'
 import { connectorsApi } from '@/api/connectors'
 import { marketApi } from '@/api/market'
 import { workflowsApi } from '@/api/workflows'
 import { useTranslation } from '@/i18n'
+import { getDesktopHost } from '@/lib/desktopHost'
 import { COMPUTER_USE_ENABLE_REQUEST, needsComputerUsePermissionCard } from '@/lib/computerUseEnable'
 import { dismissAgentTeamsNotice, isAgentTeamsNoticeDismissed } from '@/lib/agentTeamsNotice'
 import { readRecentSkills } from '@/lib/recentSkills'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useMarketStore } from '@/stores/marketStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSkillStore } from '@/stores/skillStore'
@@ -61,6 +64,23 @@ export type ComputerUseConsent = {
   platform: 'darwin' | 'win32'
   onClose(): void
   onConfirm(): Promise<void>
+}
+
+export type BrowserUseConsent = {
+  open: boolean
+  loading: boolean
+  onClose(): void
+  onConfirm(): Promise<void>
+}
+
+export type BrowserUseComposerState = {
+  /** Global Browser Use capability is enabled in Settings. */
+  enabled: boolean
+  /** Browser Use is armed for the next message (shows the pill in the composer). */
+  armed: boolean
+  preferredTarget: BrowserPreferredTarget
+  setPreferredTarget(target: BrowserPreferredTarget): void
+  disarm(): void
 }
 
 /** Cost notice shown before the composer arms Agent Teams. */
@@ -119,6 +139,7 @@ export function resetPopularSkillsCache(): void {
 export function useCapabilityMenu(options: {
   open: boolean
   lean?: boolean
+  antigravity?: boolean
   /**
    * Shows the Agent mode row. Without `onChange` the row is the read-only
    * record of a session's fixed mode.
@@ -135,26 +156,60 @@ export function useCapabilityMenu(options: {
   disarmAgentTeam(): void
   agentTeamsNotice: AgentTeamsNotice
   computerUseConsent: ComputerUseConsent
+  browserUseConsent: BrowserUseConsent
+  browserUse: BrowserUseComposerState
 } {
-  const { open, cwd, references, handlers, lean = false, agentProfile } = options
+  const { open, cwd, references, handlers, lean = false, antigravity = false, agentProfile } = options
   const t = useTranslation()
   const [data, setData] = useState<CapabilityMenuData>(EMPTY_DATA)
   const [popularSkills, setPopularSkills] = useState<NormalizedSkill[]>([])
   const [recentSkillIds, setRecentSkillIds] = useState<string[]>([])
   const [armed, setArmed] = useState(false)
+  const [browserArmed, setBrowserArmed] = useState(false)
   const [consent, setConsent] = useState<{ open: boolean, loading: boolean }>({ open: false, loading: false })
+  const [browserConsent, setBrowserConsent] = useState<{ open: boolean, loading: boolean }>({ open: false, loading: false })
+  const [browserUseUnavailable, setBrowserUseUnavailable] = useState(false)
+  const browserUseFetchFailedRef = useRef(false)
+  const browserUseFetchInFlightRef = useRef(false)
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
+  const isDesktop = getDesktopHost().isDesktop
+  const browserUseConfig = useBrowserUseStore(state => state.config)
+  const browserUseLoaded = useBrowserUseStore(state => state.loaded)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
-  const agentTeamArmed = armed && agentTeamsEnabled && !lean
+  // Antigravity runs multi-agent swarms natively via `/swarm` without relying
+  // on Claude Code's experimental Agent Teams flag in Settings.
+  const agentTeamAvailable = antigravity || agentTeamsEnabled
+  const agentTeamArmed = armed && agentTeamAvailable && !lean
+  const browserUseAvailable = isDesktop && !browserUseUnavailable && Boolean(browserUseConfig?.enabled) && !lean
+  const browserUseArmed = browserArmed && browserUseAvailable
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
+
+  // Hydrate Browser Use config once on desktop so the composer and `+` menu
+  // reflect Settings immediately. On non-desktop / remote H5 (or after a
+  // 403/error), do not loop-fetch or render a broken toggle.
+  useEffect(() => {
+    if (lean || !isDesktop || browserUseLoaded || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
+    let active = true
+    browserUseFetchInFlightRef.current = true
+    void browserUseApi.getConfig().then(config => {
+      if (!active) return
+      setBrowserUseUnavailable(false)
+      useBrowserUseStore.setState({ config, loaded: true })
+    }).catch(() => {
+      browserUseFetchFailedRef.current = true
+      if (active) setBrowserUseUnavailable(true)
+    }).finally(() => {
+      browserUseFetchInFlightRef.current = false
+    })
+    return () => { active = false }
+  }, [lean, isDesktop, browserUseLoaded])
 
   useEffect(() => {
     if (!open || lean) return
     let active = true
     const cwdArg = cwd || undefined
-    setRecentSkillIds(readRecentSkills())
 
     // Each source is independent: a failing one (e.g. computer-use off macOS)
     // must not blank the others.
@@ -164,12 +219,29 @@ export function useCapabilityMenu(options: {
       }).catch(() => {})
     }
 
-    load(agentsApi.list(cwdArg), value => ({ agents: value.activeAgents }))
-    load(connectorsApi.list(), value => ({ connectors: value.items }))
-    load(workflowsApi.list(cwdArg), value => ({ workflows: value.workflows }))
-    void loadPopularSkills().then(items => {
-      if (active) setPopularSkills(items)
-    }).catch(() => {})
+    if (!antigravity) {
+      setRecentSkillIds(readRecentSkills())
+      load(agentsApi.list(cwdArg), value => ({ agents: value.activeAgents }))
+      load(connectorsApi.list(), value => ({ connectors: value.items }))
+      load(workflowsApi.list(cwdArg), value => ({ workflows: value.workflows }))
+      void loadPopularSkills().then(items => {
+        if (active) setPopularSkills(items)
+      }).catch(() => {})
+    }
+    if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
+      browserUseFetchInFlightRef.current = true
+      void browserUseApi.getConfig().then(config => {
+        if (active) {
+          setBrowserUseUnavailable(false)
+          useBrowserUseStore.setState({ config, loaded: true })
+        }
+      }).catch(() => {
+        browserUseFetchFailedRef.current = true
+        if (active) setBrowserUseUnavailable(true)
+      }).finally(() => {
+        browserUseFetchInFlightRef.current = false
+      })
+    }
     void (async () => {
       try {
         const status = await computerUseApi.getStatus()
@@ -188,9 +260,10 @@ export function useCapabilityMenu(options: {
     })()
 
     return () => { active = false }
-  }, [open, cwd, lean])
+  }, [open, cwd, lean, antigravity, isDesktop])
 
   const sections = useMemo(() => buildCapabilitySections({
+    antigravity,
     skills: references.filter(reference => reference.kind === 'skill'),
     plugins: references.filter(reference => reference.kind === 'plugin'),
     recentSkillIds,
@@ -199,11 +272,14 @@ export function useCapabilityMenu(options: {
     agents: data.agents,
     connectors: data.connectors,
     workflows: data.workflows,
-    agentTeam: { enabled: agentTeamsEnabled, armed: agentTeamArmed },
+    agentTeam: { enabled: agentTeamAvailable, armed: agentTeamArmed },
     computerUse: data.computerUse,
-    agentProfile: profileValue ? { value: profileValue, locked: profileLocked ?? true } : undefined,
+    browserUse: isDesktop && !browserUseUnavailable && browserUseConfig
+      ? { enabled: browserUseConfig.enabled, armed: browserUseArmed, preferredTarget: browserUseConfig.preferredTarget }
+      : null,
+    agentProfile: profileValue && !antigravity ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, profileValue, profileLocked, t])
+  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamAvailable, agentTeamArmed, isDesktop, browserUseUnavailable, browserUseConfig, browserUseArmed, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }
@@ -233,6 +309,7 @@ export function useCapabilityMenu(options: {
   }
 
   const onAction = (action: CapabilityAction) => {
+    if (antigravity && !isAntigravityAction(action)) return
     if (lean && !isLeanAction(action)) return
     switch (action.type) {
       case 'attachment':
@@ -286,6 +363,9 @@ export function useCapabilityMenu(options: {
           setArmed(false)
           useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.teamReset') })
         }
+        if (action.profile === 'lean' && browserArmed) {
+          setBrowserArmed(false)
+        }
         agentProfile.onChange(action.profile)
         return
       case 'toggleComputerUse': {
@@ -305,6 +385,27 @@ export function useCapabilityMenu(options: {
             type: 'error',
             message: error instanceof Error ? error.message : String(error),
           })
+        })
+        return
+      }
+      case 'toggleBrowserUse': {
+        const currentBrowserConfig = useBrowserUseStore.getState().config ?? browserUseConfig
+        if (!currentBrowserConfig?.enabled) {
+          setBrowserConsent({ open: true, loading: false })
+          handlers.onClose()
+          return
+        }
+        setBrowserArmed(previous => !previous)
+        return
+      }
+      case 'setBrowserUseTarget': {
+        void useBrowserUseStore.getState().updateConfig({ preferredTarget: action.target }).then(saved => {
+          if (!saved) {
+            useUIStore.getState().addToast({
+              type: 'error',
+              message: t('settings.browserUse.configSaveFailed'),
+            })
+          }
         })
         return
       }
@@ -348,6 +449,40 @@ export function useCapabilityMenu(options: {
     },
   }
 
+  const browserUseConsent: BrowserUseConsent = {
+    open: browserConsent.open,
+    loading: browserConsent.loading,
+    onClose: () => setBrowserConsent({ open: false, loading: false }),
+    onConfirm: async () => {
+      setBrowserConsent({ open: true, loading: true })
+      const saved = await useBrowserUseStore.getState().updateConfig({
+        enabled: true,
+        consentAcceptedAt: new Date().toISOString(),
+      })
+      if (!saved) {
+        setBrowserConsent({ open: true, loading: false })
+        useUIStore.getState().addToast({ type: 'error', message: t('settings.browserUse.configSaveFailed') })
+        return
+      }
+      setBrowserConsent({ open: false, loading: false })
+      setBrowserArmed(true)
+    },
+  }
+
+  const browserUse: BrowserUseComposerState = {
+    enabled: browserUseAvailable,
+    armed: browserUseArmed,
+    preferredTarget: browserUseConfig?.preferredTarget ?? 'auto',
+    setPreferredTarget: (target) => {
+      void useBrowserUseStore.getState().updateConfig({ preferredTarget: target }).then(saved => {
+        if (!saved) {
+          useUIStore.getState().addToast({ type: 'error', message: t('settings.browserUse.configSaveFailed') })
+        }
+      })
+    },
+    disarm: () => setBrowserArmed(false),
+  }
+
   return {
     sections: lean ? sections.map(section => ({
       ...section,
@@ -359,7 +494,21 @@ export function useCapabilityMenu(options: {
     disarmAgentTeam: () => setArmed(false),
     agentTeamsNotice,
     computerUseConsent,
+    browserUseConsent,
+    browserUse,
   }
+}
+
+function isAntigravityAction(action: CapabilityAction): boolean {
+  return (
+    action.type === 'attachment' ||
+    action.type === 'slashTrigger' ||
+    action.type === 'toggleAgentTeam' ||
+    action.type === 'toggleBrowserUse' ||
+    action.type === 'setBrowserUseTarget' ||
+    action.type === 'toggleComputerUse' ||
+    action.type === 'settings'
+  )
 }
 
 function isLeanAction(action: CapabilityAction): boolean {

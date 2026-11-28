@@ -247,12 +247,12 @@ export function ModelIdCombobox({
       </div>
 
       {open && hasModels && (
-        <div className="absolute left-0 right-0 top-full z-[var(--z-dropdown)] mt-1 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] animate-overlay-in-top">
+        <div className="dropdown-glass absolute left-0 right-0 top-full z-[var(--z-dropdown)] mt-1 overflow-hidden rounded-[var(--radius-xl)] animate-overlay-in-top">
           <div
             id={listId}
             role="listbox"
             aria-label={pickerLabel}
-            className="max-h-64 overflow-y-auto p-1"
+            className="max-h-64 overflow-y-auto p-1.5"
           >
             {visibleGroups.length === 0 ? (
               <div
@@ -290,9 +290,9 @@ export function ModelIdCombobox({
                         onMouseEnter={() => setActiveIndex(index)}
                         onClick={() => selectModel(model.id)}
                         className={cx(
-                          'flex min-h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] outline-none transition-colors duration-150',
+                          'flex min-h-8 w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-[13px] outline-none transition-colors duration-150',
                           active
-                            ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]'
+                            ? 'v6c-row-highlight text-[var(--color-text-primary)]'
                             : selected
                               ? 'bg-[var(--color-model-option-selected-bg)] text-[var(--color-text-primary)]'
                               : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
@@ -300,7 +300,7 @@ export function ModelIdCombobox({
                       >
                         <span className="min-w-0 flex-1 truncate font-mono text-xs">{model.id}</span>
                         {selected && (
-                          <Check size={14} strokeWidth={2} aria-hidden="true" className="flex-none text-[var(--color-brand)]" />
+                          <Check size={14} strokeWidth={1.75} aria-hidden="true" className="flex-none text-[var(--color-brand)]" />
                         )}
                       </button>
                     )

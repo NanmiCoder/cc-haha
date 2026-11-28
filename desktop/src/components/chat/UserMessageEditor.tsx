@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button'
 import type { ComposerMention } from '@/lib/composerMentions'
 import { useTranslation } from '../../i18n'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MentionComposer, type MentionComposerHandle } from './MentionComposer'
@@ -94,12 +95,21 @@ export function UserMessageEditor({
       // The keys typed here belong to the editor; the message list reads arrows
       // and Space as scroll intent.
       onKeyDown={(event) => event.stopPropagation()}
-      className="relative flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
+      className="v6c-glass-card relative flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-2.5"
     >
       {triggers.menus}
-      {draft.agentTeam ? (
-        <div className="flex">
-          <AgentTeamChip onRemove={submitting ? undefined : () => updateDraft({ ...draft, agentTeam: false })} />
+      {(draft.agentTeam || draft.browserUse) ? (
+        <div className="flex flex-wrap gap-1.5">
+          {draft.agentTeam ? (
+            <AgentTeamChip onRemove={submitting ? undefined : () => updateDraft({ ...draft, agentTeam: false })} />
+          ) : null}
+          {draft.browserUse ? (
+            <BrowserUseTargetPill
+              target={draft.browserUse}
+              onChange={submitting ? undefined : (target) => updateDraft({ ...draft, browserUse: target })}
+              onRemove={submitting ? undefined : () => updateDraft({ ...draft, browserUse: undefined })}
+            />
+          ) : null}
         </div>
       ) : null}
       {draft.attachments.length > 0 ? (

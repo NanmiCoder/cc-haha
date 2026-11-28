@@ -3,8 +3,10 @@ import { browserHost } from './desktopHost/browserHost'
 import {
   filesToComposerAttachments,
   getDataTransferFiles,
+  isSupportedImageFile,
   pathToComposerAttachment,
   selectNativeFileAttachments,
+  selectNativeImageAttachments,
 } from './composerAttachments'
 
 describe('composer attachment payloads', () => {
@@ -161,5 +163,44 @@ describe('composer attachment payloads', () => {
     } as unknown as DataTransfer
 
     expect(getDataTransferFiles(dataTransfer)).toEqual([markdown, spreadsheet])
+  })
+
+  it('filters supported inline image files and rejects non-inline formats', () => {
+    expect(isSupportedImageFile(new File(['x'], 'shot.png', { type: 'image/png' }))).toBe(true)
+    expect(isSupportedImageFile(new File(['x'], 'photo.jpg', { type: 'image/jpeg' }))).toBe(true)
+    expect(isSupportedImageFile(new File(['x'], 'anim.gif', { type: 'image/gif' }))).toBe(true)
+    expect(isSupportedImageFile(new File(['x'], 'hero.webp', { type: 'image/webp' }))).toBe(true)
+    expect(isSupportedImageFile(new File(['x'], 'from-finder.PNG', { type: '' }))).toBe(true)
+    expect(isSupportedImageFile(new File(['<svg/>'], 'icon.svg', { type: 'image/svg+xml' }))).toBe(false)
+    expect(isSupportedImageFile(new File(['hello'], 'notes.txt', { type: 'text/plain' }))).toBe(false)
+  })
+
+  it('opens the native dialog with image filters and keeps only inline images', async () => {
+    const open = vi.fn().mockResolvedValue(['/workspace/a.png', '/workspace/b.svg', '/workspace/c.webp'])
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: {
+        ...browserHost.capabilities,
+        dialogs: true,
+      },
+      dialogs: {
+        ...browserHost.dialogs,
+        open,
+      },
+    }
+
+    const attachments = await selectNativeImageAttachments()
+
+    expect(open).toHaveBeenCalledWith({
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+    })
+    expect(attachments?.map((attachment) => attachment.path)).toEqual([
+      '/workspace/a.png',
+      '/workspace/c.webp',
+    ])
   })
 })

@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 import { expandPath, normalizePathForConfigKey } from '../../utils/path.js'
 import { getPlatform } from '../../utils/platform.js'
+import { findExplicitProjectRoot } from './projectIdentity.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { getProjectMcpDirectoryIdentity } from '../../services/mcp/config.js'
 import { ProjectDirectoryIoError, readProjectDirectory } from '../../services/mcp/projectDirectoryIo.js'
@@ -26,7 +27,7 @@ function nativeDirectory(directory: string): string {
   return getPlatform() === 'windows' ? normalizePathForConfigKey(directory) : directory
 }
 
-async function resolveDirectory(value: unknown, kind: 'directory' | 'project' = 'directory'): Promise<{ directory: string; root?: string }> {
+async function resolveDirectory(value: unknown, kind: 'directory' | 'project' = 'directory'): Promise<{ directory: string; root?: string; gitRoot?: string | null }> {
   if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value) || value.includes('\0')) {
     throw ApiError.badRequest('Choose an absolute directory path on this server')
   }
@@ -34,16 +35,21 @@ async function resolveDirectory(value: unknown, kind: 'directory' | 'project' = 
     // The existing project boundary verifies native realpath + dev/ino, preserving
     // Unicode path identity and collapsing symlink aliases without changing cwd.
     const result = await readProjectDirectory({ kind, path: value })
-    return { directory: nativeDirectory(result.directory), ...(result.root ? { root: nativeDirectory(result.root) } : {}) }
+    return { directory: nativeDirectory(result.directory), ...(result.root ? { root: nativeDirectory(result.root) } : {}), ...(result.gitRoot ? { gitRoot: nativeDirectory(result.gitRoot) } : {}) }
   } catch (error) {
     if (error instanceof ProjectDirectoryIoError && error.kind !== 'failed') throw ApiError.badRequest(error.message)
     throw ApiError.badRequest(`Directory is unavailable or inaccessible: ${value}`)
   }
 }
 
-export async function resolveProjectDirectories(workDir: unknown): Promise<Omit<ProjectDirectories, 'additionalDirectories'>> {
-  const { directory: mainDirectory, root = mainDirectory } = await resolveDirectory(workDir, 'project')
-  return { projectKey: getProjectMcpDirectoryIdentity(root), mainDirectory }
+export async function resolveProjectDirectories(workDir: unknown, explicitProjectRoots: readonly string[] = [], createProject = false): Promise<Omit<ProjectDirectories, 'additionalDirectories'>> {
+  const { directory: mainDirectory, root = mainDirectory, gitRoot } = await resolveDirectory(workDir, 'project')
+  const explicitRoot = findExplicitProjectRoot(mainDirectory, explicitProjectRoots)
+  // An independent repository nested beneath an explicit project remains its
+  // own project. Only a boundary inside the same repository overrides its root.
+  const useExplicitRoot = explicitRoot && (!gitRoot || findExplicitProjectRoot(explicitRoot, [root]))
+  const projectRoot = createProject ? mainDirectory : useExplicitRoot ? explicitRoot : root
+  return { projectKey: getProjectMcpDirectoryIdentity(projectRoot), mainDirectory }
 }
 
 export async function validateProjectAdditionalDirectories(mainDirectory: string, value: unknown): Promise<string[]> {

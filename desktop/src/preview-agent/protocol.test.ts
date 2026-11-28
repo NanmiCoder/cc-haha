@@ -60,3 +60,21 @@ it('validates optional picker generations on both enter and exit, preserving old
     expect(parseHostMessage(JSON.stringify({ v: 1, type }))).toEqual({ type })
   }
 })
+
+it('validates agent-control-state host messages', () => {
+  expect(parseHostMessage('{"v":1,"type":"agent-control-state","active":true}')).toEqual({
+    type: 'agent-control-state',
+    active: true,
+  })
+  expect(parseHostMessage('{"v":1,"type":"agent-control-state","active":false}')).toEqual({
+    type: 'agent-control-state',
+    active: false,
+  })
+  for (const invalid of [
+    '{"v":1,"type":"agent-control-state"}',
+    '{"v":1,"type":"agent-control-state","active":"yes"}',
+    '{"v":1,"type":"agent-control-state","active":1}',
+  ]) {
+    expect(parseHostMessage(invalid)).toBeNull()
+  }
+})

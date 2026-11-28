@@ -86,6 +86,20 @@ describe('validateSettingsFileContent', () => {
     }
   })
 
+  it('accepts all three escalation mode values and rejects invalid ones', () => {
+    for (const mode of ['auto', 'enabled', 'disabled']) {
+      expect(
+        validateSettingsFileContent(JSON.stringify({ maxOutputTokensEscalationMode: mode })).isValid,
+      ).toBe(true)
+    }
+    expect(
+      validateSettingsFileContent(JSON.stringify({ maxOutputTokensEscalationMode: 'bogus' })).isValid,
+    ).toBe(false)
+    expect(
+      validateSettingsFileContent(JSON.stringify({ maxOutputTokensEscalationMode: true })).isValid,
+    ).toBe(false)
+  })
+
   it('still rejects genuinely unknown keys', () => {
     const result = validateSettingsFileContent(
       JSON.stringify({ notARealSetting: true }),

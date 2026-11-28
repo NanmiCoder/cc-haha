@@ -21,6 +21,9 @@
 
 cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、Agent Teams 协作工作台、动态 Workflow 编排、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、手机 App 与 H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。**Computer Use 在 macOS 上使用原有原生引擎，在 Windows / Linux 上复用 agent-desktop；支持的后台语义操作不移动真实鼠标，物理输入仍会占用前台。** 配套的 Android / iPhone App 扫码连上电脑，离开工位也能审批、派任务。
 
+> [!TIP]
+> **现已全面支持 Antigravity CLI (ACP) 集成！** 可直接在 cc-haha 桌面端、H5 与手机端接入本地 Antigravity CLI，无缝使用原生 Composer、内置 Browser Use、Native Swarm、斜杠技能与中途干预等全部工作台能力。
+
 <p align="center"><b>白金赞助商 · Modelflare</b></p>
 
 <p align="center">
@@ -29,14 +32,14 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
   </a>
 </p>
 
-<p><sub>感谢 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> 赞助本项目！Modelflare：满血稳定不掺水，低成本享受全球 SOTA 模型。站点由美国 LLC 主体 Havenbyte LLC 运营，支持 GPT、Claude、Gemini、Grok 等主流模型和常用兼容协议，还支持 40 多种图片和视频模型。</sub></p>
+<p><sub>感谢 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> 赞助本项目！Modelflare：满血稳定不掺水，低成本享受全球 SOTA 模型。站点由美国 LLC 主体 Havenbyte LLC 运营，支持 GPT、Claude、Gemini、Grok 等主流模型和常用兼容协议，还支持 40 多种图片和视频模型，支持大陆正规商务合作。</sub></p>
 
 <p><sub><b>缓存补偿是一大亮点：</b>部分 OpenAI 价格优先、稳定和高级分组提供每日 65%、75%、85% 的缓存命中率保障，符合条件的请求没达到目标的，平台补偿差额，结算后可在用量看板查看。</sub></p>
 
 <p><sub><b>特惠活动：</b>单笔充值 US$20 即可解锁 0.015 倍价格倍率的 GPT 特惠分组，单笔充值 US$50 即可解锁 0.03 倍价格倍率的 Claude 特惠分组。通过 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">专属链接注册</a>即可参与。</sub></p>
 
 <p align="center">
-  <a href="#功能预览">功能预览</a> · <a href="#安装">安装</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#用户交流群">用户交流群</a>
+  <a href="#功能预览">功能预览</a> · <a href="#安装">安装</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a>
 </p>
 
 ---
@@ -126,6 +129,16 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5638">
+          <img src="docs/images/sponsors/dynadot-logo.png" width="180" alt="Dynadot">
+        </a>
+      </td>
+      <td valign="middle">
+        Dynadot 是 ICANN 认证域名注册商，域名保有量全球前五，首屈一指的国际域名交易平台，提供优质的以域名为中心的域名注册，域名交易，域名管理，以及企业邮箱及建站服务。为所有用户提供多种域名优惠，并支持免费提交域名抢注需求。Dynadot 黑五活动（<a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5638">Dynadot 黑五活动</a>）正式上线！探索我们的官方优惠页面，个位数价格注册域名，五折购入建站工具与专业版邮箱。
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>中转站导航</b></a>
       </td>
       <td valign="middle">
@@ -147,16 +160,6 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 4. 手机端（可选）：Android 在 Releases 下载 `cc-haha-mobile-*.apk` 安装；iPhone 先装 TestFlight，再打开[公开链接](https://testflight.apple.com/join/Nd49JrWZ)加入测试。手机 App 需要桌面端 v0.7.6 或更新版本。在桌面端「手机连接」里扫码配对，同一 Wi-Fi 直连，外出用 Cloudflare 连接，详见 [手机 App 与远程连接](docs/desktop/remote.md)。
 
 发布可信度与隐私：[Code signing policy](docs/start/code-signing.md) · [隐私与联网说明](docs/start/privacy.md)
-
----
-
-## 用户交流群
-
-使用过程中有问题、想反馈 Bug，或者想看看别人怎么用，欢迎扫码加入 cc-haha 企业微信用户群。也可以直接来 [Issues](https://github.com/NanmiCoder/cc-haha/issues) 提问。企业定制 / 私有化部署 / Agent 定制需求，请联系作者 [NanmiCoder](https://github.com/NanmiCoder)。
-
-<p align="center">
-  <img src="docs/images/community/wechat-group-qr.png" width="300" alt="cc-haha 企业微信用户群二维码">
-</p>
 
 ---
 
@@ -196,7 +199,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 - **模型自选**：Claude / ChatGPT / Grok 官方账号可直接登录；DeepSeek、Kimi、智谱 GLM 等第三方 API 有现成预设；LM Studio、Ollama 的本地模型也接得上。
 - **图片生成**：聊天中直接生成和编辑图片——ChatGPT / Grok 授权登录即可使用，也支持接入任意 OpenAI 兼容的 Images API。
 - **MCP 图形化管理**：界面化增删改 MCP Server，支持 STDIO / Streamable HTTP / SSE 三种传输方式与项目私有、共享、全局三种作用域。
-- **六套配色主题**：纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝，可跟随系统深浅色自动切换。
+- **七套配色主题**：纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝、深灰，可跟随系统深浅色自动切换。
 - **技能市场**：发现、预览、安装 ClawHub / SkillHub 的第三方技能，来源和安全状态摆在明处。
 - **会话活动面板**：集中查看任务进度、后台任务、SubAgent 与来源。
 - **可视化 SubAgent 管理**：图形界面创建和调校子代理，选择模型、工具与权限模式。
@@ -246,6 +249,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 - [Electron](https://github.com/electron/electron)：跨端桌面应用能力与工程实践。
 - [agent-desktop](https://github.com/vercel-labs/agent-desktop)（Vercel Labs）：Windows / Linux Computer Use 参考并直接复用其原生实现。固定版本 **1.0.2**，commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d)；保留 [Apache-2.0 许可](native/agent-desktop/LICENSE)、[来源与文件摘要](native/agent-desktop/UPSTREAM.json)及[本地改动说明](native/agent-desktop/PATCHES.md)。
 - [cc-switch](https://github.com/farion1231/cc-switch)：模型供应商配置能力参考。
+- [t3code](https://github.com/pingdotgg/t3code)：桌面端 UI 质感与交互设计参考。
 - [LINUX DO](https://linux.do/)：新的理想型开发者社区。
 - [AtomGit](https://atomgit.com/NanmiCoder/cc-haha)：为本项目提供国内代码托管。
 

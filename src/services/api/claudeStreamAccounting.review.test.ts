@@ -121,3 +121,59 @@ test('review: streaming and non-streaming fallback bill their own cumulative usa
     useFallback = false
   }
 })
+
+test('review: generator.return records API duration synchronously beside usage and normal completion does not double-count', async () => {
+  const { getTotalAPIDuration, getTotalAPIDurationWithoutRetries } = await import('../../bootstrap/state.js')
+  const beforeEarly = getTotalAPIDurationWithoutRetries()
+  await receiveResponse([...fixtureEvents(), terminal('max_tokens'), { type: 'message_stop' }], false, true)
+  const afterEarly = getTotalAPIDurationWithoutRetries()
+  // Early return skips post-finally async logging; duration must still be recorded synchronously.
+  expect(afterEarly).toBeGreaterThanOrEqual(beforeEarly)
+
+  // Normal completion: delay getToolPermissionContext() to verify duration is already updated
+  // before the async logging callback fires, and stays unchanged once it does.
+  let releasePermission!: () => void
+  const permissionGate = new Promise<void>(resolve => { releasePermission = resolve })
+  const beforeNormal = getTotalAPIDuration()
+  responseBody = [...fixtureEvents(), terminal('end_turn'), { type: 'message_stop' }]
+    .map((event: any) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('')
+  for await (const _msg of queryModelWithStreaming({
+    messages: [createUserMessage({ content: 'sync-duration' })],
+    systemPrompt: asSystemPrompt([]), thinkingConfig: { type: 'disabled' }, tools: [],
+    signal: new AbortController().signal,
+    options: {
+      model: 'fixture-model',
+      querySource: 'insights',
+      agents: [],
+      isNonInteractiveSession: true,
+      hasAppendSystemPrompt: false,
+      mcpTools: [],
+      enablePromptCaching: false,
+      getToolPermissionContext: async () => {
+        await permissionGate
+        return getEmptyToolPermissionContext()
+      },
+    },
+  })) {
+    // consume full stream
+  }
+  const rightAfterStream = getTotalAPIDuration()
+  expect(rightAfterStream).toBeGreaterThanOrEqual(beforeNormal)
+  releasePermission()
+  await new Promise(resolve => setTimeout(resolve, 25))
+  // Async logAPISuccessAndDuration must not double-add API duration.
+  expect(getTotalAPIDuration()).toBe(rightAfterStream)
+})
+
+test('review: getSessionUsageSnapshot excludes retry sleep backoff from totalAPIDuration with legacy fallback', async () => {
+  const { addToTotalDurationState, resetTotalDurationStateAndCost_FOR_TESTS_ONLY } = await import('../../bootstrap/state.js')
+  const { getSessionUsageSnapshot } = await import('../../cost-tracker.js')
+  resetTotalDurationStateAndCost_FOR_TESTS_ONLY()
+  addToTotalDurationState(12_000, 2_000)
+  expect(getSessionUsageSnapshot().totalAPIDuration).toBe(2_000)
+
+  resetTotalDurationStateAndCost_FOR_TESTS_ONLY()
+  addToTotalDurationState(5_000, 0)
+  expect(getSessionUsageSnapshot().totalAPIDuration).toBe(5_000)
+})

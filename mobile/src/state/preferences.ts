@@ -14,6 +14,8 @@ export type Preferences = Record<string, unknown> & {
   notifyPrompted: boolean
   /** iOS：审批提醒标成时效性通知，专注模式下也送达。 */
   timeSensitive: boolean
+  /** 打开 App 时保持屏幕常亮，避免自动息屏。 */
+  keepAwake: boolean
 }
 export type LiveActivityMode = 'running' | 'decisions'
 export type PreferencesPatch = Omit<
@@ -23,7 +25,103 @@ export type PreferencesPatch = Omit<
   notifications?: Partial<Preferences['notifications']>
   quietHours?: Partial<Preferences['quietHours']>
 }
+export type WebLocalStorageLike = {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
 export const preferencesKey = 'cc-haha.mobile.preferences'
+export const desktopThemeKey = 'cc-haha-theme'
+export const desktopFollowSystemKey = 'cc-haha-follow-system-theme'
+
+function normalizeAppearance(input: unknown): Appearance {
+  if (input === 'light' || input === 'dark' || input === 'system') return input
+  if (
+    input === 'white' ||
+    input === 'paper' ||
+    input === 'warm-classic' ||
+    input === 'celadon'
+  )
+    return 'light'
+  if (input === 'ink-blue' || input === 'neutral-dark') return 'dark'
+  return 'system'
+}
+
+function getBrowserLocalStorage(): WebLocalStorageLike | null {
+  try {
+    const scope = globalThis as { window?: { localStorage?: WebLocalStorageLike } }
+    const storage = scope.window?.localStorage
+    if (
+      storage &&
+      typeof storage.getItem === 'function' &&
+      typeof storage.setItem === 'function'
+    )
+      return storage
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 在同源 Web / H5 环境下，当移动端偏好尚未落盘时，读取桌面端的主题配置作为初始外观：
+ * `cc-haha-follow-system-theme === '1'` → `'system'`；
+ * `'0'`（或仅存在旧版 `cc-haha-theme`）→ 暗色值映射为 `'dark'`，其余为 `'light'`。
+ */
+export function readDesktopWebAppearance(
+  webStorage?: WebLocalStorageLike | null
+): Appearance | null {
+  const ls = webStorage === undefined ? getBrowserLocalStorage() : webStorage
+  if (!ls) return null
+  try {
+    const follow = ls.getItem(desktopFollowSystemKey)
+    if (follow === '1') return 'system'
+    const theme = ls.getItem(desktopThemeKey)
+    if (follow === '0') {
+      return theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark'
+        ? 'dark'
+        : 'light'
+    }
+    if (theme !== null) {
+      if (theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark')
+        return 'dark'
+      if (
+        theme === 'white' ||
+        theme === 'light' ||
+        theme === 'paper' ||
+        theme === 'warm-classic' ||
+        theme === 'celadon'
+      )
+        return 'light'
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 将移动端外观偏好镜像到同源桌面端 localStorage 键，保证 `/` 与 `/m/` 切换主题后即时同步。
+ * 在受限 WebView 抛出异常时静默降级。
+ */
+export function mirrorAppearanceToDesktopWeb(
+  appearance: Appearance,
+  webStorage?: WebLocalStorageLike | null
+): void {
+  const ls = webStorage === undefined ? getBrowserLocalStorage() : webStorage
+  if (!ls) return
+  try {
+    if (appearance === 'system') {
+      ls.setItem(desktopFollowSystemKey, '1')
+    } else {
+      ls.setItem(desktopFollowSystemKey, '0')
+      ls.setItem(desktopThemeKey, appearance === 'dark' ? 'dark' : 'white')
+    }
+  } catch {
+    /* 受限 WebView 禁止写 localStorage 时不影响主流程。 */
+  }
+}
+
 export function migratePreferences(raw: string | null): Preferences {
   const value = raw ? JSON.parse(raw) : {}
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -65,9 +163,7 @@ export function migratePreferences(raw: string | null): Preferences {
   return {
     ...value,
     version: 1,
-    appearance: ['light', 'dark', 'system'].includes(value.appearance)
-      ? value.appearance
-      : 'system',
+    appearance: normalizeAppearance(value.appearance),
     notifications: {
       ...notifications,
       decisions: notifications.decisions !== false,
@@ -85,15 +181,24 @@ export function migratePreferences(raw: string | null): Preferences {
     liveActivityShowCommand: value.liveActivityShowCommand !== false,
     notifyPrompted: value.notifyPrompted === true,
     timeSensitive: value.timeSensitive !== false,
+    keepAwake: value.keepAwake === true,
   }
 }
+
 export class PreferencesRepository {
   private queue: Promise<unknown> = Promise.resolve()
-  constructor(private storage: Storage) {}
+  constructor(
+    private storage: Storage,
+    private webStorage?: WebLocalStorageLike | null
+  ) {}
   load() {
     return this.serial(async () => {
       const raw = await this.storage.getItem(preferencesKey)
       const result = migratePreferences(raw)
+      if (!raw) {
+        const inherited = readDesktopWebAppearance(this.webStorage)
+        if (inherited) result.appearance = inherited
+      }
       if (raw && raw !== JSON.stringify(result))
         await this.storage.setItem(preferencesKey, JSON.stringify(result))
       return result
@@ -101,9 +206,12 @@ export class PreferencesRepository {
   }
   update(patch: PreferencesPatch) {
     return this.serial(async () => {
-      const current = migratePreferences(
-        await this.storage.getItem(preferencesKey)
-      )
+      const raw = await this.storage.getItem(preferencesKey)
+      const current = migratePreferences(raw)
+      if (!raw) {
+        const inherited = readDesktopWebAppearance(this.webStorage)
+        if (inherited) current.appearance = inherited
+      }
       const next = migratePreferences(
         JSON.stringify({
           ...current,
@@ -113,6 +221,7 @@ export class PreferencesRepository {
         })
       )
       await this.storage.setItem(preferencesKey, JSON.stringify(next))
+      mirrorAppearanceToDesktopWeb(next.appearance, this.webStorage)
       return next
     })
   }

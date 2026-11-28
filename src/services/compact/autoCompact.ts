@@ -17,7 +17,7 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 import { getToolSchemaCache } from '../../utils/toolSchemaCache.js'
 import {
   getTokenUsage,
-  hasUsableContextUsage,
+  getCurrentUsage,
   isUsableContextUsage,
   tokenCountWithEstimation,
 } from '../../utils/tokens.js'
@@ -270,6 +270,18 @@ export function estimateFallbackFixedContextTokens(
   }))
 }
 
+/** The shared context count for compaction decisions and the desktop meter. */
+export function getAutoCompactTokenCount(
+  messages: Message[],
+  snipTokensFreed = 0,
+  fallbackFixedContextTokens = 0,
+): number {
+  const fixedContextTokens = fallbackFixedContextTokens > 0 && !getCurrentUsage(messages)
+    ? fallbackFixedContextTokens
+    : 0
+  return tokenCountWithEstimation(messages) + fixedContextTokens - snipTokensFreed
+}
+
 export async function shouldAutoCompact(
   messages: Message[],
   model: string,
@@ -336,13 +348,10 @@ export async function shouldAutoCompact(
     }
   }
 
-  const fixedContextTokens = hasUsableContextUsage(messages)
-    ? 0
-    : fallbackFixedContextTokens
-  const tokenCount =
-    tokenCountWithEstimation(messages) +
-    fixedContextTokens -
-    snipTokensFreed
+  const fixedContextTokens = fallbackFixedContextTokens > 0 && !getCurrentUsage(messages)
+    ? fallbackFixedContextTokens
+    : 0
+  const tokenCount = getAutoCompactTokenCount(messages, snipTokensFreed, fixedContextTokens)
   const threshold = getAutoCompactThreshold(model)
   const effectiveWindow = getEffectiveContextWindowSize(model)
 
@@ -392,7 +401,7 @@ export async function autoCompactIfNeeded(
     model,
     querySource,
     snipTokensFreed,
-    estimateFallbackFixedContextTokens(cacheSafeParams),
+    getCurrentUsage(messages) ? 0 : estimateFallbackFixedContextTokens(cacheSafeParams),
   )
 
   if (!shouldCompact) {

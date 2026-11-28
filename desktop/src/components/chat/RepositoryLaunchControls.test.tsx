@@ -327,6 +327,24 @@ describe('RepositoryLaunchControls', () => {
     expect(within(pill).getByText('main')).toBeInTheDocument()
   })
 
+  it('shows the independent project name while retaining its parent Git branch context', async () => {
+    apiMocks.getRepositoryContext.mockResolvedValue({ ...okRepositoryContext, workDir: '/repo/child', projectRoot: '/repo/child' })
+    act(() => {
+      hydrateProjectDisplayNames(
+        { '/repo': 'Parent', '/repo/child': 'Child project' }, captureProjectDisplayNameHydrationRevision(),
+      )
+    })
+    renderControls({ workDir: '/repo/child' })
+    const pill = await screen.findByRole('button', { name: 'Location: Child project / main' })
+    expect(pill).toHaveAttribute('title', '/repo/child\nBranch: main')
+  })
+
+  it('uses the independent folder name when it has no custom alias', async () => {
+    apiMocks.getRepositoryContext.mockResolvedValue({ ...okRepositoryContext, workDir: '/repo/child', projectRoot: '/repo/child' })
+    renderControls({ workDir: '/repo/child' })
+    await screen.findByRole('button', { name: 'Location: child / main' })
+  })
+
   it('truncates the branch from the start so its tail survives', async () => {
     renderControls()
 
@@ -1613,6 +1631,47 @@ describe('RepositoryLaunchControls', () => {
       const menu = await screen.findByRole('menu', { name: 'Location' })
       expect(await within(menu).findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
       expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
+    })
+
+    it('hides worktree controls while keeping directory and branch when worktreeSupported is false', async () => {
+      apiMocks.getRepositoryContext.mockResolvedValue(okRepositoryContext)
+      renderControls({ worktreeSupported: false, useWorktree: true })
+
+      // Worktree badge should not appear on the pill when unsupported
+      expect(screen.queryByText('Isolated')).not.toBeInTheDocument()
+
+      await openPill()
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      expect(await within(menu).findByRole('menuitem', { name: /Directory/ })).toBeInTheDocument()
+      expect(within(menu).getByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
+      expect(within(menu).queryAllByRole('menuitemradio')).toHaveLength(0)
+    })
+
+    it('uses Spinner while loading context and V6C radius tokens on the reveal skeleton', async () => {
+      let resolveContext!: (value: typeof okRepositoryContext) => void
+      apiMocks.getRepositoryContext.mockImplementation(() => new Promise((resolve) => {
+        resolveContext = resolve
+      }))
+
+      render(<ControlledHarness />)
+      await openEmptyPill()
+      fireEvent.click(await screen.findByRole('button', { name: 'Pick /repo' }))
+
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      const skeleton = menu.querySelector('[aria-hidden="true"].animate-pulse')
+      expect(skeleton).toBeInTheDocument()
+      expect(skeleton?.querySelector('.h-11')).toHaveClass('rounded-[var(--radius-control)]')
+      const cardSkeletons = skeleton?.querySelectorAll('.h-16')
+      expect(cardSkeletons).toHaveLength(2)
+      for (const card of cardSkeletons ?? []) {
+        expect(card).toHaveClass('rounded-[var(--radius-card-inner)]')
+      }
+
+      const pill = screen.getByRole('button', { name: /Location: repo/ })
+      expect(pill.querySelector('svg.animate-spin')).toBeInTheDocument()
+
+      resolveContext(okRepositoryContext)
+      await screen.findByRole('menuitem', { name: /Branch/ })
     })
   })
 })

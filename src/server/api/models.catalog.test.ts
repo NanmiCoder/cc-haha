@@ -12,6 +12,7 @@ import { clearDesktopClaudeModelCatalogCache } from '../services/claudeModelCata
 import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
 import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
 import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
+import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { listSessionModels } from '../services/sessionModelCatalog.js'
@@ -151,6 +152,56 @@ describe('official model catalog API refresh', () => {
     expect(future.maxContext).toBeUndefined()
   })
 
+  test('uses account catalog windows for newly discovered models in the session environment', async () => {
+    const model = 'gpt-6.2-sol'
+    let catalogRequests = 0
+    fetchSpy.mockImplementation((async (input) => {
+      if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
+      expect(String(input)).toStartWith(fixtures[0]!.url)
+      catalogRequests++
+      return Response.json({ models: [
+        { slug: model, visibility: 'list', context_window: 500_000, max_context_window: 872_000 },
+        { slug: 'gpt-6-sol', visibility: 'list', context_window: 400_000 },
+      ] })
+    }) as typeof fetch)
+
+    const providers = new ProviderService()
+    const path = '/api/models/catalog?provider=openai-official'
+    const { models } = await (await handleModelsApi(...request(`${path}&refresh=true`))).json()
+    expect(models.find((entry: { id: string }) => entry.id === model).context).toBe('475000')
+    const mapping = { ...(await providers.getOfficialProviderModels('openai-official')), main: model }
+    const save = (modelContextWindows: Record<string, number>) => handleProvidersApi(...request(
+      '/api/providers/openai-official/models', 'PUT', { models: mapping, modelContextWindows },
+    ))
+    expect((await save({})).status).toBe(200)
+    await providers.activateProvider('openai-official')
+    const sessionWindows = async () => {
+      const env = await providers.getProviderRuntimeEnv('openai-official')
+      expect(env.ANTHROPIC_MODEL).toBe(model)
+      return JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
+    }
+    expect(await sessionWindows()).toMatchObject({
+      [model]: 475_000,
+      'gpt-6-sol': 380_000,
+      'gpt-5.5': 258_400,
+    })
+    expect(catalogRequests).toBe(1)
+
+    expect((await save({ [model]: 700_000 })).status).toBe(200)
+    expect((await sessionWindows())[model]).toBe(700_000)
+    expect((await save({})).status).toBe(200)
+
+    clearOpenAICodexModelCatalogCache()
+    expect((await sessionWindows())[model]).toBe(475_000)
+    expect(catalogRequests).toBe(2)
+
+    await hahaOpenAIOAuthService.deleteTokens()
+    expect((await sessionWindows())[model]).toBeUndefined()
+    expect(catalogRequests).toBe(2)
+  })
+
   test('refresh without a desktop login reports failure for every account provider', async () => {
     await hahaOAuthService.deleteTokens()
     await hahaOpenAIOAuthService.deleteTokens()
@@ -160,5 +211,141 @@ describe('official model catalog API refresh', () => {
       expect(response.status).toBe(502)
     }
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  test('launch resolves the current account when login changes during the catalog request', async () => {
+    const model = 'gpt-6.2-sol'
+    const oldRequestStarted = Promise.withResolvers<void>()
+    const oldReply = Promise.withResolvers<Response>()
+    const reply = (window: number) => Response.json({ models: [
+      { slug: model, visibility: 'list', context_window: window },
+    ] })
+    const catalogAccounts: Array<string | null> = []
+    fetchSpy.mockImplementation((async (input, init) => {
+      if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
+      const account = new Headers(init?.headers).get('ChatGPT-Account-Id')
+      catalogAccounts.push(account)
+      if (account === 'fake-account') {
+        oldRequestStarted.resolve()
+        return oldReply.promise
+      }
+      expect(account).toBe('new-account')
+      return reply(300_000)
+    }) as typeof fetch)
+
+    const launch = new ProviderService().getProviderRuntimeEnv('openai-official')
+    await oldRequestStarted.promise
+    await hahaOpenAIOAuthService.saveTokens({ accessToken: 'fake-new-token', refreshToken: null, expiresAt: null,
+      accountId: 'new-account', email: null })
+    oldReply.resolve(reply(500_000))
+
+    expect(JSON.parse((await launch)[MODEL_CONTEXT_WINDOWS_ENV_KEY]!)[model]).toBe(285_000)
+    expect(catalogAccounts).toEqual(['fake-account', 'new-account'])
+  })
+
+  test.each(['old reply', 'old rejection', 'logout'] as const)(
+    'explicit refresh follows a changed ChatGPT login after %s',
+    async outcome => {
+      const oldRequestStarted = Promise.withResolvers<void>()
+      const oldReply = Promise.withResolvers<Response>()
+      const model = 'gpt-6.2-sol'
+      const reply = (window: number) => Response.json({ models: [
+        { slug: model, visibility: 'list', context_window: window },
+      ] })
+      const catalogAccounts: Array<string | null> = []
+      fetchSpy.mockImplementation((async (input, init) => {
+        if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+          return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+        }
+        const account = new Headers(init?.headers).get('ChatGPT-Account-Id')
+        catalogAccounts.push(account)
+        if (account === 'fake-account') {
+          oldRequestStarted.resolve()
+          return oldReply.promise
+        }
+        expect(account).toBe('new-account')
+        return reply(300_000)
+      }) as typeof fetch)
+
+      const path = '/api/models/catalog?provider=openai-official'
+      const refresh = handleModelsApi(...request(`${path}&refresh=true`))
+      await oldRequestStarted.promise
+      if (outcome === 'logout') {
+        await hahaOpenAIOAuthService.deleteTokens()
+      } else {
+        await hahaOpenAIOAuthService.saveTokens({ accessToken: 'fake-new-token', refreshToken: null, expiresAt: null,
+          accountId: 'new-account', email: null })
+      }
+      oldReply.resolve(outcome === 'old rejection' ? new Response(null, { status: 401 }) : reply(500_000))
+
+      const response = await refresh
+      if (outcome === 'logout') {
+        expect(response.status).toBe(502)
+        expect(await response.json()).toMatchObject({ error: 'MODEL_CATALOG_REFRESH_FAILED' })
+        expect(catalogAccounts).toEqual(['fake-account'])
+      } else {
+        expect(response.status).toBe(200)
+        const { models } = await response.json()
+        expect(models).toEqual([expect.objectContaining({ id: model, context: '285000' })])
+        expect(await (await handleModelsApi(...request(path))).json()).toEqual({ models })
+        expect(catalogAccounts).toEqual(['fake-account', 'new-account'])
+      }
+    },
+  )
+
+  test('grok-official lists default and max context windows, applies account windows and overrides, and enforces catalog caps', async () => {
+    const model = 'grok-4.8-preview'
+    let catalogRequests = 0
+    fetchSpy.mockImplementation((async (input) => {
+      expect(String(input)).toBe(fixtures[1]!.url)
+      catalogRequests++
+      return Response.json({ models: [
+        { id: 'grok-4.7', name: 'Grok 4.7', context_window: 500_000, max_context_window: 1_000_000 },
+        { id: model, name: 'Grok 4.8 Preview', context_window: 750_000 },
+      ] })
+    }) as typeof fetch)
+
+    const providers = new ProviderService()
+    const path = '/api/models/catalog?provider=grok-official'
+    const { models } = await (await handleModelsApi(...request(`${path}&refresh=true`))).json() as {
+      models: Array<{ id: string; context: string; maxContext?: string }>
+    }
+    expect(models.find((entry) => entry.id === 'grok-4.7')).toMatchObject({ context: '500000', maxContext: '1000000' })
+    expect(models.find((entry) => entry.id === model)).toMatchObject({ context: '750000' })
+    expect(models.find((entry) => entry.id === model)?.maxContext).toBeUndefined()
+
+    const mapping = { ...(await providers.getOfficialProviderModels('grok-official')), main: model }
+    const save = (modelContextWindows: Record<string, number>) => handleProvidersApi(...request(
+      '/api/providers/grok-official/models', 'PUT', { models: mapping, modelContextWindows },
+    ))
+    expect((await save({ 'grok-4.7': 1_000_001 })).status).toBe(400)
+    expect((await save({ 'grok-4.7': 1_000_000 })).status).toBe(200)
+    await providers.activateProvider('grok-official')
+
+    const sessionWindows = async () => {
+      const env = await providers.getProviderRuntimeEnv('grok-official')
+      expect(env.ANTHROPIC_MODEL).toBe(model)
+      return JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
+    }
+    expect(await sessionWindows()).toMatchObject({
+      'grok-4.7': 1_000_000,
+      [model]: 750_000,
+      'grok-4.6': 500_000,
+    })
+    expect(catalogRequests).toBe(1)
+
+    expect((await save({ [model]: 256_000 })).status).toBe(200)
+    expect((await sessionWindows())[model]).toBe(256_000)
+    expect((await save({})).status).toBe(200)
+
+    clearGrokModelCatalogCache()
+    expect((await sessionWindows())[model]).toBe(750_000)
+    expect(catalogRequests).toBe(2)
+
+    await hahaGrokOAuthService.deleteTokens()
+    expect((await sessionWindows())[model]).toBeUndefined()
+    expect(catalogRequests).toBe(2)
   })
 })

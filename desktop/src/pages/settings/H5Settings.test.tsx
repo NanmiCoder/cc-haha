@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { H5Settings } from './H5Settings'
+import { H5Settings, H5SettingsShellContext, type H5SettingsSubpage } from './H5Settings'
 import { Settings } from '../Settings'
 import { ProviderSettings } from './ProviderSettings'
 import { useUIStore } from '@/stores/uiStore'
@@ -50,6 +50,7 @@ it('shows one grouped list: connection, provider, phone-editable preferences, an
   // offer nothing to press.
   const desktopOnly = screen.getByTestId('h5-settings-desktop-only')
   expect(desktopOnly).toHaveTextContent('MCP')
+  expect(desktopOnly).toHaveTextContent('Browser Use')
   expect(within(desktopOnly).queryAllByRole('button')).toHaveLength(0)
 })
 it('explains thinking mode and Ultracode on the browser settings list too', () => {
@@ -133,13 +134,16 @@ it('activates and deletes providers through the existing API without connection 
   await waitFor(() => expect(remove).toHaveBeenCalledWith('fixture-provider'))
   expect(probe).not.toHaveBeenCalled()
 })
-it('changes browser appearance without writing connected computer settings', async () => {
+it.each(['dark', 'white'] as const)('changes browser appearance to %s without writing connected computer settings', async (theme) => {
   useUIStore.setState({ activeSettingsTab: 'general', followSystemTheme: true })
   const update = vi.spyOn(settingsApi, 'updateUser')
   render(<H5Settings />)
-  fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: 'ink-blue' } })
-  expect(useUIStore.getState().theme).toBe('ink-blue')
+  expect(screen.getByRole('option', { name: theme === 'dark' ? 'Dark' : 'Light' })).toHaveValue(theme)
+  fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: theme } })
+  expect(useUIStore.getState().theme).toBe(theme)
   expect(useUIStore.getState().followSystemTheme).toBe(false)
+  expect(window.localStorage.getItem('cc-haha-theme')).toBe(theme)
+  expect(document.documentElement.style.colorScheme).toBe(theme === 'dark' ? 'dark' : 'light')
   expect(update).not.toHaveBeenCalled()
 })
 
@@ -159,4 +163,67 @@ it.each([true, false])('shows beta details on focus without overflowing narrow f
   const description = await screen.findByRole('tooltip')
   expect(description).toHaveTextContent('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1')
   expect(description.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
+})
+
+it('renders a clean desktop page header and autohide scroller without modal-close padding workarounds', () => {
+  render(<H5Settings />)
+  const header = screen.getByTestId('h5-settings-desktop-header')
+  expect(header).toHaveTextContent('Settings')
+  expect(header.className).toContain('md:flex')
+  expect(header.className).not.toContain('pr-10')
+  expect(screen.getByTestId('h5-settings-scroll').className).toContain('scrollbar-autohide')
+})
+
+it('keeps H5Settings and its subpages on opaque paper surfaces', async () => {
+  render(<H5Settings />)
+  expect(screen.getByTestId('h5-settings-scroll')).toHaveClass('bg-[var(--color-surface)]')
+  expect(screen.getByTestId('h5-settings-scroll')).not.toHaveClass('bg-transparent')
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
+  expect(await screen.findByTestId('h5-settings-subpage')).toHaveClass('bg-[var(--color-surface)]')
+  expect(screen.getByTestId('h5-settings-subpage')).not.toHaveClass('bg-transparent')
+})
+
+it('supports Follow the system appearance in H5GeneralSettings without writing connected computer settings', () => {
+  useUIStore.setState({ theme: 'dark', followSystemTheme: false })
+  const update = vi.spyOn(settingsApi, 'updateUser')
+  render(<H5Settings />)
+  const select = screen.getByLabelText('Appearance')
+  expect(screen.getByRole('option', { name: 'Follow the system' })).toHaveValue('system')
+  expect(select).toHaveValue('dark')
+  fireEvent.change(select, { target: { value: 'system' } })
+  expect(useUIStore.getState().followSystemTheme).toBe(true)
+  expect(select).toHaveValue('system')
+  expect(update).not.toHaveBeenCalled()
+})
+
+it('applies V6C pressable and hover feedback to interactive navigation rows', () => {
+  render(<H5Settings />)
+  const activityRow = screen.getByRole('button', { name: /Token usage/ })
+  const providersRow = screen.getByTestId('h5-settings-providers')
+  for (const row of [activityRow, providersRow]) {
+    expect(row).toHaveClass('v6c-pressable', 'hover:bg-[var(--color-surface-hover)]')
+  }
+})
+
+it('suppresses the duplicate inline subpage back bar when MobileShell owns back navigation', async () => {
+  let current: H5SettingsSubpage = null
+  const setSubpage = vi.fn((next: H5SettingsSubpage) => {
+    current = next
+  })
+  const { rerender } = render(
+    <H5SettingsShellContext.Provider value={{ subpage: current, setSubpage }}>
+      <H5Settings />
+    </H5SettingsShellContext.Provider>,
+  )
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
+  expect(setSubpage).toHaveBeenCalledWith('providers')
+
+  rerender(
+    <H5SettingsShellContext.Provider value={{ subpage: 'providers', setSubpage }}>
+      <H5Settings />
+    </H5SettingsShellContext.Provider>,
+  )
+  expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
+  expect(screen.queryByTestId('h5-settings-subpage-backbar')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'All settings' })).not.toBeInTheDocument()
 })

@@ -88,10 +88,10 @@ export type IconButtonProps =
 const SIZE_CLASSES: Record<IconButtonSize, string> = {
   '2xs': 'h-5 w-5 rounded-[var(--radius-sm)]',
   xs: 'h-6 w-6 rounded-[var(--radius-sm)]',
-  sm: 'h-7 w-7 rounded-[var(--radius-md)]',
-  md: 'h-8 w-8 rounded-[var(--radius-md)]',
-  lg: 'h-9 w-9 rounded-[var(--radius-lg)]',
-  xl: 'h-10 w-10 rounded-[var(--radius-lg)]',
+  sm: 'h-7 w-7 rounded-[var(--radius-control)]',
+  md: 'h-8 w-8 rounded-[var(--radius-control)]',
+  lg: 'h-9 w-9 rounded-[var(--radius-control)]',
+  xl: 'h-10 w-10 rounded-[var(--radius-card-inner)]',
   '2xl': 'h-11 w-11 rounded-[var(--radius-lg)]',
 }
 
@@ -159,10 +159,12 @@ const HOVER_BG: Record<IconButtonSurface, Record<IconButtonTone, string>> = {
     brand: 'hover:bg-[var(--color-lightbox-control-hover)]',
     danger: 'hover:bg-[var(--color-lightbox-control-hover)]',
   },
+  // V6C: a hovered icon key picks up the glass rim as well as the fill, so it
+  // reads as a pressable object rather than a tinted square.
   default: {
-    default: 'hover:bg-[var(--color-surface-hover)]',
-    secondary: 'hover:bg-[var(--color-surface-hover)]',
-    muted: 'hover:bg-[var(--color-surface-hover)]',
+    default: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
+    secondary: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
+    muted: 'hover:bg-[var(--color-surface-hover)] hover:shadow-[var(--glass-rim)]',
     brand: 'hover:bg-[var(--color-brand-soft)]',
     danger: 'hover:bg-[var(--color-error-soft)]',
   },
@@ -239,7 +241,7 @@ const SOFT_CLASSES = 'bg-[var(--color-btn-soft-bg)] hover:bg-[var(--color-btn-so
 
 const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
   lightbox: 'bg-[var(--color-lightbox-control-hover)] text-[var(--color-lightbox-control-fg)]',
-  default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
+  default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-[var(--glass-rim)]',
   // The sidebar's hover fill is the faintest step on its ground; a toggle that
   // is on must not look like one the pointer is merely over, so it takes the
   // theme accent.
@@ -250,12 +252,13 @@ const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
 
 const BASE_CLASSES = [
   'inline-flex shrink-0 items-center justify-center',
-  'transition-colors duration-150 cursor-pointer',
+  'transition-[background-color,color,border-color,box-shadow,transform,opacity] duration-150 ease-out cursor-pointer',
   // Offset matches Button: the two sit side by side in every toolbar, and a
   // flush ring next to a floated one reads as two different focus systems.
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
   'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]',
   'disabled:cursor-not-allowed disabled:pointer-events-none',
+  'motion-reduce:transition-none motion-reduce:active:scale-100',
 ].join(' ')
 
 const DISABLED_OPACITY = { dim: 'disabled:opacity-50', hide: 'disabled:opacity-0' } as const
@@ -293,6 +296,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   ...props
 }, ref) {
   const iconSize = ICON_PX[size]
+  const usesSurfaceBevel = !solid && !soft && (filled || bordered)
 
   return (
     <button
@@ -301,12 +305,16 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       title={showTooltip ? label : undefined}
       aria-pressed={pressed}
+      data-pressed={pressed ? 'true' : undefined}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cx(
         BASE_CLASSES,
         DISABLED_OPACITY[disabledStyle],
         SIZE_CLASSES[size],
+        solid && 'control-bevel-cta',
+        usesSurfaceBevel && 'control-bevel',
+        !solid && !usesSurfaceBevel && '[&:active:not(:disabled):not([aria-haspopup])]:scale-[0.97]',
         surface === 'lightbox' && !pressed && 'bg-[var(--color-lightbox-control-bg)]',
         // `solid` and `pressed` supply both fill and foreground, so the tone's
         // resting text color is skipped rather than left to compete: two

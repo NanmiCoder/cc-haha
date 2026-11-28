@@ -19,11 +19,17 @@ export function modeRisk(mode?: string): RunRisk {
 
 /**
  * 点了某一档权限之后怎么办：点当前档不动；切到全权限或自动先确认（和桌面端一样，每次都问），
- * 其余直接生效。
+ * Antigravity 原生支持自动模式，无需 Claude 的自动模式二次确认；其余直接生效。
  */
-export function modeChange(next: string, current?: string): 'none' | 'confirm' | 'apply' {
+export function modeChange(
+  next: string,
+  current?: string,
+  options?: { antigravity?: boolean }
+): 'none' | 'confirm' | 'apply' {
   if (next === (current ?? 'default')) return 'none'
-  return next === 'bypassPermissions' || next === 'auto' ? 'confirm' : 'apply'
+  if (next === 'bypassPermissions') return 'confirm'
+  if (next === 'auto' && !options?.antigravity) return 'confirm'
+  return 'apply'
 }
 
 /**

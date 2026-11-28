@@ -604,6 +604,7 @@ export function logAPISuccessAndDuration({
   fastMode,
   previousRequestId,
   betas,
+  skipDurationStateUpdate = false,
 }: {
   model: string
   preNormalizedModel: string
@@ -637,6 +638,8 @@ export function logAPISuccessAndDuration({
   /** Request ID from the previous API call in this session */
   previousRequestId?: string | null
   betas?: string[]
+  /** Skip updating global API duration counters when the caller already recorded them synchronously. */
+  skipDurationStateUpdate?: boolean
 }): void {
   const gateway = detectGateway({
     headers,
@@ -685,7 +688,9 @@ export function logAPISuccessAndDuration({
 
   const durationMs = Date.now() - start
   const durationMsIncludingRetries = Date.now() - startIncludingRetries
-  addToTotalDurationState(durationMsIncludingRetries, durationMs)
+  if (!skipDurationStateUpdate) {
+    addToTotalDurationState(durationMsIncludingRetries, durationMs)
+  }
 
   logAPISuccess({
     model,

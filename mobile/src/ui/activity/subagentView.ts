@@ -52,15 +52,16 @@ export type SubagentHeader = {
 
 const known = ['running', 'completed', 'failed', 'stopped'] as const
 
-/** 页眉：名称取任务说明，状态以后台任务列表为准，列表里找不到时退回 transcript 自带的状态。 */
+/** 页眉：名称取任务说明（或传入标题），状态以后台任务列表为准，列表里找不到时退回 transcript 自带的状态。 */
 export function subagentHeader(
   task: BackgroundTask | undefined,
-  output: Pick<SubagentOutput, 'status'> | null
+  output: Pick<SubagentOutput, 'status' | 'description'> | null,
+  fallbackTitle?: string
 ): SubagentHeader {
   const reported = known.find((status) => status === output?.status)
   const started = task?.startedAt ? Date.parse(task.startedAt) : NaN
   return {
-    title: task?.description?.trim() || '子 Agent',
+    title: task?.description?.trim() || output?.description?.trim() || fallbackTitle?.trim() || '子 Agent',
     status: task?.status ?? reported ?? 'completed',
     ...(Number.isFinite(started) ? { startedAt: started } : {}),
   }

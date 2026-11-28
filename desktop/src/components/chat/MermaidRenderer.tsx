@@ -206,12 +206,12 @@ function getMermaidThemeColors(theme: ThemeMode): MermaidThemeColors {
   // a diagram rendered before first paint); the live values come from
   // `data-theme`, so all six palettes are covered by the six token reads.
   return {
-    textColor: resolveThemeColor('--color-text-primary', isDark ? '#EDE6D6' : '#1F1C17'),
-    mutedTextColor: resolveThemeColor('--color-text-secondary', isDark ? '#A79B83' : '#5D5850'),
-    surfaceColor: resolveThemeColor('--color-surface-container-lowest', isDark ? '#201D17' : '#FFFFFF'),
-    nodeColor: resolveThemeColor('--color-surface-container-low', isDark ? '#1A1813' : '#F6F6F3'),
-    accentColor: resolveThemeColor('--color-primary', isDark ? '#D07B52' : '#96442B'),
-    lineColor: resolveThemeColor('--color-outline', isDark ? '#4C4433' : '#D8D5CC'),
+    textColor: resolveThemeColor('--color-text-primary', isDark ? '#DFDFDF' : '#1A1C1F'),
+    mutedTextColor: resolveThemeColor('--color-text-secondary', isDark ? '#B4B4B4' : '#4E4E4E'),
+    surfaceColor: resolveThemeColor('--color-surface-container-lowest', isDark ? '#181818' : '#FFFFFF'),
+    nodeColor: resolveThemeColor('--color-surface-container-low', isDark ? '#212121' : '#F6F6F6'),
+    accentColor: resolveThemeColor('--color-primary', isDark ? '#339CFF' : '#0169CC'),
+    lineColor: resolveThemeColor('--color-outline', isDark ? '#3D3D3D' : '#D4D4D4'),
     isDark,
   }
 }
@@ -689,7 +689,7 @@ export function MermaidRenderer({ code }: Props) {
         {/* Header: the same quiet 30px line as a code block. */}
         <div className="flex h-[30px] items-center justify-between border-b border-[var(--color-border)] pl-3 pr-1 text-[11px] text-[var(--color-text-tertiary)]">
           <div className="flex items-center gap-1.5">
-            <Network size={12} strokeWidth={2} aria-hidden="true" />
+            <Network size={12} strokeWidth={1.75} aria-hidden="true" />
             <span className="font-mono">mermaid</span>
           </div>
           <div className="flex items-center gap-0.5">
@@ -697,7 +697,7 @@ export function MermaidRenderer({ code }: Props) {
               variant="ghost"
               size="sm"
               onClick={handlePreview}
-              icon={<Maximize2 size={12} strokeWidth={2} aria-hidden="true" />}
+              icon={<Maximize2 size={12} strokeWidth={1.75} aria-hidden="true" />}
             >
               {t('mermaid.preview')}
             </Button>

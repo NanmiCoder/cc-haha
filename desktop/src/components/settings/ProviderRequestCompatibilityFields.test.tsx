@@ -21,8 +21,9 @@ describe('ProviderRequestCompatibilityFields', () => {
   afterEach(cleanup)
 
   it('reveals the output budget field but hides advanced compatibility controls for anthropic providers', () => {
-    render(<Harness apiFormat="anthropic" />)
+    const { container } = render(<Harness apiFormat="anthropic" />)
 
+    expect(container.querySelector('section')).toHaveClass('v6c-glass-card')
     const budget = screen.getByLabelText('Reply output budget')
     expect(budget).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Advanced compatibility' })).not.toBeInTheDocument()
@@ -32,10 +33,21 @@ describe('ProviderRequestCompatibilityFields', () => {
     expect(budget).toHaveValue('1000')
   })
 
-  it('keeps the budget field and advanced controls for openai chat providers', () => {
-    render(<Harness apiFormat="openai_chat" />)
+  it('keeps the budget field and advanced controls including service tier for proxy providers', () => {
+    render(<Harness apiFormat="google_vertex" />)
 
     expect(screen.getByLabelText('Reply output budget')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Advanced compatibility' })).toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Advanced compatibility' })
+    expect(toggle).toBeInTheDocument()
+    fireEvent.click(toggle)
+    expect(screen.getByText('Service tier')).toBeInTheDocument()
+  })
+
+  it('reveals both output token field and service tier for azure_openai providers', () => {
+    render(<Harness apiFormat="azure_openai" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced compatibility' }))
+    expect(screen.getByText('Output token field')).toBeInTheDocument()
+    expect(screen.getByText('Service tier')).toBeInTheDocument()
   })
 })

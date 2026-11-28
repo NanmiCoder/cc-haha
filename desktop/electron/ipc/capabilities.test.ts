@@ -5,6 +5,7 @@ import {
   ELECTRON_IPC_VALIDATORS,
   isElectronIpcChannel,
   isElectronIpcChannelAllowedForPetWindow,
+  isElectronIpcChannelAllowedForUsageWidgetWindow,
   validateElectronIpcPayload,
 } from './capabilities'
 
@@ -87,7 +88,9 @@ describe('Electron IPC capabilities', () => {
     const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserCreate
     const identity = { tabId: 'wb-1', storageId: 'store-1', webContentsId: 7 }
     expect(validateElectronIpcPayload(channel, identity)).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: 'session-1' })).toBe(true)
     expect(validateElectronIpcPayload(channel, { ...identity, url: 'https://example.com/' })).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: '../escape' })).toBe(false)
     for (const webContentsId of [undefined, 0, -1, 1.5, '7', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       expect(validateElectronIpcPayload(channel, { ...identity, webContentsId })).toBe(false)
     }
@@ -265,6 +268,7 @@ describe('Electron IPC capabilities', () => {
       followSystem: false,
     }
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appearanceSetApplied, valid)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appearanceSetApplied, { ...valid, darkBackground: '#202020' })).toBe(true)
 
     for (const invalid of [
       undefined,
@@ -278,6 +282,10 @@ describe('Electron IPC capabilities', () => {
       { ...valid, background: '#800E0E0E' },
       { ...valid, lightBackground: '#80FFFFFF' },
       { ...valid, lightBackground: 'white' },
+      { ...valid, darkBackground: '#80202020' },
+      { ...valid, darkBackground: '#222' },
+      { ...valid, darkBackground: 'black' },
+      { ...valid, darkBackground: null },
       { ...valid, extra: 1 },
     ]) {
       expect(
@@ -292,6 +300,66 @@ describe('Electron IPC capabilities', () => {
     expect(isElectronIpcChannelAllowedForPetWindow(
       ELECTRON_IPC_CHANNELS.appearanceSetApplied,
     )).toBe(false)
+  })
+
+  it('validates browser-use IPC payloads and denies the pet window access', () => {
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, {
+      requestId: 'ensure-1',
+      tabId: 'wb-1',
+      ok: true,
+    })).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, {
+      requestId: 'ensure-1',
+      tabId: '',
+      ok: false,
+      error: 'failed to mount tab',
+    })).toBe(true)
+    for (const bad of [
+      undefined,
+      { requestId: 'ensure-1', tabId: '', ok: true },
+      { requestId: '../bad', tabId: 'wb-1', ok: true },
+      { requestId: 'ensure-1', tabId: 'wb-1', ok: 'yes' },
+      { requestId: 'ensure-1', tabId: 'wb-1', ok: true, extra: 1 },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseTabReady, bad)).toBe(false)
+    }
+
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, {
+      moveId: 'move-1',
+      tabId: 'wb-1',
+      skipped: false,
+    })).toBe(true)
+    for (const bad of [
+      undefined,
+      { moveId: '', tabId: 'wb-1' },
+      { moveId: 'move-1', tabId: '../escape' },
+      { moveId: 'move-1', tabId: 'wb-1', skipped: 'no' },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, bad)).toBe(false)
+    }
+
+    for (const action of ['takeover', 'resume', 'stop', 'cancel'] as const) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseUserAction, {
+        tabId: 'wb-1',
+        action,
+      })).toBe(true)
+    }
+    for (const bad of [
+      undefined,
+      { tabId: 'wb-1', action: 'destroy' },
+      { tabId: 'wb-1', action: 'takeover', reason: 'x'.repeat(501) },
+      { tabId: 'wb-1', action: 'takeover', extra: true },
+    ]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.browserUseUserAction, bad)).toBe(false)
+    }
+
+    for (const channel of [
+      ELECTRON_IPC_CHANNELS.browserUseTabReady,
+      ELECTRON_IPC_CHANNELS.browserUseCursorArrived,
+      ELECTRON_IPC_CHANNELS.browserUseUserAction,
+    ]) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
   })
 
   it('gives the pet renderer only runtime bootstrap and companion controls', () => {
@@ -341,6 +409,39 @@ describe('Electron IPC capabilities', () => {
       ELECTRON_IPC_CHANNELS.adaptersRestartSidecar,
     ]) {
       expect(isElectronIpcChannelAllowedForPetWindow(forbidden)).toBe(false)
+    }
+  })
+
+  it('gives the usage widget renderer only scoped access and widget controls', () => {
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForPetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, 'dark')).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'providers')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'general')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'shell')).toBe(false)
+
+    for (const forbidden of [
+      ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken,
+      ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken,
+      ELECTRON_IPC_CHANNELS.appearanceSetApplied,
+      ELECTRON_IPC_CHANNELS.zoomSet,
+      ELECTRON_IPC_CHANNELS.shellOpen,
+      ELECTRON_IPC_CHANNELS.terminalSpawn,
+      ELECTRON_IPC_CHANNELS.commandInvoke,
+    ]) {
+      expect(isElectronIpcChannelAllowedForUsageWidgetWindow(forbidden)).toBe(false)
     }
   })
 })

@@ -41,4 +41,16 @@ describe('subprocessEnv', () => {
       else process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN = original
     }
   })
+
+  test('never leaks the browser bridge token to subprocesses', () => {
+    const original = process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+    process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = 'browser-bridge-secret'
+    try {
+      expect(subprocessEnv().CC_HAHA_BROWSER_BRIDGE_TOKEN).toBeUndefined()
+      expect(process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBe('browser-bridge-secret')
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+      else process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = original
+    }
+  })
 })

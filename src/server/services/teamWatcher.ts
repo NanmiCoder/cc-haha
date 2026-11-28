@@ -23,6 +23,11 @@ import {
   teamService,
   type TeamService,
 } from './teamService.js'
+import {
+  addAntigravitySwarmChangeListener,
+  listRememberedAntigravitySwarmSessions,
+  readAntigravitySwarmSnapshot,
+} from './antigravitySwarmAdapter.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -48,6 +53,8 @@ export class TeamWatcher {
   private lastWorkbenchFingerprints = new Map<string, string>()
   private lastLeadSessionIds = new Map<string, string>()
   private lastTeamIdentities = new Map<string, WatchedTeamIdentity>()
+  private lastAntigravitySwarms = new Map<string, { version: string; identity: WatchedTeamIdentity }>()
+  private disposeAntigravitySwarmListener: (() => void) | null = null
 
   constructor(
     private readonly emit: (message: ServerMessage, leadSessionId?: string) => void = (message, leadSessionId) => {
@@ -69,6 +76,9 @@ export class TeamWatcher {
     // Run an initial check immediately, then start the interval
     void this.scheduleCheck()
     this.intervalId = setInterval(() => void this.scheduleCheck(), intervalMs)
+    this.disposeAntigravitySwarmListener ??= addAntigravitySwarmChangeListener(() => {
+      void this.scheduleCheck()
+    })
   }
 
   /** Stop polling. */
@@ -77,6 +87,8 @@ export class TeamWatcher {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
+    this.disposeAntigravitySwarmListener?.()
+    this.disposeAntigravitySwarmListener = null
   }
 
   async stopAndWait(): Promise<void> {
@@ -96,6 +108,7 @@ export class TeamWatcher {
     this.lastWorkbenchFingerprints.clear()
     this.lastLeadSessionIds.clear()
     this.lastTeamIdentities.clear()
+    this.lastAntigravitySwarms.clear()
   }
 
   // ── Core polling logic ─────────────────────────────────────────────────
@@ -110,6 +123,47 @@ export class TeamWatcher {
   }
 
   private async check(): Promise<void> {
+    await this.checkClaudeTeams()
+    await this.checkAntigravitySwarms()
+  }
+
+  private async checkAntigravitySwarms(): Promise<void> {
+    const remembered = listRememberedAntigravitySwarmSessions()
+    const activeNativeIds = new Set(remembered.map((entry) => entry.nativeSessionId))
+    for (const nativeId of this.lastAntigravitySwarms.keys()) {
+      if (!activeNativeIds.has(nativeId)) {
+        this.lastAntigravitySwarms.delete(nativeId)
+      }
+    }
+    if (remembered.length === 0) return
+
+    for (const { nativeSessionId, sessionId } of remembered) {
+      let snapshot
+      try {
+        snapshot = await readAntigravitySwarmSnapshot(nativeSessionId, { leadSessionId: sessionId })
+      } catch {
+        continue
+      }
+      if (!snapshot) continue
+
+      const identity: WatchedTeamIdentity = {
+        teamName: snapshot.team.name,
+        incarnationId: snapshot.team.incarnationId,
+        createdAt: snapshot.team.createdAt,
+        leadSessionId: sessionId,
+      }
+      const prev = this.lastAntigravitySwarms.get(nativeSessionId)
+      if (!prev) {
+        this.lastAntigravitySwarms.set(nativeSessionId, { version: snapshot.version, identity })
+        this.broadcast({ type: 'team_created', ...identity }, sessionId)
+      } else if (prev.version !== snapshot.version) {
+        this.lastAntigravitySwarms.set(nativeSessionId, { version: snapshot.version, identity })
+        this.broadcast({ type: 'team_workbench_updated', ...identity }, sessionId)
+      }
+    }
+  }
+
+  private async checkClaudeTeams(): Promise<void> {
     const teamsDir = getTeamsDir()
 
     let entries: fs.Dirent[]

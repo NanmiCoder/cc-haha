@@ -86,6 +86,71 @@ describe('native composer references', () => {
     expect(names).toContain('office-algorithmic-art:make2')
     for (const gone of ['office-mcp-builder', 'old-skill', 'office-algorithmic-art:make']) expect(names).not.toContain(gone)
   })
+  test('Antigravity draft loads AGY skills via providerId without Claude mentions and merges native Antigravity slash commands', async () => {
+    const calls: string[] = []
+    const client = {
+      get: async (path: string) => {
+        calls.push(path)
+        if (path.startsWith('/api/skills/commands')) {
+          return { commands: [{ name: 'skill-vetter', description: 'Vet skills', kind: 'skill', source: 'user' }] }
+        }
+        return { skills: [skill], plugins: [], commands: [{ name: 'btw', description: 'Claude only' }] }
+      },
+    } as unknown as ApiClient
+    const result = await loadComposerCandidates(
+      client,
+      { workDir: '/repo', runtime: { providerId: 'antigravity-acp', modelId: 'gemini-4-neon' }, lean: false },
+      new AbortController().signal
+    )
+    expect(calls).toEqual(['/api/skills/commands?cwd=%2Frepo&providerId=antigravity-acp'])
+    expect(result.every((value) => !value.reference)).toBe(true)
+    const names = result.map((value) => value.name)
+    expect(names).toContain('swarm')
+    expect(names).toContain('compact')
+    expect(names).toContain('skill-vetter')
+    expect(names).toContain('model')
+    expect(names).toContain('permissions')
+    expect(result.find((value) => value.name === 'skill-vetter')?.kind).toBe('skill')
+    expect(names).not.toContain('review')
+    expect(names).not.toContain('btw')
+  })
+  test('Antigravity session loads only session slash-commands without Claude mentions and merges draft commands on cold start', async () => {
+    const calls: string[] = []
+    const client = {
+      get: async (path: string) => {
+        calls.push(path)
+        if (path === '/api/sessions/ag-1/slash-commands') return { commands: [{ name: 'swarm', description: 'Run swarm' }, { name: 'compact', description: 'Compact' }] }
+        if (path === '/api/sessions/ag-empty/slash-commands') return { commands: [] }
+        if (path === '/api/sessions/ag-cold/slash-commands') return { commands: [{ name: 'skill-vetter', description: 'Vet skills', kind: 'skill' }] }
+        return { skills: [skill], plugins: [] }
+      },
+    } as unknown as ApiClient
+    const live = await loadComposerCandidates(
+      client,
+      { sessionId: 'ag-1', runtime: { providerId: 'antigravity-acp', modelId: 'gemini-4-neon' }, lean: false },
+      new AbortController().signal
+    )
+    expect(calls).toEqual(['/api/sessions/ag-1/slash-commands'])
+    expect(live.map((value) => value.name)).toEqual(['swarm', 'compact', 'model', 'permissions'])
+    expect(live.every((value) => !value.reference)).toBe(true)
+
+    const fallback = await loadComposerCandidates(
+      client,
+      { sessionId: 'ag-empty', runtime: { providerId: 'antigravity-acp', modelId: 'gemini-4-neon' }, lean: false },
+      new AbortController().signal
+    )
+    expect(fallback.map((value) => value.name)).toContain('swarm')
+    expect(fallback.map((value) => value.name)).not.toContain('review')
+
+    const coldStart = await loadComposerCandidates(
+      client,
+      { sessionId: 'ag-cold', runtime: { providerId: 'antigravity-acp', modelId: 'gemini-4-neon' }, lean: false },
+      new AbortController().signal
+    )
+    expect(coldStart.map((value) => value.name)).toContain('swarm')
+    expect(coldStart.map((value) => value.name)).toContain('skill-vetter')
+    expect(coldStart.every((value) => !value.reference)).toBe(true)
+  })
 })
 
 

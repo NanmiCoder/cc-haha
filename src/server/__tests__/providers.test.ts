@@ -21,7 +21,9 @@ import {
 } from '../services/traceCaptureService.js'
 import type { CreateProviderInput } from '../types/provider.js'
 import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
-import { GROK_MODEL_CATALOG, setGrokRuntimeModelCatalog } from '../../services/grokAuth/models.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
+import { getDesktopGrokModelCatalog } from '../services/grokModelCatalog.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -834,10 +836,26 @@ describe('ProviderService', () => {
     describe('Grok Official provider metadata', () => {
       test('keeps discovered capabilities in launch env and removes stale snapshots from settings', async () => {
         const catalog = [{
-          value: 'grok-future-release', label: 'Future', description: '',
+          value: 'grok-future-release', label: 'Future', description: '', contextWindow: 750_000, source: 'official' as const,
           supportsReasoningEffort: true, reasoningEffort: 'low', reasoningEfforts: ['low', 'xhigh', 'max'],
         }]
-        setGrokRuntimeModelCatalog(catalog)
+        clearGrokModelCatalogCache()
+        await hahaGrokOAuthService.saveTokens({
+          accessToken: 'grok-fixture-token', refreshToken: null, expiresAt: null, email: null,
+        })
+        await getDesktopGrokModelCatalog({
+          forceRefresh: true,
+          fetchOverride: async () => Response.json({
+            models: [{
+              id: 'grok-future-release',
+              name: 'Future',
+              context_window: 750_000,
+              supportsReasoningEffort: true,
+              reasoningEffort: 'low',
+              reasoningEfforts: ['low', 'xhigh', 'max'],
+            }],
+          }),
+        })
         try {
           const svc = new ProviderService()
           await svc.updateManagedSettings({ env: {
@@ -847,14 +865,24 @@ describe('ProviderService', () => {
           const persistedEnv = (await readSettings()).env as Record<string, string>
           expect(persistedEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
           expect(persistedEnv.USER_CUSTOM_ENV).toBe('preserved')
+          // Account-specific live catalog windows stay in launch env, never persisted to settings.json.
+          const persistedWindows = JSON.parse(persistedEnv[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
+          expect(persistedWindows['grok-future-release']).toBeUndefined()
+          expect(persistedWindows['grok-4.7']).toBe(500_000)
+
           const runtimeEnv = await svc.getProviderRuntimeEnv('grok-official')
           expect(JSON.parse(runtimeEnv.CC_HAHA_GROK_MODEL_CATALOG!)).toEqual(catalog)
+          expect(JSON.parse(runtimeEnv[MODEL_CONTEXT_WINDOWS_ENV_KEY]!)['grok-future-release']).toBe(750_000)
+
+          await hahaGrokOAuthService.deleteTokens()
+          const afterLogout = readActiveProviderManagedEnv(tmpDir)
+          expect(JSON.parse(afterLogout![MODEL_CONTEXT_WINDOWS_ENV_KEY]!)['grok-future-release']).toBeUndefined()
 
           await svc.updateManagedSettings({ env: { ...persistedEnv, CC_HAHA_GROK_MODEL_CATALOG: 'stale-catalog' } })
           await svc.activateOfficial()
           expect(((await readSettings()).env as Record<string, string>).CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
         } finally {
-          setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+          clearGrokModelCatalogCache()
         }
       })
 
@@ -4491,14 +4519,44 @@ describe('ChatGPT Official context window overrides', () => {
     expect(tooSmall.status).toBe(400)
   })
 
-  test('only ChatGPT Official accepts window overrides', async () => {
-    for (const id of ['grok-official', 'claude-official', 'deepseek-account']) {
+  test('only ChatGPT Official and Grok Official accept window overrides', async () => {
+    for (const id of ['claude-official', 'deepseek-account']) {
       const response = await putModels(id, { models: mapping, modelContextWindows: { 'some-model': 300_000 } })
       expect(response.status).toBe(400)
     }
     // An empty map is a no-op everywhere, so a shared client can always send it.
-    const empty = await putModels('grok-official', { models: mapping, modelContextWindows: {} })
+    const empty = await putModels('claude-official', { models: mapping, modelContextWindows: {} })
     expect(empty.status).toBe(200)
+  })
+
+  test('saves and applies per-model context window overrides for Grok Official', async () => {
+    const svc = new ProviderService()
+    const grokMapping = { main: 'grok-4.7', haiku: 'grok-4.7-build-fast', sonnet: 'grok-4.6', opus: 'grok-4.7' }
+    const response = await putModels('grok-official', {
+      models: grokMapping,
+      modelContextWindows: { 'grok-4.7': 256_000 },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      models: grokMapping,
+      modelContextWindows: { 'grok-4.7': 256_000 },
+    })
+    await svc.activateProvider('grok-official')
+
+    const windows = runtimeWindows(readActiveProviderManagedEnv(tmpDir))
+    expect(windows['grok-4.7']).toBe(256_000)
+    expect(windows['grok-4.7-build-fast']).toBe(500_000)
+    expect(windows['grok-4.6']).toBe(500_000)
+    expect(windows['grok-4.5']).toBe(500_000)
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['grok-4.7']).toBe(256_000)
+    expect((await svc.getProvider('grok-official')).modelContextWindows?.['grok-4.7']).toBe(256_000)
+    expect(runtimeWindows(await svc.getProviderRuntimeEnv('grok-official'))['grok-4.7']).toBe(256_000)
+
+    const cleared = await putModels('grok-official', { models: grokMapping, modelContextWindows: {} })
+    expect(cleared.status).toBe(200)
+    expect(await cleared.json()).toEqual({ models: grokMapping, modelContextWindows: {} })
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['grok-4.7']).toBe(500_000)
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['grok-4.7']).toBe(500_000)
   })
 
   test('GET returns the saved overrides next to the mapping', async () => {
@@ -5499,4 +5557,117 @@ describe('OpenCode Go preset request contract', () => {
     }
   })
 
+})
+
+describe('standalone Gemini provider', () => {
+  const apiKey = 'fake-gemini-key'
+
+  test('persists apiFormat=gemini, routes through proxy with reasoning capabilities, and proxies namespaced gateway models with images and thinking', async () => {
+    const service = new ProviderService()
+    const provider = await service.addProvider({
+      presetId: 'custom',
+      name: 'Local Gemini Gateway',
+      apiKey,
+      baseUrl: 'http://127.0.0.1:3425',
+      apiFormat: 'gemini',
+      models: {
+        main: 'devin/gemini-4-neon',
+        haiku: 'devin/gemini-4-neon',
+        sonnet: 'devin/gemini-4-neon',
+        opus: 'devin/gemini-4-neon',
+      },
+    })
+    expect(provider.apiFormat).toBe('gemini')
+
+    const runtimeEnv = await service.getProviderRuntimeEnv(provider.id)
+    expect(runtimeEnv.ANTHROPIC_BASE_URL).toContain(`/proxy/providers/${provider.id}`)
+    expect(runtimeEnv.ANTHROPIC_API_KEY).toBe('proxy-managed')
+    expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toContain('thinking')
+    expect(runtimeEnv.ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES).toContain('adaptive_thinking')
+
+    const seen: Array<{ url: string; headers: Headers; body: Record<string, any> }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const headers = new Headers(init?.headers)
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      seen.push({ url, headers, body })
+      const chunk = {
+        responseId: 'gem-1',
+        candidates: [{
+          content: {
+            role: 'model',
+            parts: [
+              { text: 'Checking the image.', thought: true, thoughtSignature: 'sig-turn-1' },
+              { functionCall: { id: 'call_img', name: 'Read', args: { file_path: 'README.md' } }, thoughtSignature: 'sig-call-1' },
+            ],
+          },
+          finishReason: 'STOP',
+        }],
+        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 15, thoughtsTokenCount: 10 },
+      }
+      if (url.includes(':streamGenerateContent')) {
+        return new Response(`data: ${JSON.stringify(chunk)}\r\n\r\n`, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json(chunk)
+    }) as typeof fetch
+
+    try {
+      const streamReq = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'devin/gemini-4-neon',
+          max_tokens: 1024,
+          stream: true,
+          thinking: { type: 'adaptive' },
+          output_config: { effort: 'high' },
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Inspect this screenshot' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+            ],
+          }],
+        }),
+      })
+      const streamRes = await handleProxyRequest(streamReq, new URL(streamReq.url))
+      expect(streamRes.status).toBe(200)
+      const sseText = await streamRes.text()
+      expect(sseText).toContain('"thinking_delta"')
+      expect(sseText).toContain('"redacted_thinking"')
+      expect(sseText).toContain('"name":"Read"')
+      expect(sseText).toContain('"stop_reason":"tool_use"')
+
+      expect(seen[0]!.url).toBe('http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:streamGenerateContent?alt=sse')
+      expect(seen[0]!.headers.get('x-goog-api-key')).toBe(apiKey)
+      expect(seen[0]!.headers.get('authorization')).toBeNull()
+      expect(seen[0]!.body.contents[0].parts).toEqual([
+        { text: 'Inspect this screenshot' },
+        { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgo=' } },
+      ])
+      expect(seen[0]!.body.generationConfig).toEqual({
+        maxOutputTokens: 1024,
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'high' },
+      })
+
+      seen.length = 0
+      const testResult = await service.testProviderConfig({
+        baseUrl: 'http://127.0.0.1:3425',
+        apiKey,
+        modelId: 'devin/gemini-4-neon',
+        apiFormat: 'gemini',
+      })
+      expect(testResult.connectivity.success).toBe(true)
+      expect(testResult.proxy?.success).toBe(true)
+      expect(seen.map(call => call.url)).toEqual([
+        'http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:generateContent',
+        'http://127.0.0.1:3425/v1beta/models/devin/gemini-4-neon:generateContent',
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })

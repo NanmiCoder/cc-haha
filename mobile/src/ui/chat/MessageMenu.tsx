@@ -4,7 +4,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../Text'
 import type { ChatItem } from '../../core/types'
 import { visibleMessageText } from '../../core/chatComposer'
-import { Icon, Spinner, useColors, type IconName } from '../kit'
+import { Icon, Spinner, type IconName } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Markdown, UserBubble, type BubbleLayout } from '../Message'
 import { simulatedPhoneChrome } from '../webChrome'
 
@@ -39,7 +41,7 @@ export function MessageMenu({
   onAction(key: MessageAction['key']): void
   onClose(): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
   if (!item || !layout) return null
@@ -80,10 +82,10 @@ export function MessageMenu({
             maxHeight: bubbleHeight,
             width: user ? undefined : Math.min(layout.width, screenWidth - 32),
             maxWidth: user ? 300 : screenWidth - 32,
-            borderRadius: user ? 20 : 16,
-            borderBottomRightRadius: user ? 6 : 16,
+            borderRadius: user ? 20 : radius.card,
+            borderBottomRightRadius: user ? 6 : radius.card,
             overflow: 'hidden',
-            boxShadow: '0 10px 30px rgba(28,25,23,0.16)',
+            boxShadow: shadows.floating,
             transform: [{ scale: 1.02 }],
             backgroundColor: user ? colors.bubble : colors.card,
           }}
@@ -104,10 +106,10 @@ export function MessageMenu({
           accessibilityLabel="消息操作"
           style={{
             width: MENU_WIDTH,
-            backgroundColor: colors.sheet,
-            borderRadius: 14,
+            backgroundColor: colors.cardRaised,
+            borderRadius: radius.card,
             overflow: 'hidden',
-            boxShadow: `0 12px 40px rgba(28,25,23,0.18), 0 0 0 0.5px ${colors.hair}`,
+            boxShadow: shadows.menu,
           }}
         >
           {actions.map((action, index) => (

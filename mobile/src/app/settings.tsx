@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ComponentRef } from 'react'
 import { Linking, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import Constants from 'expo-constants'
@@ -6,6 +6,7 @@ import { isH5 } from '../state/h5'
 import { pushTokens, useApp, useConnection } from '../state/AppContext'
 import { usePushRegistration, useRetryPushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
+import { isKeepAwakeAvailable } from '../state/keepAwake'
 import {
   Footnote,
   Group,
@@ -20,6 +21,7 @@ import {
   Segmented,
   Separator,
   Switch,
+  Toast,
   useColors,
   type IconName,
 } from '../ui/kit'
@@ -35,6 +37,7 @@ import {
   scheduleTestNotification,
 } from '../core/systemPermissions'
 import { DeliveryCard } from '../ui/settings/DeliveryCard'
+import { AndroidUpdateAboutItem, AndroidUpdateNotice } from '../ui/settings/AndroidUpdateSection'
 import { ProfileEntry } from '../ui/profile/ProfileEntry'
 import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
 import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
@@ -45,14 +48,17 @@ import {
   channelRows,
   computerSettingsTitle,
   computersValue,
-  deliveryNote,
+  createPushTestFeedback,
+  deliveryCardNote,
   deliveryStatus,
   liveActivityValue,
   permissionLabel,
+  reconcilePushTestFeedback,
   remindFootnote,
   runTestNotification,
   versionLabel,
   type Delivery,
+  type PushTestFeedback,
   type PushTestResult,
 } from '../ui/settings/deliveryModel'
 import { quietSummary } from '../ui/settings/settingsModel'
@@ -65,6 +71,7 @@ const notificationRows: { key: NotificationKey; title: string; detail?: string }
 ]
 
 const platform = Platform.OS === 'ios' ? 'ios' : 'android'
+const keepAwakeAvailable = isKeepAwakeAvailable(Platform.OS)
 
 export default function Settings() {
   const colors = useColors()
@@ -76,19 +83,45 @@ export default function Settings() {
   const retryPush = useRetryPushRegistration(host?.id)
   const permissions = useSystemPermissions()
   const [busy, setBusy] = useState<Delivery['actions'][number]['kind'] | null>(null)
-  const [deliveryError, setDeliveryError] = useState('')
-  const [testNote, setTestNote] = useState('')
+  const [deliveryFailure, setDeliveryFailure] = useState<{
+    hostId: string | undefined
+    message: string
+  } | null>(null)
+  const [testFeedback, setTestFeedback] = useState<PushTestFeedback | null>(null)
   const [notifyError, setNotifyError] = useState('')
   const [appearanceError, setAppearanceError] = useState('')
   const [linkError, setLinkError] = useState('')
+  const [toastText, setToastText] = useState('')
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null)
   const [quietOpen, setQuietOpen] = useState(0)
   const [quietVisible, setQuietVisible] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
+  }, [])
+
+  function showToast(text: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToastText(text)
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null
+      setToastText('')
+    }, 2200)
+  }
   const { decisions, completed, errors } = preferences.notifications
   // Only when this computer reaches the phone through the background connection.
   const duty = useDutyStatus(
     push?.status === 'registered' && push.provider === 'desktop' &&
       (decisions || completed || errors)
   )
+
+  const reconciledFeedback = reconcilePushTestFeedback(testFeedback, push, host?.id)
+  if (reconciledFeedback !== testFeedback) setTestFeedback(reconciledFeedback)
+  const deliveryError =
+    deliveryFailure && deliveryFailure.hostId === host?.id ? deliveryFailure.message : ''
 
   const delivery = deliveryStatus({
     platform,
@@ -100,7 +133,7 @@ export default function Settings() {
     liveActivity: preferences.liveActivity,
     duty,
   })
-  const note = deliveryNote(push, duty)
+  const note = deliveryCardNote(reconciledFeedback, push, duty, host?.id)
   const remind = remindFootnote(permissions.notifications)
 
   /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
@@ -114,8 +147,10 @@ export default function Settings() {
   }
 
   async function runAction(kind: Delivery['actions'][number]['kind']) {
-    setDeliveryError('')
-    setTestNote('')
+    const actionHostId = host?.id
+    const actionPush = push
+    setDeliveryFailure(null)
+    setTestFeedback(null)
     setBusy(kind)
     try {
       if (kind === 'request') await requestNotifications()
@@ -126,19 +161,23 @@ export default function Settings() {
       else {
         if (host && !client) throw new Error('电脑还没连上，稍后再试')
         const outcome = await runTestNotification({
-          hostId: host?.id,
+          hostId: actionHostId,
+          push: actionPush,
           // The test must reach the phone the same way the computer's real alerts do.
-          getToken: () => pushTokens.token(push?.provider ?? 'direct', host?.id ?? ''),
+          getToken: () => pushTokens.token(actionPush?.provider ?? 'direct', actionHostId ?? ''),
           postTest: (body) =>
             client!.post<PushTestResult>('/api/sessions/mobile-push/test', body),
           scheduleLocal: scheduleTestNotification,
         })
-        setTestNote(outcome.note)
+        setTestFeedback(createPushTestFeedback(outcome, actionHostId, actionPush))
         // The computer just sent through its relay: read the fresh delivery state.
         if (outcome.via === 'remote') retryPush()
       }
     } catch (e) {
-      setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))
+      setDeliveryFailure({
+        hostId: actionHostId,
+        message: kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e),
+      })
     } finally {
       setBusy(null)
     }
@@ -183,7 +222,9 @@ export default function Settings() {
   return (
     <ScreenView>
       <NavBar floating />
+      <Toast text={toastText} top={58} />
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         keyboardShouldPersistTaps="handled"
       >
@@ -191,6 +232,7 @@ export default function Settings() {
         <InlineError text={preferenceError} style={{ marginBottom: 8 }} />
 
         <ProfileEntry />
+        <AndroidUpdateNotice onPress={() => scrollRef.current?.scrollToEnd({ animated: true })} />
 
         {/* 网页版收不到推送，也没有锁屏、系统权限：这些只在手机 App 里设置。 */}
         {isH5 ? null : (
@@ -198,7 +240,7 @@ export default function Settings() {
             <DeliveryCard
               delivery={delivery}
               busy={busy ?? (push?.status === 'loading' ? 'retry' : null)}
-              note={testNote || note}
+              note={note}
               error={deliveryError}
               onAction={(kind) => void runAction(kind)}
               onGuide={() => void open(aboutLinks.pushSetup)}
@@ -299,6 +341,23 @@ export default function Settings() {
             void setAppearance(value).catch((e) => setAppearanceError(errorText(e)))
           }}
         />
+        {keepAwakeAvailable ? (
+          <>
+            <Group style={{ marginTop: 12 }}>
+              <ListRowWithSwitch
+                first
+                title="屏幕常亮"
+                detail="打开 App 时不自动息屏，适合持续查看任务"
+                value={preferences.keepAwake}
+                onChange={(value) => {
+                  setAppearanceError('')
+                  void update({ keepAwake: value }).catch((e) => setAppearanceError(errorText(e)))
+                }}
+              />
+            </Group>
+            <Footnote>切到后台或手动锁屏后仍按系统设置息屏。</Footnote>
+          </>
+        ) : null}
         <InlineError text={appearanceError} style={{ marginTop: 8 }} />
 
         {isH5 ? null : (
@@ -407,6 +466,7 @@ export default function Settings() {
               </View>
             }
           />
+          <AndroidUpdateAboutItem onCopied={showToast} onLinkError={setLinkError} />
           <Separator />
           <LinkRow title="使用指南" onPress={() => void open(aboutLinks.guide)} />
           <Separator />

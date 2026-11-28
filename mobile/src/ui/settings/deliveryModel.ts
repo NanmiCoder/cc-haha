@@ -2,6 +2,7 @@ import { classifyPermission } from '../../state/notifyPromptGate'
 import type { LiveActivityMode } from '../../state/preferences'
 import type { PushState } from './settingsModel'
 import type { PushIssue } from '../../state/PushRegistrationContext'
+import type { PushProvider } from '../../state/pushProvider'
 
 /** 系统通知权限；null 表示还没读到。 */
 export type NotificationPermission = 'granted' | 'denied' | 'undetermined'
@@ -58,7 +59,7 @@ export type Delivery = {
 export type DeliveryInput = {
   platform: 'ios' | 'android'
   permission: PermissionSnapshot | null
-  push: { status: PushState; error?: string; issue?: PushIssue } | undefined
+  push: { status: PushState; error?: string; issue?: PushIssue; provider?: PushProvider } | undefined
   /** 没有已连接的电脑时为 undefined。 */
   hostName: string | undefined
   hasHost: boolean
@@ -250,13 +251,29 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   }
 }
 
+const expoRejectedPattern = /^Expo 推送服务拒绝了发送（(.+)）$/
+
+function relayFailingNote(error: string | undefined): string {
+  const summary = error ?? '电脑发送推送失败'
+  const detail = error ? expoRejectedPattern.exec(error)?.[1] : undefined
+  if (detail === 'InvalidCredentials' || detail === 'MismatchSenderId')
+    return `${summary}。这是应用发布侧的推送凭证失效或未配置，与手机通知权限和电脑网络无关；请更新应用或通过「反馈问题」联系开发者，修复后点「测试通知」即可恢复。`
+  if (detail === 'MessageRateExceeded' || detail === '429')
+    return `${summary}。推送过于频繁，请稍后再点「测试通知」确认。`
+  if (detail === 'MessageTooBig')
+    return `${summary}。通知内容超出长度限制；可点「测试通知」确认推送通道，若持续出现请通过「反馈问题」联系开发者。`
+  if (detail === 'ExpoError' || (detail && /^5\d\d$/.test(detail)))
+    return `${summary}。Expo 推送服务暂时异常，请稍后再点「测试通知」确认。`
+  return `${summary}。如果电脑要通过代理上网，请在电脑端「设置 → 通用」里配置网络代理，再点「测试通知」确认。`
+}
+
 /** 卡片下的补充说明：只有登记失败、设备不支持这两种需要多说一句。 */
 export function deliveryNote(
   push: DeliveryInput['push'],
   duty?: DeliveryInput['duty']
 ) {
   if (push?.status === 'registered' && push.issue === 'relayFailing')
-    return `${push.error ?? '电脑发送推送失败'}。如果电脑要通过代理上网，请在电脑端「设置 → 通用」里配置网络代理，再点「测试通知」确认。`
+    return relayFailingNote(push.error)
   if (duty && push?.status === 'registered')
     return '离开 App 后，靠通知栏里那条「正在值守」保持与电脑的连接。小米、华为、OPPO、vivo 等手机还要在应用设置里允许自启动，并在最近任务里锁定 cc-haha，否则可能被系统清理。'
   if (push?.issue === 'deviceNotConfigured')
@@ -309,8 +326,10 @@ export type PushTestResult = {
   error?: string
 }
 
+const failedTestPrefix = '测试通知发送失败'
+
 /** 把电脑的测试结果翻成一句话；未知状态按失败处理，不假装成功。 */
-export function pushTestNote(result: PushTestResult): string {
+export function pushTestNote(result: PushTestResult, push?: DeliveryInput['push']): string {
   switch (result.status) {
     case 'sent':
       return '电脑已发送测试通知，屏幕顶部应弹出横幅。'
@@ -319,7 +338,11 @@ export function pushTestNote(result: PushTestResult): string {
     case 'noRegistration':
       return '电脑还未识别这台手机，请重新连接后再试。'
     default:
-      return '测试通知发送失败，请检查电脑推送设置后重试。'
+      if (push?.status === 'registered' && push.issue === 'relayFailing')
+        return `${failedTestPrefix}：${relayFailingNote(push.error)}`
+      if (push?.provider === 'expo')
+        return `${failedTestPrefix}，请再点一次「测试通知」确认。`
+      return `${failedTestPrefix}，请检查电脑推送设置后重试。`
   }
 }
 
@@ -327,6 +350,100 @@ export type TestNotificationOutcome = {
   /** remote=经电脑真实推送，local=只发了本地通知。 */
   via: 'remote' | 'local'
   note: string
+}
+
+export type PushTestFeedback = {
+  hostId: string | undefined
+  provider: PushProvider | undefined
+  note: string
+  /** 是否是一次失败的远程测试（只有这种状态需要跟随中继拒信升级，并在中继恢复后让位）。 */
+  failed: boolean
+  /** 失败测试期间或刷新后是否观测到了 relayFailing；一旦观测到，后续恢复为正常 registered 时自动清除。 */
+  sawRelayFailing: boolean
+}
+
+export function createPushTestFeedback(
+  outcome: TestNotificationOutcome,
+  hostId: string | undefined,
+  push: DeliveryInput['push']
+): PushTestFeedback {
+  const failed = outcome.via === 'remote' && outcome.note.startsWith(failedTestPrefix)
+  const relayFailing = push?.status === 'registered' && push.issue === 'relayFailing'
+  return {
+    hostId,
+    provider: push?.provider,
+    note: outcome.note,
+    failed,
+    sawRelayFailing: failed && Boolean(relayFailing),
+  }
+}
+
+/**
+ * 同步测试反馈与最新的推送登记状态：
+ * - 切换电脑或切换推送通道后清除旧测试反馈；
+ * - 远程测试失败后若刷新出中继拒信（如 InvalidCredentials），把具体原因持久化进状态，
+ *   后续回到前台经历 loading / 临时断网也不会退回泛泛提示；
+ * - 一旦观测过 relayFailing，当通道恢复为健康 registered 时自动清除旧失败提示，不污染绿卡。
+ */
+export function reconcilePushTestFeedback(
+  prev: PushTestFeedback | null,
+  push: DeliveryInput['push'],
+  hostId: string | undefined
+): PushTestFeedback | null {
+  if (!prev) return null
+  if (prev.hostId !== hostId) return null
+  if (prev.provider && push?.provider && prev.provider !== push.provider) return null
+  if (!prev.failed) return prev
+  if (
+    push?.status === 'notConfigured' ||
+    push?.status === 'permissionRequired' ||
+    push?.status === 'unsupported'
+  )
+    return null
+  if (push?.status === 'registered') {
+    if (push.issue === 'relayFailing') {
+      const note = pushTestNote({ status: 'failed' }, push)
+      const provider = push.provider ?? prev.provider
+      if (prev.note === note && prev.sawRelayFailing && prev.provider === provider) return prev
+      return { ...prev, provider, note, sawRelayFailing: true }
+    }
+    if (!push.issue) {
+      if (prev.sawRelayFailing) return null
+      const provider = push.provider ?? prev.provider
+      if (prev.provider === provider) return prev
+      return { ...prev, provider }
+    }
+  }
+  return prev
+}
+
+/**
+ * 卡片底部说明：优先显示刚测完的结果；但若远程测试失败且拿到了中继的具体拒信
+ * （如 InvalidCredentials），用具体原因替代泛泛的失败提示，并在恢复后让位给常态说明。
+ */
+export function deliveryCardNote(
+  testFeedback: PushTestFeedback | string | null | undefined,
+  push: DeliveryInput['push'],
+  duty?: DeliveryInput['duty'],
+  hostId?: string
+): string {
+  if (typeof testFeedback === 'string') {
+    if (
+      testFeedback.startsWith(failedTestPrefix) &&
+      push?.status === 'registered' &&
+      push.issue === 'relayFailing'
+    )
+      return pushTestNote({ status: 'failed' }, push)
+    return testFeedback || deliveryNote(push, duty)
+  }
+  const reconciled = testFeedback
+    ? reconcilePushTestFeedback(
+        testFeedback,
+        push,
+        arguments.length >= 4 ? hostId : testFeedback.hostId
+      )
+    : null
+  return reconciled?.note || deliveryNote(push, duty)
 }
 
 /** 旧版电脑没有测试接口时的三种回答：404 无路由、405 局域网方法不允许、403 公网白名单拒绝。 */
@@ -341,6 +458,7 @@ export async function runTestNotification(deps: {
   postTest(body: { token: string; hostId: string }): Promise<PushTestResult>
   scheduleLocal(): Promise<void>
   hostId: string | undefined
+  push?: DeliveryInput['push']
 }): Promise<TestNotificationOutcome> {
   if (!deps.hostId) {
     await deps.scheduleLocal()
@@ -359,7 +477,7 @@ export async function runTestNotification(deps: {
   }
   try {
     const result = await deps.postTest({ token, hostId: deps.hostId })
-    return { via: 'remote', note: pushTestNote(result) }
+    return { via: 'remote', note: pushTestNote(result, deps.push) }
   } catch (error) {
     const status = (error as { status?: number } | null)?.status
     if (!status || !oldDesktopStatuses.includes(status)) throw error

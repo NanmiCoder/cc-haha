@@ -116,15 +116,21 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
   return (
     <div
       data-testid={`mobile-session-browser-${variant}`}
-      className="relative flex min-h-0 flex-1 flex-col bg-[var(--color-surface)]"
+      className="relative flex min-h-0 flex-1 flex-col bg-transparent"
     >
-      <header className="flex h-14 shrink-0 items-center gap-1 pl-4 pr-1">
+      <header
+        className={`flex h-14 shrink-0 items-center gap-1 border-b border-[var(--color-border)] pl-4 pr-1.5 ${
+          variant === 'home' ? 'surface-glass shadow-[var(--glass-top-rim)]' : ''
+        }`}
+      >
         <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold leading-tight tracking-tight text-[var(--color-text-primary)]">
           {t('mobile.home.title')}
         </h1>
         <IconButton
           size="2xl"
           tone="secondary"
+          surface={variant === 'pane' ? 'sidebar' : 'default'}
+          className="rounded-[var(--radius-control)]! v6c-pressable"
           icon={searchOpen
             ? <X size={20} strokeWidth={1.75} aria-hidden="true" />
             : <Search size={20} strokeWidth={1.75} aria-hidden="true" />}
@@ -135,6 +141,8 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         <IconButton
           size="2xl"
           tone="secondary"
+          surface={variant === 'pane' ? 'sidebar' : 'default'}
+          className="rounded-[var(--radius-control)]! v6c-pressable"
           icon={<Settings size={20} strokeWidth={1.75} aria-hidden="true" />}
           label={t('sidebar.settings')}
           onClick={openSettings}
@@ -142,7 +150,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
       </header>
 
       {searchOpen ? (
-        <div className="shrink-0 px-4 pb-2">
+        <div className="shrink-0 px-4 pt-2 pb-2">
           <SearchField
             ref={searchRef}
             size="xl"
@@ -159,7 +167,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         <div
           role="group"
           aria-label={t('mobile.home.projectFilter')}
-          className="flex shrink-0 gap-2 overflow-x-auto px-4 pb-2 [scrollbar-width:none]"
+          className="flex shrink-0 gap-1.5 overflow-x-auto px-4 pt-2 pb-2 [scrollbar-width:none]"
         >
           <FilterChip active={effectiveProjectKey === null} onClick={() => setProjectKey(null)}>
             {t('mobile.home.allProjects')}
@@ -197,6 +205,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
             groups={groups}
             runningIds={runningIds}
             attentionIds={attentionIds}
+            surface={variant}
             selectedSessionId={variant === 'pane' ? selectedSessionId : null}
             workspaceLabelFor={workspaceLabelFor}
             onOpen={(session) => openMobileSession(session.id)}
@@ -208,9 +217,9 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         type="button"
         data-testid="mobile-new-task"
         onClick={() => onNewTask(resolveNewTaskWorkDir(visibleSessions, effectiveProjectKey))}
-        className="absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-full)] bg-[var(--color-text-primary)] pl-4 pr-5 text-[15px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-overlay)] transition-transform active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2"
+        className="v6c-send-btn v6c-pressable absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-control)] pl-4 pr-5 text-[15px] font-medium shadow-[var(--shadow-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
       >
-        <Plus size={18} strokeWidth={2} aria-hidden="true" />
+        <Plus size={18} strokeWidth={1.75} aria-hidden="true" />
         {t('mobile.home.newTask')}
       </button>
     </div>
@@ -223,10 +232,10 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`h-9 max-w-[180px] shrink-0 truncate rounded-[var(--radius-full)] border px-3.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+      className={`v6c-pressable h-9 max-w-[180px] shrink-0 truncate rounded-[var(--radius-sm)] border px-3 text-[13px] font-medium transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
         active
-          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-surface)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)]'
+          ? 'v6c-raised border-[var(--color-surface-glass-border)] text-[var(--color-text-primary)]'
+          : 'border-[var(--color-border)] bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
       }`}
     >
       {children}

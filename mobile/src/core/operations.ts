@@ -1,6 +1,7 @@
 import type { ApiClient } from './client'
 import type { HistoryEntry } from './types'
 import { formatDuration } from './dashboard'
+import { isAgentIdRef, readAgentIdRef } from './workflows'
 import type { TaskExecution, TaskNotificationConfig, TaskNotificationPolicy, TaskSchedule } from '../../../src/shared/taskSchedule'
 
 export type RewindMode = 'both' | 'conversation' | 'code'
@@ -126,6 +127,7 @@ export type BackgroundSnapshot = {
 }
 export type SubagentOutput = {
   messages: HistoryEntry[]
+  description?: string
   result?: string
   summary?: string
   truncated?: boolean
@@ -144,7 +146,9 @@ export type TaskOutput =
   | { kind: 'notice'; text: string }
 export const isAgent = (task: BackgroundTask) =>
   task.taskType === 'local_agent' || task.taskType === 'remote_agent'
-/** 子 Agent 的只读 transcript；taskId 用来在同一个 toolUseId 下区分多次运行。 */
+export const isWorkflow = (task: BackgroundTask) =>
+  task.taskType === 'local_workflow'
+/** 子 Agent 的只读 transcript；支持按 toolUseId 或 `agent:<agentId>`（工作流子代理）读取。 */
 export function loadSubagentRun(
   client: ApiClient,
   sessionId: string,
@@ -152,6 +156,12 @@ export function loadSubagentRun(
   taskId: string | undefined,
   signal: AbortSignal
 ) {
+  if (isAgentIdRef(toolUseId)) {
+    return client.get<SubagentOutput>(
+      `${sessionPath(sessionId)}/subagents/by-agent/${encodeURIComponent(readAgentIdRef(toolUseId))}`,
+      { signal }
+    )
+  }
   const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''
   return client.get<SubagentOutput>(
     `${sessionPath(sessionId)}/subagents/by-tool/${encodeURIComponent(toolUseId)}${query}`,

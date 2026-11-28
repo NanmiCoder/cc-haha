@@ -12,6 +12,7 @@ import {
   type SubagentOutput,
 } from '../../core/operations'
 import { useFocusedResource } from '../../core/useFocusedResource'
+import { isAgentIdRef } from '../../core/workflows'
 import {
   Footnote,
   InlineError,
@@ -22,6 +23,8 @@ import {
   Spinner,
   useColors,
 } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { Message } from '../Message'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../chat/StepGroup'
@@ -113,37 +116,43 @@ export function SubagentRun({
   sessionId,
   taskId,
   toolUseId,
+  title,
 }: {
   hostId: string
   sessionId: string
   taskId?: string
   toolUseId: string
+  title?: string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const { client, error: connectionError } = useConnection(hostId)
   const [running, setRunning] = useState(true)
+  const byAgent = isAgentIdRef(toolUseId)
   const resource = useFocusedResource<Loaded>(
     useCallback(
       async (signal: AbortSignal) => {
         if (!client) throw new Error('正在连接电脑')
-        // 运行状态和耗时来自后台任务列表；列表读不到时只显示 transcript。
+        // 运行状态和耗时来自后台任务列表；工作流子代理不在后台任务列表里，直接读 transcript。
         const [output, snapshot] = await Promise.all([
           loadSubagentRun(client, sessionId, toolUseId, taskId, signal),
-          client
-            .get<BackgroundSnapshot>(`${sessionPath(sessionId)}/background-tasks`, { signal })
-            .catch(() => null),
+          byAgent
+            ? Promise.resolve(null)
+            : client
+                .get<BackgroundSnapshot>(`${sessionPath(sessionId)}/background-tasks`, { signal })
+                .catch(() => null),
         ])
         const task = snapshot?.tasks.find(
           (item) => (taskId && item.taskId === taskId) || item.toolUseId === toolUseId
         )
         return { output, task }
       },
-      [client, sessionId, taskId, toolUseId]
+      [client, sessionId, taskId, toolUseId, byAgent]
     ),
     running ? REFRESH_MS : 0
   )
-  const header = subagentHeader(resource.value?.task, resource.value?.output ?? null)
+  const header = subagentHeader(resource.value?.task, resource.value?.output ?? null, title)
   const live = header.status === 'running'
+  const canStop = live && !byAgent && Boolean(resource.value?.task?.taskId ?? taskId)
   // 轮询间隔跟随运行状态：结束后停止刷新。
   if (resource.value && live !== running) setRunning(live)
   const now = useNow(live)
@@ -214,7 +223,7 @@ export function SubagentRun({
           </View>
         }
         right={
-          live ? (
+          canStop ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`停止 ${header.title}`}
@@ -228,9 +237,9 @@ export function SubagentRun({
                   height: 36,
                   paddingLeft: 12,
                   paddingRight: 14,
-                  borderRadius: 18,
-                  backgroundColor: colors.card,
-                  boxShadow: `0 1px 2px rgba(28,25,23,0.06), 0 2px 8px rgba(28,25,23,0.07), 0 0 0 1px ${colors.hair}`,
+                  borderRadius: radius.control,
+                  backgroundColor: colors.cardRaised,
+                  boxShadow: shadows.card,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,

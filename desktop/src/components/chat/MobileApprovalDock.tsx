@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState, type FormEvent } from 'react'
 import { ArrowUp, ListChecks, MessageCircleQuestion, Shield } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { listPendingPermissions, useChatStore, type PendingPermission } from '../../stores/chatStore'
@@ -57,9 +58,16 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
   if (!current) return null
 
   const kind = kindOf(current)
+  const inputSupportsAllowAlways =
+    current.input && typeof current.input === 'object' && !Array.isArray(current.input)
+      ? (current.input as { supportsAllowAlways?: unknown }).supportsAllowAlways
+      : undefined
+  const allowAlways = current.supportsAllowAlways !== false && inputSupportsAllowAlways !== false
   const position = pending.length > 1 ? t('mobile.approval.position', { index: 1, total: pending.length }) : null
 
-  let Icon = PERMISSION_TOOL_ICONS[current.toolName] ?? Shield
+  let Icon = PERMISSION_TOOL_ICONS[current.toolName]
+    ?? (current.antigravityToolName ? PERMISSION_TOOL_ICONS[current.antigravityToolName] : undefined)
+    ?? Shield
   let title: string
   let detail = ''
   if (kind === 'question') {
@@ -71,9 +79,12 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
     title = t('permission.planReadyTitle')
     detail = current.description ?? ''
   } else {
-    title = getPermissionTitle(current.toolName, current.input, t, current.displayName)
+    title = getPermissionTitle(current.toolName, current.input, t, current.displayName, current.antigravityToolName)
     detail = extractToolDetails(current.toolName, current.input, t).primary || current.description || current.toolName
   }
+  const toolDescription = kind === 'tool' && current.description && current.description !== detail
+    ? current.description
+    : null
 
   const submitReason = (event: FormEvent) => {
     event.preventDefault()
@@ -88,23 +99,33 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
       data-kind={kind}
       role="region"
       aria-label={title}
-      className="flex flex-col gap-2.5 rounded-[var(--radius-xl)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] p-3 shadow-[var(--shadow-raised)]"
+      className="v6c-glass-card v6c-ring-waiting flex flex-col gap-2.5 rounded-[var(--radius-2xl)] p-3"
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container-lowest)] text-[var(--color-on-warning-container)]">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
           <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 text-[var(--color-text-primary)]">{title}</h2>
+            {current.subagentName ? (
+              <Badge tone="info" size="xs" pill={false} data-testid="mobile-approval-subagent-badge" className="shrink-0">
+                {t('permission.fromSubagent', { name: current.subagentName })}
+              </Badge>
+            ) : null}
             {position ? (
               <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-on-warning-container)]">{position}</span>
             ) : null}
           </div>
+          {toolDescription ? (
+            <p className="mt-0.5 truncate text-[12px] leading-[1.4] text-[var(--color-text-tertiary)]">
+              {toolDescription}
+            </p>
+          ) : null}
           {detail ? (
             <p
               className={`mt-0.5 line-clamp-2 break-words text-[12px] leading-[1.5] text-[var(--color-text-secondary)] ${
-                kind === 'tool' ? 'font-mono' : ''
+                kind === 'tool' && detail !== current.description ? 'font-mono' : ''
               }`}
             >
               {detail}
@@ -137,13 +158,15 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             <Button variant="ghost" size="md" onClick={() => setDetailOpen(true)}>
               {t('mobile.approval.viewDetails')}
             </Button>
-            <Button
-              variant="ghost"
-              size="md"
-              onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
-            >
-              {t('permission.allowForSession')}
-            </Button>
+            {allowAlways ? (
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
+              >
+                {t('permission.allowForSession')}
+              </Button>
+            ) : null}
           </div>
           {reasonOpen ? (
             <form onSubmit={submitReason} className="flex items-center gap-2">
@@ -154,24 +177,24 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
                 autoFocus
                 onChange={(event) => setReason(event.target.value)}
                 placeholder={t('mobile.approval.reasonPlaceholder')}
-                className="h-11 min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 text-[15px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
+                className="v6c-field h-11 min-w-0 flex-1 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-3 text-[15px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)]"
               />
               <Button
                 type="submit"
-                variant="accent"
+                variant="danger"
                 size="lg"
-                shape="circle"
+                shape="key"
                 disabled={!reason.trim()}
                 aria-label={t('mobile.approval.denyWithReason')}
                 className="h-11 w-11 shrink-0"
-                icon={<ArrowUp size={18} strokeWidth={2} aria-hidden="true" />}
+                icon={<ArrowUp size={18} strokeWidth={1.75} aria-hidden="true" />}
               />
             </form>
           ) : (
             <button
               type="button"
               onClick={() => setReasonOpen(true)}
-              className="min-h-9 text-center text-[12px] text-[var(--color-text-tertiary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="min-h-9 rounded-[var(--radius-sm)] text-center text-[12px] text-[var(--color-text-tertiary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               {t('mobile.approval.denyWithReasonHint')}
             </button>
@@ -202,6 +225,9 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             input={current.input}
             description={current.description}
             displayName={current.displayName}
+            antigravityToolName={current.antigravityToolName}
+            subagentName={current.subagentName}
+            supportsAllowAlways={current.supportsAllowAlways}
           />
         )}
       </MobileBottomSheet>

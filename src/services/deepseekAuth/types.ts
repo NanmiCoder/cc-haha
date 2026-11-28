@@ -31,3 +31,16 @@ export type DeepSeekClientIdentity = {
   locale: string
   timezoneOffsetSeconds: number
 }
+
+export type DeepSeekWalletCurrency = 'CNY' | 'USD'
+
+/** Platform recharge or bonus wallet balance; decimal strings retain server precision. */
+export type DeepSeekWalletBalance = {
+  currency: DeepSeekWalletCurrency
+  balance: string
+}
+
+export type DeepSeekBalanceSummary = {
+  normalWallets: DeepSeekWalletBalance[]
+  bonusWallets: DeepSeekWalletBalance[]
+}

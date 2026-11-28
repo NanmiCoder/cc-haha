@@ -1026,6 +1026,59 @@ describe('review content parity', () => {
     const toolbar = screen.getByTestId('workspace-review-toolbar')
     expect(toolbar.parentElement).toContainElement(screen.getByTestId('workspace-tree-sidebar'))
     expect(toolbar.nextElementSibling).toContainElement(screen.getByTestId('workspace-tree-sidebar'))
-    expect(screen.getByTestId('workspace-review-bulk-bar')).toHaveClass('absolute', 'rounded-full')
+    expect(screen.getByTestId('workspace-review-bulk-bar')).toHaveClass('absolute', 'dropdown-glass', 'rounded-[var(--radius-xl)]')
+  })
+
+  it('locates a faraway file inside a virtualized review list without mounting every section', async () => {
+    const files = Array.from({ length: 240 }, (_, index) =>
+      file(`dir-${String(Math.floor(index / 20)).padStart(2, '0')}/f-${String(index).padStart(3, '0')}.ts`),
+    )
+    const targetPath = files[220]!.path
+    reviewApi.getStatus.mockResolvedValue(status({ files, untracked: [] }))
+    const view = await renderReview({ path: targetPath })
+
+    expect(view.container.querySelectorAll('section[data-testid^="workspace-review-section-"]').length).toBeLessThan(80)
+    expect(await screen.findByTestId(`workspace-review-section-${targetPath}`)).toBeInTheDocument()
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
+
+  it('does not churn IntersectionObserver observe/unobserve on mounted cards while scrolling a virtualized review', async () => {
+    const observeCalls = new Map<Element, number>()
+    const unobserveCalls = new Map<Element, number>()
+    class TrackingIntersectionObserver {
+      observe(element: Element) {
+        observeCalls.set(element, (observeCalls.get(element) ?? 0) + 1)
+      }
+      unobserve(element: Element) {
+        unobserveCalls.set(element, (unobserveCalls.get(element) ?? 0) + 1)
+      }
+      disconnect() {}
+    }
+    vi.stubGlobal('IntersectionObserver', TrackingIntersectionObserver)
+
+    try {
+      const files = Array.from({ length: 120 }, (_, index) =>
+        file(`dir-${String(Math.floor(index / 20)).padStart(2, '0')}/f-${String(index).padStart(3, '0')}.ts`),
+      )
+      reviewApi.getStatus.mockResolvedValue(status({ files, untracked: [] }))
+      const view = await renderReview()
+
+      const firstSection = await screen.findByTestId(`workspace-review-section-${files[0]!.path}`)
+      const scrollContainer = firstSection.parentElement!
+      expect(observeCalls.get(firstSection)).toBe(1)
+      expect(unobserveCalls.get(firstSection) ?? 0).toBe(0)
+
+      // Small scrolls that keep the first section mounted must not re-observe or unobserve it.
+      for (const scrollTop of [40, 80, 120]) {
+        scrollContainer.scrollTop = scrollTop
+        fireEvent.scroll(scrollContainer)
+      }
+
+      expect(observeCalls.get(firstSection)).toBe(1)
+      expect(unobserveCalls.get(firstSection) ?? 0).toBe(0)
+      expect(view.container.querySelectorAll('section[data-testid^="workspace-review-section-"]').length).toBeLessThan(80)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

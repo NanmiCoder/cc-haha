@@ -22,6 +22,68 @@ afterEach(async () => {
 })
 
 describe('Cloudflare proxy transport', () => {
+  it('records CONNECT authentication rejection with status and destination, without credentials or response content', async () => {
+    const events: unknown[] = []
+    const proxy = http.createServer()
+    proxy.on('connect', (_request, socket) => {
+      track(socket)
+      socket.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\nprivate-provider-response')
+    })
+    const port = await listen(proxy)
+    const transport = await start(`http://fixture-user:fixture-password@127.0.0.1:${port}`, { onDiagnostic: event => events.push(event) })
+    await waitClosed(connectAddress(transport.edgeAddresses[0]!))
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'proxy_connect', outcome: 'failed', reason: 'http_connect_rejected', durationMs: expect.any(Number),
+      details: expect.objectContaining({ status: 407, targetPort: 7844, targetHost: 'region1.v2.argotunnel.com' }),
+    }))
+    for (const secret of ['fixture-user', 'fixture-password', 'private-provider-response']) expect(JSON.stringify(events)).not.toContain(secret)
+  })
+
+  it('records the actual TCP error code when the proxy listener is unavailable', async () => {
+    const events: unknown[] = []
+    const proxy = net.createServer()
+    const port = await listen(proxy)
+    await new Promise<void>(resolve => proxy.close(() => resolve()))
+    const transport = await start(`http://127.0.0.1:${port}`, { onDiagnostic: event => events.push(event) })
+    await waitClosed(connectAddress(transport.edgeAddresses[0]!))
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'proxy_connect', outcome: 'failed', reason: 'proxy_socket_error',
+      error: expect.objectContaining({ code: 'ECONNREFUSED', syscall: 'connect' }),
+    }))
+  })
+
+  it('distinguishes a silent CONNECT timeout from socket and HTTP errors', async () => {
+    const events: unknown[] = []
+    const port = await listen(net.createServer(track))
+    const transport = await start(`http://127.0.0.1:${port}`, { connectTimeoutMs: 25, onDiagnostic: event => events.push(event) })
+    await waitClosed(connectAddress(transport.edgeAddresses[0]!))
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'proxy_connect', outcome: 'failed', reason: 'connect_timeout', details: expect.objectContaining({ timeoutMs: 25 }) }))
+  })
+
+  it('retains an HTTPS proxy certificate error and identifies the proxy TLS handshake', async () => {
+    const events: unknown[] = []
+    const port = await listen(https.createServer({ key: TEST_KEY, cert: TEST_CERT }))
+    const transport = await start(`https://127.0.0.1:${port}`, { onDiagnostic: event => events.push(event) })
+    await waitClosed(connectAddress(transport.edgeAddresses[0]!))
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'proxy_connect', outcome: 'failed', reason: 'proxy_socket_error',
+      error: expect.objectContaining({ code: expect.stringMatching(/CERT|SELF_SIGNED/) }),
+      details: expect.objectContaining({ step: 'proxy_tls' }) }))
+  })
+
+  it.skipIf('Bun' in globalThis)('records Quick API HTTP rejection without recording the provider body', async () => {
+    const events: unknown[] = []
+    const origin = https.createServer({ key: TEST_KEY, cert: TEST_CERT }, (_request, response) => {
+      response.writeHead(429, { 'Content-Type': 'application/json' })
+      response.end('{"private":"do-not-record-provider-body"}')
+    })
+    const originPort = await listen(origin)
+    const proxy = await createConnectProxy(originPort)
+    const transport = await start(proxy, { ca: TEST_CERT, onDiagnostic: event => events.push(event) })
+    expect((await localRequest(`${transport.quickServiceUrl}/tunnel`, 'POST')).status).toBe(429)
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'quick_provisioning', outcome: 'failed', reason: 'http_status', details: expect.objectContaining({ status: 429 }) }))
+    expect(JSON.stringify(events)).not.toContain('do-not-record-provider-body')
+  })
+
   it('routes all four edge listeners only to official port 7844 through the selected proxy', async () => {
     const echoPort = await createEcho()
     const targets: string[] = []
@@ -205,6 +267,7 @@ describe('Cloudflare proxy transport', () => {
   })
 
   it.skipIf('Bun' in globalThis)('rejects an untrusted Quick API certificate without disabling certificate validation', async () => {
+    const events: unknown[] = []
     let originRequests = 0
     const origin = https.createServer({ key: TEST_KEY, cert: TEST_CERT }, (_request, response) => {
       originRequests++
@@ -212,11 +275,14 @@ describe('Cloudflare proxy transport', () => {
     })
     const originPort = await listen(origin)
     const proxy = await createConnectProxy(originPort)
-    const transport = await start(proxy)
+    const transport = await start(proxy, { onDiagnostic: event => events.push(event) })
     const result = await localRequest(`${transport.quickServiceUrl}/tunnel`, 'POST')
     expect(result.status).toBe(502)
     expect(result.body).not.toContain('CERT_')
     expect(originRequests).toBe(0)
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'quick_provisioning', outcome: 'failed', reason: 'request_failed',
+      error: expect.objectContaining({ code: expect.stringMatching(/CERT|SELF_SIGNED/) }),
+      details: expect.objectContaining({ step: 'quick_tls' }) }))
   })
 
   it.skipIf('Bun' in globalThis)('bounds the Quick API response before forwarding a provider payload', async () => {

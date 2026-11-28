@@ -15,6 +15,7 @@ import {
   type GrokTokenFetchOptions,
 } from '../../services/grokAuth/client.js'
 import type { GrokOAuthTokenResponse } from '../../services/grokAuth/types.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 import { coordinateOAuthRefresh, oauthFileAuthority, oauthTokenIdentity, saveRefreshedOAuthFile } from '../../services/oauth/refresh-coordinator.js'
 import {
   getNetworkProxyUrl,
@@ -109,6 +110,7 @@ export class HahaGrokOAuthService {
 
   async deleteTokens(): Promise<void> {
     await fs.rm(this.getOAuthFilePath(), { force: true })
+    clearGrokModelCatalogCache()
   }
 
   async startSession(): Promise<GrokOAuthSession> {

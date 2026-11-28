@@ -41,4 +41,23 @@ describe('subagentsApi', () => {
     expect(isAgentIdRef('agent:wf/wf/B')).toBe(false)
     expect(isAgentIdRef('tool-1')).toBe(false)
   })
+
+  it('forwards request options such as AbortSignal to api.get', () => {
+    apiGetMock.mockResolvedValue({ ok: true })
+    const controller = new AbortController()
+
+    subagentsApi.getRunByTool('session-1', 'tool-1', undefined, { signal: controller.signal })
+    subagentsApi.getRunByAgent('session-1', 'agent-1', { signal: controller.signal })
+
+    expect(apiGetMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/sessions/session-1/subagents/by-tool/tool-1',
+      { signal: controller.signal },
+    )
+    expect(apiGetMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/sessions/session-1/subagents/by-agent/agent-1',
+      { signal: controller.signal },
+    )
+  })
 })

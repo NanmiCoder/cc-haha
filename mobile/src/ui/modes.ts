@@ -21,6 +21,27 @@ export const modes: {
   },
 ]
 
+/** Antigravity 模式下的权限名称与说明（与桌面端及 agy CLI 对齐）。 */
+export const antigravityModes: {
+  id: PermissionMode
+  title: string
+  description: string
+}[] = [
+  { id: 'default', title: '默认', description: '敏感操作前询问' },
+  {
+    id: 'acceptEdits',
+    title: '自动接受编辑',
+    description: '改文件无需询问，命令等操作照常确认',
+  },
+  { id: 'auto', title: '自动', description: '由 Antigravity 自动判断是否执行命令' },
+  { id: 'plan', title: '计划模式', description: '仅规划与推理，不修改文件' },
+  {
+    id: 'bypassPermissions',
+    title: 'Turbo（全权限）',
+    description: '无限制执行所有命令，只在信任的项目里用',
+  },
+]
+
 const extraModeNames: Record<string, string> = { dontAsk: '不询问' }
 
 export const modeName = (id?: string) =>

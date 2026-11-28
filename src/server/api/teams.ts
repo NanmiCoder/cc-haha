@@ -13,10 +13,16 @@
 
 import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } from '../services/teamPlanService.js'
 import { TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
-import { teamService } from '../services/teamService.js'
+import { isAntigravitySwarmTeamName, teamService } from '../services/teamService.js'
+import {
+  getAntigravitySwarmRuntimeControlView,
+  resumeAntigravitySwarm,
+} from '../services/antigravitySwarmAdapter.js'
 import { changeTeamMemberRuntime } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureCliSessionStartedForControl } from '../ws/handler.js'
+import { teamMemberRuntimeIdentitySchema, teamRuntimeControlActionSchema, teamRuntimeControlIdentitySchema } from '../../shared/teamRuntimeControl.js'
+import { getTeamRuntimeControlView, resumeReviewedTeam } from '../services/teamRuntimeControlService.js'
 
 export async function handleTeamsApi(
   req: Request,
@@ -26,6 +32,34 @@ export async function handleTeamsApi(
   try {
     const method = req.method
     const teamName = segments[2] ? decodeURIComponent(segments[2]) : undefined
+
+    if (teamName && segments[3] === 'runtime-control') {
+      if (method === 'GET' && !segments[4]) {
+        const parsed = teamRuntimeControlIdentitySchema.safeParse(Object.fromEntries(requestUrl.searchParams))
+        if (!parsed.success) throw ApiError.badRequest('Team runtime identity is required')
+        if (isAntigravitySwarmTeamName(teamName)) {
+          return Response.json({ control: await getAntigravitySwarmRuntimeControlView(teamName, parsed.data) })
+        }
+        return Response.json({ control: await getTeamRuntimeControlView(teamName, parsed.data) })
+      }
+      if (method === 'POST' && segments[4] === 'resume') {
+        let raw: unknown
+        try { raw = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+        const parsed = teamRuntimeControlActionSchema.safeParse(raw)
+        if (!parsed.success) throw ApiError.badRequest('A current team revision and fresh human resume intent are required')
+        if (isAntigravitySwarmTeamName(teamName)) {
+          return Response.json({
+            control: await resumeAntigravitySwarm(
+              teamName,
+              parsed.data,
+              id => ensureCliSessionStartedForControl(id, requestUrl),
+            ),
+          })
+        }
+        return Response.json({ control: await resumeReviewedTeam(teamName, parsed.data, id => ensureCliSessionStartedForControl(id, requestUrl)) })
+      }
+      throw ApiError.badRequest('Unknown team runtime action')
+    }
 
     if (method === 'GET' && teamName === 'session' && segments[3] && segments[4] === 'plan') {
       return Response.json({ plan: await teamPlanService.getForSession(decodeURIComponent(segments[3])) })
@@ -39,7 +73,7 @@ export async function handleTeamsApi(
         const { members, tasks, ...identity } = parsed.data
         const plan = await teamPlanService.update(teamName, identity, {
           ...(members ? { members } : {}), ...(tasks ? { tasks } : {}),
-        })
+        }, req.signal)
         return Response.json({ plan })
       }
       const parsed = teamPlanActionSchema.safeParse(raw)
@@ -48,6 +82,7 @@ export async function handleTeamsApi(
       if (action === 'approve') {
         return Response.json({ plan: await teamPlanService.approve(teamName, parsed.data, {
           startLeader: sessionId => ensureCliSessionStartedForControl(sessionId, requestUrl),
+          signal: req.signal,
         }) })
       }
       if (action === 'return' || action === 'cancel' || action === 'retry' || action === 'end') return Response.json({ plan: await teamPlanService.action(teamName, action, parsed.data) })
@@ -135,15 +170,28 @@ export async function handleTeamsApi(
       segments[5] === 'messages'
     ) {
       const agentId = decodeURIComponent(segments[4])
-      let body: { content?: string }
+      let body: { content?: string; leadSessionId?: string }
       try {
-        body = (await req.json()) as { content?: string }
+        body = (await req.json()) as { content?: string; leadSessionId?: string }
       } catch {
         throw ApiError.badRequest('Invalid JSON body')
       }
 
-      await teamService.sendMemberMessage(teamName, agentId, body.content ?? '')
-      return Response.json({ ok: true })
+      const leadSessionId = typeof body.leadSessionId === 'string' && body.leadSessionId.trim()
+        ? body.leadSessionId.trim()
+        : requestUrl.searchParams.get('leadSessionId') || undefined
+      const result = await teamService.sendMemberMessage(
+        teamName,
+        agentId,
+        body.content ?? '',
+        {
+          ...(leadSessionId ? { leadSessionId } : {}),
+          ...(isAntigravitySwarmTeamName(teamName)
+            ? { startLeader: id => ensureCliSessionStartedForControl(id, requestUrl) }
+            : {}),
+        },
+      )
+      return Response.json(result ?? { ok: true })
     }
 
     // ── PATCH /api/teams/:name/members/:id/runtime ────────────────────────
@@ -164,12 +212,14 @@ export async function handleTeamsApi(
       if (typeof body.modelId !== 'string' || !body.modelId.trim()) throw ApiError.badRequest('modelId (string) is required')
       if (body.providerId !== null && typeof body.providerId !== 'string') throw ApiError.badRequest('providerId must be a string or null')
       if (body.effortLevel !== undefined && typeof body.effortLevel !== 'string') throw ApiError.badRequest('effortLevel must be a string')
+      const identity = teamMemberRuntimeIdentitySchema.safeParse(body)
+      if (!identity.success) throw ApiError.badRequest('Current team and member identities and revision are required')
       const member = await changeTeamMemberRuntime(teamName, agentId, {
         providerId: body.providerId,
         modelId: body.modelId,
         ...(body.effortLevel !== undefined ? { effortLevel: body.effortLevel } : {}),
-      })
-      return Response.json({ ok: true, member })
+      }, identity.data)
+      return Response.json({ ok: true, member, control: await getTeamRuntimeControlView(teamName, identity.data) })
     }
 
     // ── GET /api/teams/:name ──────────────────────────────────────────────

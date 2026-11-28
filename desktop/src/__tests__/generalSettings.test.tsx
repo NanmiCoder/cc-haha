@@ -116,6 +116,13 @@ vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
   ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
 }))
 
+vi.mock('../components/settings/OfficialProviderPlanUsage', () => ({
+  OfficialUsageToolbar: () => <div data-testid="official-usage-toolbar" />,
+  OfficialProviderPlanUsage: ({ providerId }: { providerId: string }) => (
+    <div data-testid={`official-plan-usage-${providerId}`} />
+  ),
+}))
+
 vi.mock('../components/settings/ChatGPTOfficialLogin', () => ({
   ChatGPTOfficialLogin: () => <div data-testid="chatgpt-official-login" />,
 }))
@@ -260,6 +267,7 @@ describe('Settings > General tab', () => {
       thinkingEnabled: true,
       workflowKeywordTriggerEnabled: true,
       agentTeamsEnabled: true,
+      maxOutputTokensEscalationMode: 'auto',
       autoDreamEnabled: false,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
@@ -453,28 +461,35 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Skip WebFetch domain preflight')).toBeInTheDocument()
   })
 
-  it('offers all six palettes, paper grounds before ink ones', () => {
+  it('offers only Light and Dark palettes in order', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    // The picker order is load-bearing: the four paper grounds come first, then
-    // the two ink ones, so the list reads light-to-dark rather than shuffled.
-    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']
-      .map((name) => screen.getByRole('button', { name }))
+    const lightBtn = screen.getByRole('button', { name: 'Light' })
+    const darkBtn = screen.getByRole('button', { name: 'Dark' })
+    expect((lightBtn.compareDocumentPosition(darkBtn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
 
-    for (const [index, chip] of order.slice(0, -1).entries()) {
-      const next = order[index + 1]!
-      expect(
-        (chip.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-        `${order[index + 1]} should follow ${order[index]}`,
-      ).toBe(true)
+    for (const retired of ['Paper', 'Warm Classic', 'Celadon', 'Ink Blue', 'Neutral Dark']) {
+      expect(screen.queryByRole('button', { name: retired })).not.toBeInTheDocument()
     }
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pure White' }))
+    fireEvent.click(lightBtn)
     expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('white')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ink Blue' }))
-    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('ink-blue')
+    fireEvent.click(darkBtn)
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('dark')
+  })
+
+  it('marks the dark palette selected after choosing it', () => {
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+
+    const darkBtn = screen.getByRole('button', { name: 'Dark' })
+    fireEvent.click(darkBtn)
+
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('dark')
+    expect(darkBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('gives the settings rail the handoff width and a rounded selected item', () => {
@@ -482,10 +497,11 @@ describe('Settings > General tab', () => {
     render(<Settings />)
 
     const activeItem = screen.getByRole('button', { name: 'General' })
-    // Selection is a rounded ground inside the rail, not a full-bleed band:
-    // the rail is padded, so a square highlight would touch the divider.
-    expect(activeItem.className).toContain('rounded-[var(--radius-sm)]')
-    expect(activeItem.className).toContain('bg-[var(--color-surface-selected)]')
+    // Selection uses the V6C 3px terracotta leading bar and raised glass fill
+    // inside the padded rail, not a heavy full-bleed band.
+    expect(activeItem.className).toContain('rounded-[var(--radius-control)]')
+    expect(activeItem.className).toContain('v6c-active-bar')
+    expect(activeItem.className).toContain('v6c-raised')
     expect(activeItem.className).toContain('h-[30px]')
     expect(activeItem).toHaveAttribute('aria-current', 'page')
 
@@ -507,14 +523,14 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'General' })).toBeInTheDocument()
   })
 
-  it('marks the pure white appearance theme as selected', () => {
+  it('marks the light appearance theme as selected', () => {
     useUIStore.setState({ theme: 'white' })
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Warm Classic' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('offers a switch for following the system appearance', () => {
@@ -531,46 +547,27 @@ describe('Settings > General tab', () => {
   })
 
   it('splits the picker into one row per ground while following the system', () => {
-    // The OS picks the ground; what is left to choose is the palette on each
-    // one, so both rows are offered rather than only the light half.
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'celadon', darkTheme: 'ink-blue', theme: 'ink-blue' })
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'dark', theme: 'dark' })
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
     expect(screen.getByText('Use in light mode')).toBeInTheDocument()
     expect(screen.getByText('Use in dark mode')).toBeInTheDocument()
-    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']) {
-      expect(screen.getByRole('button', { name: label }), label).toBeInTheDocument()
-    }
-  })
-
-  it('marks each ground preference rather than the applied palette', () => {
-    // Evening: the app is on ink-blue, but the light row is asking which
-    // palette to return to in the morning — that is warm classic, not ink-blue.
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'warm-classic', darkTheme: 'ink-blue', theme: 'ink-blue' })
-    render(<Settings />)
-
-    fireEvent.click(screen.getByText('General'))
-
-    expect(screen.getByRole('button', { name: 'Warm Classic' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('keeps the theme swatches at preview size on a wide settings frame', () => {
-    // The settings frame is fluid up to 1120px; the swatch grid must not grow
-    // with it, in either picker layout.
     render(<Settings />)
     fireEvent.click(screen.getByText('General'))
-    expect(screen.getByRole('button', { name: 'Pure White' }).parentElement).toHaveClass('grid-cols-3', 'max-w-[600px]')
+    expect(screen.getByRole('button', { name: 'Light' }).parentElement).toHaveClass('grid-cols-2', 'max-w-[600px]')
     cleanup()
 
-    useUIStore.setState({ followSystemTheme: true, lightTheme: 'celadon', darkTheme: 'ink-blue', theme: 'ink-blue', activeSettingsTab: 'general' })
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'dark', theme: 'dark', activeSettingsTab: 'general' })
     render(<Settings />)
-    for (const label of ['Pure White', 'Ink Night']) {
-      expect(screen.getByRole('button', { name: label }).parentElement, label).toHaveClass('grid-cols-4', 'max-w-[600px]')
+    for (const label of ['Light', 'Dark']) {
+      expect(screen.getByRole('button', { name: label }).parentElement, label).toHaveClass('grid-cols-2', 'max-w-[600px]')
     }
   })
 
@@ -583,28 +580,24 @@ describe('Settings > General tab', () => {
   })
 
   it('highlights the theme on screen after the OS flipped it and the switch is released', () => {
-    // Going through the real transition, not a hand-set state: the OS turned
-    // dark during the session, then the user releases the switch to freeze it.
-    // The picker must point at the palette that is actually rendered.
     useUIStore.setState({
       followSystemTheme: true,
       lightTheme: 'white',
-      darkTheme: 'ink-blue',
+      darkTheme: 'dark',
       theme: 'white',
     })
     render(<Settings />)
     fireEvent.click(screen.getByText('General'))
 
     act(() => {
-      // Stand in for the OS flip the media-query listener would deliver.
-      useUIStore.setState({ theme: 'ink-blue' })
+      useUIStore.setState({ theme: 'dark' })
     })
     act(() => {
       useUIStore.getState().setFollowSystemTheme(false)
     })
 
-    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('groups General settings into topic sections in a stable order', () => {
@@ -1417,6 +1410,78 @@ describe('Settings > General tab', () => {
         type: 'error',
         message: 'Failed to save Agent Teams settings. Please try again.',
       })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('renders and saves the max output tokens escalation mode tri-state', async () => {
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      // Default is Auto
+      expect(screen.getByTestId('max-output-tokens-escalation-setting')).toBeVisible()
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+
+      // Each saved choice becomes available for the next change.
+      await act(async () => { fireEvent.click(enabledBtn) })
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'enabled' })
+
+      await act(async () => { fireEvent.click(disabledBtn) })
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
+
+      await act(async () => { fireEvent.click(autoBtn) })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'auto' })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('blocks overlapping output escalation saves and restores the choice after a save failure', async () => {
+    let rejectSave!: (error: Error) => void
+    const updateUser = vi.spyOn(settingsApi, 'updateUser')
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+      .mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+
+      await act(async () => { fireEvent.click(enabledBtn) })
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeDisabled()
+      }
+      fireEvent.click(disabledBtn)
+      expect(updateUser).toHaveBeenCalledTimes(1)
+
+      await act(async () => { rejectSave(new Error('disk full')) })
+
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+      expect(useSettingsStore.getState().maxOutputTokensEscalationMode).toBe('auto')
+      for (const button of within(radiogroup).getAllByRole('radio')) {
+        expect(button).toBeEnabled()
+      }
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: 'Could not save the output token escalation setting. Please try again.',
+      })
+
+      await act(async () => { fireEvent.click(disabledBtn) })
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
     } finally {
       updateUser.mockRestore()
     }
@@ -2426,11 +2491,11 @@ describe('Settings > Providers tab', () => {
     render(<Settings />)
 
     const card = screen.getByTestId('provider-provider-1')
-    // A terracotta-mixed hairline plus a soft brand halo, so the default row
-    // reads as chosen at a glance — not the focus border, which collided with
-    // the real focus ring.
+    // A crisp terracotta-tinted hairline on the V6C glass card (no outer
+    // colored glow, and not the focus border which collided with the focus ring).
+    expect(card.className).toContain('v6c-glass-card')
     expect(card.className).toContain('border-[var(--color-primary-fixed-dim)]')
-    expect(card.className).toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
+    expect(card.className).not.toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
     expect(card.className).not.toContain('border-[var(--color-border-focus)]')
     // Only the default card carries the accent.
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
@@ -2469,6 +2534,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
 
     expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
+    expect(screen.getByTestId('official-usage-toolbar')).toBeInTheDocument()
   })
 
   it('shows ChatGPT Official as the active built-in provider', () => {
@@ -2483,6 +2549,7 @@ describe('Settings > Providers tab', () => {
     expect(within(openAIProvider).getByText('Default')).toBeInTheDocument()
     expect(screen.getByTestId('chatgpt-official-login')).toBeInTheDocument()
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('claude-official-provider')).getByTestId('official-plan-usage-claude-official')).toBeInTheDocument()
   })
 
   it('shows Grok Official as the active built-in provider', () => {

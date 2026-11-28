@@ -19,15 +19,17 @@ import { Check } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { cx } from '@/lib/cx'
 
-type DropdownItem<T extends string> = {
+export type DropdownItem<T extends string> = {
   value: T
   label: string
   description?: string
   icon?: ReactNode
+  /** Optional right-aligned keyboard shortcut hint (e.g. `<Kbd>⌘1</Kbd>`). */
+  shortcut?: ReactNode
   disabled?: boolean
 }
 
-type DropdownProps<T extends string> = {
+export type DropdownProps<T extends string> = {
   items: DropdownItem<T>[]
   value: T
   onChange: (value: T) => void
@@ -256,15 +258,15 @@ export function Dropdown<T extends string>({
       tabIndex={-1}
       onKeyDown={handleListKeyDown}
       className={cx(
-        // Menus are cards (12px) with padded rows; one value here settles
-        // the corner for every Dropdown menu in the app.
-        'z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1',
-        'bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]',
-        'shadow-[var(--shadow-dropdown)] focus:outline-none',
-        portal || maxHeight ? 'overflow-y-auto' : 'overflow-hidden',
+        // Menus are frosted V6C popovers (14px, 5px inset) with 9px rows, so
+        // row and sheet corners stay concentric; one recipe here settles the
+        // corner, glass rim, and motion for every Dropdown menu in the app.
+        'dropdown-glass popover-motion z-[var(--z-dropdown)] rounded-[var(--radius-xl)] p-[5px] focus:outline-none',
+        portal || maxHeight ? 'overflow-y-auto scrollbar-autohide' : 'overflow-hidden',
+        !portal && '[-webkit-app-region:no-drag]',
         !portal && (align === 'right' ? 'right-0' : 'left-0'),
-        portal ? 'animate-overlay-in' : 'absolute',
-        !portal && (placement === 'top' ? 'bottom-full mb-1 animate-overlay-in-bottom' : 'top-full mt-1 animate-overlay-in-top'),
+        !portal && 'absolute',
+        !portal && (placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'),
       )}
       style={menuStyle}
     >
@@ -282,9 +284,13 @@ export function Dropdown<T extends string>({
           }}
           onMouseEnter={() => setActiveIndex(index)}
           className={cx(
-            'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors',
+            'flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 py-2 text-left transition-[background-color,box-shadow] duration-150 ease-out',
             item.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-            (index === activeIndex || item.value === value) && !item.disabled && 'bg-[var(--color-surface-hover)]',
+            // The keyboard/pointer row is lifted glass; the chosen value keeps
+            // only a quiet fill so the two never read as the same state.
+            index === activeIndex && !item.disabled
+              ? 'v6c-row-highlight'
+              : item.value === value && !item.disabled && 'bg-[var(--color-surface-hover)]',
           )}
         >
           {item.icon && (
@@ -298,8 +304,11 @@ export function Dropdown<T extends string>({
               <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{item.description}</div>
             )}
           </div>
+          {item.shortcut && (
+            <span className="flex shrink-0 items-center">{item.shortcut}</span>
+          )}
           {item.value === value && (
-            <Check size={15} strokeWidth={2} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
+            <Check size={15} strokeWidth={1.75} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
           )}
         </div>
       ))}

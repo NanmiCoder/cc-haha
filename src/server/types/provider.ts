@@ -17,6 +17,9 @@ export const PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION = 6
 export const PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION = 7
 export const PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION = 8
 export const PROVIDER_PROXY_CONFIG_SCHEMA_VERSION = 9
+export const PROVIDER_ENV_OWNER_SCHEMA_VERSION = 10
+// Optional import-only scripts keep old providers unchanged and preserve template fields.
+export const PROVIDER_USAGE_SCRIPT_SCHEMA_VERSION = 11
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -32,16 +35,16 @@ export const ApiFormatSchema = z.enum([
   'anthropic',         // Native Anthropic Messages API (passthrough, no proxy)
   'openai_chat',       // OpenAI Chat Completions /v1/chat/completions
   'openai_responses',  // OpenAI Responses API /v1/responses
+  'gemini',            // Google Gemini /v1beta/models/:model:generateContent
+  'google_vertex',     // Google Vertex AI (GCP) Gemini & Anthropic rawPredict
+  'bedrock_converse',  // AWS Bedrock Runtime Converse / ConverseStream API
+  'azure_openai',      // Microsoft Azure OpenAI / Azure AI Foundry
 ])
 export type ApiFormat = z.infer<typeof ApiFormatSchema>
 
-/**
- * Protocols a preset can route one model family to. Wider than ApiFormat: a
- * gateway may serve a family only over a protocol no provider record is saved
- * with (OpenCode Go serves Gemini only over Google `generateContent`).
- */
-export const ModelApiFormatSchema = z.enum([...ApiFormatSchema.options, 'gemini'])
-export type ModelApiFormat = z.infer<typeof ModelApiFormatSchema>
+/** Protocols a preset can route one model family to. */
+export const ModelApiFormatSchema = ApiFormatSchema
+export type ModelApiFormat = ApiFormat
 
 export const ProviderAuthStrategySchema = z.enum([
   'api_key',
@@ -101,6 +104,8 @@ export const SupportsNestedToolResultMediaSchema = z.boolean()
 
 const RequestCapabilitySchema = z.enum(['auto', 'supported', 'unsupported'])
 const OutputTokenBudgetSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+export const ServiceTierSchema = z.enum(['auto', 'default', 'flex', 'priority'])
+export type ServiceTier = z.infer<typeof ServiceTierSchema>
 
 // These options describe this endpoint's contract, not capabilities inferred
 // from a model name. Missing fields retain automatic behavior.
@@ -108,6 +113,7 @@ export const RequestCompatibilitySchema = z.object({
   maxOutputTokens: OutputTokenBudgetSchema.optional(),
   outputTokenLimit: OutputTokenBudgetSchema.optional(),
   outputTokenField: z.enum(['auto', 'max_tokens', 'max_completion_tokens', 'omit']).optional(),
+  serviceTier: ServiceTierSchema.optional(),
   sampling: RequestCapabilitySchema.optional(),
   reasoning: RequestCapabilitySchema.optional(),
   parallelTools: RequestCapabilitySchema.optional(),
@@ -146,6 +152,28 @@ export const ProviderProxyConfigSchema = z.object({
 })
 export type ProviderProxyConfig = z.infer<typeof ProviderProxyConfigSchema>
 
+/**
+ * A provider's balance/quota query, as cc-switch stores it in a provider's
+ * `meta.usage_script`. It is kept exactly as cc-switch wrote it, field names
+ * included, so the same scripts and template settings can run once cc-haha has
+ * a runner for them; template fields not listed here (Coding Plan ids,
+ * Volcengine signing keys, ...) are preserved. cc-haha does not run it yet.
+ */
+export const ProviderUsageScriptSchema = z.object({
+  enabled: z.boolean(),
+  language: z.string().optional(),
+  code: z.string(),
+  timeout: z.number().int().nonnegative().optional(),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  accessToken: z.string().optional(),
+  userId: z.string().optional(),
+  templateType: z.string().optional(),
+  autoQueryInterval: z.number().int().nonnegative().optional(),
+}).passthrough()
+
+export type ProviderUsageScript = z.infer<typeof ProviderUsageScriptSchema>
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -167,6 +195,7 @@ export const SavedProviderSchema = z.object({
   imageGeneration: ImageGenerationConfigSchema.optional(),
   proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
+  usageScript: ProviderUsageScriptSchema.optional(),
 })
 
 /**
@@ -233,7 +262,7 @@ export const UpdateProviderSchema = z.object({
 
 export const TestProviderSchema = z.object({
   baseUrl: z.string().url(),
-  apiKey: z.string().min(1),
+  apiKey: z.string(),
   modelId: z.string().min(1),
   authStrategy: ProviderAuthStrategySchema.optional(),
   apiFormat: ApiFormatSchema.default('anthropic'),
@@ -246,6 +275,18 @@ export const TestProviderSchema = z.object({
    */
   presetId: z.string().optional(),
   proxy: ProviderProxyConfigSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.apiKey.length === 0 &&
+    data.apiFormat !== 'google_vertex' &&
+    data.apiFormat !== 'bedrock_converse'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['apiKey'],
+      message: 'API key is required',
+    })
+  }
 })
 
 export const ReorderProvidersSchema = z.object({
@@ -262,6 +303,12 @@ export type ImageGenerationConfig = z.infer<typeof ImageGenerationConfigSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>
 export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>
+/**
+ * What an import may persist on top of `CreateProviderInput`. The usage script
+ * is accepted only from an import read on this machine, not from the public
+ * create route.
+ */
+export type ImportProviderInput = CreateProviderInput & { usageScript?: ProviderUsageScript }
 export type UpdateProviderInput = z.infer<typeof UpdateProviderSchema>
 export type TestProviderInput = z.infer<typeof TestProviderSchema>
 export type ReorderProvidersInput = z.infer<typeof ReorderProvidersSchema>

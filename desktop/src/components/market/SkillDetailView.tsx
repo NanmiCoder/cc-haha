@@ -140,7 +140,7 @@ export function SkillDetailView(props: SkillDetailViewProps) {
       key: 'files',
       label: t('market.detail.files'),
       icon: Folder,
-      badge: <Badge size="xs" mono>{props.files.length}</Badge>,
+      badge: <Badge size="xs" pill={false} mono>{props.files.length}</Badge>,
     },
     ...extraTabs.map((extra) => ({ key: extra.key, label: extra.label, icon: extra.icon ?? FileText, badge: extra.badge })),
   ]
@@ -181,7 +181,7 @@ export function SkillDetailView(props: SkillDetailViewProps) {
                   {props.name}
                 </h1>
                 {props.version && (
-                  <Badge variant="outline" size="xs" mono data-testid="skill-detail-version">
+                  <Badge variant="outline" size="xs" pill={false} mono data-testid="skill-detail-version">
                     v{props.version}
                   </Badge>
                 )}
@@ -262,7 +262,7 @@ export function SkillDetailView(props: SkillDetailViewProps) {
               {props.stats.map((stat) => (
                 <div
                   key={stat.label}
-                  className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3"
+                  className="v6c-glass-card min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3"
                 >
                   <dt className="text-xs text-[var(--color-text-tertiary)]">{stat.label}</dt>
                   <dd className="mt-1 truncate text-[22px] font-semibold leading-7 tabular-nums text-[var(--color-text-primary)]">
@@ -322,7 +322,7 @@ export function SkillDetailView(props: SkillDetailViewProps) {
                   id="skill-detail-overview-panel"
                   role="tabpanel"
                   aria-labelledby="skill-detail-tab-overview-trigger"
-                  className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-6 py-6 sm:px-8 @4xl:min-h-0 @4xl:flex-1 @4xl:overflow-y-auto"
+                  className="v6c-glass-card rounded-[var(--radius-lg)] border border-[var(--color-border)] px-6 py-6 sm:px-8 @4xl:min-h-0 @4xl:flex-1 @4xl:overflow-y-auto"
                   data-testid="skill-detail-overview"
                 >
                   {props.docHeader && (
@@ -373,7 +373,7 @@ export function SkillDetailView(props: SkillDetailViewProps) {
               className="order-first flex min-w-0 flex-col gap-4 @4xl:order-none @4xl:max-h-full @4xl:self-start @4xl:overflow-y-auto"
             >
               {props.sideCards}
-              <Card radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+              <Card radius="lg" surface="none" padding="none" className="v6c-glass-card overflow-hidden">
                 {props.metaTitle && (
                   <h2 className="px-4 pt-3.5 text-[13px] font-semibold text-[var(--color-text-primary)]">
                     {props.metaTitle}

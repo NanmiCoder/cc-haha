@@ -66,10 +66,13 @@ export function Checkbox({
         aria-labelledby={labelHidden ? undefined : labelId}
         aria-describedby={description ? descriptionId : undefined}
         className={cx(
-          'mt-0.5 shrink-0 rounded-[var(--radius-sm)] border-[var(--color-border-strong)]',
-          'accent-[var(--color-brand)]',
+          'mt-0.5 shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-surface)]',
+          'shadow-[var(--bevel-surface-rest)] accent-[var(--color-brand)]',
+          'transition-[border-color,box-shadow,transform] duration-150 ease-out active:scale-95',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
-          disabled && 'cursor-not-allowed',
+          'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]',
+          'motion-reduce:transition-none motion-reduce:active:scale-100',
+          disabled && 'cursor-not-allowed active:scale-100 shadow-none',
           BOX_SIZE[size],
           className,
         )}

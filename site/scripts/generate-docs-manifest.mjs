@@ -20,7 +20,17 @@ export const paths = {
 }
 
 const excludedDirectoryNames = new Set(['superpowers', 'ui-clone', 'public', 'images'])
-const excludedFiles = new Set(['AGENTS.md'])
+const excludedFiles = new Set([
+  'AGENTS.md',
+  // Internal computer-use design notes and QA checklists: kept in the repo for
+  // agents and maintainers, but not part of the published documentation tree.
+  'computer-use-cef-injection.md',
+  'computer-use-codex-parity-review.md',
+  'computer-use-codex-redesign.md',
+  'computer-use-handoff.md',
+  'computer-use-native-manual-qa.md',
+  'computer-use-native-swift-design.md'
+])
 
 /** 分区顺序与标题。新增一个 docs/ 顶层目录时在这里登记，否则会排到最后并显示裸目录名。 */
 export const sections = [

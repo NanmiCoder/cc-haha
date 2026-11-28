@@ -35,20 +35,20 @@ export type AttachmentPreview = {
 }
 
 const FILE_ICON_ACCENTS: Record<string, string> = {
-  picture_as_pdf: '#d14343',
-  docs: '#3f6ecf',
-  markdown: '#4d6b8a',
-  text_snippet: '#667085',
-  table_chart: '#24845b',
-  slideshow: '#c85b2b',
-  folder_zip: '#a46a17',
-  code: '#7656b5',
-  audio_file: '#ad477c',
-  video_file: '#6655b8',
-  html: '#c05d2c',
-  image: '#24899a',
-  folder: '#a46a17',
-  insert_drive_file: '#667085',
+  picture_as_pdf: 'var(--color-error)',
+  docs: 'var(--color-info)',
+  markdown: 'var(--color-code-property)',
+  text_snippet: 'var(--color-text-secondary)',
+  table_chart: 'var(--color-success)',
+  slideshow: 'var(--color-warning)',
+  folder_zip: 'var(--color-warning)',
+  code: 'var(--color-code-keyword)',
+  audio_file: 'var(--color-brand)',
+  video_file: 'var(--color-code-function)',
+  html: 'var(--color-warning)',
+  image: 'var(--color-tertiary)',
+  folder: 'var(--color-warning)',
+  insert_drive_file: 'var(--color-text-secondary)',
 }
 
 function fileIconAccent(icon: string): string {
@@ -212,7 +212,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   isLastOddItem ? 'col-span-2' : '',
                 ].join(' ')}
               >
-                <span className="relative block h-28 overflow-hidden bg-[var(--color-surface)]">
+                <span className="relative block h-28 overflow-hidden bg-[var(--color-surface)] after:pointer-events-none after:absolute after:inset-0 after:ring-1 after:ring-inset after:ring-[var(--color-border)]">
                   <img
                     src={src}
                     alt=""
@@ -254,7 +254,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
         ref={isComposer ? composerTrayRef : undefined}
         data-testid={isComposer ? 'composer-attachment-tray' : undefined}
         className={isComposer
-          ? '-m-1 flex max-h-[min(188px,24dvh)] flex-wrap items-center gap-2 overflow-y-auto overscroll-contain p-1'
+          ? 'scrollbar-autohide -m-1 flex max-h-[min(188px,24dvh)] flex-wrap items-center gap-2 overflow-y-auto overscroll-contain p-1'
           : 'flex max-w-full flex-wrap justify-end gap-2'}
       >
         {attachments.map((attachment, index) => {
@@ -275,8 +275,8 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   onClick={() => setActiveImageIndex(images.findIndex((image) => image.src === src))}
                   className={
                     isComposer
-                      ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]'
-                      : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left transition-[border-color] hover:border-[var(--color-outline)] motion-reduce:transition-none'
+                      ? 'relative overflow-hidden rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-card-inner)] after:ring-1 after:ring-inset after:ring-[var(--color-border)]'
+                      : 'relative overflow-hidden rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] text-left after:pointer-events-none after:absolute after:inset-0 after:rounded-[var(--radius-card-inner)] after:ring-1 after:ring-inset after:ring-[var(--color-border)] hover:after:ring-[var(--color-outline)] motion-reduce:transition-none'
                   }
                 >
                   <img
@@ -315,7 +315,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                       title={selectionNote}
                       tabIndex={0}
                       className={[
-                        'inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-full border',
+                        'inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-[var(--radius-sm)] border',
                         'border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5',
                         'text-[12px] font-medium leading-none text-[var(--color-text-primary)]',
                         'transition-colors hover:border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-surface-container)]',
@@ -334,7 +334,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                     className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-error)] text-[var(--color-on-error)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                     aria-label={t('attachments.remove', { name: attachment.name })}
                   >
-                    <X size={12} strokeWidth={2} aria-hidden="true" />
+                    <X size={12} strokeWidth={1.75} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -467,7 +467,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 title={t('openWith.title')}
                 className="flex w-9 shrink-0 items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <ChevronDown size={14} strokeWidth={2} aria-hidden="true" />
+                <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
               </button>
             </div>
           )

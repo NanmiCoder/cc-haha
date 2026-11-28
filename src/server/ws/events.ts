@@ -1,4 +1,8 @@
 import type { ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
+import type {
+  BrowserTakeoverState,
+  BrowserUseActivityEvent,
+} from '../../services/browserUse/types.js'
 /**
  * WebSocket event type definitions
  *
@@ -28,6 +32,7 @@ export type ClientMessage =
       rule?: string
       updatedInput?: Record<string, unknown>
       denyMessage?: string
+      attachments?: AttachmentRef[]
       permissionUpdates?: unknown[]
       // Optional execution-model switch applied together with an approval
       // (currently honored for ExitPlanMode only): same-provider switches are
@@ -81,7 +86,7 @@ export type ServerMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
   | { type: 'content_delta'; text?: string; toolInput?: string }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
-  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string; durationMs?: number }
   | {
       type: 'permission_request'
       requestId: string
@@ -90,6 +95,9 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      antigravityToolName?: string
+      subagentName?: string
+      supportsAllowAlways?: boolean
       /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
       autoAnswerDeadline?: number | null
     }
@@ -145,7 +153,7 @@ export type ServerMessage =
   // 流式请求失败、CLI 已降级为非流式重试。非流式响应要等完整生成才返回，
   // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
-  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string }
+  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string; permissionRequestId?: string }
   | { type: 'background_task_stop_failed'; taskId: string; message: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
@@ -158,12 +166,14 @@ export type ServerMessage =
   | { type: 'session_title_updated'; sessionId: string; title: string }
   /** Predicted next user prompt for the composer; sent after a turn ends. */
   | { type: 'prompt_suggestion'; suggestion: string }
+  | { type: 'browser_use_activity'; activity: BrowserUseActivityEvent }
+  | { type: 'browser_use_takeover'; takeover: BrowserTakeoverState }
 
 export type AgentRunStreamMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
   | { type: 'content_delta'; text?: string; toolInput?: string }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
-  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string; durationMs?: number }
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean; compactProgress?: { outputChars: number } }
   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string; requestId?: string }

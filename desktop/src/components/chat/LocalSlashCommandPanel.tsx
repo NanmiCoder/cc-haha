@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton } from '@/components/ui/IconButton'
+import { Kbd } from '@/components/ui/Kbd'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { mcpStatusTone } from '@/lib/mcpStatus'
@@ -613,7 +614,7 @@ function StatusTab({
               <Button
                 variant="ghost"
                 size="sm"
-                icon={<RefreshCw size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<RefreshCw size={12} strokeWidth={1.75} aria-hidden="true" />}
               >
                 {t('slash.inspector.status.refresh')}
               </Button>
@@ -661,7 +662,7 @@ function SessionInspectorShell({
     <div
       ref={roomRef}
       style={{ maxHeight: roomAbove }}
-      className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
+      className="dropdown-glass popover-motion absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-1.5 flex flex-col overflow-hidden rounded-[var(--radius-xl)] text-[var(--color-text-primary)]"
     >
       <div className="grid min-h-12 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--color-border)] px-4 py-2">
         <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{t('slash.inspector.title')}</div>
@@ -673,7 +674,8 @@ function SessionInspectorShell({
           value={selectedTab}
           onChange={onSelectTab}
         />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-1.5">
+          <Kbd size="xs" appearance="subtle">Esc</Kbd>
           <IconButton
             icon={<X size={16} strokeWidth={1.75} aria-hidden="true" />}
             label={t('slash.inspector.close')}
@@ -683,7 +685,7 @@ function SessionInspectorShell({
           />
         </div>
       </div>
-      <div className="min-h-0 max-h-[min(540px,58vh)] overflow-y-auto p-4">{children}</div>
+      <div className="scrollbar-autohide min-h-0 max-h-[min(540px,58vh)] overflow-y-auto p-4">{children}</div>
     </div>
   )
 }

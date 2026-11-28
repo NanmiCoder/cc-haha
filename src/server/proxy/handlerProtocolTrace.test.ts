@@ -24,7 +24,7 @@ describe('proxy protocol trace summaries', () => {
     await rm(fixture, { recursive: true, force: true })
   })
 
-  for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+  for (const apiFormat of ['openai_chat', 'openai_responses', 'gemini'] as const) {
     for (const stream of [true, false]) {
       test(`${apiFormat} ${stream ? 'SSE tail' : 'JSON'} preserves raw limits and usage independently of body capture`, async () => {
         const provider = await new ProviderService().addProvider({
@@ -35,18 +35,28 @@ describe('proxy protocol trace summaries', () => {
         const calls: RecordTraceCallInput[] = []
         const callMock = spyOn(traceCaptureService, 'recordCall').mockImplementation(async input => { calls.push(input); return null })
         const eventMock = spyOn(traceCaptureService, 'recordEvent').mockResolvedValue(null)
-        const usage = apiFormat === 'openai_chat' ? { prompt_tokens: 10, completion_tokens: 64000 } : { input_tokens: 10, output_tokens: 64000 }
+        const usage = apiFormat === 'openai_chat'
+          ? { prompt_tokens: 10, completion_tokens: 64000 }
+          : apiFormat === 'gemini'
+            ? { promptTokenCount: 10, candidatesTokenCount: 64000 }
+            : { input_tokens: 10, output_tokens: 64000 }
         const response = apiFormat === 'openai_chat'
           ? { id: 'fixture', choices: [{ index: 0, message: { content: 'fixture' }, finish_reason: 'length' }], usage }
-          : { id: 'fixture', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [], usage }
+          : apiFormat === 'gemini'
+            ? { candidates: [{ content: { role: 'model', parts: [{ text: 'fixture' }] }, finishReason: 'MAX_TOKENS' }], usageMetadata: usage }
+            : { id: 'fixture', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [], usage }
         const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(async () => {
           if (!stream) return Response.json(response)
           const prefix = apiFormat === 'openai_chat'
             ? `data:${JSON.stringify({ choices: [{ delta: { content: 'a'.repeat(1024) } }] })}\n\n`
-            : `data:${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a'.repeat(1024) })}\n\n`
+            : apiFormat === 'gemini'
+              ? `data:${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'a'.repeat(1024) }] } }] })}\n\n`
+              : `data:${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a'.repeat(1024) })}\n\n`
           const terminal = apiFormat === 'openai_chat'
             ? `data:${JSON.stringify(response)}\n\ndata:[DONE]\n\n`
-            : `event:response.incomplete\ndata:${JSON.stringify({ type: 'response.incomplete', response })}\n\n`
+            : apiFormat === 'gemini'
+              ? `data:${JSON.stringify(response)}\n\n`
+              : `event:response.incomplete\ndata:${JSON.stringify({ type: 'response.incomplete', response })}\n\n`
           return new Response(prefix.repeat(1100) + terminal, { headers: { 'Content-Type': 'text/event-stream' } })
         })
         try {
@@ -59,13 +69,15 @@ describe('proxy protocol trace summaries', () => {
           const completed = calls.find(call => call.completedAt)
           const summary = completed?.metadata?.protocolTrace as Record<string, unknown> | undefined
           expect(summary).toMatchObject({
-            version: 1, protocol: apiFormat, transport: stream ? 'cancelled' : 'non_stream', usage,
+            version: 1, protocol: apiFormat, transport: !stream ? 'non_stream' : apiFormat === 'gemini' ? 'eof' : 'cancelled', usage,
             ...(stream ? { delivery: 'eof' } : {}),
             outputBudget: { source: 'default', requested: 32000, configured: 96000, effective: 64000, reason: 'hard_limit' },
           })
           expect(summary?.termination).toMatchObject(apiFormat === 'openai_chat'
             ? { finishReason: 'length' }
-            : { responseStatus: 'incomplete', incompleteReason: 'max_output_tokens' })
+            : apiFormat === 'gemini'
+              ? { finishReason: 'MAX_TOKENS' }
+              : { responseStatus: 'incomplete', incompleteReason: 'max_output_tokens' })
           if (stream) expect(completed?.response?.bodySnapshot?.truncated).toBe(true)
         } finally {
           fetchMock.mockRestore()

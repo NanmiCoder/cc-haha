@@ -394,16 +394,23 @@ export function extractAgentToolActivities(
   if (message.type === 'user') {
     const content = message.message.content
     if (!Array.isArray(content)) return []
+    const toolResultBlocks = content.filter(block => block.type === 'tool_result')
+    const singleDurationMs =
+      toolResultBlocks.length === 1 &&
+      typeof message.durationMs === 'number' &&
+      Number.isFinite(message.durationMs) &&
+      message.durationMs >= 0
+        ? message.durationMs
+        : undefined
     const activities: AgentToolActivity[] = []
-    for (const block of content) {
-      if (block.type === 'tool_result') {
-        activities.push({
-          kind: 'tool_result',
-          tool_use_id: block.tool_use_id,
-          content: block.content,
-          is_error: block.is_error === true,
-        })
-      }
+    for (const block of toolResultBlocks) {
+      activities.push({
+        kind: 'tool_result',
+        tool_use_id: block.tool_use_id,
+        content: block.content,
+        is_error: block.is_error === true,
+        ...(singleDurationMs !== undefined ? { duration_ms: singleDurationMs } : {}),
+      })
     }
     return activities
   }

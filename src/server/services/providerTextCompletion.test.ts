@@ -299,6 +299,48 @@ describe('providerTextCompletion', () => {
     expect('output_config' in server.bodies[0]!).toBe(false)
   })
 
+  test('allows empty apiKey for bedrock_converse providers using ambient AWS environment credentials', async () => {
+    const previousBearer = process.env.AWS_BEARER_TOKEN_BEDROCK
+    process.env.AWS_BEARER_TOKEN_BEDROCK = 'ABSK-text-completion-env-token'
+    let receivedAuth: string | null = null
+    try {
+      globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+        receivedAuth = new Headers(init?.headers).get('authorization')
+        return Response.json({
+          output: { message: { role: 'assistant', content: [{ text: 'bedrock ok' }] } },
+          stopReason: 'end_turn',
+          usage: { inputTokens: 4, outputTokens: 2 },
+        })
+      }) as unknown as typeof fetch
+
+      const bedrockProvider = await new ProviderService().addProvider({
+        presetId: 'custom',
+        name: 'Bedrock Ambient',
+        apiKey: '',
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiFormat: 'bedrock_converse',
+        models: {
+          main: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          haiku: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          sonnet: 'us.anthropic.claude-sonnet-4-6-v1:0',
+          opus: 'us.anthropic.claude-sonnet-4-6-v1:0',
+        },
+      })
+
+      expect(await providerTextCompletion({
+        provider: bedrockProvider,
+        modelId: 'us.anthropic.claude-sonnet-4-6-v1:0',
+        system: 'SYSTEM',
+        user: 'USER',
+        maxTokens: 64,
+      })).toEqual({ ok: true, text: 'bedrock ok' })
+      expect(receivedAuth).toBe('Bearer ABSK-text-completion-env-token')
+    } finally {
+      if (previousBearer === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK
+      else process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
+    }
+  })
+
   test('strips closed and unterminated think blocks', () => {
     expect(stripThinkBlocks('<think>a</think>keep<THINK>b</THINK> this')).toBe('keep this')
     expect(stripThinkBlocks('answer<think>cut off')).toBe('answer')

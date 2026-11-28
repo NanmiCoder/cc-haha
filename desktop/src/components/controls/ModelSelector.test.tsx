@@ -779,9 +779,9 @@ describe('ModelSelector', () => {
       .getAllByRole('button', { name: /deepseek-v4-pro/i })
       .find((button) => button.textContent?.includes('Sonnet Model'))
     expect(configuredOption).toBeDefined()
-    // 「素」 menu selection: the hover fill at rest plus the terracotta check.
+    // V6C menu selection: raised glass row highlight plus the terracotta check.
     expect(configuredOption).toHaveAttribute('aria-current', 'true')
-    expect(configuredOption?.className).toContain('bg-[var(--color-surface-hover)]')
+    expect(configuredOption?.className).toContain('v6c-row-highlight')
     expect(configuredOption?.querySelector('svg.lucide-check')).toHaveClass('text-[var(--color-brand)]')
   })
 
@@ -810,8 +810,8 @@ describe('ModelSelector', () => {
     // The ring traces `border-radius`. Each half is rounded on one side only,
     // so without this the focused half drew a box that was round down one edge
     // and square down the other.
-    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
-    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
+    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-control)]', 'focus-visible:rounded-[var(--radius-control)]')
+    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-control)]', 'focus-visible:rounded-[var(--radius-control)]')
   })
 
   // On the phone composer this control sits between two 44px buttons and opens
@@ -1268,13 +1268,43 @@ describe('ModelSelector', () => {
     expect(setSessionRuntime).toHaveBeenLastCalledWith('fast-session', expect.objectContaining({ openAIFastMode: false }))
   })
 
-  it('never offers the OAuth Fast switch for Claude Official or API-key providers', async () => {
-    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
-    useProviderStore.setState({ providers: [], activeId: null, hasLoadedProviders: true })
+  it('offers Claude Fast mode (not OAuth openAIFastMode) for Claude Official and never offers Fast for non-Claude API-key providers', async () => {
+    const setFastMode = vi.fn().mockResolvedValue(undefined)
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high', fastMode: false, setFastMode })
+    useProviderStore.setState({
+      providers: [{
+        id: 'kimi', presetId: 'kimi', name: 'Kimi', apiFormat: 'anthropic',
+        apiKey: 'fixture', baseUrl: 'http://127.0.0.1:1',
+        models: { main: 'kimi-k2.5', haiku: '', sonnet: '', opus: '' },
+      }],
+      activeId: null,
+      hasLoadedProviders: true,
+    })
     useSessionRuntimeStore.getState().setSelection('claude-session', {
       providerId: null, modelId: 'claude-opus-4-8', effortLevel: 'high',
     })
-    render(<ModelSelector runtimeKey="claude-session" />)
+    const { rerender } = render(<ModelSelector runtimeKey="claude-session" />)
+    const fastToggle = screen.getByTestId('claude-fast-mode-toggle')
+    expect(fastToggle).toHaveClass('hover:bg-[var(--color-surface-hover)]', 'rounded-[var(--radius-sm)]')
+    expect(fastToggle).not.toHaveClass('hover:bg-[var(--color-surface-container)]')
+
+    Object.assign(runtimeMocks, { isMobileViewport: true, isDesktopRuntime: false })
+    rerender(<ModelSelector runtimeKey="claude-session" />)
+    expect(screen.getByTestId('claude-fast-mode-toggle')).toHaveClass('rounded-[var(--radius-control)]')
+    Object.assign(runtimeMocks, { isMobileViewport: false, isDesktopRuntime: false })
+    rerender(<ModelSelector runtimeKey="claude-session" />)
+
+    await clickByRole('Effort: High')
+    const claudeFastSwitch = screen.getByRole('switch', { name: 'Fast mode' })
+    expect(claudeFastSwitch).not.toBeDisabled()
+    fireEvent.click(claudeFastSwitch)
+    expect(setFastMode).toHaveBeenCalledWith(true)
+    expect(useSessionRuntimeStore.getState().selections['claude-session']?.openAIFastMode).toBeUndefined()
+
+    useSessionRuntimeStore.getState().setSelection('kimi-session', {
+      providerId: 'kimi', modelId: 'kimi-k2.5', effortLevel: 'high',
+    })
+    rerender(<ModelSelector runtimeKey="kimi-session" />)
     await clickByRole('Effort: High')
     expect(screen.queryByRole('switch', { name: 'Fast mode' })).not.toBeInTheDocument()
   })
@@ -1889,5 +1919,229 @@ describe('controlled runtime pickers outside the composer', () => {
     expect(within(picker).queryByText('Claude Official')).not.toBeInTheDocument()
     fireEvent.click(within(picker).getByRole('button', { name: /^opus/ }))
     expect(onRuntimeSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ providerId: '__session__', modelId: 'opus' }))
+  })
+
+  it('keeps the frosted-glass model dropdown focused on model selection while effort stays in its standalone popover', async () => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
+    useSessionRuntimeStore.getState().setSelection('session-docked', {
+      providerId: null,
+      modelId: 'claude-opus-4-8',
+      effortLevel: 'high',
+    })
+    render(<ModelSelector runtimeKey="session-docked" />)
+
+    await clickByRole('Opus 4.8, Claude Official')
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    expect(dropdown).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-xl)]')
+    expect(within(dropdown).queryByTestId('model-selector-docked-controls')).not.toBeInTheDocument()
+    expect(within(dropdown).queryByTestId('model-selector-permissions-shortcut')).not.toBeInTheDocument()
+
+    // Effort adjustment lives exclusively in the standalone ReasoningEffortPopover.
+    await clickByRole('Effort: High')
+    expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
+    const popover = screen.getByTestId('reasoning-effort-popover')
+    expect(popover).toBeInTheDocument()
+    const slider = within(popover).getByRole('slider')
+    fireEvent.keyDown(slider, { key: 'End' })
+    expect(useSessionRuntimeStore.getState().selections['session-docked']?.effortLevel).toBe('max')
+  })
+
+  it('isolates Antigravity models and thinking levels when locked to antigravity-acp and never mixes them into cc-haha', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
+    const discoverMock = vi.fn(async () => ({
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [
+        { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as ('low' | 'medium' | 'high' | 'xhigh')[], defaultReasoningEffort: 'high' as const },
+        { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'] as ('low' | 'medium' | 'high')[], defaultReasoningEffort: 'medium' as const },
+      ],
+      currentModelId: 'gemini-3.8-pro',
+    }))
+    useProviderStore.setState({
+      providers: [],
+      activeId: null,
+      hasLoadedProviders: true,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [
+          { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+        ],
+        currentModelId: 'gemini-3.8-pro',
+      },
+      discoverAntigravity: discoverMock,
+    })
+
+    // In cc-haha mode (not locked to antigravity-acp), Antigravity models are never mixed in.
+    const { unmount } = render(<ModelSelector runtimeKey="__draft__" />)
+    await clickByRole(/Claude Official/)
+    expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Gemini 3.8 Pro')
+    unmount()
+
+    // In Antigravity locked mode, ONLY Antigravity models appear and Thinking Level remains editable.
+    useSessionRuntimeStore.getState().setSelection('ag-session', {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    const onRuntimeSelectionChange = vi.fn()
+    render(
+      <ModelSelector
+        runtimeKey="ag-session"
+        lockedProviderId="antigravity-acp"
+        onRuntimeSelectionChange={onRuntimeSelectionChange}
+      />,
+    )
+
+    await clickByRole('Gemini 3.8 Pro, Antigravity')
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('button', { name: /Gemini 3\.8 Pro/ })).toBeInTheDocument()
+    expect(dropdown.getByRole('button', { name: /Gemini 3\.8 Flash/ })).toBeInTheDocument()
+    expect(screen.getByTestId('model-selector-dropdown')).not.toHaveTextContent('Claude Official')
+
+    // Thinking level popover is enabled even though lockedProviderId is set.
+    await clickByRole(/High/)
+    const effortPopover = screen.getByTestId('reasoning-effort-popover')
+    const stops = within(effortPopover).getAllByTestId('reasoning-effort-stop')
+    expect(stops.map((el) => el.textContent)).toEqual(['Low', 'Medium', 'High', 'X-High'])
+    fireEvent.keyDown(within(effortPopover).getByRole('slider'), { key: 'End' })
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'xhigh',
+    })
+
+    // Switching model stays inside Antigravity.
+    await clickByRole('Gemini 3.8 Pro, Antigravity')
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /Gemini 3\.8 Flash/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-flash',
+      effortLevel: 'medium',
+    })
+  })
+
+  it('auto-discovers Antigravity models when opened in unchecked state, shows loading instead of a lonely default model, and shows login instructions when login_required', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const discoverMock = vi.fn(async () => ({
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'login_required' as const,
+      models: [],
+    }))
+    useProviderStore.setState({
+      hasLoadedProviders: true,
+      antigravityDiscovering: false,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'unchecked',
+        models: [],
+      },
+      discoverAntigravity: discoverMock,
+    })
+    useSessionRuntimeStore.getState().setSelection('ag-unchecked', {
+      providerId: 'antigravity-acp',
+      modelId: 'agent-default',
+    })
+
+    const { rerender } = render(
+      <ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />,
+    )
+    await clickByRole(/Antigravity/)
+    expect(discoverMock).toHaveBeenCalledTimes(1)
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    const loadingNotice = within(dropdown).getByTestId('antigravity-models-loading')
+    expect(loadingNotice).toBeInTheDocument()
+    expect(loadingNotice.querySelector('svg.animate-spin')).toBeInTheDocument()
+    expect(within(dropdown).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
+
+    act(() => {
+      useProviderStore.setState({
+        antigravityDiscovering: false,
+        antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'login_required', models: [] },
+      })
+    })
+    rerender(<ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />)
+    const notice = within(screen.getByTestId('model-selector-dropdown')).getByRole('status')
+    expect(notice).toHaveTextContent('agy acp --login')
+    expect(notice).toHaveClass('rounded-[var(--radius-control)]')
+    expect(within(screen.getByTestId('model-selector-dropdown')).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
+  })
+
+  it('adapts per-model Antigravity reasoning efforts: 3 levels for Carbon, 0 levels (hidden) for Orchestrator, and clamps xhigh on switch', async () => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({
+      hasLoadedProviders: true,
+      antigravityDiscovering: false,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [
+          { id: 'gemini-4-neon', name: 'Gemini 4 Neon', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' },
+          { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)', supportedReasoningEfforts: [] },
+        ],
+        currentModelId: 'gemini-4-neon',
+        currentEffortLevel: 'high',
+      },
+    })
+    useSessionRuntimeStore.getState().setSelection('ag-per-model', {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-neon',
+      effortLevel: 'xhigh',
+    })
+
+    const onRuntimeSelectionChange = vi.fn()
+    render(
+      <ModelSelector
+        runtimeKey="ag-per-model"
+        lockedProviderId="antigravity-acp"
+        onRuntimeSelectionChange={onRuntimeSelectionChange}
+      />,
+    )
+
+    // On Gemini 4 Neon, X-High is available in the standalone effort popover
+    await clickByRole(/X-High/)
+    let effortPopover = within(screen.getByTestId('reasoning-effort-popover'))
+    expect(effortPopover.getAllByTestId('reasoning-effort-stop').map((el) => el.textContent)).toEqual([
+      'Low', 'Medium', 'High', 'X-High',
+    ])
+
+    // Switching from Neon (xhigh) to Carbon (3 levels) clamps effort to Carbon's default (high)
+    await clickByRole('Gemini 4 Neon, Antigravity')
+    let dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    const carbonButton = dropdown.getByRole('button', { name: /Gemini 4 Carbon/ })
+    expect(carbonButton).toHaveAttribute('type', 'button')
+    fireEvent.click(carbonButton)
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-carbon',
+      effortLevel: 'high',
+    })
+
+    // Reopen effort popover on Carbon: only Low / Medium / High (NO X-High!)
+    await clickByRole(/High/)
+    effortPopover = within(screen.getByTestId('reasoning-effort-popover'))
+    expect(effortPopover.getAllByTestId('reasoning-effort-stop').map((el) => el.textContent)).toEqual([
+      'Low', 'Medium', 'High',
+    ])
+
+    // Switching to Orchestrator (supportedReasoningEfforts: []) clears effortLevel and hides the effort control
+    await clickByRole('Gemini 4 Carbon, Antigravity')
+    dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    fireEvent.click(dropdown.getByRole('button', { name: /Orchestrator \(Neon\)/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-pro-orchestrator-neon',
+    })
+
+    expect(screen.queryByRole('button', { name: /Low|Medium|High|X-High/ })).not.toBeInTheDocument()
   })
 })

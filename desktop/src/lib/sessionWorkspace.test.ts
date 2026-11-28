@@ -48,6 +48,21 @@ describe('getSessionSeedWorkDir', () => {
     expect(getSessionSeedWorkDir(session)).toBe('/repo')
   })
 
+  it.each([
+    ['C:\\repo', 'C:\\repo\\.claude\\worktrees\\desktop-main-12345678'],
+    ['C:\\repo', 'C:\\repo/.claude\\worktrees/desktop-main-12345678'],
+    ['\\\\server\\share\\repo', '\\\\server\\share\\repo\\.claude\\worktrees\\desktop-main-12345678'],
+  ])('uses project root %s for Windows worktree %s', (projectRoot, workDir) => {
+    expect(getSessionSeedWorkDir({ projectRoot, workDir, workspaceState: 'available' })).toBe(projectRoot)
+  })
+
+  it.each([
+    'C:\\repo\\packages\\app',
+    'C:\\repo\\.claude\\worktrees-archive\\app',
+  ])('preserves the original Windows subdirectory %s', (workDir) => {
+    expect(getSessionSeedWorkDir({ projectRoot: 'C:\\repo', workDir, workspaceState: 'available' })).toBe(workDir)
+  })
+
   it('keeps the session workDir for intentional repo subdirectories', () => {
     const session = {
       workDir: '/repo/packages/app',

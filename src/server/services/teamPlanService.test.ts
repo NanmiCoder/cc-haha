@@ -3,6 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TeamPlanService } from './teamPlanService.js'
+import { sessionService } from './sessionService.js'
+import { ApiError } from '../middleware/errorHandler.js'
 import { approveTeamPlan, ensureTeamDraft, readTeamPlan, replaceTeamPlan, stageMember, submitTeamPlan } from '../../utils/swarm/teamPlanStore.js'
 import * as teamPlanStore from '../../utils/swarm/teamPlanStore.js'
 import { writeTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
@@ -55,6 +57,58 @@ test('approval launches once and returns frozen selected runtime to executor', a
   release()
   expect((await settle('running')).launch?.memberIds).toEqual({ worker: 'child-1' })
 })
+test.each(['lean', 'missing', 'changing', 'aborted'] as const)('profile read recovery cannot edit or approve if metadata is %s', async (condition) => {
+  const plan = await ready()
+  const validate = async (_plan: TeamPlanRecord) => { throw new Error('must not validate an unavailable plan') }
+  const service = new TeamPlanService({ validate, launch: async () => { throw new Error('must not launch') }, stop: async () => {} })
+  const conflict = new ApiError(409, 'Session changed during recovery; retry', 'HISTORY_CHANGED')
+  const retry = condition === 'lean' ? {
+    filePath: join(root, 'leader.jsonl'), projectDir: 'review', workDir: root, transcriptMessageCount: 1,
+    customTitle: null, agentProfile: 'lean' as const,
+  } : null
+
+  for (const operation of ['edit', 'approve'] as const) {
+    const controller = new AbortController()
+    const profileRead = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementationOnce(async () => {
+      if (condition === 'aborted') controller.abort()
+      throw conflict
+    })
+    if (condition === 'changing') profileRead.mockRejectedValueOnce(conflict)
+    else profileRead.mockResolvedValueOnce(retry)
+    try {
+      const change = operation === 'edit'
+        ? service.update('review', identity(plan), { members: [] }, controller.signal)
+        : service.approve('review', identity(plan), { signal: controller.signal })
+      if (condition === 'lean') await expect(change).rejects.toMatchObject({ status: 400, message: 'Agent teams are unavailable in lean sessions' })
+      else if (condition === 'aborted') await expect(change).rejects.toMatchObject({ name: 'AbortError' })
+      else await expect(change).rejects.toBe(conflict)
+      expect(profileRead).toHaveBeenCalledTimes(condition === 'aborted' ? 1 : 2)
+      expect(await readTeamPlan('review')).toMatchObject({ revision: plan.revision, state: 'review_pending' })
+    } finally { profileRead.mockRestore() }
+  }
+})
+
+test('approval recovers a transient metadata conflict and still rejects a canceled plan', async () => {
+  const plan = await ready()
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    launches++
+    return { memberIds: { worker: 'child-1' } }
+  }, stop: async () => {} })
+  const profileRead = spyOn(sessionService, 'getSessionLaunchInfo')
+    .mockRejectedValueOnce(new ApiError(409, 'Session changed during recovery; retry', 'HISTORY_CHANGED'))
+    .mockImplementationOnce(async () => {
+      await service.action('review', 'cancel', identity(plan))
+      return { filePath: join(root, 'leader.jsonl'), projectDir: 'review', workDir: root, transcriptMessageCount: 1,
+        customTitle: null, agentProfile: 'standard' }
+    })
+  try {
+    await expect(service.approve('review', identity(plan))).rejects.toMatchObject({ status: 409, message: 'Plan changed; review it again' })
+    expect((await readTeamPlan('review'))?.state).toBe('cancelled')
+    expect(launches).toBe(0)
+  } finally { profileRead.mockRestore() }
+})
+
 test('a plan read while the approval is committing does not orphan the launch', async () => {
   let launches = 0
   const service = new TeamPlanService({ validate: async item => item, launch: async () => {
@@ -286,4 +340,69 @@ test('a running team whose owner was lost is re-owned instead of being marked in
     isRunning: () => false, rehydrate: async () => false,
   })
   expect((await unrecoverable.getForSession('session'))?.state).toBe('interrupted')
+})
+
+test('a GET whose launching snapshot completes during lookup returns the advanced plan without orphaning it', async () => {
+  const pending = await ready()
+  let release!: () => void
+  const launchBarrier = new Promise<void>(resolve => { release = resolve })
+  let launches = 0, stops = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    launches++
+    await launchBarrier
+    return { memberIds: { worker: 'fixture-child' } }
+  }, stop: async () => { stops++ }, isRunning: () => true, reclaimUnstarted: async () => false })
+  await service.approve('review', identity(pending))
+  const find = teamPlanStore.findTeamPlanForSession
+  let heldSnapshot: TeamPlanRecord | null = null
+  let delayed = false
+  const lookup = spyOn(teamPlanStore, 'findTeamPlanForSession').mockImplementation(async id => {
+    const observed = await find(id)
+    if (!delayed && observed?.state === 'launching') {
+      delayed = true
+      heldSnapshot = observed
+      release()
+      await settle('running')
+      for (let i = 0; service.hasActiveOperations() && i < 100; i++) await Bun.sleep(1)
+      expect(service.hasActiveOperations()).toBe(false)
+    }
+    return observed
+  })
+  try {
+    const result = await service.getForSession('session')
+    expect(heldSnapshot?.state).toBe('launching')
+    expect(result?.state).toBe('running')
+    expect(result?.planId).toBe(heldSnapshot?.planId)
+    expect(result!.revision).toBeGreaterThan(heldSnapshot!.revision)
+    expect((await readTeamPlan('review'))?.state).toBe('running')
+    expect(launches).toBe(1)
+    expect(stops).toBe(0)
+  } finally { lookup.mockRestore(); release() }
+})
+
+test('GET observation recovery does not relax stale human approval or update revisions', async () => {
+  const stale = await ready()
+  await teamPlanStore.mutateTeamPlan('review', identity(stale), current => ({ ...current, feedback: 'newer human review' }))
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => { launches++; return { memberIds: {} } }, stop: async () => {} })
+  await expect(service.approve('review', identity(stale))).rejects.toThrow('Plan changed; refresh before continuing')
+  await expect(service.update('review', identity(stale), { members: [] })).rejects.toThrow('Plan changed; refresh before continuing')
+  expect(launches).toBe(0)
+})
+
+test.each([false, true])('GET preserves a conflict without its exact advancing revision proof (other error: %s)', async otherError => {
+  const plan = await ready()
+  await approveTeamPlan('review', identity(plan), 'request', plan)
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => { throw new Error('must not replay') }, stop: async () => {} })
+  const mutate = teamPlanStore.mutateTeamPlan
+  const conflict = new teamPlanStore.TeamPlanError(otherError ? 'Other persisted plan conflict' : 'Plan changed; refresh before continuing')
+  const recovery = spyOn(teamPlanStore, 'mutateTeamPlan').mockImplementation(async (name, currentIdentity) => {
+    if (otherError) await mutate(name, currentIdentity, current => ({ ...current, state: 'running', launch: { ...current.launch, status: 'running' } }))
+    throw conflict
+  })
+  try {
+    await expect(service.getForSession('session')).rejects.toBe(conflict)
+    expect(recovery).toHaveBeenCalledTimes(1)
+    expect((await readTeamPlan('review'))?.state).toBe(otherError ? 'running' : 'launching')
+  } finally { recovery.mockRestore() }
 })

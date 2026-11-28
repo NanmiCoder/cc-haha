@@ -198,12 +198,12 @@ function QrSketch() {
     <View style={{ borderRadius: 6, overflow: 'hidden', boxShadow: `0 0 0 1px ${colors.hair}` }}>
       <Svg width={76} height={76} viewBox="0 0 21 21">
         <Rect width={21} height={21} fill="#FFFFFF" />
-        <Path d="M1 1h7v7H1zM13 1h7v7h-7zM1 13h7v7H1z" fill="#1D1C1A" />
+        <Path d="M1 1h7v7H1zM13 1h7v7h-7zM1 13h7v7H1z" fill="#1A1C1F" />
         <Path d="M2 2h5v5H2zM14 2h5v5h-5zM2 14h5v5H2z" fill="#FFFFFF" />
-        <Path d="M3 3h3v3H3zM15 3h3v3h-3zM3 15h3v3H3z" fill="#1D1C1A" />
+        <Path d="M3 3h3v3H3zM15 3h3v3h-3zM3 15h3v3H3z" fill="#1A1C1F" />
         <Path
           d="M10 1h1v2h-1zM9 4h2v1H9zM10 6h1v3h-1zM12 9h2v1h-2zM9 10h2v2H9zM1 10h2v1H1zM4 9h3v1H4zM15 10h2v1h-2zM18 9h2v2h-2zM13 12h2v2h-2zM10 14h3v1h-3zM16 13h1v3h-1zM18 15h2v1h-2zM10 17h1v3h-1zM12 18h3v1h-3zM17 18h3v2h-3z"
-          fill="#1D1C1A"
+          fill="#1A1C1F"
         />
       </Svg>
     </View>

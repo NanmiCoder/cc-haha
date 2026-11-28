@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SidecarChild, SidecarPlan } from './sidecarManager'
@@ -54,6 +55,7 @@ function createRuntime(options: {
   env?: NodeJS.ProcessEnv
   now?: () => number
   resolveSystemProxy?: (url: string) => Promise<string>
+  resolveBrowserBridgeUrl?: () => Promise<string | null>
   sleep?: (delayMs: number) => Promise<void>
   proxyBridge?: SystemProxyBridgeLike
   fetch?: typeof fetch
@@ -64,6 +66,7 @@ function createRuntime(options: {
     diagnosticsFile: options.diagnosticsFile,
     env: { CLAUDE_CONFIG_DIR: isolatedConfigDir, ...options.env },
     resolveSystemProxy: options.resolveSystemProxy,
+    resolveBrowserBridgeUrl: options.resolveBrowserBridgeUrl,
     deps: {
       ...(options.fetch ? { fetch: options.fetch } : {}),
       appendHostDiagnostic: sidecarMocks.appendHostDiagnostic,
@@ -943,5 +946,60 @@ describe('ElectronServerRuntime', () => {
       '/isolated/user-data/diagnostics/electron-host.log',
       expect.stringContaining('[process-error] sidecar process error: spawn error'),
     )
+  })
+
+  it('persists the system proxy resolver failure behind a Cloudflare CONNECT 502', async () => {
+    const runtime = createRuntime({ diagnosticsFile: '/isolated/diagnostics/electron-host.log',
+      resolveSystemProxy: async () => { throw Object.assign(new Error('PAC resolver failed token=fixture-private-pac'), { code: 'EAI_AGAIN' }) },
+    })
+    try {
+      await runtime.startServer()
+      const bridge = new URL(sidecarMocks.serverPlans.at(-1)!.env.CC_HAHA_SYSTEM_PROXY_URL!)
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const request = http.request({ hostname: bridge.hostname, port: Number(bridge.port), method: 'CONNECT', path: 'region1.v2.argotunnel.com:7844' })
+        request.once('connect', (response, socket) => { socket.destroy(); resolve(response.statusCode) })
+        request.once('error', reject)
+        request.end()
+      })
+      expect(status).toBe(502)
+      const logs = sidecarMocks.appendHostDiagnostic.mock.calls.map(call => String(call[1])).join('\n')
+      expect(logs).toContain('system_proxy_resolution')
+      expect(logs).toContain('PAC resolver failed')
+      expect(logs).toContain('EAI_AGAIN')
+      expect(logs).not.toContain('fixture-private-pac')
+    } finally { runtime.stopAll() }
+  })
+
+  it('passes CC_HAHA_BROWSER_BRIDGE_URL and CC_HAHA_BROWSER_BRIDGE_TOKEN only to the server sidecar and never to adapters', async () => {
+    const runtime = createRuntime({
+      env: {
+        CC_HAHA_BROWSER_BRIDGE_URL: 'http://127.0.0.1:9999',
+        CC_HAHA_BROWSER_BRIDGE_TOKEN: 'leaked-parent-env-token',
+      },
+      resolveBrowserBridgeUrl: async () => 'http://127.0.0.1:54321',
+    })
+    try {
+      await runtime.startServer()
+      const bridgeToken = runtime.getBrowserBridgeToken()
+      expect(bridgeToken.length).toBeGreaterThanOrEqual(40)
+      expect(bridgeToken).not.toBe(runtime.getLocalAccessToken())
+      expect(bridgeToken).not.toBe(runtime.getPetAccessToken())
+      expect(bridgeToken).not.toBe(runtime.getP2PEndpointToken())
+
+      const serverPlan = sidecarMocks.serverPlans.at(-1)!
+      expect(serverPlan.env.CC_HAHA_BROWSER_BRIDGE_URL).toBe('http://127.0.0.1:54321')
+      expect(serverPlan.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBe(bridgeToken)
+
+      const adapterPlans = sidecarMocks.spawnSidecar.mock.calls
+        .map(call => call[0] as SidecarPlan)
+        .filter(plan => plan.args[0] !== 'server')
+      expect(adapterPlans).toHaveLength(ADAPTER_COUNT)
+      for (const adapterPlan of adapterPlans) {
+        expect(adapterPlan.env.CC_HAHA_BROWSER_BRIDGE_URL).toBeUndefined()
+        expect(adapterPlan.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBeUndefined()
+      }
+    } finally {
+      runtime.stopAll()
+    }
   })
 })

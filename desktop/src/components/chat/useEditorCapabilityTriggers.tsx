@@ -236,7 +236,7 @@ export function useEditorCapabilityTriggers({ sessionId, text, mentions, compose
     }
     if (event.key === 'Enter' || event.key === 'Tab') {
       event.preventDefault()
-      const selected = groups.ordered[slashIndex]
+      const selected = groups.ordered[slashIndex] ?? groups.ordered[0]
       if (selected) selectSlashCommand(selected.name)
       return true
     }

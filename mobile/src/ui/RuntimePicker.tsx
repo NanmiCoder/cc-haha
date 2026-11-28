@@ -3,12 +3,18 @@ import { FlatList, View, useWindowDimensions } from 'react-native'
 import { Text } from './Text'
 import type { ApiClient } from '../core/client'
 import {
+  ANTIGRAVITY_LOGIN_GUIDANCE,
+  ANTIGRAVITY_PROVIDER_ID,
+  antigravityNeedsDiscovery,
+  antigravitySourceDetail,
   canSetRuntimeEffort,
+  discoverAntigravity,
   loadRuntimeDirectory,
   loadRuntimeModels,
   modelDetail,
   runtimeProviderIdentity,
   runtimeModelSelection,
+  withAntigravityStatus,
   type Model,
   type RuntimeDirectory,
 } from '../core/runtimeCatalog'
@@ -38,15 +44,24 @@ export function useRuntimeChoice({
   defaultScope = false,
   active = true,
   epoch = 0,
+  lockedProviderId,
+  excludeProviderIds,
 }: {
   client?: ApiClient | null
   initial?: RuntimeConfig
   defaultScope?: boolean
   active?: boolean
   epoch?: number
+  /** Lock provider switching (e.g. an existing Antigravity session) while keeping model & effort switching open. */
+  lockedProviderId?: string | null
+  /** Hide specific providers from the selectable provider list (e.g. hide Antigravity on non-Antigravity sessions). */
+  excludeProviderIds?: readonly string[]
 }) {
+  const locked = lockedProviderId !== undefined
+  const lockedIdentity = locked ? runtimeProviderIdentity(lockedProviderId) : undefined
+  const excludeKey = excludeProviderIds?.join('\0') ?? ''
   const [providerId, setProviderId] = useState<string | null>(
-    runtimeProviderIdentity(initial?.providerId ?? null)
+    locked ? lockedIdentity! : runtimeProviderIdentity(initial?.providerId ?? null)
   )
   const [modelId, setModelId] = useState(initial?.modelId ?? '')
   const [effort, setEffort] = useState(initial?.effortLevel)
@@ -62,6 +77,7 @@ export function useRuntimeChoice({
   } | null>(null)
   const [revision, setRevision] = useState(0)
   const [catalogRevision, setCatalogRevision] = useState(0)
+  const [manualRefreshingAntigravity, setManualRefreshingAntigravity] = useState(false)
   const initialProvider = initial?.providerId
   const initialModel = initial?.modelId
   const initialEffort = initial?.effortLevel
@@ -71,16 +87,19 @@ export function useRuntimeChoice({
       initialProvider,
       initialModel,
       initialEffort,
+      locked,
+      lockedIdentity,
       revision,
       epoch,
     }),
-    [client, initialProvider, initialModel, initialEffort, revision, epoch]
+    [client, initialProvider, initialModel, initialEffort, locked, lockedIdentity, revision, epoch]
   )
   const [loaded, setLoaded] = useState<{
     request: typeof request
     directory?: RuntimeDirectory
     error?: string
   } | null>(null)
+  const [autoDiscoveredFor, setAutoDiscoveredFor] = useState<typeof request | null>(null)
   useEffect(() => {
     const target = request.client
     if (!active || !target) return
@@ -90,9 +109,11 @@ export function useRuntimeChoice({
         if (controller.signal.aborted) return
         setLoaded({ request, directory })
         setProviderId(
-          request.initialProvider === undefined
-            ? directory.activeId
-            : runtimeProviderIdentity(request.initialProvider)
+          request.locked
+            ? request.lockedIdentity!
+            : request.initialProvider === undefined
+              ? directory.activeId
+              : runtimeProviderIdentity(request.initialProvider)
         )
         setModelId(request.initialModel ?? '')
         setEffort(request.initialEffort)
@@ -105,46 +126,139 @@ export function useRuntimeChoice({
   }, [request, active])
   const loading = Boolean(client) && loaded?.request !== request
   const directory = !loading ? (loaded?.directory ?? null) : null
+  const effectiveProviderId = locked ? lockedIdentity! : providerId
+  const sources = useMemo(() => {
+    const list = directory?.sources ?? []
+    if (locked) return list.filter((value) => value.id === lockedIdentity)
+    if (!excludeKey) return list
+    const excluded = new Set(excludeKey.split('\0').filter(Boolean))
+    return list.filter((value) => !value.id || !excluded.has(value.id))
+  }, [directory, locked, lockedIdentity, excludeKey])
   const error =
     (!loading && loaded?.error) ||
     (directory &&
     modelError?.directory === directory &&
-    modelError.id === providerId
+    modelError.id === effectiveProviderId
       ? modelError.message
       : '')
-  const source = directory?.sources.find((value) => value.id === providerId)
+  const source = sources.find((value) => value.id === effectiveProviderId)
+  const autoDiscoveringAntigravity = Boolean(
+    active &&
+      directory &&
+      client &&
+      effectiveProviderId === ANTIGRAVITY_PROVIDER_ID &&
+      antigravityNeedsDiscovery(directory.antigravity, { includeError: true }) &&
+      autoDiscoveredFor !== request &&
+      !error
+  )
   useEffect(() => {
-    if (!directory || !client) return
+    if (!autoDiscoveringAntigravity || !directory || !client) return
     const controller = new AbortController()
-    loadRuntimeModels(client, directory, providerId, controller.signal)
+    discoverAntigravity(client, controller.signal)
+      .then((fresh) => {
+        if (controller.signal.aborted) return
+        setAutoDiscoveredFor(request)
+        setLoaded((current) =>
+          current?.directory === directory
+            ? { ...current, directory: withAntigravityStatus(directory, fresh) }
+            : current
+        )
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) {
+          setAutoDiscoveredFor(request)
+          setModelError({
+            directory,
+            id: ANTIGRAVITY_PROVIDER_ID,
+            message: errorText(e),
+          })
+        }
+      })
+    return () => controller.abort()
+  }, [autoDiscoveringAntigravity, client, directory, request])
+  useEffect(() => {
+    if (!active || !directory || !client) return
+    if (
+      autoDiscoveringAntigravity ||
+      (effectiveProviderId === ANTIGRAVITY_PROVIDER_ID &&
+        directory.antigravity?.status === 'unchecked')
+    )
+      return
+    const controller = new AbortController()
+    loadRuntimeModels(client, directory, effectiveProviderId, controller.signal, {
+      skipEmptyAntigravityDiscover: autoDiscoveredFor === request,
+    })
       .then((models) => {
         if (!controller.signal.aborted)
-          setCatalog({ directory, id: providerId, models })
+          setCatalog({ directory, id: effectiveProviderId, models })
       })
       .catch((e) => {
         if (!controller.signal.aborted)
-          setModelError({ directory, id: providerId, message: errorText(e) })
+          setModelError({
+            directory,
+            id: effectiveProviderId,
+            message: errorText(e),
+          })
       })
     return () => controller.abort()
-  }, [client, directory, providerId, catalogRevision])
+  }, [
+    active,
+    autoDiscoveredFor,
+    autoDiscoveringAntigravity,
+    client,
+    directory,
+    effectiveProviderId,
+    catalogRevision,
+    request,
+  ])
   const catalogReady = Boolean(
-    directory && catalog?.directory === directory && catalog.id === providerId
+    directory &&
+      catalog?.directory === directory &&
+      catalog.id === effectiveProviderId
   )
   const models = catalogReady ? catalog!.models : []
   const model = models.find((value) => value.id === modelId)
-  const canSetEffort = canSetRuntimeEffort(providerId, defaultScope)
+  const canSetEffort = canSetRuntimeEffort(effectiveProviderId, defaultScope)
+  const refreshingAntigravity =
+    manualRefreshingAntigravity || autoDiscoveringAntigravity
+  async function refreshAntigravity() {
+    if (!client || !directory || refreshingAntigravity) return
+    setAutoDiscoveredFor(request)
+    setManualRefreshingAntigravity(true)
+    setModelError(null)
+    try {
+      const fresh = await discoverAntigravity(client)
+      setLoaded((current) =>
+        current?.directory === directory
+          ? { ...current, directory: withAntigravityStatus(directory, fresh) }
+          : current
+      )
+    } catch (e) {
+      setModelError({
+        directory,
+        id: ANTIGRAVITY_PROVIDER_ID,
+        message: errorText(e),
+      })
+    } finally {
+      setManualRefreshingAntigravity(false)
+    }
+  }
   return {
     loading,
     directory,
+    sources,
+    antigravity: directory?.antigravity ?? null,
+    locked,
     error,
     source,
-    providerId,
+    providerId: effectiveProviderId,
     selectProvider(id: string | null) {
+      if (locked && id !== lockedIdentity) return
       // Retrying this source must not reload the directory and reset to initial.
-      if (id === providerId && modelError?.directory === directory && modelError.id === id)
+      if (id === effectiveProviderId && modelError?.directory === directory && modelError.id === id)
         setCatalogRevision((value) => value + 1)
       setProviderId(id)
-      if (id !== providerId) setModelId('')
+      if (id !== effectiveProviderId) setModelId('')
       setModelError(null)
     },
     catalogReady,
@@ -157,12 +271,14 @@ export function useRuntimeChoice({
     effort,
     setEffort,
     canSetEffort,
-    selectConfig: (next: Model) => runtimeModelSelection(providerId, next, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope),
+    refreshingAntigravity,
+    refreshAntigravity,
+    selectConfig: (next: Model) => runtimeModelSelection(effectiveProviderId, next, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope),
     reload: () => setRevision((value) => value + 1),
     /** 可以应用的选择；来源未授权或还没选模型时为 null。 */
     selection:
       model && source?.auth === 'ready'
-        ? runtimeModelSelection(providerId, model, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope)
+        ? runtimeModelSelection(effectiveProviderId, model, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope)
         : null,
   }
 }
@@ -182,33 +298,53 @@ export function RuntimeChoiceView({
 }) {
   const colors = useColors()
   const { height } = useWindowDimensions()
-  const [step, setStep] = useState<'providers' | 'models'>('providers')
+  const locked = Boolean(choice.locked)
+  const [step, setStep] = useState<'providers' | 'models'>(
+    locked ? 'models' : 'providers'
+  )
+  const activeStep = locked ? 'models' : step
   const [query, setQuery] = useState('')
   const search = query.trim().toLocaleLowerCase()
-  const sources = (choice.directory?.sources ?? []).filter((source) =>
+  const allSources = choice.sources ?? choice.directory?.sources ?? []
+  const sources = allSources.filter((source) =>
     !search || source.name.toLocaleLowerCase().includes(search)
   )
   const models = choice.models.filter((model) =>
     !search || `${model.name} ${model.id} ${model.description ?? ''}`.toLocaleLowerCase().includes(search)
   )
+  const isAntigravity = choice.providerId === ANTIGRAVITY_PROVIDER_ID
+  const antigravityNeedsLogin =
+    isAntigravity &&
+    (choice.source?.runtimeStatus === 'login_required' ||
+      choice.source?.auth === 'missing')
+  const antigravityPending =
+    isAntigravity &&
+    (choice.refreshingAntigravity ||
+      (choice.source?.runtimeStatus === 'unchecked' && !choice.error))
+  const refreshDisabled =
+    busy || choice.loading || Boolean(choice.refreshingAntigravity)
   return (
     <View style={{ height: Math.min(480, height * 0.58), flexShrink: 1, gap: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}>
-        {step === 'models' ? (
+        {activeStep === 'models' && !locked ? (
           <TextButton title="‹ 供应商" onPress={() => { setStep('providers'); setQuery('') }} />
         ) : null}
         <Text numberOfLines={1} style={{ flex: 1, fontSize: 14, color: colors.ink2, paddingHorizontal: 4 }}>
-          {step === 'providers' ? '先选择供应商' : choice.source?.name ?? '供应商已不可用'}
+          {activeStep === 'providers'
+            ? '先选择供应商'
+            : locked
+              ? `${choice.source?.name ?? (isAntigravity ? 'Antigravity' : '当前引擎')}（已锁定引擎）`
+              : choice.source?.name ?? '供应商已不可用'}
         </Text>
       </View>
       <SearchField
         value={query}
         onChangeText={setQuery}
-        placeholder={step === 'providers' ? '搜索供应商' : '搜索模型'}
+        placeholder={activeStep === 'providers' ? '搜索供应商' : '搜索模型'}
         editable={!busy}
       />
       <InlineError text={choice.error} />
-      {choice.loading ? <Loading /> : step === 'providers' ? (
+      {choice.loading ? <Loading /> : activeStep === 'providers' ? (
         <FlatList
           style={{ flex: 1 }}
           keyboardShouldPersistTaps="handled"
@@ -218,7 +354,15 @@ export function RuntimeChoiceView({
             <ChoiceRow
               title={item.name}
               selected={item.id === choice.providerId}
-              detail={item.auth === 'missing' ? '尚未登录' : item.auth === 'error' ? '授权状态待确认' : undefined}
+              detail={
+                item.id === ANTIGRAVITY_PROVIDER_ID
+                  ? antigravitySourceDetail(choice.antigravity)
+                  : item.auth === 'missing'
+                    ? '尚未登录'
+                    : item.auth === 'error'
+                      ? '授权状态待确认'
+                      : undefined
+              }
               trailingText="›"
               disabled={busy}
               onPress={() => { choice.selectProvider(item.id); setStep('models'); setQuery('') }}
@@ -226,11 +370,15 @@ export function RuntimeChoiceView({
           )}
           ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>没有匹配的供应商。</Text>}
         />
-      ) : choice.source?.auth !== 'ready' ? (
+      ) : antigravityPending ? <Loading /> : choice.source?.auth !== 'ready' ? (
         <Callout>
-          {choice.source?.auth === 'missing'
-            ? '请先在电脑上登录或配置此供应商，再重新读取。'
-            : '尚未确认此供应商的授权状态，请重新读取后再选模型。'}
+          {antigravityNeedsLogin
+            ? ANTIGRAVITY_LOGIN_GUIDANCE
+            : isAntigravity
+              ? (choice.antigravity?.error || '尚未确认 Antigravity 状态，请点击下方刷新重试。')
+              : choice.source?.auth === 'missing'
+                ? '请先在电脑上登录或配置此供应商，再重新读取。'
+                : '尚未确认此供应商的授权状态，请重新读取后再选模型。'}
         </Callout>
       ) : !choice.catalogReady && !choice.error ? <Loading /> : (
         <FlatList
@@ -254,7 +402,15 @@ export function RuntimeChoiceView({
         />
       )}
       {warning ? <Callout>{warning}</Callout> : null}
-      <TextButton title="重新读取" disabled={busy || choice.loading} onPress={choice.reload} />
+      {activeStep === 'models' && isAntigravity && choice.refreshAntigravity ? (
+        <TextButton
+          title={choice.refreshingAntigravity ? '正在刷新…' : '刷新 Antigravity'}
+          disabled={refreshDisabled}
+          onPress={() => { void choice.refreshAntigravity() }}
+        />
+      ) : (
+        <TextButton title="重新读取" disabled={busy || choice.loading} onPress={choice.reload} />
+      )}
     </View>
   )
 }
@@ -267,6 +423,8 @@ export function RuntimePicker({
   applyLabel = '应用选择',
   busy = false,
   defaultScope = false,
+  lockedProviderId,
+  excludeProviderIds,
 }: {
   client: ApiClient
   initial?: RuntimeConfig
@@ -274,8 +432,16 @@ export function RuntimePicker({
   applyLabel?: string
   busy?: boolean
   defaultScope?: boolean
+  lockedProviderId?: string | null
+  excludeProviderIds?: readonly string[]
 }) {
-  const choice = useRuntimeChoice({ client, initial, defaultScope })
+  const choice = useRuntimeChoice({
+    client,
+    initial,
+    defaultScope,
+    lockedProviderId,
+    excludeProviderIds,
+  })
   return (
     <View style={{ gap: 12 }}>
       <RuntimeChoiceView choice={choice} busy={busy} />
@@ -306,6 +472,9 @@ export function RuntimeSheet({
   busy,
   defaultScope,
   warning,
+  inline,
+  lockedProviderId,
+  excludeProviderIds,
 }: {
   visible: boolean
   onClose(): void
@@ -316,6 +485,9 @@ export function RuntimeSheet({
   busy?: boolean
   defaultScope?: boolean
   warning?: string
+  inline?: boolean
+  lockedProviderId?: string | null
+  excludeProviderIds?: readonly string[]
 }) {
   // Each opening re-reads sources and starts from `initial`; closing discards the draft.
   const [shown, setShown] = useState(visible)
@@ -330,9 +502,12 @@ export function RuntimeSheet({
     defaultScope,
     active: visible,
     epoch,
+    lockedProviderId,
+    excludeProviderIds,
   })
   return (
     <Sheet
+      inline={inline}
       visible={visible}
       onClose={onClose}
       title={title}

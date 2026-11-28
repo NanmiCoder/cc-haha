@@ -3,6 +3,7 @@ import {
   Bot,
   Compass,
   Feather,
+  Globe,
   MonitorSmartphone,
   List,
   Paperclip,
@@ -22,6 +23,7 @@ import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { NormalizedSkill } from '@/types/market'
 import type { WorkflowDefinition } from '@/types/workflow'
 import type { AgentProfile } from '@/types/session'
+import type { BrowserPreferredTarget } from '@/api/browserUse'
 
 /**
  * Data model behind the composer's capability ("+") menu.
@@ -56,6 +58,10 @@ export type CapabilityAction =
   | { type: 'toggleAgentTeam' }
   /** Flip the global Computer Use switch; turning it on asks for consent first. */
   | { type: 'toggleComputerUse' }
+  /** Arm or disarm Browser Use for the next message; enables globally with consent if off. */
+  | { type: 'toggleBrowserUse' }
+  /** Update the global Browser Use preferred target (`auto` | `workspace` | `chrome`). */
+  | { type: 'setBrowserUseTarget', target: BrowserPreferredTarget }
   /** Pick the draft's Agent mode. Only a draft offers it; a session's is fixed. */
   | { type: 'setAgentProfile', profile: AgentProfile }
 
@@ -113,7 +119,15 @@ export type CapabilityMenuComputerUse = {
   enabled: boolean
 } | null
 
+export type CapabilityMenuBrowserUse = {
+  enabled: boolean
+  armed: boolean
+  preferredTarget: BrowserPreferredTarget
+} | null
+
 export type CapabilityMenuInput = {
+  /** Antigravity ACP engine keeps attachments, Browser Use, Computer Use, and slash commands while hiding Claude-only rows. */
+  antigravity?: boolean
   /** Skill mention candidates (kind 'skill'), already loaded for the composer. */
   skills: ComposerReferenceCandidate[]
   /** Plugin mention candidates (kind 'plugin'), already loaded for the composer. */
@@ -128,6 +142,7 @@ export type CapabilityMenuInput = {
   workflows: WorkflowDefinition[]
   agentTeam: { enabled: boolean, armed: boolean }
   computerUse: CapabilityMenuComputerUse
+  browserUse?: CapabilityMenuBrowserUse
   /**
    * The Agent mode row. Absent when there is nothing to pick or to say: the
    * lean mode is off in Settings, or this is an ordinary (standard) session.
@@ -407,6 +422,23 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
         action: { type: 'settings', tab: 'general' },
       }
 
+  const browserUseItem: CapabilityMenuItem = input.browserUse
+    ? {
+        key: 'browser-use',
+        label: t('chat.capabilities.browserUse'),
+        description: t('chat.capabilities.browserUseDescription'),
+        icon: { kind: 'lucide', icon: Globe },
+        switch: { checked: input.browserUse.armed, disabled: false },
+        action: { type: 'toggleBrowserUse' },
+      }
+    : {
+        key: 'browser-use',
+        label: t('chat.capabilities.browserUse'),
+        description: t('chat.capabilities.browserUseDescription'),
+        icon: { kind: 'lucide', icon: Globe },
+        action: { type: 'settings', tab: 'browserUse' },
+      }
+
   const computerUseItem: CapabilityMenuItem = input.computerUse?.supported
     ? {
         key: 'computer-use',
@@ -471,6 +503,43 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
     .filter(plugin => !listedPluginIds.has(plugin.id))
     .map(plugin => mentionItem(plugin))
 
+  if (input.antigravity) {
+    return [
+      {
+        id: 'use',
+        title: t('chat.capabilities.sectionUse'),
+        showTitle: true,
+        items: [
+          {
+            key: 'add-files',
+            label: t('chat.addFiles'),
+            icon: { kind: 'lucide', icon: Paperclip },
+            action: { type: 'attachment' },
+          },
+        ],
+      },
+      {
+        id: 'run',
+        title: t('chat.capabilities.sectionRun'),
+        showTitle: true,
+        items: [agentTeamItem, browserUseItem, computerUseItem],
+      },
+      {
+        id: 'more',
+        title: t('chat.capabilities.moreTools'),
+        showTitle: false,
+        items: [
+          {
+            key: 'slash-commands',
+            label: t('chat.slashCommands'),
+            icon: { kind: 'slash' },
+            action: { type: 'slashTrigger' },
+          },
+        ],
+      },
+    ]
+  }
+
   return [
     {
       id: 'use',
@@ -494,6 +563,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
       items: [
         ...(input.agentProfile ? [buildAgentProfileItem(input.agentProfile, t)] : []),
         agentTeamItem,
+        browserUseItem,
         computerUseItem,
       ],
     },

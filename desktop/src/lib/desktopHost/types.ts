@@ -34,6 +34,28 @@ export type DesktopPetInteractiveRegion = {
   height: number
 }
 
+export type DesktopUsageWidgetBoundsState = {
+  compact: boolean
+  alwaysOnTop: boolean
+  snappedTop: boolean
+}
+
+export type DesktopUsageWidgetDrag = {
+  phase: 'start' | 'move' | 'end'
+  x: number
+  y: number
+}
+
+export type DesktopUsageWidgetMenuBarSync = {
+  enabled: boolean
+  title?: string
+  tooltip?: string
+}
+
+export type DesktopUsageWidgetSettingsTab = 'general' | 'providers'
+
+export type DesktopUsageWidgetTheme = 'white' | 'dark'
+
 export type DialogFileFilter = {
   name: string
   extensions: string[]
@@ -67,6 +89,8 @@ export type AppliedAppearance = {
    * repaint when it next starts in the morning.
    */
   lightBackground: string
+  /** Dark preference, even when the currently applied theme is light. Older hosts may omit it. */
+  darkBackground?: string
   /** Whether the renderer is tracking the OS setting rather than a fixed pick. */
   followSystem: boolean
 }
@@ -272,6 +296,84 @@ export type WorkspaceBrowserEvent =
   | { type: 'agent'; tabId: string; message: unknown }
   /** The page died (crash, host teardown). The tab shows a retry entry point. */
   | { type: 'destroyed'; tabId: string; reason: 'crashed' | 'closed' }
+
+export type BrowserUseControlState = 'idle' | 'active' | 'takeover'
+
+export type BrowserUseTargetRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type BrowserUseHostEvent =
+  | {
+      type: 'ensure-tab'
+      requestId: string
+      sessionId?: string
+      tabId?: string
+      url?: string
+      focus?: boolean
+      revealWorkbench?: boolean
+      createNew?: boolean
+    }
+  | {
+      type: 'focus-tab'
+      tabId: string
+      sessionId?: string
+      revealWorkbench?: boolean
+    }
+  | {
+      type: 'close-tab'
+      tabId: string
+      sessionId?: string
+    }
+  | {
+      type: 'control-state'
+      tabId: string
+      state: BrowserUseControlState
+      actionLabel?: string
+      takeoverReason?: string
+      sessionId?: string
+      showOverlay?: boolean
+      autoReveal?: boolean
+    }
+  | {
+      type: 'move-cursor'
+      tabId: string
+      moveId: string
+      x: number
+      y: number
+      targetRect?: BrowserUseTargetRect
+      durationMs: number
+      label?: string
+    }
+  | {
+      type: 'click-ripple'
+      tabId: string
+      x: number
+      y: number
+      button?: 'left' | 'right' | 'middle'
+    }
+
+export type BrowserUseTabReadyPayload = {
+  requestId: string
+  tabId: string
+  ok: boolean
+  error?: string
+}
+
+export type BrowserUseCursorArrivedPayload = {
+  moveId: string
+  tabId: string
+  skipped?: boolean
+}
+
+export type BrowserUseUserActionPayload = {
+  tabId: string
+  action: 'takeover' | 'resume' | 'stop' | 'cancel'
+  reason?: string
+}
 
 type DesktopPetBase = {
   id: string
@@ -504,6 +606,23 @@ export type DesktopHost = {
       handler: (placement: DesktopPetPanelPlacement) => void,
     ): Promise<DesktopHostUnlisten>
   }
+  usageWidget?: {
+    show(options?: { compact?: boolean; alwaysOnTop?: boolean }): Promise<void>
+    hide(): Promise<void>
+    toggle(options?: { compact?: boolean; alwaysOnTop?: boolean }): Promise<boolean>
+    setCompact(compact: boolean): Promise<DesktopUsageWidgetBoundsState>
+    setAlwaysOnTop(alwaysOnTop: boolean): Promise<DesktopUsageWidgetBoundsState>
+    snapToTop(): Promise<DesktopUsageWidgetBoundsState>
+    dragWindow(payload: DesktopUsageWidgetDrag): Promise<DesktopUsageWidgetBoundsState>
+    syncMenuBar(payload: DesktopUsageWidgetMenuBarSync): Promise<void>
+    focusMainWindow(): Promise<void>
+    openSettings(tab?: DesktopUsageWidgetSettingsTab): Promise<void>
+    notifyPreferencesChanged(): Promise<void>
+    getTheme?(): Promise<DesktopUsageWidgetTheme>
+    onVisibilityChanged(handler: (visible: boolean) => void): Promise<DesktopHostUnlisten>
+    onPreferencesChanged(handler: () => void): Promise<DesktopHostUnlisten>
+    onThemeChanged?(handler: (theme: DesktopUsageWidgetTheme) => void): Promise<DesktopHostUnlisten>
+  }
   dialogs: {
     open(options?: DialogOpenOptions): Promise<string | string[] | null>
     save(options?: DialogSaveOptions): Promise<string | null>
@@ -559,7 +678,7 @@ export type DesktopHost = {
     /** Registers the page's `<webview>` guest with the host and starts `url`. */
     create(
       tabId: string,
-      options: { storageId: string; url?: string; webContentsId: number },
+      options: { sessionId?: string; storageId: string; url?: string; webContentsId: number },
     ): Promise<void>
     navigate(tabId: string, url: string): Promise<void>
     goBack(tabId: string): Promise<void>
@@ -575,6 +694,12 @@ export type DesktopHost = {
     printToPdf(tabId: string): Promise<void>
     close(tabId: string): Promise<void>
     onEvent(handler: (event: WorkspaceBrowserEvent) => void): Promise<DesktopHostUnlisten>
+  }
+  browserUse: {
+    reportTabReady(payload: BrowserUseTabReadyPayload): Promise<void>
+    reportCursorArrived(payload: BrowserUseCursorArrivedPayload): Promise<void>
+    sendUserAction(payload: BrowserUseUserActionPayload): Promise<void>
+    onEvent(handler: (event: BrowserUseHostEvent) => void): Promise<DesktopHostUnlisten>
   }
   appMode: {
     get(): Promise<AppModeConfig>

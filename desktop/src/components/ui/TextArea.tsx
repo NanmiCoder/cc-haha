@@ -8,6 +8,8 @@ export type TextAreaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
   hint?: ReactNode
   error?: string
   required?: boolean
+  /** Monospace face with tabular numerals for prompts, JSON, and config blocks. */
+  mono?: boolean
   containerClassName?: string
 }
 
@@ -26,6 +28,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
   hint,
   error,
   required,
+  mono = false,
   rows = 4,
   className,
   containerClassName,
@@ -55,7 +58,13 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
         required={required}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={cx(FIELD_BASE_CLASSES, 'px-2.5 py-2 text-sm leading-6', fieldStateClasses(!!error), className)}
+        className={cx(
+          FIELD_BASE_CLASSES,
+          'scrollbar-autohide px-2.5 py-2 text-sm leading-6',
+          fieldStateClasses(!!error),
+          mono && 'font-mono tabular-nums',
+          className,
+        )}
         {...props}
       />
       {error

@@ -952,7 +952,7 @@ export function AdapterSettings() {
               className="inline-flex items-center gap-0.5 rounded-[var(--radius-xs)] text-[var(--color-text-accent)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
             >
               {t('settings.adapters.configurationDocs')}
-              <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+              <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
             </a>
             {t('settings.adapters.descriptionAfterDocs')}
           </>
@@ -1008,7 +1008,7 @@ export function AdapterSettings() {
                     key={`${user.platform}-${user.userId}`}
                     className="flex min-h-[36px] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 transition-colors hover:bg-[var(--color-surface-hover)]"
                   >
-                    <Badge size="xs">{t(`settings.adapters.platform.${user.platform}`)}</Badge>
+                    <Badge size="xs" pill={false}>{t(`settings.adapters.platform.${user.platform}`)}</Badge>
                     <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]">{user.displayName}</span>
                     <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">
                       {new Date(user.pairedAt).toLocaleDateString()}
@@ -1162,7 +1162,7 @@ export function AdapterSettings() {
                     className={LINK_BUTTON}
                   >
                     {t('settings.adapters.feishuCreateBotAction')}
-                    <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+                    <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
                   </a>
                 </div>
               )}
@@ -1512,7 +1512,7 @@ export function AdapterSettings() {
                           className={LINK_BUTTON}
                         >
                           {t('settings.adapters.slackCreateAppAction')}
-                          <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+                          <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
                         </a>
                       )}
                       {(config.slack?.botToken || slackBotToken) && (

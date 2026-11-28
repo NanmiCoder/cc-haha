@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openBrowser } = vi.hoisted(() => ({ openBrowser: vi.fn() }))
@@ -49,9 +49,13 @@ vi.mock('../../stores/settingsStore', () => ({
   }),
 }))
 
+import { sessionsApi } from '@/api/sessions'
+import { resetWorkspaceFileStatsForTests } from '@/lib/workspaceFileStats'
 import { AssistantMessage } from './AssistantMessage'
 
 afterEach(() => {
+  vi.restoreAllMocks()
+  resetWorkspaceFileStatsForTests()
   openBrowser.mockReset()
   ensureTargets.mockReset().mockResolvedValue(undefined)
   openTargetFn.mockReset()
@@ -212,7 +216,8 @@ describe('AssistantMessage output-target cards', () => {
     expect(container.querySelectorAll('img')).toHaveLength(0)
   })
 
-  it('renders a relative video inline (a <video>) but NOT as a card', () => {
+  it('renders a relative video inline (a <video>) but NOT as a card', async () => {
+    vi.spyOn(sessionsApi, 'statWorkspaceFiles').mockResolvedValue({ files: [{ path: 'outputs/demo.mp4', state: 'file' }] })
     const { container } = render(
       <AssistantMessage
         sessionId="s1"
@@ -222,14 +227,13 @@ describe('AssistantMessage output-target cards', () => {
     )
     // Video renders inline through InlineVideoGallery (workDir is undefined in this
     // test's mock, so the relative path resolves as-is and is served via /preview-fs).
-    const video = container.querySelector('video') as HTMLVideoElement
-    expect(video).not.toBeNull()
-    expect(video.getAttribute('src')).toBe('http://127.0.0.1:4321/preview-fs/s1/outputs/demo.mp4')
+    await waitFor(() => expect(container.querySelector('video')).toHaveAttribute('src', 'http://127.0.0.1:4321/preview-fs/s1/outputs/demo.mp4'))
     // ...and is NOT duplicated as an output-target card (no extra open/copy controls).
     expect(screen.queryByText('assistantOutputs.kind.image')).toBeNull()
   })
 
-  it('treats an empty turnChangedFiles as no evidence and keeps legacy inline media', () => {
+  it('treats an empty turnChangedFiles as no evidence and keeps legacy inline media', async () => {
+    vi.spyOn(sessionsApi, 'statWorkspaceFiles').mockResolvedValue({ files: [{ path: 'outputs/old.mp4', state: 'file' }] })
     // The checkpoint only sees TRACKED file changes — Bash-written files are
     // invisible to it — so an empty list must not hide mentioned media. Broken
     // references still self-hide via the <img>/<video> onError handlers.
@@ -243,7 +247,7 @@ describe('AssistantMessage output-target cards', () => {
     )
 
     expect(screen.queryAllByRole('img')).toHaveLength(2)
-    expect(container.querySelector('video')).not.toBeNull()
+    await waitFor(() => expect(container.querySelector('video')).not.toBeNull())
   })
 
   it('still renders md/html/localhost cards when those references are present', () => {

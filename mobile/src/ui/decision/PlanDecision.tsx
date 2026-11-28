@@ -6,6 +6,7 @@ import {
   View,
 } from 'react-native'
 import type { ApiClient } from '../../core/client'
+import { ANTIGRAVITY_PROVIDER_ID, isAntigravityProvider } from '../../core/runtimeCatalog'
 import type { ChatState, RuntimeConfig } from '../../core/types'
 import {
   Button,
@@ -20,7 +21,7 @@ import {
 } from '../kit'
 import { planExecutionModes } from '../modes'
 import { RuntimeSheet } from '../RuntimePicker'
-import { EffortControl } from '../EffortControl'
+import { EffortControl, EffortSheet } from '../EffortControl'
 import { Text } from '../Text'
 import type { PlanExecutionMode } from '../approvalData'
 import {
@@ -39,6 +40,7 @@ import {
 } from './planText'
 
 const NOT_SENT = '操作尚未发出。请等待会话同步完成，或核对当前任务状态。'
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 /** ExitPlanMode：底部紧凑卡 + 挂载即弹出的全屏计划页。 */
 export function PlanDecision({
@@ -49,6 +51,7 @@ export function PlanDecision({
   client,
   runtime,
   position,
+  subagentName,
   approve,
   revise,
 }: {
@@ -59,6 +62,7 @@ export function PlanDecision({
   client?: ApiClient | null
   runtime?: RuntimeConfig
   position?: { index: number; total: number }
+  subagentName?: string
   approve(plan: { mode: PlanExecutionMode; runtime?: RuntimeConfig }): boolean
   revise(feedback: string): boolean
 }) {
@@ -70,14 +74,26 @@ export function PlanDecision({
   // RuntimeSheet 回传所选模型时用它的显示名；沿用当前模型时只有 modelId。
   const [executionModelName, setExecutionModelName] = useState<string>()
   const [runtimeOpen, setRuntimeOpen] = useState(false)
+  const [effortOpen, setEffortOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [notSent, setNotSent] = useState(false)
+  const closePlanSheet = () => {
+    setRuntimeOpen(false)
+    setEffortOpen(false)
+    setSheetOpen(false)
+  }
   // 打开前就存在的错误属于别的操作，计划页里只显示之后出现的错误。
   const [initialError] = useState(serverError)
   const text = planSource(input)
   const path = planFilePath(input)
   const locked = !ready || sent
+  const isAntigravity = isAntigravityProvider(runtime?.providerId)
+  const executionModes = isAntigravity
+    ? planExecutionModes.filter((option) => option.id !== 'bypassPermissions')
+    : planExecutionModes
+  const effectiveMode: PlanExecutionMode =
+    isAntigravity && mode === 'bypassPermissions' ? 'acceptEdits' : mode
   const execution = executionRuntime ?? runtime
   const executionLabel = execution
     ? (executionRuntime && executionModelName) || execution.modelId
@@ -95,7 +111,27 @@ export function PlanDecision({
 
   return (
     <DecisionSurface label="批准计划">
-      <DecisionHeader title="计划写好了，等你确认" position={position} />
+      <DecisionHeader
+        title="计划写好了，等你确认"
+        position={position}
+        right={
+          subagentName ? (
+            <View
+              style={{
+                borderRadius: 6,
+                paddingHorizontal: 7,
+                paddingVertical: 2,
+                backgroundColor: colors.fill,
+                maxWidth: 160,
+              }}
+            >
+              <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 16, color: colors.ink2 }}>
+                来自 {subagentName}
+              </Text>
+            </View>
+          ) : undefined
+        }
+      />
       <Text numberOfLines={2} style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>
         {text ? planExcerpt(text) : MISSING_PLAN_TEXT}
       </Text>
@@ -106,10 +142,43 @@ export function PlanDecision({
       )}
       <PageSheet
         visible={sheetOpen}
-        onClose={() => setSheetOpen(false)}
+        onClose={closePlanSheet}
         title="计划"
         background={colors.card}
-        left={<TextButton title="稍后" onPress={() => setSheetOpen(false)} />}
+        left={<TextButton title="稍后" onPress={closePlanSheet} />}
+        overlayOpen={runtimeOpen || effortOpen}
+        onOverlayClose={() => {
+          setRuntimeOpen(false)
+          setEffortOpen(false)
+        }}
+        overlay={
+          <>
+            <RuntimeSheet
+              inline
+              visible={runtimeOpen}
+              onClose={() => setRuntimeOpen(false)}
+              title="执行模型"
+              client={client}
+              initial={execution}
+              lockedProviderId={isAntigravity ? ANTIGRAVITY_PROVIDER_ID : undefined}
+              excludeProviderIds={isAntigravity ? undefined : EXCLUDE_ANTIGRAVITY}
+              onApply={(value, model) => {
+                setExecutionRuntime(value)
+                setExecutionModelName(model?.id === value.modelId ? model.name : undefined)
+                setRuntimeOpen(false)
+              }}
+            />
+            <EffortSheet
+              inline
+              visible={effortOpen}
+              onClose={() => setEffortOpen(false)}
+              client={client ?? null}
+              runtime={execution}
+              disabled={locked}
+              onApply={setExecutionRuntime}
+            />
+          </>
+        }
       >
         <KeyboardViewport style={{ flex: 1 }}>
           <ScrollView
@@ -145,15 +214,17 @@ export function PlanDecision({
             </Text>
             <Segmented<PlanExecutionMode>
               label="执行权限"
-              options={planExecutionModes.map((option) => ({
+              options={executionModes.map((option) => ({
                 label: option.title,
                 value: option.id as PlanExecutionMode,
               }))}
-              value={mode}
-              onChange={setMode}
+              value={effectiveMode}
+              onChange={(next) =>
+                setMode(isAntigravity && next === 'bypassPermissions' ? 'acceptEdits' : next)
+              }
               disabled={locked}
             />
-            {mode === 'bypassPermissions' ? (
+            {effectiveMode === 'bypassPermissions' ? (
               <Callout>执行时跳过所有工具审批，只在你信任的项目里用。</Callout>
             ) : null}
             <Pressable
@@ -177,7 +248,13 @@ export function PlanDecision({
               <Icon name="chevron-right" size={15} color={colors.chevron} strokeWidth={2.2} />
             </Pressable>
             <View style={{ alignItems: 'flex-start' }}>
-              <EffortControl client={client ?? null} runtime={execution} disabled={locked} onApply={setExecutionRuntime} />
+              <EffortControl
+                client={client ?? null}
+                runtime={execution}
+                disabled={locked}
+                onApply={setExecutionRuntime}
+                onOpen={() => setEffortOpen(true)}
+              />
             </View>
             {feedbackOpen ? (
               <View style={{ gap: 6 }}>
@@ -217,7 +294,7 @@ export function PlanDecision({
                   onPress={() =>
                     attempt(
                       approve({
-                        mode,
+                        mode: effectiveMode,
                         ...(executionRuntime ? { runtime: executionRuntime } : {}),
                       })
                     )
@@ -227,18 +304,6 @@ export function PlanDecision({
             )}
           </View>
         </KeyboardViewport>
-        <RuntimeSheet
-          visible={runtimeOpen}
-          onClose={() => setRuntimeOpen(false)}
-          title="执行模型"
-          client={client}
-          initial={execution}
-          onApply={(value, model) => {
-            setExecutionRuntime(value)
-            setExecutionModelName(model?.id === value.modelId ? model.name : undefined)
-            setRuntimeOpen(false)
-          }}
-        />
       </PageSheet>
     </DecisionSurface>
   )

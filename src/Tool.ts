@@ -184,6 +184,8 @@ export type ToolUseContext = {
     querySource?: QuerySource
     /** Optional callback to get the latest tools (e.g., after MCP servers connect mid-query) */
     refreshTools?: () => Tools
+    /** Optional callback to get the latest main-loop model after a mid-turn model switch (e.g., set_model during ExitPlanMode) */
+    refreshMainLoopModel?: () => string
   }
   abortController: AbortController
   /** Root query that owns Computer Use, shared with that query's subagents. */

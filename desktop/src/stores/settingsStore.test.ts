@@ -1921,9 +1921,9 @@ describe('settingsStore theme persistence', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
 
-    await useSettingsStore.getState().setTheme('warm-classic')
+    await useSettingsStore.getState().setTheme('white')
 
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('warm-classic')
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('white')
     expect(updateUser).not.toHaveBeenCalled()
     teardownTheme()
   })
@@ -2242,5 +2242,90 @@ describe('settingsStore session retention persistence', () => {
     getUser.mockResolvedValue({ cleanupPeriodDays: 'thirty' })
     await useSettingsStore.getState().fetchAll()
     expect(useSettingsStore.getState().cleanupPeriodDays).toBeNull()
+  })
+})
+
+describe('settingsStore responseLanguage persistence', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+  })
+
+  it('sends an explicit empty string when resetting responseLanguage to default English and rolls back on failure', async () => {
+    const updateUser = vi.fn().mockResolvedValue({ ok: true })
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({ language: 'chinese' }),
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().setResponseLanguage('chinese')
+    expect(updateUser).toHaveBeenLastCalledWith({ language: 'chinese' })
+    expect(useSettingsStore.getState().responseLanguage).toBe('chinese')
+
+    await useSettingsStore.getState().setResponseLanguage('')
+    expect(updateUser).toHaveBeenLastCalledWith({ language: '' })
+    expect(useSettingsStore.getState().responseLanguage).toBe('')
+
+    updateUser.mockRejectedValueOnce(new Error('disk error'))
+    await useSettingsStore.getState().setResponseLanguage('japanese')
+    expect(useSettingsStore.getState().responseLanguage).toBe('')
+  })
+
+  it('hydrates fallback effort and responseLanguage in fetchAll while keeping proxyManagedSettingsWarning true', async () => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue({
+          $schema: 'https://json.schemastore.org/claude-code-settings.json',
+          env: {
+            ANTHROPIC_API_KEY: 'PROXY_MANAGED',
+            ANTHROPIC_BASE_URL: 'http://127.0.0.1:15721',
+          },
+          outputStyle: 'engineer-professional',
+          effort: 'xhigh',
+          language: 'chinese',
+          ccHahaFallbackKeys: ['language', 'effort'],
+          leanModeEnabled: false,
+          autoUpdateEnabled: true,
+          agentTeamsEnabled: true,
+          maxConcurrentSubagents: null,
+        }),
+        updateUser: vi.fn().mockResolvedValue({ ok: true }),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'xhigh' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+          },
+        }),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().effortLevel).toBe('xhigh')
+    expect(useSettingsStore.getState().responseLanguage).toBe('chinese')
+    expect(useSettingsStore.getState().proxyManagedSettingsWarning).toBe(true)
   })
 })

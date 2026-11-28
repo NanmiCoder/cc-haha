@@ -12,7 +12,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https: http://127.0.0.1:* http://localhost:*; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; worker-src 'self' blob:; media-src 'self' data: blob: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'"
     />
     <!--
       `viewport-fit=cover` MUST live here, in the markup. iOS WebKit reads the
@@ -88,9 +88,14 @@
       })()
     </script>
     <script>
-      if (new URLSearchParams(window.location.search).get('petWindow') === '1') {
-        document.documentElement.dataset.windowKind = 'pet'
-      }
+      (function () {
+        var params = new URLSearchParams(window.location.search)
+        if (params.get('petWindow') === '1') {
+          document.documentElement.dataset.windowKind = 'pet'
+        } else if (params.get('usageWidgetWindow') === '1') {
+          document.documentElement.dataset.windowKind = 'usage-widget'
+        }
+      })()
     </script>
     <script>
       /*
@@ -140,22 +145,32 @@
           var read = function (key) {
             try { return window.localStorage.getItem(key) } catch (_) { return null }
           }
-          // The six palettes, split by ground. Keep in step with
-          // LIGHT_THEME_MODES / DARK_THEME_MODES in src/types/settings.ts.
-          var LIGHT = ['white', 'paper', 'warm-classic', 'celadon']
-          var DARK = ['dark', 'ink-blue']
+          // The two canonical Direction C palettes, split by ground. Keep in
+          // step with LIGHT_THEME_MODES / DARK_THEME_MODES /
+          // LEGACY_THEME_MIGRATIONS in src/types/settings.ts.
+          var LIGHT = ['white']
+          var DARK = ['dark']
+          var LEGACY = {
+            light: 'white',
+            paper: 'white',
+            'warm-classic': 'white',
+            celadon: 'white',
+            'ink-blue': 'dark',
+            'neutral-dark': 'dark'
+          }
           var has = function (list, value) { return list.indexOf(value) !== -1 }
+          var normalize = function (value) {
+            if (!value) return null
+            if (has(LIGHT, value) || has(DARK, value)) return value
+            return LEGACY[value] || null
+          }
           var isDark = function (value) { return has(DARK, value) }
           // Mirrors THEME_BACKGROUNDS in src/theme/systemAppearance.ts; the
           // <style> block below and bootstrapScript.test.ts hold all three
           // copies to the same values.
           var BACKGROUND = {
             white: '#FFFFFF',
-            paper: '#FBF9F4',
-            'warm-classic': '#F6F0E1',
-            celadon: '#F5F8F5',
-            dark: '#201D17',
-            'ink-blue': '#1A1D24'
+            dark: '#181818'
           }
           var paintBrowserChrome = function (value) {
             var meta = document.querySelector('meta[name="theme-color"]')
@@ -163,7 +178,7 @@
           }
 
           var stored = read('cc-haha-theme')
-          var theme = (has(LIGHT, stored) || isDark(stored)) ? stored : 'white'
+          var theme = normalize(stored) || 'white'
 
           var followRaw = read('cc-haha-follow-system-theme')
           // Unset means: new install follows the system, existing install
@@ -171,11 +186,11 @@
           var follow = followRaw === '1' || (followRaw !== '0' && stored === null)
 
           if (follow) {
-            var storedLight = read('cc-haha-light-theme')
+            var storedLight = normalize(read('cc-haha-light-theme'))
             var lightTheme = has(LIGHT, storedLight)
               ? storedLight
               : (has(LIGHT, theme) ? theme : 'white')
-            var storedDark = read('cc-haha-dark-theme')
+            var storedDark = normalize(read('cc-haha-dark-theme'))
             var darkTheme = isDark(storedDark) ? storedDark : (isDark(theme) ? theme : 'dark')
             var prefersDark = false
             try {
@@ -193,8 +208,7 @@
           // `theme` is function-scoped, so a failure after it was resolved
           // still applies the user's stored choice rather than flashing white.
           document.documentElement.setAttribute('data-theme', theme || 'white')
-          document.documentElement.style.colorScheme =
-            (theme === 'dark' || theme === 'ink-blue') ? 'dark' : 'light'
+          document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
         }
       })()
     </script>
@@ -208,14 +222,13 @@
          than a fixed white, so that degraded case stays self-consistent. */
       html { background: #FFFFFF; }
       html[data-theme="white"] { background: #FFFFFF; }
-      html[data-theme="paper"] { background: #FBF9F4; }
-      html[data-theme="warm-classic"] { background: #F6F0E1; }
-      html[data-theme="celadon"] { background: #F5F8F5; }
-      html[data-theme="dark"] { background: #201D17; }
-      html[data-theme="ink-blue"] { background: #1A1D24; }
+      html[data-theme="dark"] { background: #181818; }
       html[data-window-kind="pet"],
       html[data-window-kind="pet"] body,
-      html[data-window-kind="pet"] #root { background: transparent !important; }
+      html[data-window-kind="pet"] #root,
+      html[data-window-kind="usage-widget"],
+      html[data-window-kind="usage-widget"] body,
+      html[data-window-kind="usage-widget"] #root { background: transparent !important; }
       html, body, #root { min-height: 100%; margin: 0; }
     </style>
     <script>
@@ -237,6 +250,7 @@
           if (window.__CC_HAHA_BOOTSTRAPPED__) return
           var root = document.getElementById('root')
           if (!root) return
+          window.clearTimeout(bootTimer)
 
           var summary = summarize(reason)
           var details = [
@@ -247,14 +261,22 @@
             'Time: ' + new Date().toISOString()
           ].join('\n')
 
+          var isDark = document.documentElement.dataset.theme === 'dark'
+          var bg = isDark ? '#181818' : '#FFFFFF'
+          var panelBg = isDark ? '#212121' : '#FFFFFF'
+          var border = isDark ? '#2B2B2B' : '#E8E8E8'
+          var text = isDark ? '#DFDFDF' : '#1A1C1F'
+          var muted = isDark ? '#999999' : '#636363'
+          var preBg = isDark ? '#222222' : '#F3F3F3'
+
           root.innerHTML = ''
           var shell = document.createElement('main')
           shell.style.cssText = [
             'box-sizing:border-box',
             'min-height:100vh',
             'padding:32px',
-            'background:#fff',
-            'color:#151515',
+            'background:' + bg,
+            'color:' + text,
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
             'display:flex',
             'align-items:center',
@@ -262,19 +284,19 @@
           ].join(';')
 
           var panel = document.createElement('section')
-          panel.style.cssText = 'width:min(760px,100%);border:1px solid #d8d8d8;border-radius:8px;padding:24px;background:#fff'
+          panel.style.cssText = 'width:min(760px,100%);border:1px solid ' + border + ';border-radius:12px;padding:24px;background:' + panelBg
 
           var title = document.createElement('h1')
           title.textContent = 'Desktop startup failed'
-          title.style.cssText = 'margin:0 0 8px;font-size:20px;line-height:1.3;font-weight:700;color:#111'
+          title.style.cssText = 'margin:0 0 8px;font-size:18px;line-height:1.3;font-weight:600;color:' + text
 
           var body = document.createElement('p')
           body.textContent = 'The app could not finish booting. Keep this text when reporting the issue.'
-          body.style.cssText = 'margin:0 0 16px;font-size:14px;line-height:1.6;color:#555'
+          body.style.cssText = 'margin:0 0 16px;font-size:14px;line-height:1.6;color:' + muted
 
           var pre = document.createElement('pre')
           pre.textContent = details
-          pre.style.cssText = 'box-sizing:border-box;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;padding:14px;border-radius:6px;background:#f6f6f6;color:#222;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace'
+          pre.style.cssText = 'box-sizing:border-box;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;padding:14px;border:1px solid ' + border + ';border-radius:8px;background:' + preBg + ';color:' + text + ';font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace'
 
           panel.appendChild(title)
           panel.appendChild(body)
@@ -301,7 +323,7 @@
           renderStartupError(event.reason || 'Unhandled startup promise rejection')
         })
 
-        window.setTimeout(function () {
+        var bootTimer = window.setTimeout(function () {
           renderStartupError('Desktop app did not finish bootstrapping within ' + bootDeadlineMs + 'ms. This usually means the WebView could not execute the app bundle or startup code stopped before React mounted.')
         }, bootDeadlineMs)
       })()

@@ -65,9 +65,9 @@ export function MobileComposerSheet({
               type="button"
               disabled={setting.disabled}
               onClick={setting.onSelect}
-              className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-md)] px-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] disabled:opacity-50"
+              className="v6c-pressable flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-control)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] disabled:opacity-50"
             >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
                 {setting.icon}
               </span>
               <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text-primary)]">{setting.label}</span>

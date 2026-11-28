@@ -24,6 +24,10 @@ async function runBuildFixture(options: {
   localUnsignedBuild?: string
   ci?: string
   githubActions?: string
+  copyOutput?: boolean
+  failCopyOf?: string
+  macTargets?: string
+  failSmoke?: boolean
 } = {}) {
   const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'cc-haha-macos-build-'))
   const desktopDir = path.join(fixtureRoot, 'desktop')
@@ -46,6 +50,7 @@ async function runBuildFixture(options: {
       buildScript,
     )
     await chmod(buildScript, 0o755)
+    await writeFile(path.join(scriptsDir, 'clean-dmg-builder-cache.sh'), 'exit 0\n')
 
     await writeFile(path.join(fixtureRoot, 'security-output.txt'), options.securityOutput ?? '')
     await writeExecutable(path.join(fakeBinDir, 'security'), `#!/bin/bash
@@ -74,19 +79,44 @@ if [[ "\${*}" == *"build:sidecars"* ]]; then
   done
   printf '%s\\n' "\${CC_HAHA_SIGN_IDENTITY:-}" "\${CSC_NAME:-}" "\${CC_HAHA_LOCAL_UNSIGNED_BUILD:-}" > "\${TEST_REPO_ROOT}/sidecar-env.txt"
   /bin/bash -c 'source "$1"; resolve_identity' helper-signing-test "\${TEST_NATIVE_BUILD_SCRIPT}"
-  exit 86
+  [[ "\${TEST_COPY_OUTPUT}" == 1 ]] || exit 86
+fi
+
+if [[ "\${2:-}" == "test:package-smoke" ]]; then
+  printf '%s\\n' "$@" > "\${TEST_REPO_ROOT}/smoke-args.txt"
+  [[ "\${TEST_FAIL_SMOKE}" != 1 ]] || exit 74
 fi
 
 exit 0
 `)
-    for (const command of ['node', 'codesign', 'hdiutil']) {
+    await writeExecutable(path.join(fakeBinDir, 'node'), `#!/bin/bash
+set -euo pipefail
+output="\${TEST_REPO_ROOT}/desktop/build-artifacts/electron"
+mkdir -p "\${output}/mac-arm64/Claude Code Haha.app/Contents"
+printf '%s\\n' 'app fixture' > "\${output}/mac-arm64/Claude Code Haha.app/Contents/Info.plist"
+printf '%s\\n' 'zip fixture' > "\${output}/Claude Code Haha.zip"
+`)
+    await writeExecutable(path.join(fakeBinDir, 'cp'), `#!/bin/bash
+set -euo pipefail
+case "$1" in
+  -cR) shift; set -- -R "$@" ;;
+  -cf) shift; set -- -f "$@" ;;
+esac
+/bin/cp "$@"
+source="\${@: -2:1}"
+if [[ "\${source##*/}" == "\${TEST_FAIL_COPY_OF}" ]]; then
+  echo "cp: \${source}: No space left on device" >&2
+  exit 73
+fi
+`)
+    for (const command of ['codesign', 'hdiutil']) {
       await writeExecutable(path.join(fakeBinDir, command), '#!/bin/bash\nexit 0\n')
     }
 
     // Read shell fakes through Bash so fresh temporary executables are not
     // launched directly, while preserving their child-process exit behavior.
     const shellEnvironment = path.join(fixtureRoot, 'fake-command-env.sh')
-    await writeFile(shellEnvironment, ['uname', 'bun', 'node', 'codesign', 'hdiutil', 'security']
+    await writeFile(shellEnvironment, ['uname', 'bun', 'node', 'codesign', 'hdiutil', 'security', 'cp']
       .map(command => `${command}() { /bin/bash "\${TEST_FAKE_BIN_DIR}/${command}" "$@"; }`)
       .join('\n'), 'utf8')
 
@@ -108,13 +138,16 @@ exit 0
         CI: options.ci ?? '',
         GITHUB_ACTIONS: options.githubActions ?? '',
         TEST_FAKE_BIN_DIR: fakeBinDir,
-        MAC_TARGETS: 'zip',
+        MAC_TARGETS: options.macTargets ?? 'zip',
         SIGN_BUILD: options.signBuild ?? '',
         CC_HAHA_SIGN_IDENTITY: options.signIdentity ?? '',
         CC_HAHA_LOCAL_UNSIGNED_BUILD: options.localUnsignedBuild ?? '',
         CSC_NAME: '',
         TEST_REPO_ROOT: fixtureRoot,
         TEST_NATIVE_BUILD_SCRIPT: path.resolve(import.meta.dirname, '../../native/cu-helper/build.sh'),
+        TEST_COPY_OUTPUT: options.copyOutput ? '1' : '',
+        TEST_FAIL_COPY_OF: options.failCopyOf ?? '',
+        TEST_FAIL_SMOKE: options.failSmoke ? '1' : '',
       }),
     })
 
@@ -126,12 +159,20 @@ exit 0
     ])
     const sidecarEnv = await readFile(path.join(fixtureRoot, 'sidecar-env.txt'), 'utf8')
       .then(value => value.split('\n').slice(0, -1), () => null)
+    const smokeArgs = await readFile(path.join(fixtureRoot, 'smoke-args.txt'), 'utf8')
+      .then(value => value.trimEnd().split('\n'), () => [])
+    const canonicalOutput = path.join(desktopDir, 'build-artifacts', 'macos-arm64')
     return {
       result,
       installedBefore,
       installedAfter,
       sidecarEnv,
+      smokeArgs,
       securityQueried: await exists(path.join(fixtureRoot, 'security-queried')),
+      canonicalOutputExists: await exists(canonicalOutput),
+      canonicalApp: await exists(path.join(canonicalOutput, 'Claude Code Haha.app', 'Contents', 'Info.plist')),
+      canonicalZip: await exists(path.join(canonicalOutput, 'Claude Code Haha.zip')),
+      canonicalBuildInfo: await exists(path.join(canonicalOutput, 'BUILD_INFO.txt')),
     }
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true })
@@ -154,6 +195,33 @@ describe('macOS arm64 build dependency installation', () => {
     expectSidecarReached(fixture.result)
     expect(fixture.installedBefore).toEqual([false, false, false, false])
     expect(fixture.installedAfter).toEqual([true, true, true, true])
+  })
+})
+
+describe('macOS arm64 build output', () => {
+  it('publishes the application, archive and build information', async () => {
+    const fixture = await runBuildFixture({ signBuild: '0', copyOutput: true })
+    expect(fixture.result.status).toBe(0)
+    expect(fixture.canonicalApp).toBe(true)
+    expect(fixture.canonicalZip).toBe(true)
+    expect(fixture.canonicalBuildInfo).toBe(true)
+    expect(fixture.smokeArgs.slice(-4, -2)).toEqual(['--package-kind', 'release'])
+  })
+
+  it.each(['Claude Code Haha.app', 'Claude Code Haha.zip'])('leaves no canonical output after copying %s fails', async failCopyOf => {
+    const fixture = await runBuildFixture({ signBuild: '0', copyOutput: true, failCopyOf })
+    expect(fixture.result.stderr).toContain('No space left on device')
+    expect(fixture.result.status).toBe(73)
+    expect(fixture.result.stdout).not.toContain('Build finished')
+    expect(fixture.canonicalOutputExists).toBe(false)
+  })
+
+  it('checks a directory build in staging before publishing it', async () => {
+    const fixture = await runBuildFixture({ signBuild: '0', copyOutput: true, macTargets: 'dir', failSmoke: true })
+    expect(fixture.smokeArgs.slice(-4, -2)).toEqual(['--package-kind', 'dir'])
+    expect(fixture.smokeArgs.at(-1)).toMatch(/macos-arm64\.[^/]+$/)
+    expect(fixture.result.status).toBe(74)
+    expect(fixture.canonicalOutputExists).toBe(false)
   })
 })
 

@@ -1,4 +1,4 @@
-import { DARK_THEME_MODES, LIGHT_THEME_MODES, THEME_MODES } from '../types/settings'
+import { DARK_THEME_MODES, LEGACY_THEME_MIGRATIONS, LIGHT_THEME_MODES, THEME_MODES } from '../types/settings'
 import {
   WORKSPACE_STORAGE_KEY,
   WORKSPACE_STORAGE_VERSION,
@@ -12,8 +12,14 @@ import {
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  ANTIGRAVITY_ENABLED_STORAGE_KEY,
+  ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+  ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+  parseAntigravitySavedSelection,
+} from './antigravityPreferences'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 7
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 8
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -195,16 +201,12 @@ function migrateSessionRuntime(storage: StorageLike, report: DesktopMigrationRep
 }
 
 /**
- * The 「纸 · 墨 · 印」 redesign replaced three theme keys with six.
- *
- * `light` was the warm workspace, labelled 经典暖色 in the picker, so it lands
- * on `warm-classic` — the palette carrying the same name. Without this it
- * would fail the enum check and silently reset those users to the default,
- * which reads as "the app forgot my theme" rather than as a rename.
+ * Direction C consolidated the desktop palettes into two canonical grounds:
+ * pure white (`white`) and matte charcoal (`dark`). Forward-migrate every
+ * legacy light/dark theme key to its matching ground so upgrading users keep
+ * their light/dark preference instead of silently resetting.
  */
-const RENAMED_THEMES: Record<string, string> = {
-  light: 'warm-classic',
-}
+const RENAMED_THEMES: Readonly<Record<string, string>> = LEGACY_THEME_MIGRATIONS
 
 /**
  * Rename-aware normalization for any key holding a theme name. The applied
@@ -282,7 +284,13 @@ function migrateWorkspaceState(storage: StorageLike, report: DesktopMigrationRep
       sessions[sessionId] = { ...value, tabs }
     }
 
-    if (Object.keys(sessions).length === 0) {
+    // Closing the last tab still leaves a valid document owning the user's
+    // panel sizes. The hydrator applies the readable bounds when restoring it.
+    const hasStoredSizes = typeof parsed.sideWidth === 'number' &&
+      Number.isFinite(parsed.sideWidth) && parsed.sideWidth > 0 &&
+      typeof parsed.bottomHeight === 'number' &&
+      Number.isFinite(parsed.bottomHeight) && parsed.bottomHeight > 0
+    if (Object.keys(sessions).length === 0 && !hasStoredSizes) {
       storage.removeItem(WORKSPACE_STORAGE_KEY)
       report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
       return
@@ -379,6 +387,21 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
     if (stored !== '0' && stored !== '1') {
       storage.setItem(PREVENT_SLEEP_STORAGE_KEY, '0')
       report.migratedKeys.push(PREVENT_SLEEP_STORAGE_KEY)
+    }
+  })
+  // Schema 8 adds local Antigravity dual-engine UI preferences. Unset keys
+  // mean defaults (enabled when installed, cc-haha engine); only invalid values
+  // are removed so upgrades stay idempotent and preserve user choices.
+  runMigrationStep(report, ANTIGRAVITY_ENABLED_STORAGE_KEY, () =>
+    normalizeEnumKey(storage, ANTIGRAVITY_ENABLED_STORAGE_KEY, ['0', '1'], report))
+  runMigrationStep(report, ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, () =>
+    normalizeEnumKey(storage, ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, ['cc-haha', 'antigravity'], report))
+  runMigrationStep(report, ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, () => {
+    const raw = storage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
+    if (raw === null) return
+    if (!parseAntigravitySavedSelection(raw)) {
+      storage.removeItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
+      report.migratedKeys.push(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)
     }
   })
   try {

@@ -168,3 +168,42 @@ export function getSessionReferences(text: string, mentions: ComposerMention[]):
     .filter(({ mention }) => mention.kind === 'session' && mention.id)
     .map(({ mention }) => mention.id!))].map(sessionId => ({ sessionId }))
 }
+
+/**
+ * Re-match previous mention pills against rewritten text (e.g. after prompt
+ * optimization) so surviving `@label` tokens stay live pills even if the
+ * rewrite reordered sentences or dropped one mention.
+ */
+export function reconcileMentionsAfterRewrite(
+  text: string,
+  previousMentions: ComposerMention[],
+): ComposerMention[] {
+  if (previousMentions.length === 0 || text.length === 0) return []
+  const occurrenceCache = new Map<string, number[]>()
+  const usedRanges: Array<{ start: number; end: number }> = []
+  const matched: Array<{ start: number; mention: ComposerMention }> = []
+
+  const overlaps = (start: number, end: number) =>
+    usedRanges.some(range => start < range.end && end > range.start)
+
+  for (const mention of previousMentions) {
+    const token = mentionToken(mention)
+    let positions = occurrenceCache.get(token)
+    if (!positions) {
+      positions = tokenOccurrences(text, token)
+      occurrenceCache.set(token, positions)
+    }
+    const chosen = positions.find(pos => !overlaps(pos, pos + token.length))
+    if (chosen === undefined) continue
+    usedRanges.push({ start: chosen, end: chosen + token.length })
+    matched.push({ start: chosen, mention })
+  }
+
+  matched.sort((a, b) => a.start - b.start)
+  return matched.map(({ start, mention }) => {
+    const token = mentionToken(mention)
+    const positions = occurrenceCache.get(token) ?? []
+    const tokenOrdinal = positions.filter(pos => pos < start).length
+    return { ...mention, tokenOrdinal }
+  })
+}

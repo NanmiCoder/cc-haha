@@ -274,8 +274,13 @@ export async function providerTextCompletion(
     const accountHeaders = isDeepSeekAccountProviderId(provider.id)
       ? await resolveDeepSeekAccountRequestHeaders()
       : null
+    const resolvedFormat = resolveProviderApiFormat(provider)
+    const allowsAmbientCloudCredential =
+      resolvedFormat === 'google_vertex' || resolvedFormat === 'bedrock_converse'
     if (!provider.baseUrl) return failure('upstream', 'The provider has no base URL')
-    if (!provider.apiKey && !accountHeaders) return failure('auth', 'The provider has no credentials')
+    if (!provider.apiKey && !accountHeaders && !allowsAmbientCloudCredential) {
+      return failure('auth', 'The provider has no credentials')
+    }
 
     const requestBody = {
       model: normalizeModelStringForAPI(request.modelId),
@@ -288,7 +293,7 @@ export async function providerTextCompletion(
     // rules and the client headers some gateways require, so these go through the
     // same proxy the CLI uses instead of a second, parallel code path.
     const usesLocalProxy = providerNeedsProxy(
-      resolveProviderApiFormat(provider),
+      resolvedFormat,
       provider.supportsNestedToolResultMedia,
     )
     const firstAttempt = {

@@ -205,8 +205,16 @@ describe('IconButton', () => {
     // badge pinned to user-supplied image content.
     const { container } = render(<IconButton icon={<span />} label="Remove" tone="danger" solid />)
     const className = container.firstElementChild!.className
+    expect(className).toContain('control-bevel-cta')
     expect(className).toContain('bg-[var(--color-error)]')
     expect(className).toContain('text-[var(--color-on-error)]')
+  })
+
+  it('applies surface bevel to filled and bordered icon buttons', () => {
+    const { container: filled } = render(<IconButton icon={<span />} label="Filled" filled />)
+    const { container: bordered } = render(<IconButton icon={<span />} label="Bordered" bordered />)
+    expect(filled.firstElementChild?.className).toContain('control-bevel')
+    expect(bordered.firstElementChild?.className).toContain('control-bevel')
   })
 
   it('solid suppresses the tone hover so two fills cannot compete', () => {

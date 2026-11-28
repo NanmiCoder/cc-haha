@@ -6,10 +6,12 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { ArrowUp, Cpu, Feather, Plus, ShieldCheck } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
+import { ModelBrandIcon } from '@/components/composite/ModelBrandIcon'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { Button } from '@/components/ui/Button'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { ApiError, rawRecordDiagnosticEvent } from '../api/client'
 import { agentsApi } from '../api/agents'
 import { providersApi } from '../api/providers'
@@ -48,6 +50,21 @@ import {
   buildDeepSeekAccountProvider,
 } from '../constants/deepseekAccountProvider'
 import { CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import {
+  ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
+  ANTIGRAVITY_ACP_LOGIN_COMMAND,
+  ANTIGRAVITY_ACP_PERMISSION_MODES,
+  ANTIGRAVITY_ACP_PROVIDER_ID,
+  ANTIGRAVITY_DRAFT_SLASH_COMMANDS,
+  ANTIGRAVITY_HOST_UI_SLASH_COMMANDS,
+} from '../constants/antigravityAcp'
+import {
+  readAntigravityLastSelection,
+  readLastComposerEngine,
+  writeAntigravityLastSelection,
+  writeLastComposerEngine,
+  type ComposerEngine,
+} from '../lib/antigravityPreferences'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import { getSessionBrowsablePath } from '../lib/sessionWorkspace'
 import {
@@ -89,18 +106,23 @@ import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
 import { AgentProfileChip } from '@/components/chat/AgentProfileChip'
 import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { BrowserUseEnableDialog, BrowserUseTargetPill } from '@/components/browser-use/BrowserUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
-import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { withAgentTeamRequest, withAntigravitySwarmRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
+import { executeFastSlashCommand } from '@/lib/fastModeCommand'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { formatBytes } from '@/lib/formatBytes'
 import { checkUserMessageBudget } from '@/lib/userMessageBudget'
 import type { AttachmentRef, UIAttachment } from '../types/chat'
-import type { SavedProvider } from '../types/provider'
+import type { AntigravityStatus, SavedProvider } from '../types/provider'
+import type { RuntimeSelection } from '../types/runtime'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
+import { useComposerPromptHistory } from '@/hooks/useComposerPromptHistory'
 
 type Attachment = ComposerAttachment
 
@@ -172,8 +194,53 @@ function resolveProviderName(providerId: string | null, providers: SavedProvider
       return t('settings.providers.grokOfficialName')
     case DEEPSEEK_ACCOUNT_PROVIDER_ID:
       return t('settings.providers.deepseekAccountName')
+    case ANTIGRAVITY_ACP_PROVIDER_ID:
+      return t('settings.providers.antigravity.name')
     default:
       return providers.find((provider) => provider.id === providerId)?.name ?? providerId
+  }
+}
+
+function resolveAntigravityDraftSelection(antigravity: AntigravityStatus | undefined): RuntimeSelection {
+  const saved = readAntigravityLastSelection()
+  const models = antigravity?.models ?? []
+  const savedModel = saved ? models.find((model) => model.id === saved.modelId) : undefined
+  const currentModel = antigravity?.currentModelId
+    ? models.find((model) => model.id === antigravity.currentModelId)
+    : undefined
+  const chosenModel = savedModel ?? currentModel ?? models[0]
+  const modelId = savedModel?.id
+    ?? (models.length === 0 && saved?.modelId ? saved.modelId : undefined)
+    ?? chosenModel?.id
+    ?? antigravity?.currentModelId
+    ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+  const matchesSavedModel = Boolean(saved?.modelId && saved.modelId === modelId)
+  const matchesCurrentModel = Boolean(antigravity?.currentModelId && chosenModel?.id === antigravity.currentModelId)
+  const supportedEfforts = chosenModel?.supportedReasoningEfforts
+  let effortLevel: RuntimeSelection['effortLevel']
+  if (Array.isArray(supportedEfforts)) {
+    if (supportedEfforts.length > 0) {
+      const candidates: Array<RuntimeSelection['effortLevel']> = [
+        matchesSavedModel ? saved?.effortLevel : undefined,
+        matchesCurrentModel ? antigravity?.currentEffortLevel : undefined,
+        chosenModel?.defaultReasoningEffort,
+        supportedEfforts[0],
+      ]
+      effortLevel = candidates.find((candidate): candidate is NonNullable<RuntimeSelection['effortLevel']> =>
+        candidate !== undefined && supportedEfforts.includes(candidate),
+      )
+    }
+  } else {
+    effortLevel = (matchesSavedModel ? saved?.effortLevel : undefined)
+      ?? (matchesCurrentModel ? antigravity?.currentEffortLevel : undefined)
+      ?? chosenModel?.defaultReasoningEffort
+      ?? antigravity?.currentEffortLevel
+      ?? 'medium'
+  }
+  return {
+    providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+    modelId,
+    ...(effortLevel ? { effortLevel } : {}),
   }
 }
 
@@ -249,8 +316,14 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const [atCursorPos, setAtCursorPos] = useState(-1)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
-  const [slashCommands, setSlashCommands] = useState<SlashCommandOption[]>([])
-  const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
+  const [slashCommandState, setSlashCommandState] = useState<{
+    cwd: string | null
+    providerId: string | null
+    commands: SlashCommandOption[]
+  }>({ cwd: null, providerId: null, commands: [] })
+  const slashCommands = slashCommandState.commands
+  const slashCommandsCwd = slashCommandState.cwd
+  const slashCommandsProviderId = slashCommandState.providerId
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
   const materializingRef = useRef<{
@@ -290,13 +363,71 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const defaultPermissionMode = useSettingsStore((state) => state.permissionMode)
   const providers = useProviderStore((state) => state.providers)
   const activeProviderId = useProviderStore((state) => state.activeId)
+  const antigravity = useProviderStore((state) => state.antigravity)
+  const antigravityEnabled = useProviderStore((state) => state.antigravityEnabled)
+  const discoverAntigravity = useProviderStore((state) => state.discoverAntigravity)
   // The draft follows the default from Settings until a mode is picked in this
   // draft. It stays mounted while Settings is open, so a copy taken at mount
   // would launch the next session in a mode the user had already turned off.
   const [pickedPermissionMode, setDraftPermissionMode] = useState<PermissionMode | null>(null)
-  const draftPermissionMode = pickedPermissionMode ?? defaultPermissionMode
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
   const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
+  const antigravityAvailable = Boolean(antigravity && antigravity.status !== 'not_installed' && antigravityEnabled)
+  const [selectedEngine, setSelectedEngine] = useState<ComposerEngine>(() =>
+    draftRuntimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
+      ? 'antigravity'
+      : readLastComposerEngine(),
+  )
+  const engine: ComposerEngine = antigravityAvailable ? selectedEngine : 'cc-haha'
+  const isAntigravity = engine === 'antigravity'
+  const draftPermissionMode = pickedPermissionMode ?? defaultPermissionMode
+  const lastStandardSelectionRef = useRef<RuntimeSelection | null>(
+    draftRuntimeSelection && draftRuntimeSelection.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID
+      ? draftRuntimeSelection
+      : null,
+  )
+  useEffect(() => {
+    if (draftRuntimeSelection && draftRuntimeSelection.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID) {
+      lastStandardSelectionRef.current = draftRuntimeSelection
+    }
+  }, [draftRuntimeSelection])
+  useEffect(() => {
+    const runtimeStore = useSessionRuntimeStore.getState()
+    const current = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
+    if (isAntigravity) {
+      const hasDiscoveredAntigravityModel = Boolean(
+        antigravity && (
+          antigravity.models.length > 0 ||
+          (antigravity.currentModelId && antigravity.currentModelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID)
+        ),
+      )
+      const shouldUpgradePlaceholder =
+        current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID &&
+        current.modelId === ANTIGRAVITY_ACP_DEFAULT_MODEL_ID &&
+        hasDiscoveredAntigravityModel
+      if (current?.providerId !== ANTIGRAVITY_ACP_PROVIDER_ID || shouldUpgradePlaceholder) {
+        const nextSelection = resolveAntigravityDraftSelection(antigravity)
+        if (
+          current?.providerId !== nextSelection.providerId ||
+          current?.modelId !== nextSelection.modelId ||
+          current?.effortLevel !== nextSelection.effortLevel
+        ) {
+          runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, nextSelection)
+        }
+      }
+      if (useWorktree) setUseWorktree(false)
+      if (selectedAgentProfile === 'lean') setAgentProfile('standard')
+      if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
+        void discoverAntigravity().catch(() => {})
+      }
+    } else if (current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+      if (lastStandardSelectionRef.current) {
+        runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, lastStandardSelectionRef.current)
+      } else {
+        runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+      }
+    }
+  }, [antigravity, discoverAntigravity, isAntigravity, selectedAgentProfile, useWorktree])
   const referenceProviderId = mentionProviderId(draftRuntimeSelection)
   const referenceContext = `${workDir}\0${referenceProviderId ?? ''}\0${agentProfile}`
   const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
@@ -343,16 +474,42 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   // recording bar takes their row.
   const dictationLive = dictation.phase !== 'idle'
 
+  const promptHistory = useComposerPromptHistory({
+    sessionId: null,
+    projectPath: workDir || null,
+    includeProjectHistory: true,
+    getCurrentDraft: () => ({
+      text: draftComposerRef.current.input,
+      mentions: draftComposerRef.current.mentions,
+    }),
+    applyEntry: (entry, cursor) => {
+      const nextMentions = entry.mentions ?? []
+      composerRef.current?.replaceContent(entry.text, nextMentions, cursor)
+      draftComposerRef.current = {
+        ...draftComposerRef.current,
+        input: entry.text,
+        mentions: nextMentions,
+      }
+      setInput(entry.text)
+      setMentions(nextMentions)
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setAtFilter('')
+      setAtCursorPos(-1)
+    },
+  })
+
   useEffect(() => {
     if (visible) composerRef.current?.focus()
     else {
+      promptHistory.resetHistory()
       setPlusMenuOpen(false)
       setSlashMenuOpen(false)
       setFileSearchOpen(false)
       setReferenceDetail(null)
       setLocalSlashPanel(null)
     }
-  }, [visible])
+  }, [promptHistory.resetHistory, visible])
 
   useDismissable({
     // On a phone the + opens a sheet that closes itself; see ChatInput.
@@ -386,40 +543,88 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     },
   })
 
+  const antigravityDiscoveryStatus = isAntigravity ? (antigravity?.status ?? null) : null
+
   useEffect(() => {
     let cancelled = false
 
     const cwd = workDir || undefined
+    const mapSkillsToSlashCommands = (
+      skills: Array<{
+        name: string
+        description: string
+        source?: string
+        userInvocable?: boolean
+        leanCompatible?: boolean
+      }>,
+    ): SlashCommandOption[] =>
+      skills
+        .filter((skill) => skill.userInvocable !== false)
+        .map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          kind: 'skill' as const,
+          ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
+            ? { source: skill.source }
+            : {}),
+          // Kept on the row so the lean/standard choice, made later, can filter without a refetch.
+          ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
+        }))
 
-    skillsApi.list(cwd)
-      .then(({ skills }) => {
+    const sanitizeSlashCommands = (commands: SlashCommandOption[]): SlashCommandOption[] =>
+      commands.map(({ argumentHint, description, ...rest }) => {
+        const normalizedHint =
+          typeof argumentHint === 'string' && argumentHint.trim()
+            ? argumentHint.trim()
+            : undefined
+        return {
+          ...rest,
+          description: typeof description === 'string' ? description : '',
+          ...(normalizedHint ? { argumentHint: normalizedHint } : {}),
+        }
+      })
+
+    const providerId = isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : null
+    const loadFromSkillsFallback = () =>
+      skillsApi.list(cwd).then(({ skills }) => mapSkillsToSlashCommands(skills))
+
+    const loadPromise =
+      typeof skillsApi.commands === 'function'
+        ? (isAntigravity
+            ? skillsApi.commands(cwd, undefined, ANTIGRAVITY_ACP_PROVIDER_ID)
+            : skillsApi.commands(cwd)
+          ).then(
+            ({ commands }) => sanitizeSlashCommands(commands),
+            (error) => {
+              if (!isAntigravity && error instanceof ApiError && error.status === 400) {
+                return loadFromSkillsFallback()
+              }
+              throw error
+            },
+          )
+        : isAntigravity
+          ? Promise.resolve([])
+          : loadFromSkillsFallback()
+
+    loadPromise
+      .then((commands) => {
         if (cancelled) return
-        setSlashCommandsCwd(workDir)
-        setSlashCommands(
-          skills
-            .filter((skill) => skill.userInvocable)
-            .map((skill) => ({
-              name: skill.name,
-              description: skill.description,
-              kind: 'skill' as const,
-              ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
-                ? { source: skill.source }
-                : {}),
-              // Kept on the row so the lean/standard choice, made later, can filter without a refetch.
-              ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
-            })),
-        )
+        setSlashCommandState({ cwd: workDir, providerId, commands })
       })
       .catch(() => {
         if (!cancelled) {
-          setSlashCommands([])
+          setSlashCommandState((prev) =>
+            prev.cwd === workDir && prev.providerId === providerId
+              ? prev
+              : { cwd: workDir, providerId, commands: [] },
+          )
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [workDir, lastPluginReloadSummary])
+  }, [workDir, isAntigravity, antigravityDiscoveryStatus, lastPluginReloadSummary, referencesVersion])
 
   useEffect(() => {
     let cancelled = false
@@ -456,12 +661,39 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     return names
   }, [composerReferences, referenceCurrent?.loading])
   const listedLeanNames = useMemo(() => new Set([
-    ...(slashCommandsCwd === workDir ? slashCommands : []).filter(command => command.leanCompatible !== false).map(command => command.name),
+    ...(slashCommandsCwd === workDir && slashCommandsProviderId === null ? slashCommands : []).filter(command => command.leanCompatible !== false).map(command => command.name),
     ...referenceNames,
-  ]), [slashCommands, slashCommandsCwd, workDir, referenceNames])
+  ]), [slashCommands, slashCommandsCwd, slashCommandsProviderId, workDir, referenceNames])
 
   const allSlashCommands = useMemo(() => {
-    const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommandsCwd === workDir ? slashCommands : [], getLocalizedFallbackCommands(t)), agentSlashCommands)
+    if (isAntigravity) {
+      const localized = new Map(getLocalizedFallbackCommands(t).map((cmd) => [cmd.name, cmd.description]))
+      const draftBuiltIns: SlashCommandOption[] = ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd) => ({
+        name: cmd.name,
+        description: localized.get(cmd.name) ?? cmd.description,
+        kind: 'command',
+      }))
+      const agySkills =
+        slashCommandsCwd === workDir && slashCommandsProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
+          ? slashCommands
+          : []
+      const seen = new Set(draftBuiltIns.map((cmd) => cmd.name.toLowerCase()))
+      const merged = [...draftBuiltIns]
+      for (const skill of agySkills) {
+        const key = skill.name.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        merged.push({ ...skill, kind: skill.kind ?? 'skill' })
+      }
+      return merged
+    }
+    const commands = appendAgentSlashCommands(
+      mergeSlashCommands(
+        slashCommandsCwd === workDir && slashCommandsProviderId === null ? slashCommands : [],
+        getLocalizedFallbackCommands(t),
+      ),
+      agentSlashCommands,
+    )
     const names = new Set(commands.map(command => command.name.toLowerCase()))
     for (const reference of composerReferences) {
       const name = reference.kind === 'plugin' ? reference.id : reference.name
@@ -470,7 +702,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
     return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedLeanNames)))
-  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, listedLeanNames, isLean, t])
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, slashCommandsProviderId, workDir, composerReferences, listedLeanNames, isLean, isAntigravity, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
     applyWorkDir(newWorkDir)
@@ -494,8 +726,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }, [draftRevision, hasUnsentContent])
 
   const filteredCommandGroups = useMemo(() => {
-    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
-  }, [allSlashCommands, slashFilter])
+    return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter, { showAllWhenEmpty: isAntigravity }))
+  }, [allSlashCommands, isAntigravity, slashFilter])
   const filteredCommands = filteredCommandGroups.ordered
   const isSlashMenuVisible = slashMenuOpen && filteredCommands.length > 0
 
@@ -513,6 +745,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   useEffect(() => {
     setSlashSelectedIndex(0)
   }, [slashFilter])
+
+  useEffect(() => {
+    setSlashSelectedIndex((prev) =>
+      filteredCommands.length === 0 ? 0 : Math.min(prev, filteredCommands.length - 1),
+    )
+  }, [filteredCommands.length])
 
   useEffect(() => {
     const activeItem = slashMenuOpen ? slashItemRefs.current[slashSelectedIndex] : null
@@ -540,9 +778,50 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // A model picked in this draft runs on its own provider, whatever the
       // global default is, so that provider's credentials are the ones to check.
       // Without a pick the server keeps judging the global default.
-      const authStatus = explicitDraftSelection
-        ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
-        : await providersApi.authStatus()
+      let authStatus = isAntigravity
+        ? await providersApi.authStatus(ANTIGRAVITY_ACP_PROVIDER_ID)
+        : explicitDraftSelection
+          ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
+          : await providersApi.authStatus()
+      if (isAntigravity && !authStatus.hasAuth) {
+        let antigravityAuthState = authStatus.antigravityStatus ?? authStatus.localAgentStatus
+        let antigravityError: string | undefined
+        if (antigravityAuthState === 'unchecked' && typeof discoverAntigravity === 'function') {
+          try {
+            const discovered = await discoverAntigravity()
+            if (discovered) {
+              antigravityAuthState = discovered.status
+              if (discovered.status === 'ready') {
+                authStatus = { ...authStatus, hasAuth: true, antigravityStatus: 'ready', localAgentStatus: 'ready' }
+              }
+            }
+          } catch (error) {
+            antigravityAuthState = 'error'
+            antigravityError = error instanceof Error ? error.message : String(error)
+          }
+        }
+        if (!authStatus.hasAuth) {
+          if (antigravityAuthState === 'login_required') {
+            addToast({
+              type: 'warning',
+              message: t('settings.providers.antigravity.status.login_required', { command: ANTIGRAVITY_ACP_LOGIN_COMMAND }),
+            })
+          } else if (antigravityAuthState === 'not_installed') {
+            addToast({
+              type: 'warning',
+              message: t('settings.providers.antigravity.status.not_installed'),
+            })
+          } else {
+            addToast({
+              type: 'warning',
+              message: antigravityError || t('settings.providers.antigravity.status.error'),
+            })
+          }
+          useUIStore.getState().setPendingSettingsTab('providers')
+          useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+          return null
+        }
+      }
       if (!authStatus.hasAuth) {
         const providerName = resolveProviderName(
           explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
@@ -602,9 +881,14 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
             effortLevel,
           }
         : undefined
-      const runtimeSelection = explicitDraftSelection
-        ?? defaultRuntimeSelection
-        ?? claudeOAuthRuntimeSelection
+      const runtimeSelection = isAntigravity
+        ? (explicitDraftSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID &&
+            (explicitDraftSelection.modelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID || !antigravity?.models.length)
+            ? explicitDraftSelection
+            : resolveAntigravityDraftSelection(antigravity))
+        : (explicitDraftSelection
+            ?? defaultRuntimeSelection
+            ?? claudeOAuthRuntimeSelection)
       // The draft may have waited for hours. A branch chosen for the user is
       // decided again now, against the checkout as it is: the server switches
       // to any launch branch that is not the current one.
@@ -615,10 +899,16 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         workDir || undefined,
         {
           ...(launchBranch
-            ? { repository: { branch: launchBranch, worktree: useWorktree } }
+            ? { repository: { branch: launchBranch, worktree: isAntigravity ? false : useWorktree } }
             : {}),
           permissionMode: draftPermissionMode,
-          ...(isLean ? { agentProfile } : {}),
+          ...(isLean && !isAntigravity ? { agentProfile } : {}),
+          ...(isAntigravity ? {
+            launchProviderId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+            modelId: runtimeSelection?.modelId ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID,
+            ...(runtimeSelection?.effortLevel ? { effortLevel: runtimeSelection.effortLevel } : {}),
+          } : {}),
         },
       )
       if (runtimeSelection) {
@@ -646,11 +936,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     activeProviderName,
     addToast,
     agentProfile,
+    antigravity,
     createSession,
     currentModel?.id,
     currentModel?.name,
     draftPermissionMode,
     effortLevel,
+    isAntigravity,
     isLean,
     providers,
     selectedBranch,
@@ -692,8 +984,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       return
     }
 
-    const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
+    const rawSlashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
+    const slashCommandName = text.startsWith('/') ? text.slice(1).trim().split(/\s+/)[0]?.toLowerCase() ?? '' : ''
+    const slashUiAction = isAntigravity && !ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(slashCommandName)
+      ? null
+      : rawSlashUiAction
     if (slashUiAction?.type === 'panel') {
+      promptHistory.recordSubmission({ text: input, mentions })
       setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
       setInput('')
       setMentions([])
@@ -704,6 +1001,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
 
     if (slashUiAction?.type === 'settings') {
+      promptHistory.recordSubmission({ text: input, mentions })
       useUIStore.getState().setPendingSettingsTab(slashUiAction.tab)
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
       setInput('')
@@ -715,12 +1013,28 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
 
     if (slashUiAction?.type === 'model') {
+      promptHistory.recordSubmission({ text: input, mentions })
       modelSelectorRef.current?.open()
       setInput('')
       setMentions([])
       setSlashMenuOpen(false)
       setFileSearchOpen(false)
       setPlusMenuOpen(false)
+      return
+    }
+
+    if (slashUiAction?.type === 'fast') {
+      promptHistory.recordSubmission({ text: input, mentions })
+      setInput('')
+      setMentions([])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      await executeFastSlashCommand({
+        mode: slashUiAction.mode,
+        runtimeKey: DRAFT_RUNTIME_SELECTION_KEY,
+        t,
+      })
       return
     }
 
@@ -735,10 +1049,16 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }))
     // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
     // serialized from the live document; the bubble keeps the pill text.
-    // Agent Team armed in the + menu: the model gets the team instruction,
-    // the bubble keeps what the user typed.
+    // Agent Team / Browser Use armed in the + menu: the model gets the
+    // instruction block, the bubble keeps what the user typed plus the chip.
+    const sendAsBrowserUse = capabilityMenu.browserUse.armed
     const sendAsTeam = capabilityMenu.agentTeamArmed
-    const contentForModel = sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText
+    const contentWithBrowser = sendAsBrowserUse
+      ? withBrowserUseRequest(serializedText, capabilityMenu.browserUse.preferredTarget)
+      : serializedText
+    const contentForModel = sendAsTeam
+      ? (isAntigravity ? withAntigravitySwarmRequest(contentWithBrowser) : withAgentTeamRequest(contentWithBrowser))
+      : contentWithBrowser
     // The local server drops a frame over its input budget by closing the
     // socket, and the client would only reconnect: the first turn, with its
     // pasted screenshots inlined as data URLs, would vanish without a trace.
@@ -771,8 +1091,22 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       if (serializedText || attachmentPayload.length > 0) {
         sendMessage(sessionId, contentForModel, attachmentPayload, { displayContent: text })
       }
+      if (text) {
+        const createdSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
+        promptHistory.recordSubmission(
+          { text: input, mentions },
+          {
+            sessionId,
+            projectPath: workDir || createdSession?.workDir || null,
+            projectRoot: createdSession?.projectRoot ?? null,
+          },
+        )
+      } else {
+        promptHistory.resetHistory()
+      }
       recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
       if (sendAsTeam) capabilityMenu.disarmAgentTeam()
+      if (sendAsBrowserUse) capabilityMenu.browserUse.disarm()
       setInput('')
       setMentions([])
       setAttachments([])
@@ -876,6 +1210,12 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   ])
 
   const handleComposerChange = (value: string, nextMentions: ComposerMention[]) => {
+    promptHistory.resetHistory()
+    draftComposerRef.current = {
+      ...draftComposerRef.current,
+      input: value,
+      mentions: nextMentions,
+    }
     setInput(value)
     setMentions(nextMentions)
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? value.length
@@ -952,11 +1292,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         return true
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        const selected = filteredCommands[slashSelectedIndex]
+        const selected = filteredCommands[slashSelectedIndex] ?? filteredCommands[0]
         if (
           event.key === 'Enter' &&
           exactSlashCommand &&
-          !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name)) &&
+          (isAntigravity || !composerReferences.some(item => item.kind === selected?.kind && (item.id === selected?.name || item.name === selected?.name))) &&
           selected?.name.toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           slashFilter.trim().toLowerCase() === exactSlashCommand.name.toLowerCase() &&
           shouldSubmitOnEnter(event, chatSendBehavior)
@@ -973,6 +1313,31 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         event.preventDefault()
         setSlashMenuOpen(false)
         return true
+      }
+    }
+
+    if (
+      !isSubmitting &&
+      !dictationLive &&
+      !localSlashPanel &&
+      !plusMenuOpen &&
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    ) {
+      if (event.key === 'ArrowUp' && composerRef.current?.isSelectionAtBoundary('up')) {
+        if (promptHistory.onHistoryUp()) {
+          event.preventDefault()
+          return true
+        }
+      }
+      if (
+        event.key === 'ArrowDown' &&
+        promptHistory.isNavigating() &&
+        composerRef.current?.isSelectionAtBoundary('down')
+      ) {
+        if (promptHistory.onHistoryDown()) {
+          event.preventDefault()
+          return true
+        }
       }
     }
 
@@ -1057,10 +1422,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const selectSlashCommand = (command: string) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const option = allSlashCommands.find(item => item.name === command)
     let nextCursor: number
-    const reference = (option?.kind === 'skill' || option?.kind === 'plugin')
+    const reference = !isAntigravity && (option?.kind === 'skill' || option?.kind === 'plugin')
       ? composerReferences.find(item => item.kind === option.kind && (item.id === command || item.name === command))
       : undefined
     if (reference) {
@@ -1085,6 +1451,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const insertSlashCommand = () => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const replacement = insertSlashTrigger(input, cursorPos)
     setInput(replacement.value)
@@ -1098,6 +1465,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   const insertSelectedFileMention = (mention: NewComposerMention) => {
+    promptHistory.resetHistory()
     const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
     const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
     setInput(inserted.text)
@@ -1132,7 +1500,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         onSelect: () => openFromComposerSheet(() => modelSelectorRef.current?.open()),
       },
       // The mode has no chip on a phone's toolbar: it covered the "+".
-      ...(leanModeEnabled ? [{
+      ...(leanModeEnabled && !isAntigravity ? [{
         key: 'agentProfile',
         icon: <Feather size={16} strokeWidth={1.75} aria-hidden="true" />,
         label: t('agentProfile.label'),
@@ -1158,6 +1526,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // opened rightwards from it ran past the card and the window edge.
       menuAlign={isMobileComposer ? 'left' : 'right'}
       lean={isLean}
+      antigravity={isAntigravity}
+      allowedModes={isAntigravity ? ANTIGRAVITY_ACP_PERMISSION_MODES : undefined}
       value={draftPermissionMode}
       onChange={setDraftPermissionMode}
     />
@@ -1168,12 +1538,14 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     cwd: workDir,
     references: composerReferences,
     lean: isLean,
+    antigravity: isAntigravity,
     // While the conversation is being created the mode is fixed, as it will be after.
-    agentProfile: leanModeEnabled && !isMobileComposer
+    agentProfile: leanModeEnabled && !isMobileComposer && !isAntigravity
       ? { value: agentProfile, onChange: isSubmitting ? undefined : changeAgentProfile }
       : undefined,
     handlers: {
       onInsertMention: (reference) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
         const mention = composerReferenceToMention(reference)
         const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
@@ -1185,6 +1557,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         })
       },
       onInsertSlashText: (command) => {
+        promptHistory.resetHistory()
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
         const replacement = replaceSlashToken(input, cursorPos, command)
         setInput(replacement.value)
@@ -1201,9 +1574,58 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     },
   })
 
+  const handleEngineChange = (nextEngine: ComposerEngine) => {
+    if (nextEngine === engine || isSubmitting) return
+    setSelectedEngine(nextEngine)
+    writeLastComposerEngine(nextEngine)
+    const runtimeStore = useSessionRuntimeStore.getState()
+    if (nextEngine === 'antigravity') {
+      setUseWorktree(false)
+      if (selectedAgentProfile === 'lean') setAgentProfile('standard')
+      runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, resolveAntigravityDraftSelection(antigravity))
+      if (antigravity?.status === 'unchecked' && typeof providersApi.discoverAntigravity === 'function') {
+        void discoverAntigravity().catch(() => {})
+      }
+      return
+    }
+    const current = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
+    if (current?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+      writeAntigravityLastSelection({
+        modelId: current.modelId,
+        ...(current.effortLevel ? { effortLevel: current.effortLevel } : {}),
+      })
+    }
+    if (lastStandardSelectionRef.current) {
+      runtimeStore.setSelection(DRAFT_RUNTIME_SELECTION_KEY, lastStandardSelectionRef.current)
+    } else {
+      runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+    }
+  }
+
+  const engineSwitcher = antigravityAvailable ? (
+    <div data-testid="composer-engine-switcher" className="shrink-0">
+      <SegmentedControl
+        size="sm"
+        label={t('empty.engineSwitcher.label')}
+        value={engine}
+        onChange={handleEngineChange}
+        items={[
+          { value: 'cc-haha', label: 'cc-haha', disabled: isSubmitting },
+          {
+            value: 'antigravity',
+            label: t('settings.providers.antigravity.name'),
+            icon: <ModelBrandIcon providerId={ANTIGRAVITY_ACP_PROVIDER_ID} size={12} />,
+            disabled: isSubmitting,
+          },
+        ]}
+      />
+    </div>
+  ) : null
+
   const heroProject = workDir ? (resolveProjectDisplayName(workDir) ?? projectTitle(workDir)) : null
   // A draft already typed is kept: the suggestion goes on a new line.
   const insertSuggestion = (text: string) => {
+    promptHistory.resetHistory()
     const next = input.trim() ? `${input}\n${text}` : text
     setInput(next)
     requestAnimationFrame(() => {
@@ -1212,15 +1634,280 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     })
   }
 
-  return (
-    // The new-session page (「素」, su-12). On desktop the composer sits in the
-    // flow between the hero (bottom-aligned) and the starter row (top-aligned),
-    // which puts it just above the middle of the page. On a phone it stays
-    // docked to the bottom edge, above the keyboard, and the project sits at
-    // the top, where the keyboard cannot cover it and it is read before Send.
-    <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
-      {isMobileComposer && (
-        <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
+  const heroBlock = (
+    <div
+      data-testid="empty-session-hero"
+      className={`flex flex-col items-center gap-2.5 text-center ${isMobileComposer ? 'max-w-[300px]' : 'mb-7 max-w-[600px]'}`}
+    >
+      <BrandSeal size={isMobileComposer ? 'md' : 'lg'} />
+      <h1
+        className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${
+          isMobileComposer ? 'text-[22px]' : 'text-[26px]'
+        }`}
+      >
+        {heroProject
+          ? t('empty.heroTitle', { project: heroProject })
+          : t('empty.heroTitleNoProject')}
+      </h1>
+      <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
+        {t(isAntigravity ? 'empty.heroSubtitleAntigravity' : 'empty.heroSubtitle')}
+      </p>
+    </div>
+  )
+
+  const composerShell = (
+    <div
+      data-testid="empty-session-composer-shell"
+      className={`flex justify-center ${
+        isMobileComposer
+          ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
+          : 'relative z-[var(--z-raised)] w-full shrink-0'
+      }`}
+    >
+      <div className={`flex w-full flex-col ${isMobileComposer ? 'max-w-none' : 'max-w-[var(--chat-content-max-width)]'}`}>
+        <div
+          ref={panelRef}
+          data-testid="empty-session-composer-panel"
+          // Kept identical to ChatInput's floating V6C studio card:
+          // `.composer-glass` + `--radius-2xl` (16px) + calm `--color-outline` focus edge.
+          className={`composer-glass relative z-[var(--z-raised)] flex flex-col overflow-visible rounded-[var(--radius-2xl)] p-2 transition-[border-color,box-shadow] duration-150 ease-out focus-within:border-[var(--color-outline)] ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          {...dragHandlers}
+        >
+          {isDragActive && (
+            <ComposerDropOverlay
+              testId="empty-session-drop-overlay"
+              title={t('chat.dropFilesTitle')}
+              description={t('chat.dropFilesHint')}
+            />
+          )}
+
+          <div className="contents">
+            {fileSearchOpen && (
+              <ComposerReferenceMenu
+                ref={fileSearchRef}
+                id={referenceMenuId}
+                compact={isMobileComposer}
+                references={composerReferences}
+                referencesLoading={referenceCurrent?.loading ?? true}
+                referencesError={referenceCurrent?.error}
+                onActiveChange={setReferenceOptionId}
+                cwd={workDir || ''}
+                filter={atFilter}
+                onNavigate={(relativePath) => {
+                  if (atCursorPos < 0) return
+                  promptHistory.resetHistory()
+                  const replacement = `@${relativePath}`
+                  const tokenEnd = atCursorPos + 1 + atFilter.length
+                  const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
+                  const newCursorPos = atCursorPos + replacement.length
+                  setInput(newValue)
+                  setAtFilter(relativePath)
+                  requestAnimationFrame(() => {
+                    composerRef.current?.focus()
+                    composerRef.current?.setSelectionOffsets(newCursorPos)
+                  })
+                }}
+                onSelect={(mention) => {
+                  if (atCursorPos < 0) return
+                  promptHistory.resetHistory()
+                  const tokenEnd = atCursorPos + 1 + atFilter.length
+                  const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
+                  setInput(inserted.text)
+                  setMentions(inserted.mentions)
+                  setFileSearchOpen(false)
+                  setAtFilter('')
+                  setAtCursorPos(-1)
+                  void composerRef.current?.focus()
+                  requestAnimationFrame(() => {
+                    composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+                  })
+                }}
+              />
+            )}
+
+            {localSlashPanel && (
+              <div ref={slashMenuRef}>
+                <LocalSlashCommandPanel
+                  command={localSlashPanel}
+                  cwd={workDir || undefined}
+                  commands={allSlashCommands}
+                  onClose={() => setLocalSlashPanel(null)}
+                />
+              </div>
+            )}
+
+            {isSlashMenuVisible && (
+              <SlashCommandMenu
+                ref={slashMenuRef}
+                id={slashMenuId}
+                groups={filteredCommandGroups}
+                isSearching={Boolean(slashFilter.trim())}
+                references={isAntigravity ? EMPTY_COMPOSER_REFERENCES : composerReferences}
+                selectedIndex={slashSelectedIndex}
+                itemRefs={slashItemRefs}
+                onSelect={selectSlashCommand}
+                onHighlight={setSlashSelectedIndex}
+                showKeyboardHints={!isMobileComposer}
+              />
+            )}
+
+            {attachments.length > 0 && (
+              <div className="px-2 pt-2">
+                <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
+              </div>
+            )}
+
+            <div className="flex items-start">
+              <MentionComposer
+                ref={composerRef}
+                rootRef={composerContainerRef}
+                value={input}
+                mentions={mentions}
+                onMentionClick={setReferenceDetail}
+                onChange={handleComposerChange}
+                onKeyDown={handleComposerKeyDown}
+                onPaste={handleComposerPaste}
+                onCompositionStart={dictation.compositionHandlers.onCompositionStart}
+                onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
+                placeholder={capabilityMenu.agentTeamArmed ? t('chat.capabilities.teamPlaceholder') : t('empty.placeholder')}
+                // `min-w-0`: see ChatInput — an unbreakable long run (URL,
+                // hash) otherwise grows this flex item past the panel.
+                className="flex-1 min-w-0"
+                editorClassName={`chat-reading-text scrollbar-autohide min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
+                  isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
+                }`}
+                aria={{
+                  role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
+                  'aria-autocomplete': isSlashMenuVisible || fileSearchOpen ? 'list' : undefined,
+                  'aria-expanded': isSlashMenuVisible || fileSearchOpen ? 'true' : undefined,
+                  'aria-controls': fileSearchOpen ? referenceMenuId : isSlashMenuVisible ? slashMenuId : undefined,
+                  'aria-activedescendant': fileSearchOpen ? referenceOptionId : isSlashMenuVisible
+                    ? getSlashCommandOptionId(slashMenuId, slashSelectedIndex)
+                    : undefined,
+                }}
+              />
+            </div>
+
+            <div
+              data-testid="empty-session-toolbar"
+              className={`flex min-w-0 items-center justify-between pt-1.5 ${
+                isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
+              }`}
+            >
+              {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
+              <div data-testid="empty-session-toolbar-leading" hidden={dictationLive} className="flex shrink-0 items-center gap-1">
+                <div ref={plusMenuRef} className="relative shrink-0">
+                  {/* Hand-rolled like ChatInput's: a quiet 28px square on
+                      desktop, the 44px touch minimum on a phone. */}
+                  <button
+                    type="button"
+                    onClick={() => setPlusMenuOpen((prev) => !prev)}
+                    aria-label={t('chat.composerTools')}
+                    aria-haspopup="menu"
+                    aria-expanded={plusMenuOpen}
+                    className={`v6c-pressable inline-flex items-center justify-center rounded-[var(--radius-card-inner)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                      plusMenuOpen ? 'v6c-raised text-[var(--color-text-primary)]' : ''
+                    } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
+                  >
+                    <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+
+                  {plusMenuOpen && !isMobileComposer && (
+                    <ComposerCapabilityMenu
+                      cwd={workDir}
+                      referencesLoading={referenceCurrent?.loading ?? true}
+                      referencesError={referenceCurrent?.error}
+                      onSelectFile={insertSelectedFileMention}
+                      id={capabilityMenuId}
+                      sections={capabilityMenu.sections}
+                      onAction={capabilityMenu.onAction}
+                      onClose={() => setPlusMenuOpen(false)}
+                    />
+                  )}
+                  {isMobileComposer && (
+                    <MobileComposerSheet
+                      open={plusMenuOpen}
+                      onClose={() => setPlusMenuOpen(false)}
+                      menuId={capabilityMenuId}
+                      settings={mobileComposerSettings}
+                      sections={capabilityMenu.sections}
+                      cwd={workDir}
+                      referencesLoading={referenceCurrent?.loading ?? true}
+                      referencesError={referenceCurrent?.error}
+                      onSelectFile={insertSelectedFileMention}
+                      onAction={capabilityMenu.onAction}
+                    />
+                  )}
+                  <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                  <BrowserUseEnableDialog {...capabilityMenu.browserUseConsent} />
+                  <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
+                </div>
+
+                {capabilityMenu.agentTeamArmed ? (
+                  <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                ) : null}
+
+                {capabilityMenu.browserUse.armed ? (
+                  <BrowserUseTargetPill
+                    target={capabilityMenu.browserUse.preferredTarget}
+                    onChange={capabilityMenu.browserUse.setPreferredTarget}
+                    onRemove={capabilityMenu.browserUse.disarm}
+                    touch={isMobileComposer}
+                  />
+                ) : null}
+
+                {isLean && !isMobileComposer ? (
+                  <AgentProfileChip onRemove={isSubmitting ? undefined : () => changeAgentProfile('standard')} />
+                ) : null}
+
+                {isMobileComposer ? permissionSelector : null}
+              </div>
+
+              {/* A draft has used none of its context, so the usage ring is not
+                  on this row: it appears with the session's first reading. */}
+              <div
+                data-testid="empty-session-toolbar-trailing"
+                hidden={dictationLive}
+                className="flex min-w-0 flex-1 items-center justify-end gap-1"
+              >
+                {leanModeEnabled && isMobileComposer && !isAntigravity && <AgentProfileControl
+                  ref={agentProfileRef}
+                  value={agentProfile}
+                  onChange={changeAgentProfile}
+                  disabled={isSubmitting}
+                />}
+                {!isMobileComposer ? permissionSelector : null}
+                <ModelSelector
+                  ref={modelSelectorRef}
+                  runtimeKey={DRAFT_RUNTIME_SELECTION_KEY}
+                  lockedProviderId={isAntigravity ? ANTIGRAVITY_ACP_PROVIDER_ID : undefined}
+                  disabled={isSubmitting}
+                  compact={isMobileComposer}
+                />
+                <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
+                <Button
+                  variant="accent"
+                  size="md"
+                  shape="key"
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  aria-label={t('common.run')}
+                  title={t('common.run')}
+                  className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
+                  icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bare under-card context strip sitting cleanly below the floating
+            composer card on desktop without overlapping its rounded corners. */}
+        {!isMobileComposer && (
+          <div
+            data-testid="composer-context-strip"
+            className="relative flex min-w-0 items-center justify-between gap-2 overflow-x-clip px-2.5 pb-0.5 pt-2"
+          >
             <RepositoryLaunchControls
               ref={repositoryLaunchRef}
               workDir={workDir}
@@ -1230,302 +1917,58 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               useWorktree={useWorktree}
               onUseWorktreeChange={setUseWorktree}
               onLaunchReadyChange={setRepositoryLaunchReady}
+              worktreeSupported={!isAntigravity}
+              disabled={isSubmitting}
+              visible={visible}
+              placement="toolbar"
+            />
+            {engineSwitcher}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  return (
+    // Zero-shift centered Draft Hero on desktop: headline is anchored via a
+    // viewport-clamped top inset so typing multiline drafts or toggling
+    // attachments never jumps the hero upward. On a phone the composer stays
+    // docked to the bottom above the keyboard and the project stays at the top.
+    <div className="v6c-main-canvas relative flex flex-1 flex-col overflow-hidden">
+      {isMobileComposer ? (
+        <>
+          <div data-testid="empty-session-mobile-launch" className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-4 pt-1">
+            <RepositoryLaunchControls
+              ref={repositoryLaunchRef}
+              workDir={workDir}
+              onWorkDirChange={handleWorkDirChange}
+              branch={selectedBranch}
+              onBranchChange={setSelectedBranch}
+              useWorktree={useWorktree}
+              onUseWorktreeChange={setUseWorktree}
+              onLaunchReadyChange={setRepositoryLaunchReady}
+              worktreeSupported={!isAntigravity}
               disabled={isSubmitting}
               visible={visible}
             />
-        </div>
-      )}
-      <div className={`flex flex-col items-center text-center ${
-        isMobileComposer
-          ? 'min-h-0 flex-1 justify-center overflow-hidden px-6 pb-[230px] pt-6'
-          : 'min-h-0 flex-1 justify-end overflow-hidden px-8 pb-7 pt-8'
-      }`}>
-        <div className={`flex flex-col items-center gap-2.5 ${isMobileComposer ? 'max-w-[300px]' : 'max-w-[600px]'}`}>
-          <BrandSeal size={isMobileComposer ? 'md' : 'lg'} />
-          <h1
-            className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${
-              isMobileComposer ? 'text-[22px]' : 'text-[26px]'
-            }`}
-          >
-            {heroProject
-              ? t('empty.heroTitle', { project: heroProject })
-              : t('empty.heroTitleNoProject')}
-          </h1>
-          <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
-            {t('empty.heroSubtitle')}
-          </p>
-        </div>
-      </div>
-
-      <div
-        data-testid="empty-session-composer-shell"
-        className={`flex justify-center ${
-        isMobileComposer
-          ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
-          : 'relative z-[var(--z-raised)] shrink-0 px-8'
-      }`}
-      >
-        <div className={`flex w-full flex-col ${isMobileComposer ? 'max-w-none' : 'max-w-3xl'}`}>
-          <div
-            ref={panelRef}
-            data-testid="empty-session-composer-panel"
-            // Kept identical to ChatInput's floating card: `--radius-xl`, the
-            // composer shadow step from `glass-panel--composer`, and an 8px
-            // inset that the editor and toolbar pad themselves within.
-            className={`glass-panel glass-panel--composer relative flex flex-col overflow-visible rounded-[var(--radius-xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
-            {...dragHandlers}
-          >
-            {isDragActive && (
-              <ComposerDropOverlay
-                testId="empty-session-drop-overlay"
-                title={t('chat.dropFilesTitle')}
-                description={t('chat.dropFilesHint')}
-              />
-            )}
-
-            <div className="contents">
-              {fileSearchOpen && (
-                <ComposerReferenceMenu
-                  ref={fileSearchRef}
-                  id={referenceMenuId}
-                  compact={isMobileComposer}
-                  references={composerReferences}
-                  referencesLoading={referenceCurrent?.loading ?? true}
-                  referencesError={referenceCurrent?.error}
-                  onActiveChange={setReferenceOptionId}
-                  cwd={workDir || ''}
-                  filter={atFilter}
-                  onNavigate={(relativePath) => {
-                    if (atCursorPos < 0) return
-                    const replacement = `@${relativePath}`
-                    const tokenEnd = atCursorPos + 1 + atFilter.length
-                    const newValue = `${input.slice(0, atCursorPos)}${replacement}${input.slice(tokenEnd)}`
-                    const newCursorPos = atCursorPos + replacement.length
-                    setInput(newValue)
-                    setAtFilter(relativePath)
-                    requestAnimationFrame(() => {
-                      composerRef.current?.focus()
-                      composerRef.current?.setSelectionOffsets(newCursorPos)
-                    })
-                  }}
-                  onSelect={(mention) => {
-                    if (atCursorPos < 0) return
-                    const tokenEnd = atCursorPos + 1 + atFilter.length
-                    const inserted = insertMentionIntoText(input, mentions, atCursorPos, tokenEnd, mention)
-                    setInput(inserted.text)
-                    setMentions(inserted.mentions)
-                    setFileSearchOpen(false)
-                    setAtFilter('')
-                    setAtCursorPos(-1)
-                    void composerRef.current?.focus()
-                    requestAnimationFrame(() => {
-                      composerRef.current?.setSelectionOffsets(inserted.cursorPos)
-                    })
-                  }}
-                />
-              )}
-
-              {localSlashPanel && (
-                <div ref={slashMenuRef}>
-                  <LocalSlashCommandPanel
-                    command={localSlashPanel}
-                    cwd={workDir || undefined}
-                    commands={allSlashCommands}
-                    onClose={() => setLocalSlashPanel(null)}
-                  />
-                </div>
-              )}
-
-              {isSlashMenuVisible && (
-                <SlashCommandMenu
-                  ref={slashMenuRef}
-                  id={slashMenuId}
-                  groups={filteredCommandGroups}
-                  isSearching={Boolean(slashFilter.trim())}
-                  references={composerReferences}
-                  selectedIndex={slashSelectedIndex}
-                  itemRefs={slashItemRefs}
-                  onSelect={selectSlashCommand}
-                  onHighlight={setSlashSelectedIndex}
-                  showKeyboardHints={!isMobileComposer}
-                />
-              )}
-
-              {attachments.length > 0 && (
-                <div className="px-2 pt-2">
-                  <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
-                </div>
-              )}
-
-              <div className="flex items-start">
-                <MentionComposer
-                  ref={composerRef}
-                  rootRef={composerContainerRef}
-                  value={input}
-                  mentions={mentions}
-                  onMentionClick={setReferenceDetail}
-                  onChange={handleComposerChange}
-                  onKeyDown={handleComposerKeyDown}
-                  onPaste={handleComposerPaste}
-                  onCompositionStart={dictation.compositionHandlers.onCompositionStart}
-                  onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
-                  placeholder={capabilityMenu.agentTeamArmed ? t('chat.capabilities.teamPlaceholder') : t('empty.placeholder')}
-                  // `min-w-0`: see ChatInput — an unbreakable long run (URL,
-                  // hash) otherwise grows this flex item past the panel.
-                  className="flex-1 min-w-0"
-                  editorClassName={`chat-reading-text min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
-                    isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
-                  }`}
-                  aria={{
-                    role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
-                    'aria-autocomplete': isSlashMenuVisible || fileSearchOpen ? 'list' : undefined,
-                    'aria-expanded': isSlashMenuVisible || fileSearchOpen ? 'true' : undefined,
-                    'aria-controls': fileSearchOpen ? referenceMenuId : isSlashMenuVisible ? slashMenuId : undefined,
-                    'aria-activedescendant': fileSearchOpen ? referenceOptionId : isSlashMenuVisible
-                      ? getSlashCommandOptionId(slashMenuId, slashSelectedIndex)
-                      : undefined,
-                  }}
-                />
-              </div>
-
-              {/* No divider: the editor's bottom inset and this row's top inset
-                  separate the two, exactly as in ChatInput. */}
-              {/* The row has to hold the project, branch and model next to the
-                  fixed controls, and the three had one budget: everything else
-                  was `shrink-0`, so the project and branch paid for every
-                  control that was added ("claude-cod…" / "…in"). With the lean
-                  control on the row (desktop; a phone keeps it in the "+" sheet),
-                  the trailing group takes what the leading
-                  one leaves and gives up only the model's name, down to a floor;
-                  when even that does not fit, it wraps to its own line instead
-                  of squeezing the location. Without the control the row is the
-                  one it always was. */}
-              <div
-                data-testid="empty-session-toolbar"
-                className={`flex min-w-0 items-center justify-between pt-1.5 ${
-                  isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
-                }`}
-              >
-                {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
-                <div data-testid="empty-session-toolbar-leading" hidden={dictationLive} className="flex min-w-0 shrink items-center gap-1">
-                  <div ref={plusMenuRef} className="relative shrink-0">
-                    {/* Hand-rolled like ChatInput's: a quiet 28px square on
-                        desktop, the 44px touch minimum on a phone. */}
-                    <button
-                      type="button"
-                      onClick={() => setPlusMenuOpen((prev) => !prev)}
-                      aria-label={t('chat.composerTools')}
-                      aria-haspopup="menu"
-                      aria-expanded={plusMenuOpen}
-                      className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-                        plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
-                      } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
-                    >
-                      <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
-                    </button>
-
-                    {plusMenuOpen && !isMobileComposer && (
-                      <ComposerCapabilityMenu
-                        cwd={workDir}
-                        referencesLoading={referenceCurrent?.loading ?? true}
-                        referencesError={referenceCurrent?.error}
-                        onSelectFile={insertSelectedFileMention}
-                        id={capabilityMenuId}
-                        sections={capabilityMenu.sections}
-                        onAction={capabilityMenu.onAction}
-                        onClose={() => setPlusMenuOpen(false)}
-                      />
-                    )}
-                    {isMobileComposer && (
-                      <MobileComposerSheet
-                        open={plusMenuOpen}
-                        onClose={() => setPlusMenuOpen(false)}
-                        menuId={capabilityMenuId}
-                        settings={mobileComposerSettings}
-                        sections={capabilityMenu.sections}
-                        cwd={workDir}
-                        referencesLoading={referenceCurrent?.loading ?? true}
-                        referencesError={referenceCurrent?.error}
-                        onSelectFile={insertSelectedFileMention}
-                        onAction={capabilityMenu.onAction}
-                      />
-                    )}
-                    <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
-                    <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
-                  </div>
-
-                  {capabilityMenu.agentTeamArmed ? (
-                    <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
-                  ) : null}
-
-                  {isLean && !isMobileComposer ? (
-                    <AgentProfileChip onRemove={isSubmitting ? undefined : () => changeAgentProfile('standard')} />
-                  ) : null}
-
-                  {isMobileComposer ? permissionSelector : null}
-
-                  {!isMobileComposer && (
-                    <RepositoryLaunchControls
-                      ref={repositoryLaunchRef}
-                      workDir={workDir}
-                      onWorkDirChange={handleWorkDirChange}
-                      branch={selectedBranch}
-                      onBranchChange={setSelectedBranch}
-                      useWorktree={useWorktree}
-                      onUseWorktreeChange={setUseWorktree}
-                      onLaunchReadyChange={setRepositoryLaunchReady}
-                      disabled={isSubmitting}
-                      visible={visible}
-                      placement="toolbar"
-                    />
-                  )}
-                </div>
-
-                {/* A draft has used none of its context, so the usage ring is not
-                    on this row: it appears with the session's first reading. */}
-                <div
-                  data-testid="empty-session-toolbar-trailing"
-                  hidden={dictationLive}
-                  className={isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}
-                >
-                  {leanModeEnabled && isMobileComposer && <AgentProfileControl
-                    ref={agentProfileRef}
-                    value={agentProfile}
-                    onChange={changeAgentProfile}
-                    disabled={isSubmitting}
-                  />}
-                  {!isMobileComposer ? permissionSelector : null}
-                  <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
-                  <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
-                  {/* Kept identical to ChatInput's send button — same
-                      component, shape, size and icon. See the note there for
-                      why the label went away. */}
-                  <Button
-                    variant="accent"
-                    size="base"
-                    shape="circle"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    aria-label={t('common.run')}
-                    title={t('common.run')}
-                    className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                    icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
-                  />
-                </div>
-              </div>
-            </div>
-
+            {engineSwitcher}
           </div>
-        </div>
-      </div>
-
-      {!isMobileComposer && (
-        <div className="flex min-h-0 flex-[1.3] flex-col items-center overflow-y-auto px-8 pb-8 pt-4">
-          <NewSessionStarter
-            projectPath={workDir || null}
-            projectLabel={heroProject}
-            onSuggestion={insertSuggestion}
-          />
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-6 pb-[230px] pt-6 text-center">
+            {heroBlock}
+          </div>
+          {composerShell}
+        </>
+      ) : (
+        <div className="scrollbar-autohide flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-8 pb-10 pt-[clamp(3rem,14vh,8.5rem)]">
+          {heroBlock}
+          {composerShell}
+          <div className="mt-6 flex w-full max-w-[var(--chat-content-max-width)] flex-col items-center">
+            <NewSessionStarter
+              projectPath={workDir || null}
+              projectLabel={heroProject}
+              onSuggestion={insertSuggestion}
+            />
+          </div>
         </div>
       )}
 

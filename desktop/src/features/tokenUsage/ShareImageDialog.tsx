@@ -18,11 +18,7 @@ import type { DailyModelSeries, RankedModel } from './usageModel'
 
 const THEME_LABEL_KEYS: Record<ThemeMode, TranslationKey> = {
   white: 'settings.general.appearance.white',
-  paper: 'settings.general.appearance.paper',
-  'warm-classic': 'settings.general.appearance.warmClassic',
-  celadon: 'settings.general.appearance.celadon',
   dark: 'settings.general.appearance.dark',
-  'ink-blue': 'settings.general.appearance.inkBlue',
 }
 
 type Props = {

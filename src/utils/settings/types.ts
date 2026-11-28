@@ -355,6 +355,15 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           "Include built-in commit and PR workflow instructions in Claude's system prompt (default: true)",
         ),
+      includeCyberRiskInstruction: z
+        .boolean()
+        .optional()
+        // A malformed value here must not invalidate the whole settings file:
+        // parseSettingsFileUncached drops every setting when the schema throws.
+        .catch(undefined)
+        .describe(
+          'Include the Anthropic cyber-risk safety instruction and file-read malware reminder for third-party providers (default: true). Claude official OAuth accounts keep them unless overridden by CLAUDE_CODE_DISABLE_CYBER_RISK_INSTRUCTION.',
+        ),
       permissions: PermissionsSchema()
         .optional()
         .describe('Tool usage permissions configuration'),
@@ -491,6 +500,15 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'Desktop: show a predicted next prompt in the empty composer after each reply ' +
             '(one extra model request per turn). Default: false.',
+        ),
+      maxOutputTokensEscalationMode: z
+        .enum(['auto', 'enabled', 'disabled'])
+        .optional()
+        .describe(
+          'Controls the native output budget cap (up to 8k) and model-bounded retry (up to 64k). ' +
+            'auto = follow GrowthBook remote flag (tengu_otk_slot_v1). ' +
+            'enabled = opt in on supported routes, preserving explicit budgets. ' +
+            'disabled = use model defaults. Continuation recovery remains available in all modes.',
         ),
       workflowSizeGuideline: z
         .enum(['unrestricted', 'small', 'medium', 'large'])

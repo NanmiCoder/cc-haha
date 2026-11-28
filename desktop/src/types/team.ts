@@ -48,6 +48,7 @@ export type TeamMember = {
 
 export type TeamDetail = {
   name: string
+  description?: string
   incarnationId?: string
   leadAgentId?: string
   leadSessionId?: string
@@ -95,6 +96,8 @@ export type TeamWorkbenchSnapshot = {
 
 export type TeamWorkbenchTimeline = {
   teamName: string
+  /** Discovery source; only a live team offers runtime controls. */
+  source?: 'live' | 'archive' | 'transcript'
   snapshots: TeamWorkbenchSnapshot[]
   loading: boolean
   error: string | null

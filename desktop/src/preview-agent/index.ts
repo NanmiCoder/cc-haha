@@ -41,6 +41,7 @@ import { afterNextPaint } from './paint'
   let selectionOverlayId: number | null = null
   let selectionCaptureSequence = 0
   let pickerOn = false
+  let agentControlActive = false
   let activeBubble: { destroy: () => void; revert: () => void } | null = null
   const updateChromeSuppression = () => {
     zoomControls.setSuppressed(pickerOn || activeBubble !== null || selectionOverlayCleanup !== null || (persistentPicker && !temporarilyBrowsing))
@@ -139,6 +140,10 @@ import { afterNextPaint } from './paint'
 
   bridge.on('enter-picker', (message) => {
     if (!acceptPickerCommand(message.generation)) return
+    if (agentControlActive) {
+      teardown('host')
+      return
+    }
     activeBubble?.revert()
     closePicker()
     persistentPicker = message.persistent === true
@@ -152,6 +157,17 @@ import { afterNextPaint } from './paint'
   bridge.on('exit-picker', (message) => {
     if (!acceptPickerCommand(message.generation)) return
     teardown('host')
+  })
+  bridge.on('agent-control-state', (message) => {
+    agentControlActive = message.active
+    zoomControls.setAgentSuppressed(agentControlActive)
+    if (agentControlActive && (pickerOn || activeBubble !== null || persistentPicker || temporarilyBrowsing)) {
+      // Force-exit picker without touching `queuedReverts`, preserving any
+      // queued selection draft the user built before AI took control.
+      teardown('host')
+    } else {
+      updateChromeSuppression()
+    }
   })
   bridge.on('undo-selection', (message) => {
     queuedReverts.get(message.itemId)?.()
@@ -169,14 +185,14 @@ import { afterNextPaint } from './paint'
   })
 
   document.addEventListener('mousemove', (e) => {
-    if (!pickerOn) return
+    if (agentControlActive || !pickerOn) return
     if (zoomControls.ownsTarget(e.composedPath())) return
     const t = e.target
     if (t instanceof Element) picker.hover(t)
   }, true)
 
   document.addEventListener('click', (e) => {
-    if (!pickerOn || activeBubble) return
+    if (agentControlActive || !pickerOn || activeBubble) return
     if (zoomControls.ownsTarget(e.composedPath())) return
     e.preventDefault(); e.stopPropagation()
     picker.select()

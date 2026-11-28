@@ -77,7 +77,15 @@ function runSliderCase(modulePath: string, exportName: string, body: string) {
     mock.module(${JSON.stringify(import.meta.resolve('expo-linear-gradient'))}, () => ({ LinearGradient: 'Gradient' }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
-      useColors: () => ({ ink: '#222222', fill: '#eeeeee', chevron: '#aaaaaa', btnInk: '#ffffff', card: '#ffffff' }),
+      useColors: () => ({ ink: '#222222', fill: '#eeeeee', chevron: '#aaaaaa', btnInk: '#ffffff', card: '#ffffff', cardRaised: '#ffffff' }),
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({
+      useTheme: () => ({
+        colors: { ink: '#222222', fill: '#eeeeee', chevron: '#aaaaaa', btnInk: '#ffffff', card: '#ffffff', cardRaised: '#ffffff' },
+        shadows: { thumb: '0 1px 2px rgba(0,0,0,0.16)' },
+        dark: false,
+        scheme: 'light',
+      }),
     }))
     const Component = (await import(${JSON.stringify(modulePath)}))[${JSON.stringify(exportName)}]
     const options = [

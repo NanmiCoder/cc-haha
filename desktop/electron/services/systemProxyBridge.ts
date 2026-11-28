@@ -5,6 +5,7 @@ import tls from 'node:tls'
 import { lookup } from 'node:dns/promises'
 import type { Duplex } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { recordPublicAccessDiagnostic, type PublicAccessDiagnosticWriter } from './publicAccessDiagnostics'
 
 export const SYSTEM_PROXY_BRIDGE_HOST = '127.0.0.1'
 const CONNECT_TIMEOUT_MS = 10_000
@@ -64,7 +65,10 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
   private readonly clientSockets = new Set<net.Socket>()
   private readonly outboundSockets = new Set<Duplex>()
 
-  constructor(private readonly resolveSystemProxy: (url: string) => Promise<string>) {}
+  constructor(
+    private readonly resolveSystemProxy: (url: string) => Promise<string>,
+    private readonly onDiagnostic?: PublicAccessDiagnosticWriter,
+  ) {}
 
   start(): Promise<string> {
     if (this.startPromise) return this.startPromise
@@ -202,9 +206,9 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
       const endpoint = parseEndpoint(request.url ?? '', 443)
       if (!endpoint) throw new Error('Invalid CONNECT target')
       const target = new URL(`https://${formatAuthority(endpoint.host, endpoint.port)}/`)
-      const rules = await this.resolveRules(target)
+      const rules = await this.resolveRules(target, true)
       if (isClientUnavailable()) return
-      const route = await connectTunnelUsingRules(rules, endpoint.host, endpoint.port)
+      const route = await connectTunnelUsingRules(rules, endpoint.host, endpoint.port, this.onDiagnostic)
       routeSocket = route.socket
       this.trackOutboundSocket(route.socket)
       const closeBoth = () => {
@@ -232,9 +236,15 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
     }
   }
 
-  private async resolveRules(target: URL): Promise<SystemProxyRule[]> {
+  private async resolveRules(target: URL, diagnostic = false): Promise<SystemProxyRule[]> {
     if (isLoopbackHostname(target.hostname)) return [{ type: 'direct' }]
-    return parseSystemProxyRules(await this.resolveSystemProxy(target.href))
+    const startedAt = Date.now()
+    try { return parseSystemProxyRules(await this.resolveSystemProxy(target.href)) }
+    catch (error) {
+      if (diagnostic) recordPublicAccessDiagnostic(this.onDiagnostic, { stage: 'system_proxy_resolution', outcome: 'failed', reason: 'resolution_failed',
+        durationMs: Date.now() - startedAt, error, details: { targetHost: stripIpv6Brackets(target.hostname), targetPort: targetPort(target) } })
+      throw error
+    }
   }
 
   private trackOutboundSocket(socket: Duplex): void {
@@ -461,30 +471,37 @@ async function connectTunnelUsingRules(
   rules: SystemProxyRule[],
   targetHost: string,
   targetPortNumber: number,
+  onDiagnostic?: PublicAccessDiagnosticWriter,
 ): Promise<{ socket: Duplex }> {
   const errors: string[] = []
   for (const rule of rules) {
+    const startedAt = Date.now()
+    const details = { ruleType: rule.type, targetHost, targetPort: targetPortNumber,
+      ...(rule.host ? { proxyHost: rule.host, proxyPort: rule.port } : {}) }
+    const succeeded = (socket: Duplex) => {
+      if (errors.length) recordPublicAccessDiagnostic(onDiagnostic, { stage: 'system_proxy_route', outcome: 'succeeded', reason: 'fallback_recovered',
+        durationMs: Date.now() - startedAt, details: { ...details, attempts: errors.length + 1 } })
+      return { socket }
+    }
     try {
       if (rule.type === 'direct') {
-        return { socket: await connectTcp(targetHost, targetPortNumber) }
+        return succeeded(await connectTcp(targetHost, targetPortNumber))
       }
       const endpoint = requireEndpoint(rule)
       if (rule.type === 'http' || rule.type === 'https') {
-        return {
-          socket: await establishHttpProxyTunnel(
-            endpoint,
-            rule.type === 'https',
-            targetHost,
-            targetPortNumber,
-          ),
-        }
+        return succeeded(await establishHttpProxyTunnel(
+          endpoint,
+          rule.type === 'https',
+          targetHost,
+          targetPortNumber,
+        ))
       }
-      return {
-        socket: rule.type === 'socks4'
-          ? await connectSocks4(endpoint, targetHost, targetPortNumber)
-          : await connectSocks5(endpoint, targetHost, targetPortNumber),
-      }
+      return succeeded(rule.type === 'socks4'
+        ? await connectSocks4(endpoint, targetHost, targetPortNumber)
+        : await connectSocks5(endpoint, targetHost, targetPortNumber))
     } catch (error) {
+      recordPublicAccessDiagnostic(onDiagnostic, { stage: 'system_proxy_route', outcome: 'failed', reason: 'route_failed',
+        durationMs: Date.now() - startedAt, error, details })
       if (error instanceof ProxyAuthenticationRequiredError) throw error
       errors.push(`${rule.type}: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -571,17 +588,20 @@ async function connectSocks5(
     port.writeUInt16BE(targetPortNumber)
     socket.write(Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x03, host.length]), host, port]))
 
-    const response = await readExactly(socket, 4)
-    if (response[0] !== 0x05 || response[1] !== 0x00) throw new Error(`SOCKS5 connect failed with code ${response[1]}`)
-    const addressLength = response[3] === 0x01
-      ? 4
-      : response[3] === 0x04
-        ? 16
-        : response[3] === 0x03
-          ? (await readExactly(socket, 1))[0]!
-          : 0
-    if (!addressLength) throw new Error('SOCKS5 proxy returned an invalid address type')
-    await readExactly(socket, addressLength + 2)
+    await readFromSocket(socket, buffer => {
+      if (buffer.length < 4) return null
+      if (buffer[0] !== 0x05 || buffer[1] !== 0x00) {
+        throw new Error(`SOCKS5 connect failed with code ${buffer[1]}`)
+      }
+      if (buffer[3] === 0x01) return buffer.length >= 10 ? 10 : null
+      if (buffer[3] === 0x04) return buffer.length >= 22 ? 22 : null
+      if (buffer[3] === 0x03) {
+        if (buffer.length < 5) return null
+        const total = 5 + buffer[4]! + 2
+        return buffer.length >= total ? total : null
+      }
+      throw new Error('SOCKS5 proxy returned an invalid address type')
+    })
     return socket
   } catch (error) {
     socket.destroy()
@@ -640,12 +660,12 @@ function readFromSocket(
   return new Promise((resolve, reject) => {
     let buffered = Buffer.alloc(0)
     const cleanup = () => {
-      socket.off('data', onData)
+      socket.off('readable', onReadable)
       socket.off('error', onError)
       socket.off('close', onClose)
       clearTimeout(timer)
     }
-    const onData = (chunk: Buffer) => {
+    const consume = (chunk: Buffer): boolean => {
       buffered = Buffer.concat([buffered, chunk])
       let length: number | null
       try {
@@ -653,12 +673,20 @@ function readFromSocket(
       } catch (error) {
         cleanup()
         reject(error)
-        return
+        return true
       }
-      if (length === null) return
+      if (length === null) return false
       cleanup()
       if (buffered.length > length) socket.unshift(buffered.subarray(length))
       resolve(buffered.subarray(0, length))
+      return true
+    }
+    const onReadable = () => {
+      while (true) {
+        const chunk = socket.read() as Buffer | string | null
+        if (chunk === null) return
+        if (consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))) return
+      }
     }
     const onError = (error: Error) => {
       cleanup()
@@ -672,9 +700,11 @@ function readFromSocket(
       cleanup()
       reject(new Error('proxy handshake timed out'))
     }, CONNECT_TIMEOUT_MS)
-    socket.on('data', onData)
+    socket.pause()
+    socket.on('readable', onReadable)
     socket.once('error', onError)
     socket.once('close', onClose)
+    onReadable()
   })
 }
 

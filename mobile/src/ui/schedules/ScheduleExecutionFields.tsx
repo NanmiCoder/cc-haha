@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FlatList, View } from 'react-native'
 import type { ApiClient } from '../../core/client'
+import { ANTIGRAVITY_PROVIDER_ID } from '../../core/runtimeCatalog'
 import type { ScheduleCreateOptions } from '../../core/scheduleDraft'
 import type { Session } from '../../core/types'
 import { Group, InlineError, SearchField, Segmented, Sheet, Switch, TextButton, useColors } from '../kit'
@@ -9,6 +10,8 @@ import { RuntimeSheet } from '../RuntimePicker'
 import { ChoiceRow } from '../newtask/ChoiceRow'
 import { FormRow } from './parts'
 import { ScheduleChoice } from './ScheduleFields'
+
+const EXCLUDE_ANTIGRAVITY = [ANTIGRAVITY_PROVIDER_ID] as const
 
 type NotificationChannels = Record<ScheduleCreateOptions['channels'][number], boolean>
 
@@ -80,7 +83,7 @@ export function ScheduleExecutionFields({ client, value, onChange, disabled }: {
         <Text style={{ fontSize: 13, color: colors.ink3 }}>飞书和 Telegram 需先在电脑上完成配置。</Text>
       </> : null}
     </Group>
-    <RuntimeSheet visible={modelOpen} onClose={() => setModelOpen(false)} client={client} initial={value.runtime} busy={disabled} onApply={runtime => { onChange({ runtime }); setModelOpen(false) }} />
+    <RuntimeSheet visible={modelOpen} onClose={() => setModelOpen(false)} client={client} initial={value.runtime} busy={disabled} excludeProviderIds={EXCLUDE_ANTIGRAVITY} onApply={runtime => { onChange({ runtime }); setModelOpen(false) }} />
     <Sheet visible={sessionOpen} onClose={() => setSessionOpen(false)} title="选择会话" scroll={false}>
       <SearchField value={query} onChangeText={setQuery} placeholder="搜索最近 100 个会话" />
       <FlatList style={{ maxHeight: 420 }} data={sessions.filter(session => session.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()))} keyExtractor={session => session.id} renderItem={({ item }) => <ChoiceRow title={item.title || '未命名会话'} detail={item.workDir ?? undefined} selected={selectedSession === item.id} disabled={disabled} onPress={() => { onChange({ execution: { kind: 'session', targetSessionId: item.id } }); setSessionOpen(false) }} />} ListEmptyComponent={<Text style={{ padding: 16, color: colors.ink3 }}>没有匹配的会话</Text>} />

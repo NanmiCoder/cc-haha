@@ -6,6 +6,7 @@ import { join, relative, sep } from 'node:path'
 import { loadQuarantineManifest, quarantinedPathSet } from '../quality-gate/quarantine'
 import { rootBunTestFilter } from './bun-test-filter'
 import { classifyFailedFiles, formatFlakeReport } from './server-test-flakes'
+import { runServerTestFiles } from './server-test-scheduling'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { parseShardArg, selectShard } from './test-shard'
 
@@ -128,21 +129,8 @@ async function runTestFile(file: string): Promise<TestFileResult> {
   }
 }
 
-let nextFile = 0
-const results: TestFileResult[] = []
-async function runWorker() {
-  while (nextFile < selectedFiles.length) {
-    const file = selectedFiles[nextFile]
-    nextFile += 1
-    results.push(await runTestFile(file))
-  }
-}
-
-await Promise.all(
-  Array.from(
-    { length: Math.min(TEST_PROCESS_CONCURRENCY, selectedFiles.length) },
-    () => runWorker(),
-  ),
+const results = await runServerTestFiles(
+  selectedFiles, TEST_PROCESS_CONCURRENCY, runTestFile,
 )
 
 const failedFiles = results.filter((result) => !result.evidenceComplete)

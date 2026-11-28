@@ -6,6 +6,7 @@ import {
 } from './fetch.js'
 import { createModelCatalogCache } from '../modelCatalogCache.js'
 import { ensureFreshGrokTokens } from './refresh.js'
+import { getGrokOAuthTokens } from './storage.js'
 import {
   GROK_MODEL_CATALOG,
   setGrokRuntimeModelCatalog,
@@ -55,17 +56,35 @@ export async function fetchGrokModelCatalog(
   return models
 }
 
+function grokCatalogAccountKey(
+  accessToken?: string | null,
+  accountKey?: string,
+): string {
+  return accessToken
+    ? createHash('sha256').update(accessToken).digest('hex')
+    : accessToken === null ? 'logged-out' : accountKey ?? 'default'
+}
+
+export function readCachedGrokModelCatalog(
+  accessToken?: string | null,
+  accountKey?: string,
+): GrokModelCatalogEntry[] {
+  return catalogCache.peek(grokCatalogAccountKey(accessToken, accountKey)) ?? GROK_MODEL_CATALOG
+}
+
 export async function getGrokModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  waitForInitial?: boolean
   throwOnError?: boolean
   resolveProxyUrl?: () => Promise<string | null | undefined>
   accessToken?: string | null
   accountKey?: string
 }): Promise<GrokModelCatalogEntry[]> {
-  const accountKey = options?.accessToken
-    ? createHash('sha256').update(options.accessToken).digest('hex')
-    : options?.accessToken === null ? 'logged-out' : options?.accountKey ?? 'default'
+  const hasToken = options?.accessToken === undefined
+    ? !!getGrokOAuthTokens()?.accessToken
+    : !!options.accessToken
+  const accountKey = grokCatalogAccountKey(options?.accessToken, options?.accountKey)
   return catalogCache.resolve({
     accountKey,
     fetchCatalog: async () => fetchGrokModelCatalog(
@@ -73,6 +92,7 @@ export async function getGrokModelCatalog(options?: {
     ),
     fallback: GROK_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(hasToken && options?.waitForInitial ? { waitForInitial: true } : {}),
     ...(options?.throwOnError ? { throwOnError: true } : {}),
   })
 }
@@ -121,7 +141,17 @@ function normalizeRemoteModel(value: unknown): GrokModelCatalogEntry | null {
     record.total_context_tokens,
     record.context_window,
     record.contextWindow,
+    record.context_length,
+    record.contextLength,
   ) ?? fallback?.contextWindow
+  const maxContextWindow = firstNumber(
+    record.maxContextWindow,
+    record.max_context_window,
+    record.maxContextTokens,
+    record.max_context_tokens,
+    record.maxContextLength,
+    record.max_context_length,
+  ) ?? fallback?.maxContextWindow
   const supportsReasoningEffort = firstBoolean(
     record.supportsReasoningEffort,
     record.supports_reasoning_effort,
@@ -139,6 +169,7 @@ function normalizeRemoteModel(value: unknown): GrokModelCatalogEntry | null {
     label,
     description,
     ...(contextWindow !== undefined && { contextWindow }),
+    ...(maxContextWindow !== undefined && { maxContextWindow }),
     source: fallback?.source ?? 'official',
     ...(supportsReasoningEffort !== undefined && { supportsReasoningEffort }),
     ...(reasoningEffort && { reasoningEffort }),

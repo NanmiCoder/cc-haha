@@ -10,7 +10,6 @@ import {
   FolderGit2,
   GitBranch,
   GitFork,
-  Loader2,
   Plus,
   Search,
 } from 'lucide-react'
@@ -36,6 +35,7 @@ import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
+import { Spinner } from '@/components/ui/Spinner'
 
 type Props = {
   workDir: string
@@ -67,6 +67,8 @@ type Props = {
   branchAutomatic?: boolean
   /** Reports whether the branch now held is one chosen on its own, so a parent can keep `branchAutomatic`. */
   onBranchAutomaticChange?: (automatic: boolean) => void
+  /** False for engines that do not support isolated Git worktrees (e.g. Antigravity ACP). */
+  worktreeSupported?: boolean
 }
 
 export type RepositoryLaunchControlsHandle = {
@@ -79,6 +81,8 @@ export type RepositoryLaunchControlsHandle = {
    * the folder as it is.
    */
   resolveLaunchBranch: () => Promise<string | null>
+  /** Re-reads the repository context (e.g. when focus returns from the docked terminal). */
+  refreshContext: () => void
 }
 
 /**
@@ -185,7 +189,9 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   visible = true,
   branchAutomatic = false,
   onBranchAutomaticChange,
+  worktreeSupported = true,
 }, ref) {
+  const effectiveUseWorktree = worktreeSupported && useWorktree
   const t = useTranslation()
   const addToast = useUIStore((state) => state.addToast)
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
@@ -220,8 +226,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   latestWorkDirRef.current = workDir
   const latestBranchRef = useRef(branch)
   latestBranchRef.current = branch
-  const latestUseWorktreeRef = useRef(useWorktree)
-  latestUseWorktreeRef.current = useWorktree
+  const latestUseWorktreeRef = useRef(effectiveUseWorktree)
+  latestUseWorktreeRef.current = effectiveUseWorktree
   /**
    * The branch these controls last chose on their own. Only that one follows
    * the repository when it is read again; a branch the user picked or
@@ -397,7 +403,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       }
       return next
     },
-  }), [onBranchChange, setAutomaticBranch])
+    refreshContext,
+  }), [onBranchChange, refreshContext, setAutomaticBranch])
 
   // A new directory starts over. A parent that keeps the launch target and
   // mounts these controls again later says which branch was chosen for the
@@ -433,10 +440,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
     // the checkout moved does not launch on the branch it used to be on.
     if (branchExists && branch !== automaticBranchRef.current) return
 
-    const fallbackBranch = automaticLaunchBranch(context, useWorktree)
+    const fallbackBranch = automaticLaunchBranch(context, effectiveUseWorktree)
     setAutomaticBranch(fallbackBranch)
     if (fallbackBranch !== branch) onBranchChange(fallbackBranch)
-  }, [branch, context, onBranchChange, setAutomaticBranch, useWorktree, workDir])
+  }, [branch, context, onBranchChange, setAutomaticBranch, effectiveUseWorktree, workDir])
 
   const closeMenu = useCallback(() => {
     setMenuOpen(false)
@@ -498,7 +505,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }, [branchFilter, context])
 
   const warning = useMemo(() => {
-    if (context?.state !== 'ok' || !selectedBranch || useWorktree) return null
+    if (context?.state !== 'ok' || !selectedBranch || effectiveUseWorktree) return null
     // A branch that points where HEAD already points cannot be blocked by
     // uncommitted changes — git only moves the ref, it rewrites nothing. That
     // is exactly the branch you just created off the one you are standing on,
@@ -642,8 +649,11 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }
 
   const handleProjectCreateSubmit = async (submission: ProjectEditorSubmission) => {
-    const project = await desktopUiPreferencesApi.updateProjectDirectories(submission.sourceFolder, submission.additionalDirectories)
+    const project = await desktopUiPreferencesApi.updateProjectDirectories(submission.sourceFolder, submission.additionalDirectories, { createProject: true })
     await setProjectDisplayName(project.projectKey, submission.name)
+    if (contextSourceWorkDir === submission.sourceFolder) {
+      setContext((current) => current ? { ...current, projectRoot: project.projectKey } : current)
+    }
     invalidateRecentProjectsCache()
     setProjectCreateOpen(false)
     // Naming the folder already in use only renames it.
@@ -683,7 +693,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       context.branches.length === 0 ||
       !!selectedBranch ||
       // Nothing to wait for: no branch is chosen for a detached HEAD.
-      launchesDetachedInPlace(context, useWorktree)
+      launchesDetachedInPlace(context, effectiveUseWorktree)
     )
   )
 
@@ -705,10 +715,13 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }, [revealAfterPick, loading, context, contextSourceWorkDir, error, workDir, closeMenu])
 
   const projectKey = contextSourceWorkDir === workDir && context
-    ? (context.repoRoot || context.workDir)
+    ? (context.projectRoot || context.repoRoot || context.workDir)
     : workDir
   const displayName = useProjectDisplayName(projectKey)
-  const repoLabel = displayName || context?.repoName || basename(context?.repoRoot) || basename(workDir)
+  const projectFolderLabel = context?.projectRoot && context.projectRoot !== context.repoRoot
+    ? basename(context.projectRoot)
+    : null
+  const repoLabel = displayName || projectFolderLabel || context?.repoName || basename(context?.repoRoot) || basename(workDir)
   const selectedBranchName = isGitReady ? (selectedBranch?.name ?? null) : null
   // A detached HEAD has no branch to name and none is chosen for it (that would
   // switch the user off their commit); the commit says where the checkout is.
@@ -721,14 +734,14 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // default branch when none is chosen.
   const branchLabel = selectedBranch?.name ?? context?.currentBranch ?? (detachedCommit ? `HEAD ${detachedCommit}` : t('repoLaunch.noBranch'))
   const isolatedBaseLabel = selectedBranch?.name ?? (context?.state === 'ok' ? automaticLaunchBranch(context, true) : null) ?? t('repoLaunch.noBranch')
-  const worktreeLabel = useWorktree ? t('repoLaunch.worktreeIsolated') : t('repoLaunch.worktreeCurrent')
+  const worktreeLabel = effectiveUseWorktree ? t('repoLaunch.worktreeIsolated') : t('repoLaunch.worktreeCurrent')
   const summary = [repoLabel, branchPillName].filter(Boolean).join(' / ')
   const pillTitle = [
     workDir,
     selectedBranchName
       ? `${t('repoLaunch.branch')}: ${selectedBranchName}`
       : detachedCommit ? `${t('repoLaunch.detachedHead')}: ${detachedCommit}` : null,
-    useWorktree ? worktreeLabel : null,
+    effectiveUseWorktree ? worktreeLabel : null,
   ].filter(Boolean).join('\n')
 
   const branchSubtitle = selectedBranch
@@ -747,7 +760,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // the opaque focus token rather than `--color-brand/35`, whose `/N` modifier
   // Safari 15 drops.
   const pillClassName = [
-    'group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5',
+    'v6c-pressable group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--radius-control)] px-1.5',
     'text-xs leading-none text-[var(--color-text-tertiary)]',
     'transition-[background-color,color] duration-150 ease-out',
     'hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
@@ -760,7 +773,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   ].join(' ')
 
   const rowClassName = [
-    'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left',
+    'flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left',
     'transition-[background-color] duration-150 ease-out',
     'hover:bg-[var(--color-surface-hover)]',
     'focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]',
@@ -770,15 +783,15 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // Both drill-downs head back the same way. The dropdown labels the crumb
   // after the view you are in; the sheet, which has its own title bar, labels
   // it after the view you are going to.
-  const dropdownBackClassName = 'inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
-  const sheetBackClassName = 'inline-flex items-center gap-1 self-start rounded-[var(--radius-sm)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]'
+  const dropdownBackClassName = 'inline-flex h-7 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  const sheetBackClassName = 'inline-flex items-center gap-1 self-start rounded-[var(--radius-control)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)]'
 
   // The two modes are a single choice, so they read as radio cards rather than
   // a menu list: a hairline at rest, a 1.5px terracotta edge on a faint
   // terracotta wash once picked. Inset shadows rather than borders so the edge
   // can thicken without nudging the content.
   const worktreeCardClassName = (selected: boolean) => [
-    'flex w-full items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left',
+    'flex w-full items-start gap-2.5 rounded-[var(--radius-card-inner)] px-3 py-2.5 text-left',
     'transition-[background-color,box-shadow] duration-150 ease-out',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
     selected
@@ -791,7 +804,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
       id={listboxId}
       role="listbox"
       aria-label={t('repoLaunch.selectBranch')}
-      className={isMobileBrowser ? 'p-1.5' : 'max-h-[280px] overflow-y-auto'}
+      className={isMobileBrowser ? 'p-1.5' : 'scrollbar-autohide max-h-[280px] overflow-y-auto'}
     >
       {filteredBranches.length === 0 ? (
         <div className="px-4 py-8 text-center text-xs text-[var(--color-text-tertiary)]">
@@ -809,10 +822,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
             aria-selected={isSelected}
             onMouseEnter={() => setSelectedIndex(index)}
             onClick={() => selectBranch(candidate)}
-            className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-[background-color] duration-150 ease-out focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${
+            className={`flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left transition-[background-color] duration-150 ease-out focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] ${
               isMobileBrowser ? 'min-h-[56px] py-3' : 'min-h-8 py-1.5'
             } ${
-              index === selectedIndex || isSelected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'
+              index === selectedIndex || isSelected ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
             }`}
           >
             <GitBranch size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
@@ -830,7 +843,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
                       : t('repoLaunch.localBranch')}
               </span>
             </span>
-            {isSelected && <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />}
+            {isSelected && <Check size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />}
           </button>
         )
       })}
@@ -925,10 +938,10 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   // pixels taller the moment the context lands.
   const revealSkeleton = (
     <div aria-hidden="true" className="flex animate-pulse flex-col gap-1">
-      <div className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)]" />
+      <div className="h-11 rounded-[var(--radius-control)] bg-[var(--color-surface-container)]" />
       <div className="mx-1 my-1 h-px bg-[var(--color-border-separator)]" />
-      <div className="h-16 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
-      <div className="h-16 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
+      <div className="h-16 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]" />
+      <div className="h-16 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)]" />
     </div>
   )
 
@@ -980,18 +993,18 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
         </button>
       )}
 
-      {isGitReady && (
+      {isGitReady && worktreeSupported && (
         <>
           <div className="mx-1 my-1 h-px bg-[var(--color-border-separator)]" />
           <button
             type="button"
             role="menuitemradio"
-            aria-checked={!useWorktree}
+            aria-checked={!effectiveUseWorktree}
             aria-labelledby={worktreeCurrentLabelId}
             onClick={() => selectWorktreeMode(false)}
-            className={worktreeCardClassName(!useWorktree)}
+            className={worktreeCardClassName(!effectiveUseWorktree)}
           >
-            <WorktreeRadio selected={!useWorktree} />
+            <WorktreeRadio selected={!effectiveUseWorktree} />
             <span className="min-w-0 flex-1">
               <span id={worktreeCurrentLabelId} className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('repoLaunch.worktreeCurrent')}
@@ -1005,12 +1018,12 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
           <button
             type="button"
             role="menuitemradio"
-            aria-checked={useWorktree}
+            aria-checked={effectiveUseWorktree}
             aria-labelledby={worktreeIsolatedLabelId}
             onClick={() => selectWorktreeMode(true)}
-            className={worktreeCardClassName(useWorktree)}
+            className={worktreeCardClassName(effectiveUseWorktree)}
           >
-            <WorktreeRadio selected={useWorktree} />
+            <WorktreeRadio selected={effectiveUseWorktree} />
             <span className="min-w-0 flex-1">
               <span id={worktreeIsolatedLabelId} className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('repoLaunch.worktreeIsolated')}
@@ -1087,20 +1100,20 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
         </>
       )}
 
-      {useWorktree && isGitReady && (
-        <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)]">
-          <GitFork size={12} strokeWidth={2} aria-hidden="true" />
+      {effectiveUseWorktree && isGitReady && (
+        <span className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-text-secondary)]">
+          <GitFork size={12} strokeWidth={1.75} aria-hidden="true" />
           {t('repoLaunch.worktreeBadge')}
         </span>
       )}
 
       {loading && workDir
-        ? <Loader2 size={14} aria-hidden="true" className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" />
+        ? <Spinner size={14} className="text-[var(--color-text-tertiary)]" />
         : <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
     </button>
   )
 
-  const menuClassName = 'flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  const menuClassName = 'dropdown-glass popover-motion scrollbar-autohide flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-xl)] p-[5px]'
   const menuStyle = {
     position: 'fixed' as const,
     left: menuPos?.left,
@@ -1128,7 +1141,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
               title={warning.message}
               className="inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-warning-container)] px-1.5 text-[11px] font-medium text-[var(--color-on-warning-container)]"
             >
-              <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+              <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
               <span className="hidden 2xl:inline">{warning.compactLabel}</span>
             </div>
           )}
@@ -1137,7 +1150,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
 
       {message && workDir && (
         <div className="flex items-center gap-1.5 px-1.5 text-xs text-[var(--color-text-tertiary)]">
-          <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+          <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
           <span>{message === 'missing' ? t('repoLaunch.missingWorkdir') : message}</span>
         </div>
       )}
@@ -1148,7 +1161,7 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
           aria-label={warning.message}
           className="flex items-center gap-1.5 px-1.5 text-xs text-[var(--color-on-warning-container)]"
         >
-          <AlertCircle size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
+          <AlertCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
           <span>{warning.message}</span>
         </div>
       )}

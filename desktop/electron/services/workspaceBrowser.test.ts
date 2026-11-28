@@ -7,9 +7,11 @@ import type { WorkspaceBrowserMenuFactory } from './workspaceBrowserMenu'
 import type { WorkspaceBrowserEvent, WorkspaceBrowserMenuOptions } from '../../src/lib/desktopHost/types'
 import {
   ElectronWorkspaceBrowserService,
+  isAllowedWorkspaceBrowserNavigationUrl,
   WORKSPACE_BROWSER_PARTITION,
   workspaceBrowserPdfFilename,
   type WorkspaceBrowserDownloadItemLike,
+  type WorkspaceBrowserInternalPorts,
   type WorkspaceBrowserSessionLike,
   type WorkspaceBrowserWebContentsLike,
 } from './workspaceBrowser'
@@ -1431,5 +1433,188 @@ describe('webview guest parity with the native page', () => {
     const before = guest.zoomFactors.length
     h.flushDeferred()
     expect(guest.zoomFactors).toHaveLength(before)
+  })
+})
+
+describe('browser use CDP lease integration and agent control hygiene', () => {
+  it('routes full-page capture through DebuggerLeaseManager without detaching an active Browser Use lease', async () => {
+    const h = createHarness()
+    const guest = await h.open('tab-a', { url: 'https://example.test/' })
+    let attached = false
+    const attach = vi.fn(() => { attached = true })
+    const detach = vi.fn(() => { attached = false })
+    guest.debugger = {
+      isAttached: () => attached,
+      attach,
+      detach,
+      sendCommand: vi.fn(async (method: string) => {
+        if (method === 'Page.getLayoutMetrics') {
+          return { cssContentSize: { x: 0, y: 0, width: 800, height: 1600 } }
+        }
+        return { data: 'FULL_SHARED' }
+      }),
+    }
+
+    const lease = h.service.getCdpManager().acquire('tab-a')
+    expect(attach).toHaveBeenCalledTimes(1)
+    await h.service.capture('tab-a', 'full')
+    // Active Browser Use lease keeps debugger attached across full-page capture!
+    expect(attached).toBe(true)
+    expect(detach).not.toHaveBeenCalled()
+    expect(h.events.at(-1)).toMatchObject({
+      type: 'screenshot',
+      tabId: 'tab-a',
+      dataUrl: 'data:image/png;base64,FULL_SHARED',
+      kind: 'full',
+    })
+
+    h.service.getCdpManager().release('tab-a', lease.leaseId)
+    h.service.closeAll()
+  })
+
+  it('exposes live page zoom and app zoom factors for coordinate math', async () => {
+    const h = createHarness()
+    const guest = await h.open('tab-a', { url: 'https://zoom.test/' })
+    guest.zoomFactor = 1.5
+    ;(h.parent.webContents as { getZoomFactor?: () => number }).getZoomFactor = () => 1.25
+    expect(h.service.getPageZoomFactor('tab-a')).toBe(1.5)
+    expect(h.service.getAppZoomFactor()).toBe(1.25)
+    expect(h.service.getPageInfo('tab-a')).toMatchObject({
+      tabId: 'tab-a',
+      zoomFactor: 1.5,
+      appZoomFactor: 1.25,
+    })
+  })
+
+  it('syncs agent-control-state, blocks picker entry while active, and re-applies after reload', async () => {
+    const h = createHarness()
+    const guest = await h.open('tab-a', { url: 'https://agent.test/' })
+    await h.service.message('tab-a', { v: 1, type: 'enter-picker', persistent: true })
+    expect(h.events.filter(event => event.type === 'state').at(-1)).toMatchObject({ annotationActive: true })
+
+    await h.service.setAgentControlActive('tab-a', true)
+    expect(h.events.filter(event => event.type === 'state').at(-1)).toMatchObject({ annotationActive: false })
+    expect(guest.scripts.some(script => script.includes('agent-control-state') && script.includes('true'))).toBe(true)
+
+    // Attempting to arm picker while agent control is active is ignored.
+    const scriptsBefore = guest.scripts.length
+    await h.service.message('tab-a', { v: 1, type: 'enter-picker', persistent: true })
+    expect(guest.scripts.length).toBe(scriptsBefore)
+    expect(h.events.filter(event => event.type === 'state').at(-1)).toMatchObject({ annotationActive: false })
+
+    // Navigating while agent control is active re-syncs agent-control-state after injecting preview-agent.
+    guest.scripts.length = 0
+    guest.emit('did-finish-load')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(guest.scripts.some(script => script.includes('agent-control-state') && script.includes('true'))).toBe(true)
+
+    await h.service.setAgentControlActive('tab-a', false)
+    expect(guest.scripts.some(script => script.includes('agent-control-state') && script.includes('false'))).toBe(true)
+  })
+
+  it('blocks cloud metadata, local server /api/*, and internal bridge/proxy ports while allowing previews and dev servers', async () => {
+    const internalPorts: WorkspaceBrowserInternalPorts = {
+      serverPort: 49_321,
+      blockedPorts: [54_321, 54_322],
+    }
+
+    for (const blocked of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://169.254.170.2/v2/credentials',
+      'http://[fd00:ec2::254]/latest/meta-data/',
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+      'http://100.100.100.200/latest/meta-data/',
+      'http://127.0.0.1:49321/api/sessions',
+      'http://localhost:49321/API/browser-use/config',
+      'http://127.0.0.1:49321/%61pi/sessions',
+      'http://127.0.0.1:49321/preview-fs/../api/sessions',
+      'http://[::1]:49321/api',
+      'http://127.0.0.1:54321/rpc',
+      'http://localhost:54322/',
+    ]) {
+      expect(isAllowedWorkspaceBrowserNavigationUrl(blocked, internalPorts), blocked).toBe(false)
+    }
+
+    for (const allowed of [
+      'https://example.com/docs',
+      'http://127.0.0.1:49321/preview-fs/session-1/index.html',
+      'http://127.0.0.1:49321/local-file/report.html',
+      'http://127.0.0.1:3000/api/users',
+      'http://localhost:5173/',
+    ]) {
+      expect(isAllowedWorkspaceBrowserNavigationUrl(allowed, internalPorts), allowed).toBe(true)
+    }
+
+    // Wire into ElectronWorkspaceBrowserService and verify will-navigate, will-redirect, setWindowOpenHandler, and navigate().
+    const guests: FakeWebContents[] = []
+    const events: WorkspaceBrowserEvent[] = []
+    const service = new ElectronWorkspaceBrowserService({
+      resolveGuest: id => guests.find(g => g.id === id)!,
+      previewScriptPath: previewScript(),
+      emit: event => events.push(event),
+      getInternalPorts: () => internalPorts,
+    })
+    const guest = new FakeWebContents()
+    guest.id = 1
+    guests.push(guest)
+    await service.create(fakeParent(), 'tab-ssrf', { storageId: 'store-ssrf', webContentsId: 1 })
+
+    const blockedNav = vi.fn()
+    guest.emit('will-navigate', { preventDefault: blockedNav }, 'http://169.254.169.254/latest/meta-data/')
+    guest.emit('will-navigate', { preventDefault: blockedNav }, 'http://127.0.0.1:49321/api/sessions')
+    guest.emit('will-navigate', { preventDefault: blockedNav }, 'http://127.0.0.1:54321/rpc')
+    expect(blockedNav).toHaveBeenCalledTimes(3)
+
+    const blockedRedirect = vi.fn()
+    guest.emit('will-redirect', { preventDefault: blockedRedirect }, 'http://metadata.google.internal/')
+    guest.emit('will-redirect', { preventDefault: blockedRedirect }, 'http://127.0.0.1:49321/api/browser-use/config')
+    expect(blockedRedirect).toHaveBeenCalledTimes(2)
+
+    const allowedNav = vi.fn()
+    guest.emit('will-navigate', { preventDefault: allowedNav }, 'http://127.0.0.1:49321/preview-fs/s1/index.html')
+    guest.emit('will-redirect', { preventDefault: allowedNav }, 'http://127.0.0.1:3000/api/items')
+    expect(allowedNav).not.toHaveBeenCalled()
+
+    events.length = 0
+    expect(guest.windowOpenHandler?.({ url: 'http://169.254.169.254/' })).toEqual({ action: 'deny' })
+    expect(guest.windowOpenHandler?.({ url: 'http://127.0.0.1:49321/api/sessions' })).toEqual({ action: 'deny' })
+    expect(events.filter(e => e.type === 'new-window')).toEqual([])
+
+    expect(guest.windowOpenHandler?.({ url: 'http://127.0.0.1:49321/local-file/demo.html' })).toEqual({ action: 'deny' })
+    expect(events.filter(e => e.type === 'new-window')).toEqual([
+      { type: 'new-window', tabId: 'tab-ssrf', url: 'http://127.0.0.1:49321/local-file/demo.html' },
+    ])
+
+    await expect(service.navigate('tab-ssrf', 'http://169.254.169.254/latest/meta-data/')).rejects.toThrow('blocked')
+    await expect(service.navigate('tab-ssrf', 'http://127.0.0.1:49321/api/sessions')).rejects.toThrow('blocked')
+    await expect(service.navigate('tab-ssrf', 'http://127.0.0.1:49321/preview-fs/s1/app.html')).resolves.toBeUndefined()
+    service.closeAll()
+  })
+
+  it('tracks owning sessionId per page and filters listPages by sessionId', async () => {
+    const guests: FakeWebContents[] = []
+    const service = new ElectronWorkspaceBrowserService({
+      resolveGuest: id => guests.find(g => g.id === id)!,
+      previewScriptPath: previewScript(),
+      emit: () => {},
+    })
+    const guestA = new FakeWebContents()
+    guestA.id = 11
+    guestA.url = 'https://session-a.test/'
+    const guestB = new FakeWebContents()
+    guestB.id = 12
+    guestB.url = 'https://session-b.test/'
+    guests.push(guestA, guestB)
+
+    await service.create(fakeParent(), 'wb-a', { sessionId: 'sess-a', storageId: 'store-a', webContentsId: 11 })
+    await service.create(fakeParent(), 'wb-b', { sessionId: 'sess-b', storageId: 'store-b', webContentsId: 12 })
+
+    expect(service.getPageInfo('wb-a')).toMatchObject({ tabId: 'wb-a', sessionId: 'sess-a' })
+    expect(service.getPageInfo('wb-b')).toMatchObject({ tabId: 'wb-b', sessionId: 'sess-b' })
+    expect(service.listPages({ sessionId: 'sess-a' }).map(p => p.tabId)).toEqual(['wb-a'])
+    expect(service.listPages({ sessionId: 'sess-b' }).map(p => p.tabId)).toEqual(['wb-b'])
+    expect(service.listPages().map(p => p.tabId).sort()).toEqual(['wb-a', 'wb-b'])
+    service.closeAll()
   })
 })

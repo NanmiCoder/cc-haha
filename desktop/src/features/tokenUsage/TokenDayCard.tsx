@@ -37,7 +37,7 @@ export function TokenDayCard({ day, locale, onClose, style }: Props) {
       role="group"
       aria-labelledby={headingId}
       data-testid="stream-day-card"
-      className="absolute top-2 z-[var(--z-raised)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-dropdown)]"
+      className="dropdown-glass popover-motion absolute top-2 z-[var(--z-raised)] rounded-[var(--radius-xl)] p-4"
       style={style}
     >
       <div className="flex items-center justify-between gap-2">
@@ -69,7 +69,7 @@ export function TokenDayCard({ day, locale, onClose, style }: Props) {
           style={{ left: `${Math.min(day.average / day.peak, 1) * 100}%` }}
         />
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
         <span>
           {t('settings.activity.day.rankOfPeak', { rank: day.rank, percent: formatShare(day.total, day.peak, locale) })}
         </span>

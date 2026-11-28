@@ -111,12 +111,23 @@ describe('RawRequestTab', () => {
     expect(screen.getByText('end_turn')).toBeInTheDocument()
     // The harness-injected reminder is split out of the conversation.
     expect(screen.getByText('Injected context')).toBeInTheDocument()
+    const injectedBtn = screen.getByRole('button', { name: /System reminder/i })
+    expect(injectedBtn).toHaveClass('focus-visible:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-[var(--color-border-focus)]')
 
-    fireEvent.click(screen.getByRole('button', { name: /System prompt/ }))
+    const systemPromptToggle = screen.getByRole('button', { name: /System prompt/ })
+    expect(systemPromptToggle).toHaveClass(
+      'rounded-[var(--radius-control)]',
+      'focus-visible:outline-none',
+      'focus-visible:ring-2',
+      'focus-visible:ring-[var(--color-border-focus)]',
+    )
+    fireEvent.click(systemPromptToggle)
     expect(await screen.findByText('You are the harness system prompt.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
     const tools = screen.getByRole('button', { name: /Tools/ }).closest('section') ?? document.body
-    expect(within(tools as HTMLElement).getByRole('button', { name: 'Bash' })).toBeInTheDocument()
+    const bashBtn = within(tools as HTMLElement).getByRole('button', { name: 'Bash' })
+    expect(bashBtn).toBeInTheDocument()
+    expect(bashBtn).toHaveClass('focus-visible:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-[var(--color-border-focus)]')
   })
 
   it('says the response was never captured and offers the switch right here', async () => {
@@ -141,5 +152,42 @@ describe('RawRequestTab', () => {
     getTraceCallsNear.mockRejectedValue(new Error('capture unavailable'))
     render(<RawRequestTab sessionId="s1" row={ROW} />)
     expect(await screen.findByText(/capture unavailable/)).toBeInTheDocument()
+  })
+
+  it('matches the subagent call when agentId is provided', async () => {
+    getTraceCallsNear.mockResolvedValue({
+      captured: true,
+      revisionToken: 'rev-sub',
+      calls: [
+        call('main-call', 1, 8, { querySource: 'sdk' }),
+        call('sub-call', 1, 8, { querySource: 'agent:builtin', agentId: 'explore42' }),
+      ],
+      locs: { 'sub-call': '100-200' },
+    })
+    getTraceCall.mockResolvedValue({
+      call: call('sub-call', 1, 8, {
+        querySource: 'agent:builtin',
+        agentId: 'explore42',
+        request: {
+          method: 'POST',
+          url: 'https://api/v1/messages',
+          headers: {},
+          body: { contentType: 'json', bytes: 100, sha256: 'x', preview: JSON.stringify(REQUEST), truncated: false },
+          semantic: { version: 1, request: REQUEST },
+        },
+        response: {
+          status: 200,
+          headers: {},
+          body: { contentType: 'json', bytes: 50, sha256: 'y', preview: JSON.stringify({
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Subagent raw response' }],
+            stop_reason: 'end_turn',
+          }), truncated: false },
+        },
+      }),
+    })
+    render(<RawRequestTab sessionId="s1" agentId="explore42" row={ROW} />)
+    expect(await screen.findByText('Subagent raw response')).toBeInTheDocument()
+    expect(getTraceCall).toHaveBeenCalledWith('s1', 'sub-call', '100-200')
   })
 })

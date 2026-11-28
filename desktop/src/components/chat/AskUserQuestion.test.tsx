@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -27,10 +27,12 @@ vi.mock('../../api/sessions', () => ({
 }))
 
 import { AskUserQuestion } from './AskUserQuestion'
+import { getDesktopHost } from '../../lib/desktopHost'
 import { useChatStore, type PerSessionState } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { useUIStore } from '../../stores/uiStore'
 import { teamMemberSessionId } from '../../types/team'
 
 const ACTIVE_TAB = 'active-tab'
@@ -48,6 +50,7 @@ describe('AskUserQuestion', () => {
   beforeEach(() => {
     sendMock.mockReset()
     useSettingsStore.setState({ locale: 'en' })
+    useUIStore.setState({ toasts: [] })
     useTabStore.setState({
       activeTabId: ACTIVE_TAB,
       tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session', status: 'idle' }],
@@ -542,10 +545,561 @@ describe('AskUserQuestion', () => {
       updatedInput: {
         ...input,
         answers: {
-          'First question?': 'custom-q1',
+          'First question?': 'A1',
           'Second question?': 'A2',
         },
+        annotations: {
+          'First question?': { notes: 'custom-q1' },
+        },
       },
+    })
+  })
+
+  describe('issue #1961: option + custom notes, images, and chat-about-this payload', () => {
+    const SINGLE_INPUT = {
+      questions: [
+        {
+          question: 'Which approach should we use?',
+          options: [{ label: 'Option 1' }, { label: 'Option 2' }],
+        },
+      ],
+    }
+
+    it('keeps a selected option when typing supplemental custom notes and submits both', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+
+      const optionOne = screen.getByRole('button', { name: /^Option 1$/ })
+      fireEvent.click(optionOne)
+      expect(optionOne.getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByText('Add extra details or images (optional):')).toBeTruthy()
+
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Also keep backwards compatibility with v1.' },
+      })
+
+      expect(optionOne.getAttribute('aria-pressed')).toBe('true')
+
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: {
+            'Which approach should we use?': 'Option 1',
+          },
+          annotations: {
+            'Which approach should we use?': {
+              notes: 'Also keep backwards compatibility with v1.',
+            },
+          },
+        },
+      })
+      expect(screen.getByText('Option 1 (Also keep backwards compatibility with v1.)')).toBeTruthy()
+    })
+
+    it('keeps typed notes when choosing an option afterwards and stays on the tab', () => {
+      const twoQuestions = {
+        questions: [
+          { header: 'Q1', question: 'First?', options: [{ label: 'A1' }, { label: 'B1' }] },
+          { header: 'Q2', question: 'Second?', options: [{ label: 'A2' }] },
+        ],
+      }
+      render(<AskUserQuestion toolUseId="tool-1" input={twoQuestions} />)
+
+      const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'extra detail for Q1' } })
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+
+      // Typing notes before picking keeps the user on Q1 with both preserved.
+      expect(screen.getByText('First?')).toBeTruthy()
+      expect(textarea.value).toBe('extra detail for Q1')
+      expect(screen.getByRole('button', { name: /^A1$/ }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('renders structured result annotations and attachments after reload', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={SINGLE_INPUT}
+          result={{
+            questions: SINGLE_INPUT.questions,
+            answers: { 'Which approach should we use?': 'Option 1' },
+            annotations: { 'Which approach should we use?': { notes: 'Match the mockup' } },
+            attachments: [
+              { type: 'image', name: 'mockup.png', data: 'data:image/png;base64,aGVsbG8=' },
+            ],
+          }}
+        />,
+      )
+
+      expect(screen.getByText('Option 1 (Match the mockup)')).toBeTruthy()
+      expect(screen.getByAltText('mockup.png')).toBeTruthy()
+    })
+
+    it('attaches pasted images, allows removing them, persists across unmount, and submits them', async () => {
+      const first = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const textarea = screen.getByPlaceholderText('Type your answer...')
+      const pngFile = new File(['png-bytes'], 'paste-shot.png', { type: 'image/png' })
+      const txtFile = new File(['ignore-me'], 'notes.txt', { type: 'text/plain' })
+
+      fireEvent.paste(textarea, {
+        clipboardData: {
+          files: [pngFile, txtFile],
+          items: [
+            { kind: 'file', getAsFile: () => pngFile },
+            { kind: 'file', getAsFile: () => txtFile },
+          ],
+        },
+      })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+      })
+      expect(sendMock.mock.calls.filter(([, message]) => message.type === 'ask_user_question_activity'))
+        .toEqual([[ACTIVE_TAB, { type: 'ask_user_question_activity', requestId: 'perm-1' }]])
+
+      // Image-only answer enables Submit.
+      expect(screen.getByRole('button', { name: /^submit$/i })).toHaveProperty('disabled', false)
+
+      // Survives unmount/remount through askUserQuestionDrafts.
+      first.unmount()
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 2$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'See screenshot' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: { 'Which approach should we use?': 'Option 2' },
+          annotations: { 'Which approach should we use?': { notes: 'See screenshot\nAttached images: paste-shot.png' } },
+        },
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'paste-shot.png',
+            mimeType: 'image/png',
+            data: expect.stringMatching(/^data:image\/png;base64,/),
+          }),
+        ],
+      })
+      // Attached image remains visible and metadata suffix stays hidden in the submitted summary.
+      expect(screen.getByText('Option 2 (See screenshot)')).toBeTruthy()
+      expect(screen.queryByText(/Attached images:/)).toBeNull()
+      expect(screen.getByAltText('paste-shot.png')).toBeTruthy()
+    })
+
+    it('supports uploading an image via file input and submitting an image-only answer', async () => {
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      expect(fileInput).toBeTruthy()
+
+      const img = new File(['webp-bytes'], 'diagram.webp', { type: 'image/webp' })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('diagram.webp')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...SINGLE_INPUT,
+          answers: { 'Which approach should we use?': '(Image attached)' },
+        },
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'diagram.webp',
+            mimeType: 'image/webp',
+          }),
+        ],
+      })
+    })
+
+    it('carries selected option, custom notes, and attached images when clicking Chat about this', async () => {
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['img-bytes'], 'reference.png', { type: 'image/png' })
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Can we combine Option 1 with this layout?' },
+      })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('reference.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: false,
+        denyMessage: [
+          '- "Which approach should we use?"',
+          '  Answer: Option 1',
+          '  Notes: Can we combine Option 1 with this layout?',
+          '  Attached images: reference.png',
+        ].join('\n'),
+        attachments: [
+          expect.objectContaining({
+            type: 'image',
+            name: 'reference.png',
+            mimeType: 'image/png',
+          }),
+        ],
+      })
+      expect(screen.getByText(/Handed back to Claude/)).toBeTruthy()
+      expect(screen.getByText('Option 1 (Can we combine Option 1 with this layout?)')).toBeTruthy()
+      expect(screen.getByAltText('reference.png')).toBeTruthy()
+    })
+
+    it('carries custom response text alone when clicking Chat about this without picking an option', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Explain the trade-offs between Option 1 and Option 2 first.' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: false,
+        denyMessage: '- "Which approach should we use?"\n  Answer: Explain the trade-offs between Option 1 and Option 2 first.',
+      })
+    })
+
+    it('retains the card draft when respondToPermission refuses an oversized attachment payload', async () => {
+      const respond = vi.spyOn(useChatStore.getState(), 'respondToPermission').mockReturnValue(false)
+      try {
+        const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+        const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+        const img = new File(['big-bytes'], 'huge.png', { type: 'image/png' })
+        fireEvent.change(fileInput, { target: { files: [img] } })
+
+        await waitFor(() => {
+          expect(screen.getByAltText('huge.png')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+        expect(respond).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+        expect(screen.getByAltText('huge.png')).toBeTruthy()
+      } finally {
+        respond.mockRestore()
+      }
+    })
+
+    it('forwards attachments on expired fallback messages for both submit and chat-about-this', async () => {
+      patchSession({ pendingPermission: null, pendingPermissions: {}, chatState: 'idle' })
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.getByRole('status').className).toContain('rounded-[var(--radius-card-inner)]')
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['img-bytes'], 'expired-ref.png', { type: 'image/png' })
+
+      fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Follow this mockup' },
+      })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+
+      await waitFor(() => {
+        expect(screen.getByAltText('expired-ref.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /chat about this/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, expect.objectContaining({
+        type: 'user_message',
+        content: expect.stringContaining('Notes: Follow this mockup'),
+        attachments: [
+          expect.objectContaining({ type: 'image', name: 'expired-ref.png' }),
+        ],
+      }))
+    })
+
+    it('renders reloaded handed-off clarify results with attached images', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={SINGLE_INPUT}
+          result={{
+            handedOff: true,
+            message: 'The user wants to clarify or discuss your questions before answering.',
+            attachments: [
+              { type: 'image', name: 'clarify-shot.png', data: 'data:image/png;base64,aGVsbG8=' },
+            ],
+          }}
+        />,
+      )
+
+      expect(screen.getByText('Handed off')).toBeTruthy()
+      expect(screen.getByText(/Handed back to Claude/)).toBeTruthy()
+      expect(screen.getByAltText('clarify-shot.png')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull()
+    })
+
+    it('calls preventDefault on non-image drag-drops and filters native desktop drops to inline images', async () => {
+      const host = getDesktopHost()
+      let desktopDropListener: ((event: { payload: unknown }) => void) | null = null
+      const isDesktopSpy = vi.spyOn(host, 'isDesktop', 'get').mockReturnValue(true)
+      const onDragDropSpy = vi.spyOn(host.webview, 'onDragDropEvent').mockImplementation(async (listener) => {
+        desktopDropListener = listener as (event: { payload: unknown }) => void
+        return () => { desktopDropListener = null }
+      })
+
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+        const dropZone = screen.getByPlaceholderText('Type your answer...').parentElement?.parentElement as HTMLElement
+        expect(dropZone).toBeTruthy()
+
+        // Non-image DOM drop must still be prevented so the webview does not navigate away.
+        const pdfFile = new File(['pdf'], 'spec.pdf', { type: 'application/pdf' })
+        const nonImageDrop = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent
+        Object.defineProperty(nonImageDrop, 'dataTransfer', {
+          value: { types: ['Files'], files: [pdfFile], dropEffect: 'none' },
+        })
+        fireEvent(dropZone, nonImageDrop)
+        expect(nonImageDrop.defaultPrevented).toBe(true)
+        expect(screen.queryByAltText('spec.pdf')).toBeNull()
+
+        // Valid DOM image drop attaches the image.
+        const pngFile = new File(['png-bytes'], 'dropped.png', { type: 'image/png' })
+        const imageDrop = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent
+        Object.defineProperty(imageDrop, 'dataTransfer', {
+          value: { types: ['Files'], files: [pngFile], dropEffect: 'none' },
+        })
+        fireEvent(dropZone, imageDrop)
+        await waitFor(() => {
+          expect(screen.getByAltText('dropped.png')).toBeTruthy()
+        })
+
+        // Native desktop file drop attaches inline images and ignores non-inline files (.txt/.svg).
+        vi.spyOn(dropZone, 'getBoundingClientRect').mockReturnValue({
+          left: 0, top: 0, right: 400, bottom: 400, width: 400, height: 400, x: 0, y: 0, toJSON: () => ({}),
+        })
+        await waitFor(() => {
+          expect(desktopDropListener).toBeTruthy()
+        })
+        act(() => {
+          desktopDropListener?.({
+            payload: {
+              type: 'drop',
+              paths: ['/tmp/native-shot.webp', '/tmp/notes.txt', '/tmp/vector.svg'],
+              position: { x: 50, y: 50 },
+            },
+          })
+        })
+        await waitFor(() => {
+          expect(screen.getByAltText('native-shot.webp')).toBeTruthy()
+        })
+        expect(screen.queryByText('notes.txt')).toBeNull()
+        expect(screen.queryByText('vector.svg')).toBeNull()
+      } finally {
+        onDragDropSpy.mockRestore()
+        isDesktopSpy.mockRestore()
+      }
+    })
+
+    it('surfaces an error toast and keeps the draft when an oversized attachment exceeds the 16 MiB payload budget', () => {
+      const oversizedData = `data:image/png;base64,${'A'.repeat(17 * 1024 * 1024)}`
+      useChatStore.getState().setAskUserQuestionDraft(ACTIVE_TAB, 'tool-1', {
+        activeTab: 0,
+        selections: { 0: ['Option 1'] },
+        freeTexts: { 0: 'Keep draft' },
+        images: {
+          0: [{ id: 'big-1', type: 'image', name: 'giant.png', mimeType: 'image/png', data: oversizedData }],
+        },
+      })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      expect(sendMock.mock.calls.filter(([, message]) => message.type === 'permission_response')).toHaveLength(0)
+      expect(useUIStore.getState().toasts.some((toast) => toast.type === 'error')).toBe(true)
+      expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+      expect((screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement).value).toBe('Keep draft')
+    })
+
+    it('persists in-flight image submission across unmount and reopens when ATTACHMENT_PROCESSING_FAILED restores the permission', async () => {
+      const first = render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      const fileInput = first.container.querySelector('input[type="file"]') as HTMLInputElement
+      const img = new File(['png-bytes'], 'inflight.png', { type: 'image/png' })
+      fireEvent.change(fileInput, { target: { files: [img] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('inflight.png')).toBeTruthy()
+      })
+      fireEvent.change(screen.getByPlaceholderText('Type your answer...'), {
+        target: { value: 'Keep on retry' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^submit$/i }))
+
+      // While waiting for server materialization, unmounting and remounting must not flash an expired form.
+      first.unmount()
+      render(<AskUserQuestion toolUseId="tool-1" input={SINGLE_INPUT} />)
+      expect(screen.queryByRole('button', { name: /^submit$/i })).toBeNull()
+      expect(screen.getByAltText('inflight.png')).toBeTruthy()
+
+      // When server attachment materialization fails, chatStore restores pendingPermission and clears submitted.
+      act(() => {
+        useChatStore.getState().handleServerMessage(ACTIVE_TAB, {
+          type: 'error',
+          code: 'ATTACHMENT_PROCESSING_FAILED',
+          message: 'Failed to process attached images',
+          permissionRequestId: 'perm-1',
+        })
+      })
+
+      expect(screen.getByRole('button', { name: /^submit$/i })).toBeTruthy()
+      expect((screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement).value).toBe('Keep on retry')
+      expect(screen.getByAltText('inflight.png')).toBeTruthy()
+    })
+
+    it('disables image attachment and sends full structured text when a team-member AskUserQuestion expires', () => {
+      const LEAD = 'lead-expired'
+      const MEMBER_AGENT = 'worker@team-1'
+      const MEMBER_TAB = teamMemberSessionId(LEAD, MEMBER_AGENT)
+      const base = useChatStore.getState().sessions[ACTIVE_TAB]!
+
+      useTabStore.setState({
+        activeTabId: MEMBER_TAB,
+        tabs: [
+          { sessionId: LEAD, title: 'Lead', type: 'session', status: 'idle' },
+          {
+            sessionId: MEMBER_TAB,
+            title: 'worker',
+            type: 'team-member',
+            status: 'idle',
+            sourceSessionId: LEAD,
+            teamLeadSessionId: LEAD,
+            teamMemberAgentId: MEMBER_AGENT,
+            teamIncarnationId: 'inc-1',
+          },
+        ],
+      })
+      useTeamStore.setState({
+        memberTeamBySession: {
+          [MEMBER_TAB]: {
+            name: 'team-1',
+            incarnationId: 'inc-1',
+            leadSessionId: LEAD,
+            members: [{ agentId: MEMBER_AGENT, name: 'worker', role: 'general-purpose', status: 'idle', sessionId: 'm-1' }],
+          },
+        },
+      })
+      useChatStore.setState({
+        askUserQuestionDrafts: {},
+        sessions: {
+          [LEAD]: { ...base, chatState: 'idle', pendingPermission: null, pendingPermissions: {} },
+          [MEMBER_TAB]: { ...base, chatState: 'idle', pendingPermission: null, pendingPermissions: {} },
+        },
+      })
+
+      const sendMemberMessage = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(true)
+      try {
+        render(<AskUserQuestion sessionId={MEMBER_TAB} toolUseId="tool-expired" input={SINGLE_INPUT} />)
+
+        expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+
+        const textarea = screen.getByPlaceholderText('Type your answer...')
+        const pngFile = new File(['png-bytes'], 'blocked.png', { type: 'image/png' })
+        fireEvent.paste(textarea, {
+          clipboardData: {
+            files: [pngFile],
+            items: [{ kind: 'file', getAsFile: () => pngFile }],
+          },
+        })
+        expect(screen.queryByAltText('blocked.png')).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: /^Option 1$/ }))
+        fireEvent.change(textarea, { target: { value: 'Use the dark palette' } })
+        fireEvent.click(screen.getByRole('button', { name: /send as new message/i }))
+
+        expect(sendMemberMessage).toHaveBeenCalledWith(
+          MEMBER_TAB,
+          expect.stringContaining('Notes: Use the dark palette'),
+          undefined,
+          expect.objectContaining({
+            displayContent: expect.stringContaining('Notes: Use the dark palette'),
+          }),
+        )
+      } finally {
+        sendMemberMessage.mockRestore()
+        act(() => useTeamStore.setState({ memberTeamBySession: {} }))
+      }
+    })
+
+    it('attributes per-question images in multi-question annotations, strips metadata in UI, and localizes image-only labels', async () => {
+      useSettingsStore.setState({ locale: 'zh' })
+      const multiInput = {
+        questions: [
+          { header: 'Q1', question: 'First?', options: [{ label: 'A1' }] },
+          { header: 'Q2', question: 'Second?', options: [{ label: 'A2' }] },
+        ],
+      }
+      const { container } = render(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+
+      // Q1: image-only
+      fireEvent.change(fileInput, { target: { files: [new File(['q1'], 'q1-ref.png', { type: 'image/png' })] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('q1-ref.png')).toBeTruthy()
+      })
+
+      // Switch to Q2: option + note + image
+      fireEvent.click(screen.getByRole('button', { name: /Q2$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+      fireEvent.change(screen.getByPlaceholderText('输入你的回答...'), { target: { value: '保持居中' } })
+      fireEvent.change(fileInput, { target: { files: [new File(['q2'], 'q2-ref.png', { type: 'image/png' })] } })
+      await waitFor(() => {
+        expect(screen.getByAltText('q2-ref.png')).toBeTruthy()
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: /提交/ }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...multiInput,
+          answers: {
+            'First?': '(Image attached)',
+            'Second?': 'A2',
+          },
+          annotations: {
+            'First?': { notes: 'Attached images: q1-ref.png' },
+            'Second?': { notes: '保持居中\nAttached images: q2-ref.png' },
+          },
+        },
+        attachments: [
+          expect.objectContaining({ type: 'image', name: 'q1-ref.png' }),
+          expect.objectContaining({ type: 'image', name: 'q2-ref.png' }),
+        ],
+      })
+
+      // UI renders localized image-only text and hides the wire Attached images metadata suffix.
+      expect(screen.getByText('已附加图片; A2 (保持居中)')).toBeTruthy()
+      expect(screen.queryByText(/Attached images:/)).toBeNull()
     })
   })
 
@@ -742,6 +1296,296 @@ describe('AskUserQuestion', () => {
       expect(screen.queryByRole('button', { name: /next/i })).toBeNull()
     })
 
+    // #2014: Ctrl/⌘+→ is the keyboard form of the Next button, and shares its
+    // gate. fireEvent returns false when the event was default-prevented.
+    const keyDownOn = (
+      target: HTMLElement,
+      key: string,
+      modifiers: {
+        ctrlKey?: boolean
+        metaKey?: boolean
+        altKey?: boolean
+        shiftKey?: boolean
+        repeat?: boolean
+      } = { ctrlKey: true },
+    ) => fireEvent.keyDown(target, { key, ...modifiers })
+    const pressNextShortcut = (
+      modifiers: { ctrlKey?: boolean; metaKey?: boolean; repeat?: boolean } = { ctrlKey: true },
+    ) => keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'ArrowRight', modifiers)
+    const sentPermissionResponses = () =>
+      sendMock.mock.calls.filter(([, message]) => message.type === 'permission_response')
+    const mockPlatform = (target: 'mac' | 'win') => {
+      const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(
+        target === 'mac' ? 'MacIntel' : 'Win32',
+      )
+      const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+        target === 'mac'
+          ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)'
+          : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      )
+      return () => {
+        platformSpy.mockRestore()
+        userAgentSpy.mockRestore()
+      }
+    }
+
+    it('advances with Ctrl+→ once the question on screen is answered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+
+      // The card owns the key while it can advance, so the textarea's word-wise
+      // cursor movement must not also run.
+      expect(pressNextShortcut()).toBe(false)
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(screen.queryByText('First question?')).toBeNull()
+    })
+
+    it('uses ⌘+→ on macOS and leaves Ctrl+→ free for system shortcuts', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        typeCustomAnswer('custom-q1')
+        // Ctrl+→ switches macOS Spaces and must not be claimed on macOS.
+        expect(pressNextShortcut({ ctrlKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        expect(pressNextShortcut({ metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('ignores Win/Meta+→ on Windows and ignores simultaneous Ctrl+⌘ chords', () => {
+      const restore = mockPlatform('win')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        typeCustomAnswer('custom-q1')
+        expect(pressNextShortcut({ metaKey: true })).toBe(true)
+        expect(pressNextShortcut({ ctrlKey: true, metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        expect(pressNextShortcut({ ctrlKey: true })).toBe(false)
+        fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+        const option = screen.getByRole('button', { name: /^A2$/ })
+        expect(keyDownOn(option, 'Enter', { ctrlKey: true, metaKey: true })).toBe(true)
+        expect(sentPermissionResponses()).toHaveLength(0)
+      } finally {
+        restore()
+      }
+    })
+
+    it('preserves macOS ⌘+→ end-of-line editing mid-line in the textarea and advances at line end', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+        typeCustomAnswer('first line\nsecond line')
+
+        // Mid-line caret: let macOS jump to end of line instead of switching tabs.
+        textarea.setSelectionRange(3, 3)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Active text selection: also preserve native editing.
+        textarea.setSelectionRange(0, 5)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(true)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Caret at end of the first line (before '\n'): native ⌘→ is a no-op, so advance.
+        textarea.setSelectionRange(10, 10)
+        expect(keyDownOn(textarea, 'ArrowRight', { metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('supports Ctrl/⌘+← to return to the previous question without breaking textarea editing', () => {
+      const restore = mockPlatform('mac')
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+        fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+        expect(screen.getByText('Second question?')).toBeTruthy()
+
+        // Inside textarea with caret past start: preserve native line-start editing.
+        const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+        typeCustomAnswer('draft-q2')
+        textarea.setSelectionRange(4, 4)
+        expect(keyDownOn(textarea, 'ArrowLeft', { metaKey: true })).toBe(true)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+
+        // Caret at very start of textarea: step back to Q1.
+        textarea.setSelectionRange(0, 0)
+        expect(keyDownOn(textarea, 'ArrowLeft', { metaKey: true })).toBe(false)
+        expect(screen.getByText('First question?')).toBeTruthy()
+
+        // Already on Q1: ArrowLeft does nothing and is not prevented.
+        expect(keyDownOn(screen.getByRole('button', { name: /^A1$/ }), 'ArrowLeft', { metaKey: true })).toBe(true)
+
+        // Advance back to Q2, then step back from an option button.
+        expect(keyDownOn(screen.getByRole('button', { name: /^A1$/ }), 'ArrowRight', { metaKey: true })).toBe(false)
+        expect(screen.getByText('Second question?')).toBeTruthy()
+        expect(keyDownOn(screen.getByRole('button', { name: /^A2$/ }), 'ArrowLeft', { metaKey: true })).toBe(false)
+        expect(screen.getByText('First question?')).toBeTruthy()
+      } finally {
+        restore()
+      }
+    })
+
+    it('ignores repeated keydown events on ArrowRight and Enter', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      expect(pressNextShortcut({ ctrlKey: true, repeat: true })).toBe(false)
+      expect(screen.getByText('First question?')).toBeTruthy()
+
+      expect(pressNextShortcut({ ctrlKey: true })).toBe(false)
+      expect(screen.getByText('Second question?')).toBeTruthy()
+
+      typeCustomAnswer('custom-q2')
+      expect(keyDownOn(screen.getByPlaceholderText('Type your answer...'), 'Enter', { ctrlKey: true, repeat: true })).toBe(false)
+      expect(sentPermissionResponses()).toHaveLength(0)
+    })
+
+    it('ignores Ctrl+→ while the question is unanswered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      // Not prevented: with nothing answered, the textarea keeps Ctrl+→ for
+      // its own word-wise cursor movement.
+      expect(pressNextShortcut()).toBe(true)
+
+      expect(screen.getByText('First question?')).toBeTruthy()
+      expect(screen.queryByText('Second question?')).toBeNull()
+    })
+
+    it('ignores Ctrl+→ on the last question and does not submit', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      pressNextShortcut()
+      typeCustomAnswer('custom-q2')
+
+      expect(pressNextShortcut()).toBe(true)
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(sentPermissionResponses()).toHaveLength(0)
+    })
+
+    it('ignores Ctrl+→ on a single-question card', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{ questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] }}
+        />,
+      )
+
+      // Not prevented: no next question exists, so the textarea keeps the key.
+      expect(pressNextShortcut()).toBe(true)
+      expect(screen.getByText('Ship it?')).toBeTruthy()
+    })
+
+    it('moves focus to the next question first option when advancing from an option, and keeps textarea focus when typing', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      const firstOption = screen.getByRole('button', { name: /^A1$/ })
+      firstOption.focus()
+
+      keyDownOn(firstOption, 'ArrowRight')
+
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /^A2$/ }))
+
+      // Going back from the textarea keeps focus in the textarea.
+      const textarea = screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement
+      textarea.focus()
+      textarea.setSelectionRange(0, 0)
+      keyDownOn(textarea, 'ArrowLeft')
+      expect(screen.getByText('First question?')).toBeTruthy()
+      expect(document.activeElement).toBe(textarea)
+    })
+
+    it('focuses the textarea when advancing from an option onto a free-text-only question', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={{
+            questions: [
+              { header: 'Q1', question: 'First question?', options: [{ label: 'A1' }] },
+              { header: 'Q2', question: 'Explain why?' },
+            ],
+          }}
+        />,
+      )
+
+      typeCustomAnswer('note')
+      const option = screen.getByRole('button', { name: /^A1$/ })
+      option.focus()
+      keyDownOn(option, 'ArrowRight')
+
+      expect(screen.getByText('Explain why?')).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer...'))
+    })
+
+    it('keeps card focus when clicking Next onto the last question so Ctrl+Enter still submits', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      typeCustomAnswer('custom-q1')
+      // Mouse click (detail: 1) unmounts Next on the last question; focus stays on the card.
+      fireEvent.click(nextButton(), { detail: 1 })
+      expect(screen.getByText('Second question?')).toBeTruthy()
+      expect(document.activeElement).not.toBe(document.body)
+
+      typeCustomAnswer('custom-q2')
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter', ctrlKey: true })
+      expect(sentPermissionResponses()).toHaveLength(1)
+    })
+
+    it('ignores keyboard shortcuts once the card has been submitted', () => {
+      render(
+        <AskUserQuestion
+          toolUseId="tool-1"
+          input={TWO_QUESTIONS}
+          result={{
+            answers: {
+              'First question?': 'A1',
+              'Second question?': 'A2',
+            },
+            attachments: [
+              { id: 'img-1', type: 'image', name: 'shot.png', previewUrl: 'data:image/png;base64,AA==' },
+            ],
+          }}
+        />,
+      )
+
+      const previewButton = screen.getByRole('button', { name: /shot\.png/i })
+      expect(keyDownOn(previewButton, 'ArrowRight', { ctrlKey: true })).toBe(true)
+      expect(keyDownOn(previewButton, 'Enter', { ctrlKey: true })).toBe(true)
+      expect(screen.getByText('First question?')).toBeTruthy()
+    })
+
+    it('does not steal the arrow keys while an IME is composing', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      const textarea = screen.getByPlaceholderText('Type your answer...')
+      typeCustomAnswer('custom-q1')
+
+      fireEvent.compositionStart(textarea)
+      pressNextShortcut()
+      expect(screen.getByText('First question?')).toBeTruthy()
+
+      fireEvent.compositionEnd(textarea)
+      pressNextShortcut()
+      expect(screen.getByText('Second question?')).toBeTruthy()
+    })
+
     it('submits every answer after walking the questions', () => {
       render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
 
@@ -761,6 +1605,56 @@ describe('AskUserQuestion', () => {
           },
         },
       })
+    })
+
+    // Keyboard pickers leave focus on the option button, so Ctrl+Enter has to
+    // work from there too — it used to be wired to the textarea alone.
+    it('submits with Ctrl+Enter from an option, not just from the textarea', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      const secondOption = screen.getByRole('button', { name: /^A2$/ })
+      fireEvent.click(secondOption)
+
+      expect(fireEvent.keyDown(secondOption, { key: 'Enter', ctrlKey: true })).toBe(false)
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...TWO_QUESTIONS,
+          answers: {
+            'First question?': 'A1',
+            'Second question?': 'A2',
+          },
+        },
+      })
+    })
+
+    it('claims Ctrl+Enter without submitting before every question is answered', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      const option = screen.getByRole('button', { name: /^A1$/ })
+
+      // Prevented so it cannot fall through to the focused option's default
+      // Enter activation, but nothing is submitted.
+      expect(keyDownOn(option, 'Enter')).toBe(false)
+      expect(sentPermissionResponses()).toHaveLength(0)
+    })
+
+    it('submits once when Ctrl+Enter is pressed in the textarea', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={TWO_QUESTIONS} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^A1$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^A2$/ }))
+
+      fireEvent.keyDown(screen.getByPlaceholderText('Type your answer...'), {
+        key: 'Enter',
+        ctrlKey: true,
+      })
+
+      expect(sentPermissionResponses()).toHaveLength(1)
     })
   })
 
@@ -1244,6 +2138,188 @@ describe('AskUserQuestion', () => {
       })} />)
 
       expect(screen.getByText('Ship it?')).toBeTruthy()
+    })
+  })
+
+  it('shows platform-aware shortcut keycaps without duplicate arrows and hides them on touch H5', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get')
+    const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get')
+    const multiInput = {
+      questions: [
+        { header: 'Q1', question: 'First?', options: [{ label: 'Yes' }] },
+        { header: 'Q2', question: 'Second?', options: [{ label: 'No' }] },
+      ],
+    }
+
+    try {
+      platformSpy.mockReturnValue('Win32')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+
+      const { rerender } = render(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const winSubmit = screen.getByRole('button', { name: 'Submit' })
+      const winNext = screen.getByRole('button', { name: 'Next' })
+      expect(winSubmit.textContent).toContain('Ctrl+↵')
+      expect(winSubmit.querySelector('kbd')?.className).toContain('bg-[var(--color-surface-container)]')
+      expect(winNext.textContent).toContain('Ctrl+→')
+      // Desktop shows the keycap instead of a redundant trailing ArrowRight icon.
+      expect(winNext.querySelector('svg')).toBeNull()
+
+      platformSpy.mockReturnValue('MacIntel')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
+
+      rerender(<AskUserQuestion toolUseId="tool-1" input={multiInput} />)
+      const macSubmit = screen.getByRole('button', { name: 'Submit' })
+      const macNext = screen.getByRole('button', { name: 'Next' })
+      expect(macSubmit.textContent).toContain('⌘↵')
+      expect(macNext.textContent).toContain('⌘→')
+      expect(macNext.querySelector('svg')).toBeNull()
+
+      // Once all questions are answered, Submit's keycap switches to inverse styling.
+      fireEvent.click(screen.getByRole('button', { name: /^Yes$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^No$/ }))
+      expect(screen.getByRole('button', { name: 'Submit' }).querySelector('kbd')?.className)
+        .toContain('bg-[var(--color-inverse-surface)]')
+
+      // Touch H5 hides keyboard keycaps and restores the directional arrow icon on Next.
+      document.documentElement.setAttribute('data-touch-h5', 'true')
+      rerender(<AskUserQuestion key="touch" toolUseId="tool-2" input={multiInput} />)
+      const touchSubmit = screen.getByRole('button', { name: 'Submit' })
+      const touchNext = screen.getByRole('button', { name: 'Next' })
+      expect(touchSubmit.querySelector('kbd')).toBeNull()
+      expect(touchNext.querySelector('kbd')).toBeNull()
+      expect(touchNext.querySelector('svg')).not.toBeNull()
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+      platformSpy.mockRestore()
+      userAgentSpy.mockRestore()
+    }
+  })
+
+  describe('fixed-option questions (allowFreeText: false)', () => {
+    const fixedInput = {
+      allowFreeText: false,
+      questions: [
+        {
+          question: 'Pick a target environment',
+          options: [{ label: 'Staging' }, { label: 'Production' }],
+        },
+      ],
+    }
+
+    it('hides free-text input, attach-image, and Chat about this while submitting exact option labels', () => {
+      render(<AskUserQuestion toolUseId="tool-1" input={fixedInput} />)
+
+      expect(screen.queryByPlaceholderText(/type/i)).toBeNull()
+      expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /chat about this/i })).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Staging$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...fixedInput,
+          answers: {
+            'Pick a target environment': 'Staging',
+          },
+        },
+      })
+    })
+
+    it('ignores stale free-text, image, and handoff drafts and becomes read-only once expired', () => {
+      useChatStore.setState({
+        askUserQuestionDrafts: {
+          [ACTIVE_TAB]: {
+            'tool-1': {
+              activeTab: 0,
+              selections: {},
+              freeTexts: { 0: 'stale custom note' },
+              handedOff: true,
+              sentAsMessage: true,
+            },
+          },
+        },
+      })
+      patchSession({ chatState: 'idle', pendingPermission: null })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={fixedInput} />)
+
+      expect(screen.getByText('Expired')).toBeTruthy()
+      expect((screen.getByRole('button', { name: /^Staging$/ }) as HTMLButtonElement).disabled).toBe(true)
+      expect(screen.queryByRole('button', { name: /send as new message/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /chat about this/i })).toBeNull()
+    })
+  })
+
+  describe('text-only free-form questions (allowFreeText: true, allowImages: false)', () => {
+    const elicitationInput = {
+      allowFreeText: true,
+      allowImages: false,
+      questions: [
+        {
+          question: 'Choose implementation plan',
+          header: 'Q1',
+          multiSelect: false,
+          options: [{ label: '(Recommended) Plan A' }, { label: 'Plan B' }],
+        },
+        {
+          question: 'Enable extra features',
+          header: 'Q2',
+          multiSelect: true,
+          options: [{ label: 'Strict TypeScript' }, { label: 'Unit tests' }],
+        },
+      ],
+    }
+
+    it('keeps free-text, multi-select, and Chat about this enabled while hiding image attachments and ignoring stale image drafts', () => {
+      useChatStore.setState({
+        askUserQuestionDrafts: {
+          [ACTIVE_TAB]: {
+            'tool-1': {
+              activeTab: 0,
+              selections: {},
+              freeTexts: {},
+              images: {
+                0: [{ id: 'stale-img', type: 'image', name: 'stale.png', data: 'abc', mimeType: 'image/png' }],
+              },
+            },
+          },
+        },
+      })
+
+      render(<AskUserQuestion toolUseId="tool-1" input={elicitationInput} />)
+
+      expect(screen.getByPlaceholderText(/type/i)).toBeTruthy()
+      expect(screen.getByRole('button', { name: /chat about this/i })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /attach image/i })).toBeNull()
+      expect(screen.queryByAltText('stale.png')).toBeNull()
+
+      // Answer Q1 with option + additional note, then navigate to Q2 and pick multiple options
+      fireEvent.change(screen.getByPlaceholderText(/type/i), { target: { value: 'Keep it lean' } })
+      fireEvent.click(screen.getByRole('button', { name: /^\(Recommended\) Plan A$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Q2/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^Strict TypeScript$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^Unit tests$/ }))
+      fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+
+      expect(sendMock).toHaveBeenCalledWith(ACTIVE_TAB, {
+        type: 'permission_response',
+        requestId: 'perm-1',
+        allowed: true,
+        updatedInput: {
+          ...elicitationInput,
+          answers: {
+            'Choose implementation plan': '(Recommended) Plan A',
+            'Enable extra features': 'Strict TypeScript, Unit tests',
+          },
+          annotations: {
+            'Choose implementation plan': { notes: 'Keep it lean' },
+          },
+        },
+      })
     })
   })
 })

@@ -26,6 +26,7 @@ import {
   GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
+  isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
 import {
   DEEPSEEK_OAUTH_FILE_ENV_KEY,
@@ -42,7 +43,39 @@ import {
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
 } from '../../services/imageGeneration/config.js'
-import { sessionService, type MessageEntry } from './sessionService.js'
+import { sessionService, type MessageEntry, type SessionLaunchInfo } from './sessionService.js'
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  ANTIGRAVITY_PROVIDER_ID,
+  AntigravityError,
+  openAntigravityAcp,
+  type AntigravitySlashCommand,
+} from './antigravityAcp.js'
+import { AntigravityConversation } from './antigravityConversation.js'
+import {
+  createAntigravityBrowserUseBridge,
+  type AntigravityBrowserUseBridge,
+} from './antigravityBrowserUseBridge.js'
+import {
+  createAntigravityComputerUseBridge,
+  type AntigravityComputerUseBridge,
+} from './antigravityComputerUseBridge.js'
+import { isBrowserUseEnabled } from '../../services/browserUse/config.js'
+import { isComputerUseEnabledForDispatch } from '../../utils/computerUse/skillGate.js'
+import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
+import {
+  beginAntigravitySwarmPause,
+  completeAntigravitySwarmPause,
+  hasAntigravitySwarmOnDiskSync,
+  readAntigravitySwarmBoardMaxSeq,
+  registerAntigravitySwarmResumeHandler,
+  registerAntigravitySwarmRuntimeProbe,
+  registerAntigravitySwarmSteerHandler,
+  rememberAntigravitySwarmSessionMapping,
+  type AntigravitySwarmResumePayload,
+  type AntigravitySwarmSteerPayload,
+  type AntigravitySwarmSteerResult,
+} from './antigravitySwarmAdapter.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -210,6 +243,9 @@ type TrackedPermissionRequest = {
   toolUseId?: string
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
   input: Record<string, unknown>
   permissionSuggestions?: unknown[]
   autoAnswerTimer?: ReturnType<typeof setTimeout>
@@ -289,13 +325,21 @@ function networkRoutingFingerprint(
 }
 
 type SessionProcess = {
+  /** A terminating process cannot accept a late permission or user turn. */
+  controlRevoked?: boolean
   runtimeSelection?: SessionRuntimeSelection
   proc: ReturnType<typeof Bun.spawn>
+  antigravity?: AntigravityConversation
+  antigravityBridge?: AntigravityComputerUseBridge | null
+  antigravityBrowserUseBridge?: AntigravityBrowserUseBridge | null
+  antigravityHistoryDraining?: boolean
+  antigravitySwarmPausePending?: boolean
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
   teamWorker?: TeamWorkerStart
   providerId?: string | null
+  claudeFastModeEligible?: boolean
   providerConfigFingerprint?: string
   providerAuth?: { baseUrl: string; apiKey: string; authToken: string }
   networkRoutingFingerprint: string
@@ -340,6 +384,9 @@ export type PendingPermissionRequest = {
   input: Record<string, unknown>
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
   autoAnswerDeadline?: number | null
 }
 
@@ -409,9 +456,12 @@ export type ConversationServiceProcessDeps = {
 }
 
 export class ConversationService {
+  private sessionStopPromises = new Map<string, Promise<void>>()
   private sessions = new Map<string, SessionProcess>()
+  private readonly teamWorkerPermissionOrigins = new WeakMap<object, { sessionId: string; process: SessionProcess }>()
   private teamStopOperations = new Map<string, Promise<void>>()
   private teamRuntimeListeners = new Set<TeamRuntimeListener>()
+  private slashCommandsListeners = new Set<(sessionId: string, commands: AntigravitySlashCommand[]) => void>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
@@ -464,10 +514,32 @@ export class ConversationService {
       },
     }
     this.notifyOutputCallbacks(sessionId, session.outputCallbacks, message)
-    if (session.teamWorker) {
-      const parent = this.sessions.get(session.teamWorker.parentSessionId)
-      if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, message)
+    this.forwardTeamWorkerPermission(sessionId, session, message)
+  }
+
+  private forwardTeamWorkerPermission(
+    sessionId: string,
+    session: SessionProcess,
+    message: { request: object },
+  ): void {
+    if (!session.teamWorker) return
+    const { parentSessionId, name, teamName } = session.teamWorker
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent) return
+    const forwarded = {
+      ...message,
+      request: { ...message.request, agent_id: `${name}@${teamName}`, display_name: name },
     }
+    this.teamWorkerPermissionOrigins.set(forwarded, { sessionId, process: session })
+    this.notifyOutputCallbacks(parentSessionId, parent.outputCallbacks, forwarded)
+  }
+
+  /** Match the exact forwarded frame and its currently authorized worker process. */
+  isLiveTeamWorkerPermission(parentSessionId: string, message: { request_id?: unknown }): boolean {
+    const origin = this.teamWorkerPermissionOrigins.get(message)
+    return origin !== undefined && this.sessions.get(origin.sessionId) === origin.process &&
+      origin.process.teamWorker?.parentSessionId === parentSessionId && !origin.process.controlRevoked &&
+      typeof message.request_id === 'string' && origin.process.pendingPermissionRequests.has(message.request_id)
   }
 
   /** Apply setting changes to questions that are already waiting. */
@@ -709,9 +781,16 @@ export class ConversationService {
       throw new ConversationStartupError('Agent teams are unavailable in lean sessions', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
+    const isAntigravity = options?.providerId === ANTIGRAVITY_PROVIDER_ID
     const additionalDirectories = (options?.teamWorker
       ? (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.additionalDirectories
       : launchInfo?.additionalDirectories) ?? []
+    if (isAntigravity && (!launchInfo || side || options?.teamWorker || launchInfo.agentProfile === 'lean' || launchInfo.repository?.worktree)) {
+      throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'Antigravity requires a standard chat in the original checkout.')
+    }
+    if (isAntigravity && !sessionService.shouldPersistSession()) {
+      throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'Antigravity CLI keeps its own history and is unavailable when session history is disabled.')
+    }
     if (launchInfo?.agentProfile === 'lean' && (options?.permissionMode ?? launchInfo.permissionMode) === 'plan') {
       throw new ConversationStartupError('Plan mode is unavailable in lean sessions. Choose another permission mode before continuing.', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
@@ -719,7 +798,7 @@ export class ConversationService {
       ? options.teamWorker.resume === true && !!await sessionService.findSessionFile(sessionId)
       : !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
-      !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
+      !isAntigravity && !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
     const shouldCreateWorktree =
       !!launchInfo && shouldCreateWorktreeForSessionLaunch(launchInfo)
     const hasMaterializedWorktree =
@@ -794,6 +873,11 @@ export class ConversationService {
       )
     }
 
+    if (isAntigravity && launchInfo) {
+      await this.startAntigravitySession(sessionId, launchWorkDir, launchRepository, launchInfo, additionalDirectories, options)
+      return
+    }
+
     // `--resume` finds the conversation only from the folder that holds it.
     // After EnterWorktree that is not where the CLI works; the resumed CLI
     // re-enters the worktree itself from the transcript's worktree state.
@@ -852,8 +936,9 @@ export class ConversationService {
     }
     if (side) {
       delete childEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
-      delete childEnv.CC_HAHA_TRACE_API_CALLS
+      childEnv.CC_HAHA_TRACE_API_CALLS = '0'
       delete childEnv.CLAUDE_CODE_DIAGNOSTICS_FILE
+      childEnv.CC_HAHA_PROMPT_SNAPSHOT = '0'
     }
     if (side?.closed) throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
     // A delete can land during any await above (transcript reset, workspace,
@@ -916,6 +1001,7 @@ export class ConversationService {
       workDir: launchWorkDir,
       permissionMode: options?.permissionMode || 'default',
       providerId: options?.providerId,
+      claudeFastModeEligible: childEnv.CLAUDE_CODE_DISABLE_FAST_MODE !== '1',
       runtimeSelection: options?.model ? {
         providerId: options.providerId ?? null, modelId: options.model,
         ...(options.effort ? { effortLevel: options.effort } : {}),
@@ -1065,9 +1151,193 @@ export class ConversationService {
     }
   }
 
+  private async startAntigravitySession(
+    sessionId: string,
+    workDir: string,
+    repository: SessionLaunchInfo['repository'],
+    launchInfo: SessionLaunchInfo,
+    additionalDirectories: string[],
+    options?: SessionStartOptions,
+  ): Promise<void> {
+    const modelId = options?.model ?? launchInfo.runtimeModelId ?? ANTIGRAVITY_DEFAULT_MODEL
+    const effortLevel = options?.effort ?? launchInfo.effortLevel
+    const permissionMode = options?.permissionMode ?? launchInfo.permissionMode ?? 'default'
+    const nativeId = launchInfo.nativeSessionId
+    if (!nativeId && launchInfo.transcriptMessageCount > 0) {
+      throw new AntigravityError('ANTIGRAVITY_RESUME_FAILED', 'This history is not linked to an Antigravity session. Start a new chat for Antigravity.')
+    }
+
+    const bridge = await createAntigravityComputerUseBridge(sessionId)
+    let browserUseBridge: AntigravityBrowserUseBridge | null = null
+    try {
+      browserUseBridge = await createAntigravityBrowserUseBridge(sessionId)
+    } catch (error) {
+      await bridge?.close()
+      throw error
+    }
+    const closeBridges = async () => {
+      await Promise.allSettled([
+        bridge?.close(),
+        browserUseBridge?.close(),
+      ])
+    }
+    const mcpServers = [
+      ...(bridge ? [bridge.mcpServerConfig] : []),
+      ...(browserUseBridge ? [browserUseBridge.mcpServerConfig] : []),
+    ]
+    const systemPromptParts = [
+      bridge?.systemPromptAppend,
+      browserUseBridge?.systemPromptAppend,
+    ].filter((part): part is string => Boolean(part))
+    const systemPromptAppend = systemPromptParts.length > 0 ? systemPromptParts.join('\n\n') : undefined
+
+    let acp: Awaited<ReturnType<typeof openAntigravityAcp>>
+    try {
+      acp = await openAntigravityAcp(workDir, {
+        nativeSessionId: nativeId,
+        modelId,
+        effortLevel,
+        permissionMode,
+        additionalDirectories,
+        mcpServers,
+        systemPromptAppend,
+      })
+    } catch (error) {
+      await closeBridges()
+      throw error
+    }
+
+    const assertSessionAvailable = () => {
+      migrationMaintenance.assertAvailable()
+      if (this.deletedSessions.has(sessionId)) throw new ConversationStartupError('Session was deleted before startup completed', 'SESSION_DELETED')
+    }
+    try {
+      assertSessionAvailable()
+      if (this.sessions.has(sessionId)) {
+        acp.close()
+        await closeBridges()
+        return
+      }
+      await sessionService.appendSessionMetadata(sessionId, {
+        workDir,
+        repository,
+        permissionMode: acp.permissionMode,
+        nativeSessionId: acp.sessionId,
+        runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+        runtimeModelId: modelId,
+        ...(effortLevel ? { effortLevel } : {}),
+      })
+      assertSessionAvailable()
+      if (this.sessions.has(sessionId)) {
+        acp.close()
+        await closeBridges()
+        return
+      }
+    } catch (error) {
+      acp.close()
+      await closeBridges()
+      throw error
+    }
+
+    const initMessage = {
+      type: 'system',
+      subtype: 'init',
+      cwd: workDir,
+      model: acp.modelId ?? modelId,
+      slash_commands: acp.initialAvailableCommands,
+    }
+    const session: SessionProcess = {
+      proc: acp.proc,
+      workDir,
+      permissionMode: acp.permissionMode,
+      providerId: ANTIGRAVITY_PROVIDER_ID,
+      antigravityBridge: bridge,
+      antigravityBrowserUseBridge: browserUseBridge,
+      runtimeSelection: {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId,
+        ...(effortLevel ? { effortLevel } : {}),
+      },
+      outputCallbacks: [],
+      outputDrain: acp.drained,
+      sdkToken: '',
+      sdkSocket: null,
+      sdkAttached: Promise.resolve(),
+      resolveSdkAttached: null,
+      pendingOutbound: [],
+      seenSdkMessageUuids: new Set(),
+      sdkMessages: [initMessage],
+      initMessage,
+      startupPending: false,
+      startupExitCode: null,
+      stdoutLines: [],
+      stderrLines: [],
+      networkRoutingFingerprint: '',
+      networkDerivedFirstTokenTimeout: false,
+      networkDerivedStreamMaxDuration: false,
+      networkDerivedToolInputDuration: false,
+      usesOfficialOAuth: false,
+      officialOAuthToken: null,
+      pendingPermissionRequests: new Map(),
+      pendingControlRequests: new Map(),
+    }
+    const ownsSession = () => this.sessions.get(sessionId) === session
+    const current = () => ownsSession() && !session.controlRevoked
+    this.sessions.set(sessionId, session)
+    session.antigravity = new AntigravityConversation(
+      acp,
+      message => {
+        if (current()) this.handleSdkPayload(sessionId, JSON.stringify(message))
+      },
+      messages => sessionService.appendAntigravityMessages(
+        sessionId,
+        acp.sessionId,
+        messages,
+        () => ownsSession() && (!session.controlRevoked || session.antigravityHistoryDraining === true),
+      ),
+      {
+        computerUseBridge: bridge,
+        browserUseBridge,
+        onAvailableCommands: (commands: AntigravitySlashCommand[]) => {
+          session.initMessage = {
+            ...session.initMessage,
+            type: 'system',
+            subtype: 'init',
+            cwd: session.workDir,
+            model: acp.modelId ?? modelId,
+            slash_commands: commands,
+          }
+          if (current()) {
+            for (const listener of this.slashCommandsListeners) {
+              try {
+                listener(sessionId, commands)
+              } catch (error) {
+                console.error('[ConversationService] Slash commands listener failed', error)
+              }
+            }
+          }
+        },
+      },
+    )
+    rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
+    void acp.proc.exited.then(async () => {
+      await session.antigravity!.waitForExit()
+      await Promise.allSettled([
+        session.antigravityBridge?.close(),
+        session.antigravityBrowserUseBridge?.close(),
+      ])
+      if (current()) this.sessions.delete(sessionId)
+    })
+  }
+
   addTeamRuntimeListener(listener: TeamRuntimeListener): () => void {
     this.teamRuntimeListeners.add(listener)
     return () => this.teamRuntimeListeners.delete(listener)
+  }
+
+  onSlashCommandsUpdated(listener: (sessionId: string, commands: AntigravitySlashCommand[]) => void): () => void {
+    this.slashCommandsListeners.add(listener)
+    return () => this.slashCommandsListeners.delete(listener)
   }
 
   onOutput(sessionId: string, callback: (msg: any) => void): void {
@@ -1098,6 +1368,236 @@ export class ConversationService {
     return this.sessions.get(sessionId)?.initMessage ?? null
   }
 
+  isAntigravityResponding(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.antigravity?.isResponding === true
+  }
+
+  /**
+   * True when an idle Antigravity session's attached Browser Use or Computer Use
+   * MCP bridges no longer match current Settings (either enabled or disabled
+   * mid-session), so restarting via ACP `session/resume` reconciles MCP servers
+   * and injected system prompts before the next user turn.
+   */
+  needsAntigravityCapabilityRestart(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return false
+    if (Boolean(session.antigravityBrowserUseBridge) !== isBrowserUseEnabled()) return true
+    if (Boolean(session.antigravityBridge) !== isComputerUseEnabledForDispatch()) return true
+    return false
+  }
+
+  getAntigravityTurnCompletion(sessionId: string): Promise<boolean> | undefined {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return
+    return session.antigravity.pendingTurnCompletion?.then(() =>
+      this.sessions.get(sessionId) === session && !session.controlRevoked)
+  }
+
+  async waitForAntigravityCancellation(sessionId: string): Promise<void> {
+    const pendingSwarmStop = this.teamStopOperations.get(sessionId)
+    if (pendingSwarmStop) {
+      await pendingSwarmStop
+    }
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked) return
+    await session.antigravity.waitForCancelledTurn()
+    if (this.sessions.get(sessionId) === session && !session.controlRevoked && !session.antigravity.acp.isOpen) {
+      await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+    }
+  }
+
+  hasActiveAntigravitySwarmRuntime(nativeSessionId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (
+        !session.controlRevoked
+        && session.antigravity?.acp.sessionId === nativeSessionId
+        && session.antigravity.acp.isOpen
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  async setAntigravityConfig(
+    sessionId: string,
+    config: { modelId?: string; effortLevel?: string },
+  ): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) return false
+    const acp = session.antigravity.acp
+    if (config.modelId) {
+      await acp.setModel(config.modelId)
+      if (this.sessions.get(sessionId) !== session) return false
+      const supportedEfforts = acp.availableEfforts
+      const previousEffort = session.runtimeSelection?.effortLevel
+      const preservedEffort = supportedEfforts.length === 0
+        ? undefined
+        : acp.effortLevel
+          ?? (previousEffort && supportedEfforts.includes(previousEffort) ? previousEffort : undefined)
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: config.modelId,
+        ...(preservedEffort ? { effortLevel: preservedEffort } : {}),
+      }
+      if (session.initMessage) {
+        session.initMessage = { ...session.initMessage, model: acp.modelId ?? config.modelId }
+      }
+    }
+    if (config.effortLevel) {
+      await acp.setEffortLevel(config.effortLevel)
+      if (this.sessions.get(sessionId) !== session) return false
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+        effortLevel: config.effortLevel,
+      }
+    }
+    if (this.sessions.get(sessionId) !== session) return false
+    if (!config.modelId && !config.effortLevel) {
+      session.runtimeSelection = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+        ...(session.runtimeSelection?.effortLevel ? { effortLevel: session.runtimeSelection.effortLevel } : {}),
+      }
+    }
+    if (session.initMessage) {
+      session.initMessage = { ...session.initMessage, model: acp.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL }
+    }
+    return true
+  }
+
+  async steerAntigravityMessage(
+    sessionId: string,
+    content: string,
+    attachments?: AttachmentRef[],
+    options?: { messageUuid?: string },
+  ): Promise<'steered' | 'busy' | 'not_responding'> {
+    if (migrationMaintenance.isActive) return 'busy'
+    const userContent = await this.buildUserContent(content, sessionId, attachments)
+    const session = this.sessions.get(sessionId)
+    if (!session?.antigravity || session.controlRevoked || migrationMaintenance.isActive) {
+      return 'not_responding'
+    }
+    if (!session.antigravity.isResponding) {
+      return 'not_responding'
+    }
+    const steered = session.antigravity.steer(userContent, options?.messageUuid ?? crypto.randomUUID())
+    return steered ? 'steered' : 'busy'
+  }
+
+  async steerAntigravitySwarmMember(
+    payload: AntigravitySwarmSteerPayload,
+  ): Promise<AntigravitySwarmSteerResult> {
+    let targetSessionId = payload.sessionId
+    let session = targetSessionId ? this.sessions.get(targetSessionId) : undefined
+    if (!session || session.antigravity?.acp.sessionId !== payload.nativeSessionId) {
+      session = undefined
+      for (const [id, candidate] of this.sessions.entries()) {
+        if (candidate.antigravity?.acp.sessionId === payload.nativeSessionId) {
+          targetSessionId = id
+          session = candidate
+          break
+        }
+      }
+    }
+    if (!targetSessionId || !session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) {
+      return { routed: false, reason: 'unavailable' }
+    }
+    if (session.antigravity.isResponding) {
+      const steerOutcome = await this.steerAntigravityMessage(targetSessionId, payload.formattedPrompt)
+      if (steerOutcome === 'steered') {
+        return {
+          routed: true,
+          delivery: 'steering',
+          formattedPrompt: payload.formattedPrompt,
+        }
+      }
+      if (steerOutcome === 'busy') {
+        return { routed: false, reason: 'busy' }
+      }
+      // The active turn settled while preparing the steer; fall through to start a fresh turn.
+    }
+    const sent = await this.sendMessage(targetSessionId, payload.formattedPrompt)
+    if (!sent) {
+      return {
+        routed: false,
+        reason: session.antigravity.isResponding ? 'busy' : 'unavailable',
+      }
+    }
+    const currentTargetId = targetSessionId
+    const currentSession = session
+    if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+      this.handleSdkPayload(
+        currentTargetId,
+        JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'running' }),
+      )
+      const completion = currentSession.antigravity.pendingTurnCompletion
+      if (completion) {
+        void completion.finally(() => {
+          if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+            this.handleSdkPayload(
+              currentTargetId,
+              JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }),
+            )
+          }
+        })
+      }
+    }
+    return {
+      routed: true,
+      delivery: 'steering',
+      formattedPrompt: payload.formattedPrompt,
+    }
+  }
+
+  async resumeAntigravitySwarmSession(
+    payload: AntigravitySwarmResumePayload,
+  ): Promise<{ routed: boolean; error?: string }> {
+    let targetSessionId = payload.sessionId
+    let session = targetSessionId ? this.sessions.get(targetSessionId) : undefined
+    if (!session || session.antigravity?.acp.sessionId !== payload.nativeSessionId) {
+      session = undefined
+      for (const [id, candidate] of this.sessions.entries()) {
+        if (candidate.antigravity?.acp.sessionId === payload.nativeSessionId) {
+          targetSessionId = id
+          session = candidate
+          break
+        }
+      }
+    }
+    if (!targetSessionId || !session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) {
+      return { routed: false, error: 'Antigravity session is not running. Retry resuming the swarm.' }
+    }
+    if (session.antigravity.isResponding) {
+      return { routed: false, error: 'Antigravity is already processing a turn. Wait for it to settle and retry.' }
+    }
+    const sent = await this.sendMessage(targetSessionId, payload.prompt)
+    if (!sent) {
+      return { routed: false, error: 'Could not deliver the swarm resume prompt to Antigravity.' }
+    }
+    const currentTargetId = targetSessionId
+    const currentSession = session
+    if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+      this.handleSdkPayload(
+        currentTargetId,
+        JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'running' }),
+      )
+      const completion = currentSession.antigravity.pendingTurnCompletion
+      if (completion) {
+        void completion.finally(() => {
+          if (this.sessions.get(currentTargetId) === currentSession && !currentSession.controlRevoked) {
+            this.handleSdkPayload(
+              currentTargetId,
+              JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }),
+            )
+          }
+        })
+      }
+    }
+    return { routed: true }
+  }
+
   async sendMessage(
     sessionId: string,
     content: string,
@@ -1107,6 +1607,13 @@ export class ConversationService {
     if (migrationMaintenance.isActive) return false
     const userContent = await this.buildUserContent(content, sessionId, attachments)
     let session = this.sessions.get(sessionId)
+    if (session?.antigravity) {
+      await session.antigravity.waitForCancelledTurn()
+      if (this.sessions.get(sessionId) !== session || session.controlRevoked || migrationMaintenance.isActive || (options?.canSend && !options.canSend())) return false
+      const sent = session.antigravity.send(userContent, options?.messageUuid ?? crypto.randomUUID())
+      if (sent) options?.onCommitted?.()
+      return sent
+    }
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
       return false
     }
@@ -1142,7 +1649,13 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    if (!session.providerId || !session.providerAuth) return true
+    // ChatGPT and Grok CLIs read OAuth credentials from their token files directly.
+    if (
+      !session.providerId ||
+      !session.providerAuth ||
+      isOpenAIOfficialProviderId(session.providerId) ||
+      isGrokOfficialProviderId(session.providerId)
+    ) return true
     let env: Record<string, string>
     try {
       env = await this.providerService.getProviderRuntimeEnv(session.providerId)
@@ -1225,6 +1738,30 @@ export class ConversationService {
     return sent
   }
 
+  async materializePermissionAttachments(
+    sessionId: string,
+    attachments?: AttachmentRef[],
+  ): Promise<UserContentBlock[]> {
+    if (!attachments || attachments.length === 0) return []
+    const materialized = await this.materializeAttachments(sessionId, attachments)
+    const blocks: UserContentBlock[] = []
+    blocks.push(...materialized.imageBlocks)
+    for (const metadataText of materialized.imageMetadataTexts) {
+      blocks.push({ type: 'text', text: metadataText })
+    }
+    const fallbackMatches = [...materialized.pathPrefix.matchAll(/@"([^"]+)"/g)]
+    for (const match of fallbackMatches) {
+      const fallbackPath = match[1]?.trim()
+      if (fallbackPath) {
+        blocks.push({ type: 'text', text: `[Image source: ${fallbackPath}]` })
+      }
+    }
+    if (blocks.length === 0) {
+      throw new Error('Failed to materialize attached images')
+    }
+    return blocks
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,
@@ -1234,16 +1771,27 @@ export class ConversationService {
     denyMessage?: string,
     permissionUpdates?: unknown[],
     automaticQuestionAnswer = false,
+    contentBlocks?: UserContentBlock[],
   ): boolean {
     const child = [...this.sessions.entries()].find(([, entry]) => entry.teamWorker?.parentSessionId === sessionId && entry.pendingPermissionRequests.has(requestId))
-    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer)
+    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer, contentBlocks)
     const session = this.sessions.get(sessionId)
     if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
+    if (session?.antigravity) {
+      if (session.controlRevoked || !session.antigravity.respond(requestId, allowed, updatedInput, rule, denyMessage)) return false
+      this.clearAutoAnswerWait(pendingRequest)
+      if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
+      return true
+    }
     this.clearAutoAnswerWait(pendingRequest)
     if (session) {
       if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
     }
+
+    const extraBlocks = Array.isArray(contentBlocks) && contentBlocks.length > 0
+      ? { contentBlocks }
+      : {}
 
     return this.sendSdkMessage(sessionId, {
       type: 'control_response',
@@ -1256,6 +1804,7 @@ export class ConversationService {
               updatedInput: pendingRequest?.toolName === 'AskUserQuestion' && !automaticQuestionAnswer
                 ? stripAutomaticQuestionMarker(updatedInput ?? {})
                 : updatedInput ?? {},
+              ...extraBlocks,
               ...(Array.isArray(permissionUpdates) && permissionUpdates.length > 0
                 ? { updatedPermissions: permissionUpdates }
                 : rule === 'always' && pendingRequest
@@ -1281,6 +1830,7 @@ export class ConversationService {
               // ExitPlanMode is the exception — rejecting it means "keep
               // planning", so the model is told to revise rather than stop.
               message: buildDenyMessage(pendingRequest?.toolName, denyMessage),
+              ...extraBlocks,
             },
       },
     })
@@ -1288,7 +1838,15 @@ export class ConversationService {
 
   async setPermissionMode(sessionId: string, mode: string, timeoutMs = 10_000): Promise<boolean> {
     if (mode === 'plan' && (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
-    if (!this.sessions.has(sessionId)) return false
+    const activeSession = this.sessions.get(sessionId)
+    if (!activeSession) return false
+    if (activeSession.antigravity) {
+      if (activeSession.controlRevoked) return false
+      await activeSession.antigravity.acp.setPermissionMode(mode)
+      if (this.sessions.get(sessionId) !== activeSession) return false
+      activeSession.permissionMode = activeSession.antigravity.acp.permissionMode
+      return true
+    }
     this.trackPendingPermissionModeChange(sessionId, mode, 1)
 
     let confirmationSettled = false
@@ -1372,6 +1930,13 @@ export class ConversationService {
   async setModel(sessionId: string, model: string, timeoutMs = 10_000): Promise<boolean> {
     const session = this.sessions.get(sessionId)
     if (!session) return false
+    if (session.antigravity) {
+      if (session.controlRevoked) return false
+      await session.antigravity.acp.setModel(model)
+      if (this.sessions.get(sessionId) !== session) return false
+      session.runtimeSelection = { ...session.runtimeSelection, providerId: ANTIGRAVITY_PROVIDER_ID, modelId: model }
+      return true
+    }
     await this.requestControl(sessionId, {
       subtype: 'set_model',
       model,
@@ -1445,7 +2010,30 @@ export class ConversationService {
     return sent
   }
 
-  sendInterrupt(sessionId: string): boolean {
+  setFastMode(sessionId: string, enabled: boolean): boolean {
+    return this.sendSdkMessage(sessionId, {
+      type: 'control_request',
+      request_id: crypto.randomUUID(),
+      request: {
+        subtype: 'set_fast_mode',
+        enabled,
+      },
+    })
+  }
+
+  setFastModeForActiveSessions(enabled: boolean): number {
+    let sent = 0
+    for (const sessionId of this.getActiveSessions()) {
+      const session = this.sessions.get(sessionId)
+      if (session?.claudeFastModeEligible === false) continue
+      if (this.setFastMode(sessionId, enabled)) {
+        sent += 1
+      }
+    }
+    return sent
+  }
+
+  pauseTeamWorkers(sessionId: string): boolean {
     // Stop ends all team activity immediately, but an approved team that is
     // already working is paused rather than destroyed: the runtime marks its
     // members as user-stopped before their processes die, and a later message
@@ -1458,18 +2046,65 @@ export class ConversationService {
         console.error('[ConversationService] Team runtime interrupt hook failed', error)
       }
     }
-    for (const [childId, child] of this.sessions) {
-      if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
-    }
+    const childStops = [...this.sessions].filter(([, child]) => child.teamWorker?.parentSessionId === sessionId)
+      .map(([childId]) => this.stopSessionAndWait(childId, undefined, { requireExit: true }))
+    // Keep rejected physical-exit confirmations owned until the queued team
+    // operation records its partial state; never report a vanished map as exit.
+    const childrenStopped = Promise.allSettled(childStops)
     const stop = (this.teamStopOperations.get(sessionId) ?? Promise.resolve()).then(async () => {
       const runtime = await import('./teamPlanRuntime.js')
       await runtime.stopTeamPlanRuntimesForParent(sessionId, { pauseReleased: true })
+      await childrenStopped
     }).catch(error => {
       console.error('[ConversationService] Failed to revoke interrupted team launch', error)
     }).finally(() => {
       if (this.teamStopOperations.get(sessionId) === stop) this.teamStopOperations.delete(sessionId)
     })
     this.teamStopOperations.set(sessionId, stop)
+    return pausedTeam
+  }
+
+  private pauseAntigravitySwarmOnInterrupt(
+    sessionId: string,
+    session: SessionProcess,
+    nativeSessionId: string,
+  ): void {
+    if (session.antigravitySwarmPausePending) return
+    if (!hasAntigravitySwarmOnDiskSync(nativeSessionId)) return
+    session.antigravitySwarmPausePending = true
+    const pauseToken = beginAntigravitySwarmPause(nativeSessionId)
+    const stop = (this.teamStopOperations.get(sessionId) ?? Promise.resolve()).then(async () => {
+      try {
+        await session.antigravity?.waitForCancelledTurn()
+        if (this.sessions.get(sessionId) === session) {
+          await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        }
+        const boardMaxSeq = await readAntigravitySwarmBoardMaxSeq(nativeSessionId)
+        completeAntigravitySwarmPause(nativeSessionId, pauseToken, { boardMaxSeq })
+      } catch (error) {
+        const message = `Could not confirm Antigravity swarm stop: ${error instanceof Error ? error.message : String(error)}. Pause again before resuming.`
+        completeAntigravitySwarmPause(nativeSessionId, pauseToken, { error: message })
+      } finally {
+        session.antigravitySwarmPausePending = false
+      }
+    }).finally(() => {
+      if (this.teamStopOperations.get(sessionId) === stop) {
+        this.teamStopOperations.delete(sessionId)
+      }
+    })
+    this.teamStopOperations.set(sessionId, stop)
+  }
+
+  sendInterrupt(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (session?.antigravity) {
+      if (session.controlRevoked) return false
+      const nativeSessionId = session.antigravity.acp.sessionId
+      const cancelled = session.antigravity.cancel()
+      this.pauseAntigravitySwarmOnInterrupt(sessionId, session, nativeSessionId)
+      return cancelled
+    }
+    const pausedTeam = this.pauseTeamWorkers(sessionId)
     // A paused team's lead also holds the mail its members sent before the
     // Stop until the user speaks again; acting on it would start lead turns,
     // and restart members, that the user just stopped.
@@ -1498,7 +2133,7 @@ export class ConversationService {
     while (Date.now() - startedAt < timeoutMs) {
       if (signal?.aborted) throw controlRequestAbortReason(signal)
       const session = this.sessions.get(sessionId)
-      if (!session) {
+      if (!session || session.controlRevoked) {
         throw new Error('CLI session is not running')
       }
       if (this.isControlChannelReady(session)) {
@@ -1521,8 +2156,83 @@ export class ConversationService {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
     }
-    if (!this.sessions.has(sessionId)) {
+    const activeSession = this.sessions.get(sessionId)
+    if (!activeSession) {
       return Promise.reject(new Error('CLI session is not running'))
+    }
+    if (activeSession.antigravity) {
+      if (request.subtype === 'get_context_usage') {
+        return activeSession.antigravity.getContextUsageSnapshot()
+      }
+      if (request.subtype === 'get_session_usage') {
+        return activeSession.antigravity.getSessionUsageSnapshot()
+      }
+      if (request.subtype === 'enqueue_session_message') {
+        if (request.sender_session_id !== sessionId) {
+          throw new AntigravityError(
+            'ANTIGRAVITY_UNSUPPORTED',
+            'Cross-session collaboration messages are unavailable in an Antigravity session.',
+          )
+        }
+        if (request.start_if_idle !== true) {
+          return { status: 'busy' }
+        }
+        const text = typeof request.text === 'string' ? request.text : ''
+        if (!text.trim()) {
+          return { status: 'rejected', error: 'Empty session message' }
+        }
+        if (timeoutMs > 0) {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          let onAbort: (() => void) | undefined
+          try {
+            await Promise.race([
+              activeSession.antigravity.waitForCancelledTurn(),
+              new Promise<void>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error('Timed out waiting for Antigravity turn cancellation')), timeoutMs)
+                if (signal) {
+                  onAbort = () => reject(controlRequestAbortReason(signal))
+                  signal.addEventListener('abort', onAbort, { once: true })
+                }
+              }),
+            ])
+          } finally {
+            if (timer) clearTimeout(timer)
+            if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+          }
+        } else {
+          await activeSession.antigravity.waitForCancelledTurn()
+        }
+        if (signal?.aborted) {
+          throw controlRequestAbortReason(signal)
+        }
+        if (
+          this.sessions.get(sessionId) !== activeSession ||
+          activeSession.controlRevoked ||
+          migrationMaintenance.isActive ||
+          (canSend && !canSend())
+        ) {
+          return { status: 'cancelled' }
+        }
+        if (beforeSend && !(await beforeSend())) {
+          return { status: 'cancelled' }
+        }
+        if (signal?.aborted) {
+          throw controlRequestAbortReason(signal)
+        }
+        if (
+          this.sessions.get(sessionId) !== activeSession ||
+          activeSession.controlRevoked ||
+          migrationMaintenance.isActive ||
+          (canSend && !canSend())
+        ) {
+          return { status: 'cancelled' }
+        }
+        const rawMessageId = typeof request.message_id === 'string' ? request.message_id.trim() : ''
+        const replayUuid = rawMessageId ? sessionMessageUuid(rawMessageId) : crypto.randomUUID()
+        const sent = activeSession.antigravity.send([{ type: 'text', text }], replayUuid)
+        return sent ? { status: 'queued' } : { status: 'busy' }
+      }
+      throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This Claude Code action is unavailable in an Antigravity session.')
     }
 
     const startedAt = Date.now()
@@ -1651,6 +2361,9 @@ export class ConversationService {
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.antigravityToolName ? { antigravityToolName: request.antigravityToolName } : {}),
+      ...(request.subagentName ? { subagentName: request.subagentName } : {}),
+      ...(request.supportsAllowAlways !== undefined ? { supportsAllowAlways: request.supportsAllowAlways } : {}),
       ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     }))
   }
@@ -1660,7 +2373,7 @@ export class ConversationService {
     token: string | null | undefined,
   ): boolean {
     const session = this.sessions.get(sessionId)
-    return Boolean(session && token && token === session.sdkToken)
+    return Boolean(session && !session.controlRevoked && token && token === session.sdkToken)
   }
 
   attachSdkConnection(
@@ -1668,7 +2381,7 @@ export class ConversationService {
     socket: { send(data: string): void },
   ): boolean {
     const session = this.sessions.get(sessionId)
-    if (!session) return false
+    if (!session || session.controlRevoked || session.antigravity) return false
 
     session.sdkSocket = socket
     session.resolveSdkAttached?.()
@@ -1727,7 +2440,7 @@ export class ConversationService {
     options?: HandleSdkPayloadOptions,
   ): void {
     const session = this.sessions.get(sessionId)
-    if (!session) return
+    if (!session || session.controlRevoked) return
 
     const lines = rawPayload
       .split('\n')
@@ -1820,6 +2533,18 @@ export class ConversationService {
               typeof msg.request.display_name === 'string' && msg.request.display_name.trim()
                 ? msg.request.display_name.trim()
                 : undefined,
+            antigravityToolName:
+              typeof msg.request.antigravity_tool_name === 'string' && msg.request.antigravity_tool_name.trim()
+                ? msg.request.antigravity_tool_name.trim()
+                : undefined,
+            subagentName:
+              typeof msg.request.subagent_name === 'string' && msg.request.subagent_name.trim()
+                ? msg.request.subagent_name.trim()
+                : undefined,
+            supportsAllowAlways:
+              typeof msg.request.supports_allow_always === 'boolean'
+                ? msg.request.supports_allow_always
+                : undefined,
             permissionSuggestions: Array.isArray(msg.request.permission_suggestions)
               ? msg.request.permission_suggestions
               : undefined,
@@ -1828,7 +2553,7 @@ export class ConversationService {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
           session.pendingPermissionRequests.set(msg.request_id, request)
           powerActivityClock.changed()
-          void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
+          if (!session.antigravity) void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
         }
         if (
           (msg?.type === 'control_cancel_request' || msg?.type === 'control_response') &&
@@ -1845,10 +2570,7 @@ export class ConversationService {
           if (session.pendingPermissionRequests.delete(msg.response.request_id)) powerActivityClock.changed()
         }
         if (session.teamWorker && msg?.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
-          const parent = this.sessions.get(session.teamWorker.parentSessionId)
-          if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, {
-            ...msg, request: { ...msg.request, agent_id: `${session.teamWorker.name}@${session.teamWorker.teamName}`, display_name: session.teamWorker.name },
-          })
+          this.forwardTeamWorkerPermission(sessionId, session, msg)
         }
         this.notifyOutputCallbacks(sessionId, session.outputCallbacks, msg)
       } catch {
@@ -2030,12 +2752,29 @@ export class ConversationService {
     this.cancelPendingControlRequests(session)
     this.clearSessionAutoAnswerWaits(session)
     this.sessions.delete(sessionId)
+    void session.antigravityBridge?.close()
+    void session.antigravityBrowserUseBridge?.close()
     this.killProcess(sessionId, session)
   }
 
   async stopSessionAndWait(
     sessionId: string,
     timeoutMs = DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    options?: { keepTeamWorkers?: boolean; requireExit?: boolean },
+  ): Promise<void> {
+    const pending = this.sessionStopPromises.get(sessionId)
+    if (pending) return pending
+    const operation = this.stopSessionAndWaitOnce(sessionId, timeoutMs, options)
+    this.sessionStopPromises.set(sessionId, operation)
+    try { await operation }
+    finally {
+      if (this.sessionStopPromises.get(sessionId) === operation) this.sessionStopPromises.delete(sessionId)
+    }
+  }
+
+  private async stopSessionAndWaitOnce(
+    sessionId: string,
+    timeoutMs: number,
     options?: { keepTeamWorkers?: boolean; requireExit?: boolean },
   ): Promise<void> {
     if (!options?.keepTeamWorkers) {
@@ -2046,10 +2785,17 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (!session) return
 
+    session.controlRevoked = true
+    session.pendingOutbound.length = 0
     this.cancelPendingControlRequests(session)
     this.clearSessionAutoAnswerWaits(session)
+    session.pendingPermissionRequests.clear()
     if (!options?.requireExit) this.sessions.delete(sessionId)
     await this.stopProcessAndWait(sessionId, session, timeoutMs, options?.requireExit)
+    await Promise.allSettled([
+      session.antigravityBridge?.close(),
+      session.antigravityBrowserUseBridge?.close(),
+    ])
     if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
   }
 
@@ -2065,15 +2811,24 @@ export class ConversationService {
     const activeSessions = Array.from(this.sessions.entries())
     if (activeSessions.length === 0) return
 
-    for (const [, session] of activeSessions) {
+    await Promise.all(activeSessions.map(async ([sessionId, session]) => {
       this.cancelPendingControlRequests(session)
-    }
-    this.sessions.clear()
-    await Promise.all(
-      activeSessions.map(([sessionId, session]) =>
+      if (session.antigravity) {
+        // 先撤销控制和实时输出（不能在关停时触发延迟重启），但保留历史写入所有权。
+        session.controlRevoked = true
+        session.antigravityHistoryDraining = true
+      } else {
+        this.sessions.delete(sessionId)
+      }
+      const history = session.antigravity?.flushForShutdown()
+      await Promise.all([
         this.stopProcessAndWait(sessionId, session, timeoutMs),
-      ),
-    )
+        history,
+        session.antigravityBridge?.close(),
+        session.antigravityBrowserUseBridge?.close(),
+      ])
+      if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
+    }))
   }
 
   private async stopProcessAndWait(
@@ -2177,6 +2932,10 @@ export class ConversationService {
   async stopForMigration(): Promise<void> {
     const sessions = [...this.sessions.entries()]
     await Promise.all(sessions.map(async ([sessionId, session]) => {
+      if (session.antigravity) {
+        await this.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        return
+      }
       if (session.proc.exitCode == null) {
         await this.requestControl(sessionId, { subtype: 'end_session', reason: 'data_migration' }, 10_000)
       }
@@ -2249,7 +3008,7 @@ export class ConversationService {
     payload: Record<string, unknown>,
   ): boolean {
     const session = this.sessions.get(sessionId)
-    if (!session) return false
+    if (!session || session.controlRevoked || session.antigravity) return false
 
     const line = JSON.stringify(payload) + '\n'
     if (session.sdkSocket) {
@@ -2271,6 +3030,9 @@ export class ConversationService {
 
     const activeSession = this.sessions.get(sessionId)
     if (activeSession?.proc === proc) {
+      // A confirmed-exit stop retains its map entry until the process leaves.
+      // It is still an intentional stop, not a second crashed model turn.
+      if (activeSession.controlRevoked) return
       // A lead process that dies on its own (crash, OOM, provider SDK fault)
       // must not take its approved team with it: members are independent
       // processes, their messages queue in the lead's mailbox, and the next
@@ -2381,6 +3143,7 @@ export class ConversationService {
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_BASE_URL',
       'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_SUBAGENT_MODEL',
       'ENABLE_TOOL_SEARCH',
       'ANTHROPIC_MODEL',
       'ANTHROPIC_DEFAULT_FABLE_MODEL',
@@ -2402,6 +3165,7 @@ export class ConversationService {
       OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
       OPENAI_CODEX_REASONING_EFFORT_ENV_KEY,
       'CC_HAHA_OPENAI_FAST_MODE',
+      'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK',
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
       GROK_MODEL_CATALOG_ENV_KEY,
@@ -2424,6 +3188,8 @@ export class ConversationService {
         !cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS
     }
     delete cleanEnv.CC_HAHA_SESSION_COLLABORATION_TOKEN
+    delete cleanEnv.CC_HAHA_BROWSER_BRIDGE_TOKEN
+    delete cleanEnv.CC_HAHA_BROWSER_BRIDGE_URL
     delete cleanEnv.CC_HAHA_SESSION_ID
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
     delete cleanEnv.CLAUDE_CODE_ACCOUNT_UUID
@@ -2605,6 +3371,19 @@ export class ConversationService {
       ...(explicitProviderEnv
         ? { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' }
         : {}),
+      ...(explicitProvider &&
+      (explicitProvider.apiFormat ?? 'anthropic') === 'anthropic' &&
+      explicitProvider.disableExperimentalBetas !== true
+        ? { CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1' }
+        : {}),
+      ...(
+        (options?.providerId !== undefined && options?.providerId !== null && !explicitProvider) ||
+        (explicitProvider &&
+          ((explicitProvider.apiFormat ?? 'anthropic') !== 'anthropic' ||
+            explicitProvider.disableExperimentalBetas === true))
+          ? { CLAUDE_CODE_DISABLE_FAST_MODE: '1' }
+          : {}
+      ),
       // "官方" 模式 (cc-haha/settings.json 没 provider env) 下,把 CLI 标记为
       // managed-OAuth,让它忽略外部 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
       // 残留、只走用户 /login 的 OAuth token。自定义 provider 模式绝不能设,
@@ -2651,6 +3430,10 @@ export class ConversationService {
   private async buildOfficialOAuthEnv(): Promise<Record<string, string>> {
     const env: Record<string, string> = {
       CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+      // Desktop injects CLAUDE_CODE_OAUTH_TOKEN without user:profile scope, so
+      // the pre-flight /api/claude_code_penguin_mode org probe would fail and
+      // falsely block fast mode; the Messages API still enforces org/billing.
+      CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1',
     }
     try {
       // deferred import: avoids instantiating the OAuth singleton on every
@@ -3428,3 +4211,6 @@ function normalizeSessionPermissionUpdates(
 }
 
 export const conversationService = new ConversationService()
+registerAntigravitySwarmSteerHandler((payload) => conversationService.steerAntigravitySwarmMember(payload))
+registerAntigravitySwarmRuntimeProbe((nativeSessionId) => conversationService.hasActiveAntigravitySwarmRuntime(nativeSessionId))
+registerAntigravitySwarmResumeHandler((payload) => conversationService.resumeAntigravitySwarmSession(payload))

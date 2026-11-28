@@ -75,10 +75,14 @@ function cutLoops(schema: unknown, target: string, safe: boolean): unknown {
   })
 }
 
-/** Project an Anthropic tool `input_schema` onto what Gemini accepts. */
-export function toGeminiParametersSchema(schema: unknown): JsonObject {
+/** Project an Anthropic tool `input_schema` or structured-output schema onto what Gemini accepts. */
+export function toGeminiParametersSchema(
+  schema: unknown,
+  options?: { requireObjectRoot?: boolean },
+): JsonObject {
+  const requireObjectRoot = options?.requireObjectRoot !== false
   const normalized = normalizeNode(isRecord(schema) ? schema : {})
-  if (!isRecord(normalized)) return { type: 'object' }
+  if (!isRecord(normalized)) return requireObjectRoot ? { type: 'object' } : {}
   // The draft marker is metadata for validators, not part of the tool contract.
   const { $schema: _draft, ...rest } = normalized
   const result = cutLoops(
@@ -89,7 +93,7 @@ export function toGeminiParametersSchema(schema: unknown): JsonObject {
     '#',
     false,
   )
-  if (!isRecord(result)) return { type: 'object' }
-  // Tool arguments are always an object; a root without a type is read as one.
-  return result.type === undefined ? { type: 'object', ...result } : result
+  if (!isRecord(result)) return requireObjectRoot ? { type: 'object' } : {}
+  // Tool arguments are always an object; structured output schemas may be top-level unions/enums.
+  return requireObjectRoot && result.type === undefined ? { type: 'object', ...result } : result
 }

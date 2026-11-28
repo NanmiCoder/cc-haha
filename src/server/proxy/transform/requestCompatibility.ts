@@ -1,6 +1,14 @@
-import type { RequestCompatibility } from '../../types/provider.js'
+import type { RequestCompatibility, ServiceTier } from '../../types/provider.js'
 import type { OutputBudgetSource } from '../../../services/api/outputBudget.js'
 import type { AnthropicRequest } from './types.js'
+
+export type RequestCompatibilityProtocol =
+  | 'openai_chat'
+  | 'openai_responses'
+  | 'gemini'
+  | 'google_vertex'
+  | 'bedrock_converse'
+  | 'azure_openai'
 
 export type RequestCompatibilityOptions = {
   requestCompatibility?: RequestCompatibility
@@ -14,7 +22,7 @@ export type ResolvedOutputBudget = {
   requested?: number
   configured?: number
   effective?: number
-  field: 'max_tokens' | 'max_completion_tokens' | 'max_output_tokens' | 'omit'
+  field: 'max_tokens' | 'max_completion_tokens' | 'max_output_tokens' | 'maxOutputTokens' | 'maxTokens' | 'omit'
   reason: 'explicit_request' | 'provider_default' | 'upstream_default' | 'hard_limit' | 'responses_minimum' | 'provider_omit' | 'oauth_omit'
   hardLimit?: number
 }
@@ -35,13 +43,14 @@ export type StructuredOutputFormat = {
 /** Resolve wire policy once for both saved-provider probes and production. */
 export function resolveRequestCompatibility(
   body: AnthropicRequest,
-  options: RequestCompatibilityOptions & { protocol: 'openai_chat' | 'openai_responses' },
+  options: RequestCompatibilityOptions & { protocol: RequestCompatibilityProtocol },
 ): {
   outputBudget: ResolvedOutputBudget
   passSamplingParams: boolean
   passReasoning: boolean
   parallelToolCalls?: boolean
   structuredOutput?: StructuredOutputFormat
+  serviceTier?: ServiceTier
 } {
   const compatibility = options.requestCompatibility ?? {}
   const source = options.budgetSource ?? 'explicit'
@@ -81,6 +90,10 @@ export function resolveRequestCompatibility(
         outputBudget.reason = 'responses_minimum'
       }
       outputBudget.field = 'max_output_tokens'
+    } else if (options.protocol === 'gemini' || options.protocol === 'google_vertex') {
+      outputBudget.field = 'maxOutputTokens'
+    } else if (options.protocol === 'bedrock_converse') {
+      outputBudget.field = 'maxTokens'
     } else {
       const override = compatibility.outputTokenField
       // Known OpenAI reasoning families use the completion budget field. An
@@ -131,6 +144,10 @@ export function resolveRequestCompatibility(
     }
   }
 
+  const serviceTier = compatibility.serviceTier && compatibility.serviceTier !== 'auto'
+    ? compatibility.serviceTier
+    : undefined
+
   return {
     outputBudget,
     passSamplingParams: compatibility.sampling === 'supported'
@@ -138,6 +155,7 @@ export function resolveRequestCompatibility(
     passReasoning: compatibility.reasoning !== 'unsupported',
     ...(parallelToolCalls !== undefined ? { parallelToolCalls } : {}),
     ...(structuredOutput ? { structuredOutput } : {}),
+    ...(serviceTier ? { serviceTier } : {}),
   }
 }
 

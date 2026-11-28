@@ -7,6 +7,7 @@ vi.mock('../../lib/openPreviewLink', () => ({ openPreviewLink }))
 
 import { UserMessage, type UserMessageEditAction } from './UserMessage'
 import { withAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { withBrowserUseRequest } from '../../lib/browserUseRequest'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -267,7 +268,22 @@ describe('UserMessage bare-URL linkify', () => {
 
     expect(container.querySelector('[data-message-shell="teammate"]')).toBeNull()
     expect(bubbleOf(container).textContent).toBe('Review the auth diff.')
+    expect(bubbleOf(container).className).toContain('rounded-[var(--radius-xl)]')
+    expect(bubbleOf(container).className).toContain('rounded-br-[var(--radius-xs)]')
+    expect(bubbleOf(container).className).toContain('bg-[var(--color-surface-user-msg)]')
+    expect(bubbleOf(container).className).not.toContain('shadow-[var(--glass-rim),var(--shadow-card)]')
+    expect(container.querySelector('[data-message-shell="user"]')?.className).toContain('max-w-[80%]')
     expect(container.firstElementChild?.className).toContain('justify-end')
+  })
+
+  it('tightens facing inner corners on consecutive user bubbles', () => {
+    const { container } = render(
+      <UserMessage content="Follow-up note" consecutiveBefore consecutiveAfter />,
+    )
+
+    const bubble = bubbleOf(container)
+    expect(bubble.className).toContain('rounded-tr-[var(--radius-sm)]')
+    expect(bubble.className).toContain('rounded-br-[var(--radius-xs)]')
   })
 })
 
@@ -317,6 +333,22 @@ describe('UserMessage capability pills', () => {
     expect(screen.queryByRole('button', { name: 'Remove Agent Teams' })).toBeNull()
   })
 
+  it('shows Browser Use as a read-only target pill above the bubble alongside other capabilities', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const modelContent = withAgentTeamRequest(withBrowserUseRequest(`${SKILL} 打开 modeldial.com`, 'workspace'))
+    const { container } = render(<UserMessage content="@frontend-design 打开 modeldial.com" modelContent={modelContent} />)
+
+    const browserPill = screen.getByTestId('browser-use-target-pill')
+    expect(browserPill.textContent).toContain('Browser')
+    expect(browserPill.textContent).toContain('Workspace')
+    expect(bubbleOf(container).contains(browserPill)).toBe(false)
+    expect(browserPill.querySelector('button')).toBeNull()
+    expect(screen.getByTestId('agent-team-chip').textContent).toBe('Agent Teams')
+    expect(pills(container)).toEqual(['skill:@frontend-design'])
+    expect(bubbleOf(container).textContent).toBe('@frontend-design 打开 modeldial.com')
+    expect(bubbleOf(container).textContent).not.toContain('browser-use-request')
+  })
+
   it('renders a live pill and its reloaded copy the same way', () => {
     // Live: the bubble text is the composer projection, the model text the sentence.
     const live = render(<UserMessage content="@Frontend Design 做个落地页" modelContent={TEAM_MODEL_CONTENT} />)
@@ -358,5 +390,16 @@ describe('UserMessage capability pills', () => {
     const { container } = render(<UserMessage content="分析最近一个版本的commit" />)
     expect(pills(container)).toEqual([])
     expect(screen.queryByTestId('agent-team-chip')).toBeNull()
+  })
+
+  it('shows the Agent Team chip for Antigravity + menu /swarm sends without duplicating when /swarm was typed', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const armed = render(<UserMessage content="Parallel code audit" modelContent="/swarm Parallel code audit" />)
+    expect(armed.container.querySelector('[data-testid="agent-team-chip"]')?.textContent).toBe('Agent Teams')
+    expect(bubbleOf(armed.container).textContent).toBe('Parallel code audit')
+
+    const typed = render(<UserMessage content="/swarm Parallel code audit" modelContent="/swarm Parallel code audit" />)
+    expect(typed.container.querySelector('[data-testid="agent-team-chip"]')).toBeNull()
+    expect(pills(typed.container)).toEqual(['command:/swarm'])
   })
 })

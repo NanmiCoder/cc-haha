@@ -8,7 +8,7 @@ import type {
 } from '../core/types'
 import { Card, Mono, useColors } from './kit'
 import { Text } from './Text'
-import { decisionResponse } from './approvalData'
+import { decisionResponse, permissionSubagentName } from './approvalData'
 import { PlanDecision } from './decision/PlanDecision'
 import { PlanDocument } from './decision/PlanDocument'
 import { MISSING_PLAN_TEXT, planFilePath, planSource } from './decision/planText'
@@ -84,13 +84,17 @@ export function Approval({
     setSubmission({ ready, serverError, sent: false })
 
   function respond(
-    options: Omit<Parameters<typeof decisionResponse>[0], 'requestId' | 'toolName' | 'input'>
+    options: Omit<
+      Parameters<typeof decisionResponse>[0],
+      'requestId' | 'toolName' | 'input' | 'supportsAllowAlways'
+    >
   ) {
     const accepted = send(
       decisionResponse({
         requestId: request.requestId,
         toolName: request.toolName,
         input,
+        supportsAllowAlways: request.supportsAllowAlways,
         ...options,
       })
     )
@@ -105,6 +109,7 @@ export function Approval({
         input={input}
         ready={ready}
         sent={sent}
+        serverError={serverError}
         signalActivity={() =>
           send({ type: 'ask_user_question_activity', requestId: request.requestId })
         }
@@ -123,6 +128,7 @@ export function Approval({
         client={client}
         runtime={runtime}
         position={position}
+        subagentName={permissionSubagentName(request, input)}
         approve={(plan) => respond({ allowed: true, plan })}
         revise={(note) => respond({ allowed: false, note })}
       />

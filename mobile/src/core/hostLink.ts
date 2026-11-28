@@ -44,7 +44,7 @@ export class HostLink {
   path: LinkPath = 'cf'
   #peer?: P2PPeer
   #tunnel?: Tunnel
-  #negotiating = false
+  #negotiating?: P2PPeer
   /** 回前台正在确认还通不通的直连（见 `foreground`）。 */
   #checking?: P2PPeer
   /**
@@ -134,6 +134,7 @@ export class HostLink {
 
   background() {
     this.#hiddenAt = this.#now()
+    this.#peer?.setBackground(true)
     this.#timers.clear(this.#backgroundTimer)
     this.#backgroundTimer = this.#timers.set(() => this.#peer?.close(), BACKGROUND_CLOSE_MS)
   }
@@ -143,7 +144,15 @@ export class HostLink {
     const away = this.#hiddenAt === undefined ? 0 : this.#now() - this.#hiddenAt
     this.#hiddenAt = undefined
     const peer = this.#peer
+    if (away >= STALE_AFTER_BACKGROUND_MS && this.#negotiating && peer) {
+      // 协商跨过长时后台多半已被系统挂起，直接重开而不是等 8 秒超时。
+      this.#negotiating = undefined
+      peer.close()
+      this.#retryNow()
+      return
+    }
     if (away >= STALE_AFTER_BACKGROUND_MS && this.path !== 'cf' && peer) void this.#check(peer)
+    else if (this.path !== 'cf' && peer) peer.setBackground(false)
     else if (this.path === 'cf') this.#retryNow()
   }
 
@@ -161,7 +170,11 @@ export class HostLink {
     this.#checking = peer
     const alive = await peer.check(FOREGROUND_PROBE_MS)
     if (this.#checking === peer) this.#checking = undefined
-    if (alive || this.#disposed) return
+    if (this.#disposed) return
+    if (alive) {
+      if (this.#hiddenAt === undefined) peer.setBackground(false)
+      return
+    }
     // 关掉它会把路径退回 Cloudflare，直连上的套接字按网络断开收尾、经 Cloudflare 续传接回。
     peer.close()
     if (this.path === 'cf') this.#retryNow()
@@ -192,7 +205,6 @@ export class HostLink {
 
   async #upgrade() {
     if (!this.enabled || this.#disposed || this.#peer || this.#negotiating) return
-    this.#negotiating = true
     let tunnel: Tunnel | undefined
     const peer: P2PPeer = new P2PPeer({
       rtc: this.options.rtc!,
@@ -203,6 +215,7 @@ export class HostLink {
     })
     tunnel = new Tunnel({ send: (channel, text) => peer.send(channel, text) })
     this.#peer = peer
+    this.#negotiating = peer
     try {
       const path = await peer.connect()
       if (this.#disposed || this.#peer !== peer) {
@@ -213,10 +226,12 @@ export class HostLink {
       this.#failures = 0
       this.#setPath(path)
     } catch (error) {
-      if (this.#peer === peer) this.#peer = undefined
-      this.#cooldown(error)
+      if (this.#negotiating === peer) {
+        if (this.#peer === peer) this.#peer = undefined
+        this.#cooldown(error)
+      }
     } finally {
-      this.#negotiating = false
+      if (this.#negotiating === peer) this.#negotiating = undefined
     }
   }
 

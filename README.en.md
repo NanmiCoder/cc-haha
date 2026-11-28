@@ -21,6 +21,9 @@
 
 cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, mobile app and H5 remote access, IM integration, and scheduled tasks, all in one app. **Computer Use keeps the existing native macOS engine and reuses agent-desktop on Windows / Linux. Supported background semantic actions leave the physical pointer alone; physical input still uses the foreground.** The companion Android / iPhone app pairs with your computer by QR code, so you can approve actions and start tasks away from your desk.
 
+> [!TIP]
+> **Antigravity CLI (ACP) integration is now supported!** Connect your local Antigravity CLI directly inside cc-haha across desktop, H5, and mobile to use native Composer, built-in Browser Use, Native Swarm, slash skills, and mid-turn steering out of the box.
+
 <p align="center"><b>Platinum Sponsor · Modelflare</b></p>
 
 <p align="center">
@@ -29,14 +32,14 @@ cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: mu
   </a>
 </p>
 
-<p><sub>Thanks to <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> for sponsoring this project! Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost. Operated by US-based Havenbyte LLC, Modelflare supports GPT, Claude, Gemini, Grok, and other leading models through common compatible protocols, plus 40+ image and video models.</sub></p>
+<p><sub>Thanks to <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> for sponsoring this project! Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost. Operated by US-based Havenbyte LLC, Modelflare supports GPT, Claude, Gemini, Grok, and other leading models through common compatible protocols, plus 40+ image and video models, and supports legitimate business cooperation in mainland China.</sub></p>
 
 <p><sub><b>Cache compensation is a highlight:</b> selected OpenAI groups (price-first, stable, and premium) guarantee daily cache hit rates of 65%, 75%, or 85%, and if eligible requests fall short, Modelflare refunds the difference, visible on the usage dashboard after settlement.</sub></p>
 
 <p><sub><b>Special offers:</b> a single top-up of US$20 unlocks the GPT discount group at a 0.015x price multiplier, and a single top-up of US$50 unlocks the Claude discount group at a 0.03x multiplier. Register via <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">this exclusive link</a> to get started.</sub></p>
 
 <p align="center">
-  <a href="#feature-preview">Feature Preview</a> · <a href="#install">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
+  <a href="#feature-preview">Feature Preview</a> · <a href="#install">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a>
 </p>
 
 ---
@@ -126,6 +129,16 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5638">
+          <img src="docs/images/sponsors/dynadot-logo.png" width="180" alt="Dynadot">
+        </a>
+      </td>
+      <td valign="middle">
+        Dynadot is an ICANN-accredited domain registrar, ranks among the world's top five registrars by domains under management, and is a leading international domain marketplace. It offers quality domain-focused services, including domain registration, trading, management, business email, and website building. All users can access a variety of domain promotions and submit domain backorder requests for free. The <a href="https://www.dynadot.com/zh/black-friday-sale?utm_source=github&amp;utm_medium=display&amp;utm_campaign=Promo&amp;drefid=5638">Dynadot Black Friday sale</a> is live! Explore our official deals page to register domains at single-digit prices and get website builders and Professional Email at 50% off.
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">
@@ -147,16 +160,6 @@ This project is maintained in the author's spare time. Corporate or individual s
 4. Mobile (optional; the app interface is currently Chinese only): on Android, download `cc-haha-mobile-*.apk` from Releases; on iPhone, install TestFlight and open the [public link](https://testflight.apple.com/join/Nd49JrWZ). The mobile app needs desktop v0.7.6 or later. Pair it by scanning the QR code under **Phone connection** in the desktop app: connect directly on the same Wi-Fi, or through Cloudflare when you are away. See [Mobile app and remote connection](docs/en/desktop/remote.md).
 
 Release trust and privacy: [Code signing policy](docs/en/start/code-signing.md) · [Privacy and network access](docs/en/start/privacy.md)
-
----
-
-## User Group
-
-Scan the QR code below to join the cc-haha user group on WeCom (WeChat Work) — the conversation there is mostly in Chinese. For questions and bug reports in English, [Issues](https://github.com/NanmiCoder/cc-haha/issues) is the better place. For enterprise deployment, customization, or Agent development needs, contact the author [NanmiCoder](https://github.com/NanmiCoder).
-
-<p align="center">
-  <img src="docs/images/community/wechat-group-qr.png" width="300" alt="cc-haha WeCom user group QR code">
-</p>
 
 ---
 
@@ -196,7 +199,7 @@ If this project helps you, consider buying me a coffee — every bit of support 
 - **Bring your own model**: sign in to Claude, ChatGPT, or Grok; use presets for DeepSeek, Kimi, Zhipu GLM and others; or point it at LM Studio and Ollama running locally.
 - **Image generation**: generate and edit images right in the chat — sign in with ChatGPT or Grok for instant use, or plug in any OpenAI-compatible Images API.
 - **Visual MCP manager**: add and edit MCP servers in a GUI — STDIO / Streamable HTTP / SSE, with project, shared, or global scope.
-- **Six colour themes**: white, paper, warm classic, celadon, ink night, and ink blue — optionally following your system's light/dark setting.
+- **Seven colour themes**: white, paper, warm classic, celadon, ink night, ink blue, and Neutral Dark — optionally following your system's light/dark setting.
 - **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status shown up front.
 - **Session activity panel**: track task progress, background tasks, SubAgents, and sources in one side panel.
 - **Visual SubAgent manager**: create and tune SubAgents in a GUI — model, tools, and permission mode.
@@ -246,6 +249,7 @@ Thanks to the following open-source projects and community practices for referen
 - [Electron](https://github.com/electron/electron): cross-platform desktop app capabilities and engineering practices.
 - [agent-desktop](https://github.com/vercel-labs/agent-desktop) by Vercel Labs: a reference and directly reused native implementation for Windows / Linux Computer Use. Pinned to **1.0.2**, commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d), with the [Apache-2.0 license](native/agent-desktop/LICENSE), [provenance and file hashes](native/agent-desktop/UPSTREAM.json), and [local changes](native/agent-desktop/PATCHES.md) retained.
 - [cc-switch](https://github.com/farion1231/cc-switch): reference for model provider configuration.
+- [t3code](https://github.com/pingdotgg/t3code): visual texture and interaction design reference for the desktop UI.
 - [LINUX DO](https://linux.do/): a new ideal developer community.
 - [AtomGit](https://atomgit.com/NanmiCoder/cc-haha): code hosting for this project in China.
 

@@ -159,6 +159,20 @@ describe('public transport boundary', () => {
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ error: 'Network proxy unavailable', code: 'proxy' })
   })
+
+  test('correlates authenticated connection checks with the host attempt and ignores arbitrary header text', async () => {
+    const calls: unknown[] = []
+    const f = fixture(undefined, 'https://fixture.trycloudflare.com', {
+      resolveProxy: async context => { calls.push(['network', context]); return { proxyUrl: null } },
+      verifyGateway: async (_origin, _gateway, context) => { calls.push(['verify', context]); return true },
+    })
+    const attemptId = '81d5559c-a61e-4871-a185-4e7aaf02c693'
+    for (const [route, method, attempt] of [['network', 'GET', attemptId], ['verify', 'POST', attemptId], ['network', 'GET', 'not-a-valid-id;password=private-secret']]) {
+      const response = await f.service.control(new Request(`http://localhost/api/public-access/${route}`, { method, headers: { Authorization: 'Bearer fixture-process-credential', 'X-CC-Haha-Connection-Attempt': attempt } }))
+      expect(response.ok).toBe(true)
+    }
+    expect(calls).toEqual([['network', { attemptId }], ['verify', { attemptId }], ['network', {}]])
+  })
   test('custom tunnels use the requested fixed port across restarts without changing device credentials', async () => {
     const f = fixture()
     const { claim } = await f.pairNative()
@@ -559,6 +573,33 @@ test('push route allowlist refuses extra segments and unsupported methods', () =
   expect(allowed('/api/sessions/mobile-push/test/extra', 'POST')).toBe(false)
 })
 
+test('mobile-update allowlist permits only read-only Android update routes with validated params', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  const sha = 'a'.repeat(64)
+  expect(allowed('/api/mobile-update/android/latest', 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/latest?refresh=1', 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/latest?refresh=2', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest?refresh=1&refresh=1', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest?url=https://evil.test', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest', 'POST')).toBe(false)
+  expect(allowed('/api/mobile-update/android/latest/', 'GET')).toBe(false)
+  expect(allowed('/api//mobile-update/android/latest', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk', 'GET')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/apk?sha256=${sha}`, 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/apk?sha256=not-hex', 'GET')).toBe(false)
+  expect(allowed(`/api/mobile-update/android/apk?sha256=${sha}&sha256=${sha}`, 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk?url=https://evil.test', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk', 'DELETE')).toBe(false)
+  expect(allowed('/api/mobile-update/android/prepare', 'POST')).toBe(true)
+  expect(allowed('/api/mobile-update/android/prepare', 'GET')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/prepare?sha256=${sha}`, 'POST')).toBe(true)
+  expect(allowed(`/api/mobile-update/android/prepare?sha256=${sha}`, 'GET')).toBe(true)
+  expect(allowed('/api/mobile-update/android/prepare?sha256=bad', 'POST')).toBe(false)
+  expect(allowed('/api/mobile-update/android/prepare', 'DELETE')).toBe(false)
+  expect(allowed('/api/mobile-update/ios/latest', 'GET')).toBe(false)
+  expect(allowed('/api/mobile-update/android/apk/extra', 'GET')).toBe(false)
+})
+
 test('paired phones can browse directories without gaining file/search/write routes', async () => {
   const calls: string[] = []
   const f = fixture(async (_request, url) => {
@@ -635,18 +676,25 @@ const fixtureConnector = {
   operation: { id: 'op-1', kind: 'authenticate', phase: 'waiting-for-browser', startedAt: '2026-01-01T00:00:00Z', authUrl: 'https://accounts.example.test/oauth?state=fixture-secret' },
 }
 
-test('remote phones read the connector and workflow lists only', () => {
+test('remote phones read connector list and read-only workflow catalog/runs only', () => {
   const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
   expect(allowed('/api/connectors', 'GET')).toBe(true)
   expect(allowed('/api//connectors/', 'GET')).toBe(true)
   expect(allowed('/api/workflows?cwd=%2Ffixture', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs?sessionId=s1&limit=20', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/runs/s1/wf_run123', 'GET')).toBe(true)
+  expect(allowed('/api/workflows/session-runs/s1', 'GET')).toBe(true)
   expect(allowed('/api/agents', 'GET')).toBe(true)
   expect(allowed('/api/agents/reviewer', 'GET')).toBe(true)
   for (const [path, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors', 'POST'], ['/api/connectors', 'DELETE'],
     ['/api/connectors/feishu/authenticate', 'POST'], ['/api/connectors/feishu/prepare', 'POST'], ['/api/connectors/feishu/remove', 'POST'],
     ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
-    ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
+    ['/api/workflows/runs', 'POST'], ['/api/workflows/runs', 'DELETE'],
+    ['/api/workflows/runs/s1', 'GET'], ['/api/workflows/runs/s1/wf_run123', 'POST'], ['/api/workflows/runs/s1/wf_run123/extra', 'GET'],
+    ['/api/workflows/session-runs', 'GET'], ['/api/workflows/session-runs/s1', 'POST'], ['/api/workflows/session-runs/s1/extra', 'GET'],
+    ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
     ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
     // 路由器会忽略单项 Agent 名字后面多出来的段，放行它们等于绕过对手机的裁剪。
     ['/api/agents/reviewer/override', 'GET'], ['/api/agents/reviewer/zzz', 'GET'], ['/api/agents/reviewer', 'DELETE'],
@@ -698,14 +746,89 @@ test('paired phones get connector, workflow and agent lists without credentials,
   for (const secret of ['authUrl', 'fixture-secret', 'EACCES', '/Users/fixture', 'setupFields', 'homepage', 'packageName', 'systemPrompt', 'filePath', 'availableTools']) expect(text).not.toContain(secret)
 })
 
+test('paired phones get workflow run history and detail without desktop script paths or source', async () => {
+  const f = fixture(async (_request, url) => {
+    if (url.pathname === '/api/workflows/session-runs/s1') {
+      return Response.json({
+        runs: [{
+          runId: 'wf_abc123',
+          taskId: 'task-1',
+          workflowName: 'ship',
+          status: 'completed',
+          startedAt: 1000,
+          updatedAt: 2000,
+          endedAt: 2000,
+          agents: [{ agentId: 'a1', label: '调研', phaseIndex: 1, phaseTitle: '调研', agentIndex: 1, state: 'done' }],
+        }],
+      })
+    }
+    if (url.pathname === '/api/workflows/runs') {
+      return Response.json({
+        runs: [{
+          runId: 'wf_abc123',
+          sessionId: 's1',
+          workflowName: 'ship',
+          scriptPath: '/Users/fixture/.claude/projects/p/s1/workflows/ship.wf_abc123.js',
+          startedAt: 1000,
+          completedAgents: 1,
+          status: 'completed',
+        }],
+      })
+    }
+    if (url.pathname === '/api/workflows/runs/s1/wf_abc123') {
+      return Response.json({
+        runId: 'wf_abc123',
+        sessionId: 's1',
+        workflowName: 'ship',
+        scriptPath: '/Users/fixture/.claude/projects/p/s1/workflows/ship.wf_abc123.js',
+        script: 'const secretScript = true',
+        logs: ['/Users/fixture/private.log'],
+        desktopOnlyExtra: 'must-not-leak',
+        description: 'Ship release',
+        phases: [{ title: '调研', detail: 'read', internalPath: '/Users/fixture/x' }, { title: '实现' }],
+        startedAt: 1000,
+        completedAgents: 1,
+        status: 'completed',
+        agents: [{ key: 'k1', agentId: 'a1', result: 'ok', internalNote: 'drop-me' }],
+      })
+    }
+    return Response.json({ ok: true })
+  })
+  const { claim } = await f.pairNative()
+  const read = async (route: string) => (await f.native(route, claim.token)).json()
+  expect(await read('/api/workflows/session-runs/s1')).toMatchObject({
+    runs: [{ runId: 'wf_abc123', workflowName: 'ship', status: 'completed' }],
+  })
+  expect(await read('/api/workflows/runs')).toEqual({
+    runs: [{ runId: 'wf_abc123', sessionId: 's1', workflowName: 'ship', startedAt: 1000, completedAgents: 1, status: 'completed' }],
+  })
+  const detail = await read('/api/workflows/runs/s1/wf_abc123')
+  expect(detail).toEqual({
+    runId: 'wf_abc123',
+    sessionId: 's1',
+    workflowName: 'ship',
+    description: 'Ship release',
+    phases: [{ title: '调研', detail: 'read' }, { title: '实现' }],
+    startedAt: 1000,
+    completedAgents: 1,
+    status: 'completed',
+    agents: [{ key: 'k1', agentId: 'a1', result: 'ok' }],
+  })
+  const serialized = JSON.stringify([await read('/api/workflows/runs'), detail])
+  for (const forbidden of ['/Users/fixture', 'scriptPath', 'secretScript', 'private.log', 'must-not-leak', 'drop-me']) {
+    expect(serialized).not.toContain(forbidden)
+  }
+})
+
 test('connector actions and details never reach the desktop handler from a phone', async () => {
   const calls: string[] = []
   const f = fixture(async (request, url) => { calls.push(`${request.method} ${url.pathname}`); return Response.json({ items: [] }) })
   const { claim } = await f.pairNative()
   for (const [route, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors/feishu/authenticate', 'POST'],
-    ['/api/workflows/runs', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows', 'PUT'], ['/api/mcp', 'GET'],
-    ['/api/agents/reviewer/zzz', 'GET'],
+    ['/api/workflows/my-flow', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'], ['/api/workflows', 'PUT'],
+    ['/api/workflows/runs/s1/wf_1', 'POST'], ['/api/workflows/session-runs/s1', 'DELETE'],
+    ['/api/mcp', 'GET'], ['/api/agents/reviewer/zzz', 'GET'],
   ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
   expect((await f.remote('/api/connectors')).status).toBe(401)
   expect(calls).toEqual([])
@@ -997,6 +1120,29 @@ describe('resumable session streams through the gateway', () => {
 describe('a changed public address reaches paired phones', () => {
   const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
   const macFor = (token: string, message: string) => createHmac('sha256', sha256(token)).update(message).digest('base64url')
+  function lanFixture(connectivity: Parameters<typeof fixture>[2] = {}, rejectLanBind = false) {
+    const serve = Bun.serve
+    const requested: Array<{ hostname: unknown, port: unknown }> = []
+    let lanPort: number | null = null
+    const bind = spyOn(Bun, 'serve').mockImplementation(((options: Parameters<typeof Bun.serve>[0]) => {
+      if (options.hostname !== '0.0.0.0') return serve(options)
+      requested.push({ hostname: options.hostname, port: options.port })
+      if (rejectLanBind) throw Object.assign(new Error('Fixture LAN bind unavailable'), { code: 'EADDRINUSE' })
+      // Hold an atomically allocated real listener, not the unreserved next port.
+      const listener = serve({ ...options, port: 0 })
+      lanPort = listener.port ?? null
+      return listener
+    }) as typeof Bun.serve)
+    try {
+      const remote = fixture(undefined, undefined, connectivity)
+      expect(requested).toEqual([{ hostname: '0.0.0.0', port: remote.service.status().port! + 1 }])
+      if (rejectLanBind) expect(lanPort).toBeNull()
+      else expect(lanPort).toBeNumber()
+      return { ...remote, lanPort }
+    } finally {
+      bind.mockRestore()
+    }
+  }
   /** A non-loopback address of this machine: requests to it arrive like a phone's on the LAN. */
   const lanAddress = Object.values(os.networkInterfaces()).flat().find(entry => entry?.family === 'IPv4' && !entry.internal)?.address
   const bareServer = (storePath: string, onOriginChanged: ConstructorParameters<typeof PublicAccessServer>[0]['onOriginChanged']) => new PublicAccessServer({
@@ -1006,7 +1152,7 @@ describe('a changed public address reaches paired phones', () => {
   })
 
   test('a paired phone learns where to find the gateway on its local network', async () => {
-    const remote = fixture(undefined, undefined, {
+    const remote = lanFixture({
       networkInterfaces: () => ({
         lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true } as os.NetworkInterfaceInfo],
         en0: [
@@ -1020,14 +1166,32 @@ describe('a changed public address reaches paired phones', () => {
     const { claim } = await remote.pairNative()
     const response = await remote.native('/api/public-access/locator', claim.token)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ port: remote.service.status().port! + 1, addresses: ['192.168.1.5', '100.101.1.2'] })
+    expect(await response.json()).toEqual({ port: remote.lanPort, addresses: ['192.168.1.5', '100.101.1.2'] })
     expect((await remote.remote('/api/public-access/locator')).status).toBe(401)
   })
 
-  test.skipIf(!lanAddress)('from the LAN only the signed address lookup answers, never the gateway', async () => {
-    const remote = fixture()
+  test('an unavailable LAN locator leaves the authenticated loopback gateway usable', async () => {
+    const remote = lanFixture({}, true)
+    expect(remote.service.status()).toMatchObject({ enabled: true, port: expect.any(Number) })
+    expect((await remote.remote('/health')).status).toBe(200)
     const { claim } = await remote.pairNative()
-    const lan = `http://${lanAddress}:${remote.service.status().port! + 1}`
+    const locator = await remote.native('/api/public-access/locator', claim.token)
+    expect(locator.status).toBe(200)
+    expect(await locator.json()).toEqual({ port: null, addresses: [] })
+    expect((await remote.remote('/api/public-access/locator')).status).toBe(401)
+    expect((await remote.native('/api/public-access/session', claim.token)).status).toBe(200)
+    remote.service.disable()
+    await expect(fetch(`${remote.base}/health`)).rejects.toThrow()
+  })
+
+  test.skipIf(!lanAddress)('from the LAN only the signed address lookup answers, never the gateway', async () => {
+    const remote = lanFixture()
+    const { claim } = await remote.pairNative()
+    const locator = await remote.native('/api/public-access/locator', claim.token)
+    expect(locator.status).toBe(200)
+    const endpoint = await locator.json() as { port: number | null }
+    expect(endpoint.port).toBe(remote.lanPort)
+    const lan = `http://${lanAddress}:${endpoint.port}`
     const nonce = 'n'.repeat(22)
     const id = sha256(sha256(claim.token))
     const located = await fetch(`${lan}/api/public-access/locate?id=${id}&nonce=${nonce}`)

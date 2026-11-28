@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, Folder, RotateCcw } from 'lucide-react'
+import { ChevronLeft, Copy, Download, Folder, RotateCcw } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { sessionsApi } from '@/api/sessions'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -9,10 +9,12 @@ import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
+import { runSessionMarkdownAction, type SessionMarkdownActionMode } from '@/lib/sessionMarkdown'
 import { useChatStore } from '@/stores/chatStore'
 import { resolveProjectDisplayName } from '@/stores/projectDisplayNameStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTabStore } from '@/stores/tabStore'
+import { useUIStore } from '@/stores/uiStore'
 import type { SessionListItem } from '@/types/session'
 import { SidebarMenuItem } from './SidebarMenuItem'
 import { getSessionProjectKey, projectTitle } from './sidebarTaskGroups'
@@ -45,6 +47,7 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
   const t = useTranslation()
   const errorId = useId()
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const addToast = useUIStore((s) => s.addToast)
   const projectArchivedTotals = useSessionStore((s) => s.projectArchivedTotals)
   const [page, setPage] = useState<ArchivePage>({ sessions: [], nextCursor: null, offset: 0, hasMore: false, total: null })
   const [loading, setLoading] = useState(true)
@@ -158,6 +161,17 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
     useChatStore.getState().connectToSession(session.id)
   }
 
+  const handleMarkdown = (session: SessionListItem, mode: SessionMarkdownActionMode) => {
+    setMenu(null)
+    void runSessionMarkdownAction({
+      sessionId: session.id,
+      title: session.title || t('tabs.untitled'),
+      mode,
+      addToast,
+      t,
+    })
+  }
+
   // Across all projects, rows group under their project in server order.
   const groups = useMemo(() => {
     const byProject = new Map<string, SessionListItem[]>()
@@ -232,9 +246,9 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
                       setMenu({ session, x: event.clientX, y: event.clientY })
                     }}
                     title={title}
-                    className={`flex h-[30px] w-full items-center gap-1.5 rounded-[var(--radius-sm)] pl-8 pr-2 text-left text-[13px] transition-[background,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                    className={`flex h-[30px] w-full items-center gap-1.5 rounded-[var(--radius-control)] pl-8 pr-2 text-left text-[13px] transition-[background,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                       session.id === activeTabId
-                        ? 'bg-[var(--color-sidebar-item-active)] font-medium text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
+                        ? 'v6c-raised v6c-active-bar font-medium text-[var(--color-text-primary)]'
                         : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)]'
                     }`}
                   >
@@ -284,7 +298,7 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
           type="button"
           disabled={loading || restoringId !== null}
           onClick={() => void loadPage(false)}
-          className="inline-flex h-7 items-center rounded-[var(--radius-sm)] pl-8 pr-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
+          className="inline-flex h-7 items-center rounded-[var(--radius-control)] pl-8 pr-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
         >
           {loading ? t('common.loading') : t('sidebar.archiveLoadMore')}
         </button>
@@ -299,7 +313,7 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
         <div
           ref={menuRef}
           role="menu"
-          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={menuPosition.style}
         >
           <SidebarMenuItem
@@ -308,6 +322,18 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
             onClick={() => void restoreSession(menu.session.id)}
           >
             {t('sidebar.restoreSession')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Copy size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => handleMarkdown(menu.session, 'copy')}
+          >
+            {t('sidebar.copyMarkdown')}
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Download size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            onClick={() => handleMarkdown(menu.session, 'export')}
+          >
+            {t('sidebar.exportMarkdown')}
           </SidebarMenuItem>
         </div>,
         document.body,

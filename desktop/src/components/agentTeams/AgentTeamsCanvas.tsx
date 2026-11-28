@@ -165,7 +165,7 @@ function memberTaskChipStyle(task: TeamWorkbenchTask, next: boolean, accent: str
   if (task.status === 'completed') {
     return { borderColor: 'var(--color-border)', backgroundColor: 'var(--color-success-container)', color: 'var(--color-on-success-container)' }
   }
-  return { borderColor: accent, backgroundColor: 'var(--color-surface-container-lowest)', color: 'var(--color-text-primary)' }
+  return { borderColor: accent, backgroundColor: 'var(--color-surface-container)', color: 'var(--color-text-primary)' }
 }
 
 function leadStatusLabel(snapshot: TeamWorkbenchSnapshot, t: TranslationFn): string {
@@ -190,7 +190,7 @@ function taskStateColors(state: WorkbenchTaskState, accent: string) {
   }
   if (state === 'running') {
     return {
-      background: 'var(--color-surface-container-lowest)',
+      background: 'var(--color-surface-container)',
       border: accent,
       // Running is the app-wide "in progress" tone, never the brand.
       pillBackground: 'var(--color-info-container)',
@@ -201,7 +201,7 @@ function taskStateColors(state: WorkbenchTaskState, accent: string) {
   }
   if (state === 'open') {
     return {
-      background: 'var(--color-surface-container-lowest)',
+      background: 'var(--color-surface-container)',
       border: 'var(--color-outline)',
       pillBackground: 'var(--color-surface-container-high)',
       pillForeground: 'var(--color-text-secondary)',
@@ -549,7 +549,7 @@ function MemberNode({
           alt=""
           draggable={false}
           src={MEMBER_AVATARS[getMemberAvatarKey(member, isLead)]}
-          className={`agent-teams-character h-full w-full object-contain drop-shadow-md ${characterClass}`}
+          className={`agent-teams-character h-full w-full object-contain ${characterClass}`}
         />
         <span
           aria-hidden="true"
@@ -573,7 +573,7 @@ function MemberNode({
       </span>
 
       <span
-        className="mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] px-2.5 py-1 shadow-[var(--shadow-card)]"
+        className={`v6c-glass-card mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[var(--radius-lg)] border px-2.5 py-1${!selected && state === 'working' ? ' v6c-ring-running' : !selected && state === 'retrying' ? ' v6c-ring-waiting' : !selected && state === 'error' ? ' v6c-ring-error' : ''}`}
         style={{ borderColor: selected ? 'var(--color-brand)' : 'var(--color-border)' }}
       >
         <span className="truncate font-mono text-[11px] font-medium text-[var(--color-text-primary)]">
@@ -581,7 +581,7 @@ function MemberNode({
         </span>
         {model ? (
           <span
-            className="max-w-[54px] shrink-0 truncate rounded-full border border-[var(--color-border)] px-1.5 py-px text-[11px] font-semibold text-[var(--color-text-tertiary)]"
+            className="max-w-[54px] shrink-0 truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-px text-[11px] font-semibold text-[var(--color-text-tertiary)]"
             title={model.full}
             data-testid={`agent-teams-canvas-member-model-${member.agentId}`}
             data-model-inherited={model.inherited ? 'true' : 'false'}
@@ -590,7 +590,7 @@ function MemberNode({
           </span>
         ) : null}
         {isLead ? (
-          <span className="shrink-0 rounded-full bg-[var(--color-surface-container)] px-1.5 py-px text-[11px] font-medium text-[var(--color-text-secondary)]">
+          <span className="shrink-0 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 py-px text-[11px] font-medium text-[var(--color-text-secondary)]">
             {t('agentTeams.leader')}
           </span>
         ) : null}
@@ -634,7 +634,7 @@ function MemberNode({
                   data-task-status={task.status}
                   data-task-next={next ? 'true' : undefined}
                   title={task.subject}
-                  className="rounded-full border px-1.5 py-px font-mono text-[11px] font-medium"
+                  className="rounded-[var(--radius-sm)] border px-1.5 py-px font-mono text-[11px] font-medium"
                   style={memberTaskChipStyle(task, next, accent)}
                 >
                   #{task.id}
@@ -695,6 +695,16 @@ function TaskCard({
         ? t('agentTeams.task.runningNoOwner')
         : t('agentTeams.task.unclaimed')
 
+  const ringClass = justUnlocked
+    ? 'v6c-ring-success'
+    : stalled === 'error'
+      ? 'v6c-ring-error'
+      : stalled === 'retrying'
+        ? 'v6c-ring-waiting'
+        : state === 'running' && !stalled
+          ? 'v6c-ring-running'
+          : ''
+
   return (
     <button
       type="button"
@@ -709,12 +719,11 @@ function TaskCard({
       onMouseLeave={onHoverEnd}
       onFocus={onFocus}
       onBlur={onBlur}
-      className={`agent-teams-task absolute z-[var(--z-sticky)] flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[var(--radius-md)] border p-[9px_10px] text-left shadow-none outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-card)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
+      className={`agent-teams-task v6c-glass-card absolute z-[var(--z-sticky)] flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[var(--radius-lg)] border p-[9px_10px] text-left outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${ringClass} ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
       style={{
         left: x,
         top: y,
-        backgroundColor: colors.background,
-        borderColor: justUnlocked ? 'var(--color-success)' : stall?.border ?? colors.border,
+        borderColor: ringClass ? 'transparent' : stall?.border ?? colors.border,
         opacity: dimmed ? 0.34 : state === 'blocked' ? 0.72 : 1,
       }}
     >
@@ -723,7 +732,7 @@ function TaskCard({
           #{task.id}
         </span>
         <span
-          className="shrink-0 rounded-full border px-1.5 py-px text-[11px] font-semibold"
+          className="shrink-0 rounded-[var(--radius-sm)] border px-1.5 py-px text-[11px] font-semibold"
           style={{
             backgroundColor: justUnlocked ? 'var(--color-success-container)' : stall?.background ?? colors.pillBackground,
             borderColor: justUnlocked ? 'var(--color-success)' : stall?.border ?? colors.border,
@@ -911,7 +920,7 @@ export function AgentTeamsCanvas({
   return (
     <div
       data-testid="agent-teams-canvas-viewport"
-      className="h-full min-h-0 min-w-0 overflow-auto bg-[var(--color-background)] text-[var(--color-text-primary)]"
+      className="surface-grain scrollbar-autohide h-full min-h-0 min-w-0 overflow-auto bg-[var(--color-background)] text-[var(--color-text-primary)]"
     >
       <div
         data-testid="agent-teams-canvas"
@@ -1012,6 +1021,7 @@ export function AgentTeamsCanvas({
             const from = layout.byId.get(dependencyId)
             if (!from) return null
             const satisfied = from.task.status === 'completed'
+            const flowing = !snapshot.deletedAt && satisfied && to.task.status !== 'completed'
             const justCompleted = satisfied && previousTasksById.get(dependencyId)?.status !== 'completed'
             const fresh = justCompleted || justUnlockedIds.has(to.task.id)
             const owner = taskOwnerVisual(from.task, snapshot, uniqueMembers, from.depth)
@@ -1029,7 +1039,7 @@ export function AgentTeamsCanvas({
                   strokeWidth={fresh ? 3 : focusedChain && related ? 2.5 : 2}
                   strokeDasharray="7 7"
                   opacity={related ? (satisfied ? 0.95 : 0.8) : 0.2}
-                  className={`${satisfied ? 'agent-teams-flow' : ''} ${fresh ? 'agent-teams-unlocked' : ''}`}
+                  className={`${flowing ? 'agent-teams-flow' : ''} ${fresh ? 'agent-teams-unlocked' : ''}`}
                 />
                 <circle
                   cx={to.x - 4}
@@ -1105,7 +1115,7 @@ export function AgentTeamsCanvas({
               <span className="truncate text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 {title}
               </span>
-              <span className="shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
+              <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">
                 {completed}/{lane.count}
               </span>
             </div>
@@ -1159,7 +1169,7 @@ export function AgentTeamsCanvas({
             aria-hidden="true"
             data-testid="agent-teams-active-flight"
             data-flight-channel={route.channel}
-            className="agent-teams-flight pointer-events-none absolute z-[var(--z-nav)] flex items-center gap-1.5 whitespace-nowrap rounded-full border-[1.5px] bg-[var(--color-surface-container-lowest)] px-2 py-1 shadow-[var(--shadow-card)]"
+            className="agent-teams-flight v6c-glass-card pointer-events-none absolute z-[var(--z-nav)] flex items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] border-[1.5px] px-2 py-1"
             style={{
               borderColor: route.color,
               color: route.color,

@@ -69,6 +69,9 @@ test('notification capability failures can be retried and configured remote chan
     assert.equal(attempts, 2)
     assert.ok(!calls.includes('/api/adapters'))
     assert.ok(!find(root, item => item.type === 'InlineError' && item.props.text))
+    const runtimeSheet = find(root, item => item.type === 'RuntimeSheet')
+    assert.ok(runtimeSheet, 'renders RuntimeSheet for schedule model selection')
+    assert.deepEqual(runtimeSheet.props.excludeProviderIds, ['antigravity-acp'])
     cleanups.forEach(cleanup => cleanup?.())
   `
   expect(() => execFileSync(process.execPath, ['--no-env-file', '-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).not.toThrow()

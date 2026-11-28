@@ -207,6 +207,19 @@ describe('buildModelsUrlCandidates', () => {
     ).toEqual(['https://api.example.com/v1/models'])
   })
 
+  test('derives Gemini /v1beta/models candidates from bare, versioned, and /models roots', () => {
+    expect(buildModelsUrlCandidates('https://generativelanguage.googleapis.com', { apiFormat: 'gemini' })).toEqual([
+      'https://generativelanguage.googleapis.com/v1beta/models',
+      'https://generativelanguage.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('http://127.0.0.1:3425/v1beta', { apiFormat: 'gemini' })).toEqual([
+      'http://127.0.0.1:3425/v1beta/models',
+    ])
+    expect(buildModelsUrlCandidates('http://127.0.0.1:3425/v1beta/models', { apiFormat: 'gemini' })).toEqual([
+      'http://127.0.0.1:3425/v1beta/models',
+    ])
+  })
+
   test('throws on an empty base URL', () => {
     expect(() => buildModelsUrlCandidates('')).toThrow(/Base URL is required/)
     expect(() => buildModelsUrlCandidates('   ')).toThrow(/Base URL is required/)
@@ -702,5 +715,153 @@ describe('fetchProviderModels', () => {
 
     expect(result).toMatchObject({ ok: true, endpoint: 'https://custom.example.com/catalog' })
     expect(calls.map(call => call.url)).toEqual(['https://custom.example.com/catalog'])
+  })
+
+  test('fetches Gemini catalogs with x-goog-api-key, strips models/ prefix, and filters non-generative models', async () => {
+    stubFetchSequence([() => jsonResponse({
+      models: [
+        { name: 'models/devin/gemini-4-neon', supportedGenerationMethods: ['generateContent', 'streamGenerateContent'] },
+        { name: 'models/gemini-2.5-pro', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+        { name: 'models/custom-gateway-model' },
+      ],
+    })])
+
+    const result = await fetchProviderModels({
+      baseUrl: 'http://127.0.0.1:3425',
+      apiKey: 'magpie-test-key',
+      apiFormat: 'gemini',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: 'custom-gateway-model' },
+        { id: 'devin/gemini-4-neon' },
+        { id: 'gemini-2.5-pro' },
+      ],
+      endpoint: 'http://127.0.0.1:3425/v1beta/models',
+    })
+    expect(calls).toHaveLength(1)
+    expect(new Headers(calls[0]!.init?.headers).get('x-goog-api-key')).toBe('magpie-test-key')
+    expect(authHeaderOf(calls[0]!)).toBeNull()
+  })
+
+  test('derives Vertex AI publisher model catalog URLs for bare aiplatform roots and supports ambient AWS credentials', async () => {
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com/v1', { apiFormat: 'google_vertex' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'gemini' })).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/publishers/google/models',
+      'https://aiplatform.googleapis.com/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google', { apiFormat: 'google_vertex' })).toEqual([
+      'https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models',
+      'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models',
+    ])
+
+    // Azure OpenAI / Foundry model URL candidates across /openai/v1, /openai, and bare host
+    expect(buildModelsUrlCandidates('https://my-res.services.ai.azure.com/openai/v1', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.services.ai.azure.com/openai/v1/models',
+    ])
+    expect(buildModelsUrlCandidates('https://my-res.openai.azure.com/openai', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.openai.azure.com/openai/v1/models',
+      'https://my-res.openai.azure.com/openai/models?api-version=2024-10-21',
+    ])
+    expect(buildModelsUrlCandidates('https://my-res.openai.azure.com', { apiFormat: 'azure_openai' })).toEqual([
+      'https://my-res.openai.azure.com/openai/v1/models',
+      'https://my-res.openai.azure.com/openai/models?api-version=2024-10-21',
+    ])
+
+    // Ambient Bedrock model discovery fails cleanly with auth-failed when no AWS env vars exist
+    const previousBearer = process.env.AWS_BEARER_TOKEN_BEDROCK
+    const previousAccessKey = process.env.AWS_ACCESS_KEY_ID
+    const previousSecretKey = process.env.AWS_SECRET_ACCESS_KEY
+    delete process.env.AWS_BEARER_TOKEN_BEDROCK
+    delete process.env.AWS_ACCESS_KEY_ID
+    delete process.env.AWS_SECRET_ACCESS_KEY
+    try {
+      const missingAuth = await fetchProviderModels({
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: '',
+        apiFormat: 'bedrock_converse',
+      })
+      expect(missingAuth).toMatchObject({ ok: false, errorCode: 'auth-failed' })
+    } finally {
+      if (previousAccessKey !== undefined) process.env.AWS_ACCESS_KEY_ID = previousAccessKey
+      if (previousSecretKey !== undefined) process.env.AWS_SECRET_ACCESS_KEY = previousSecretKey
+      if (previousBearer !== undefined) process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
+    }
+
+    process.env.AWS_BEARER_TOKEN_BEDROCK = 'ABSK-ambient-env-token'
+    try {
+      stubFetchSequence([() => jsonResponse({
+        modelSummaries: [{ modelId: 'us.anthropic.claude-sonnet-4-6-v1:0', providerName: 'Anthropic' }],
+      })])
+      const result = await fetchProviderModels({
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: '',
+        apiFormat: 'bedrock_converse',
+      })
+      expect(result).toEqual({
+        ok: true,
+        models: [{ id: 'us.anthropic.claude-sonnet-4-6-v1:0', ownedBy: 'Anthropic' }],
+        endpoint: 'https://bedrock.us-east-1.amazonaws.com/foundation-models',
+      })
+      expect(authHeaderOf(calls[0]!)).toBe('Bearer ABSK-ambient-env-token')
+    } finally {
+      if (previousBearer === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK
+      else process.env.AWS_BEARER_TOKEN_BEDROCK = previousBearer
+    }
+  })
+
+  test('lists Vertex publisher models from the regional inference URL and returns usable model IDs', async () => {
+    const catalog = 'https://us-east5-aiplatform.googleapis.com/v1beta1/publishers/anthropic/models'
+    const baseUrl = 'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/old:rawPredict'
+    stubFetch(url => url === catalog
+      ? jsonResponse({ publisherModels: [{ name: 'publishers/anthropic/models/claude-sonnet-4-6' }] })
+      : jsonResponse({}, 404))
+    expect(await fetchProviderModels({ baseUrl, apiKey: 'test-api-key', apiFormat: 'google_vertex', isFullUrl: true }))
+      .toEqual({ ok: true, endpoint: catalog, models: [{ id: 'claude-sonnet-4-6' }] })
+  })
+
+  test('derives clean catalog candidates from full Gemini and Vertex action URLs and preserves error contracts', () => {
+    expect(
+      buildModelsUrlCandidates(
+        'https://gateway.example/v1beta/models/old:streamGenerateContent?route=a&alt=SSE#frag',
+        { apiFormat: 'gemini' },
+      ),
+    ).toEqual([
+      'https://gateway.example/v1beta/models?route=a',
+    ])
+
+    expect(
+      buildModelsUrlCandidates(
+        'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/old:rawPredict',
+        { apiFormat: 'google_vertex' },
+      ),
+    ).toEqual([
+      'https://us-east5-aiplatform.googleapis.com/v1beta1/publishers/anthropic/models',
+      'https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models',
+    ])
+
+    expect(
+      buildModelsUrlCandidates('https://aiplatform.googleapis.com', { apiFormat: 'google_vertex', isFullUrl: true }),
+    ).toEqual([
+      'https://aiplatform.googleapis.com/v1beta1/publishers/google/models',
+    ])
+
+    expect(() => buildModelsUrlCandidates('completions', { apiFormat: 'gemini', isFullUrl: true }))
+      .toThrow(/Cannot derive models endpoint from full URL/)
+    expect(() => buildModelsUrlCandidates('not-a-url', { apiFormat: 'google_vertex' }))
+      .toThrow(/Not a valid URL/)
   })
 })

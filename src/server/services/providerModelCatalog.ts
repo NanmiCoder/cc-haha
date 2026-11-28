@@ -13,7 +13,15 @@ import {
   loadNetworkSettings,
   resolveProviderNetworkSettings,
 } from './networkSettings.js'
-import type { ProviderProxyConfig } from '../types/provider.js'
+import { buildBedrockModelsEndpoints } from '../proxy/bedrockEndpoint.js'
+import {
+  buildBedrockRequestHeaders,
+  buildOpenaiAuthHeaders,
+  resolveVertexAuthHeaders,
+} from '../proxy/cloudAuth.js'
+import { isVertexEndpointUrl, normalizeGeminiModelName } from '../proxy/geminiEndpoint.js'
+import { DEFAULT_AZURE_OPENAI_API_VERSION, isAzureOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
+import type { ApiFormat, ProviderProxyConfig } from '../types/provider.js'
 
 export type FetchedModel = {
   id: string
@@ -42,6 +50,7 @@ export type FetchProviderModelsResult =
 export type FetchProviderModelsInput = {
   baseUrl: string
   apiKey: string
+  apiFormat?: ApiFormat
   isFullUrl?: boolean
   modelsUrl?: string
   /** The provider's own proxy override, so the probe reaches it the way chat will. */
@@ -73,14 +82,14 @@ const COMPAT_SUFFIXES = [
   '/claude',
 ] as const
 
-const VERSION_SEGMENT_RE = /^v\d+$/
+const VERSION_SEGMENT_RE = /^v\d+(?:alpha|beta\d*)?$/i
+const GEMINI_ACTION_PATH_RE = /\/models\/.+:(?:generateContent|streamGenerateContent|rawPredict|streamRawPredict)$/i
 
 // Shapes seen in the wild for the same catalog: OpenAI's `data`, plus the
-// `models`/`items`/bare-array variants. cc-switch is lenient like this on its
-// Codex-OAuth path only; there is no reason for the generic path to be stricter.
-const MODEL_ARRAY_KEYS = ['data', 'models', 'items'] as const
-const MODEL_ID_KEYS = ['id', 'slug', 'model', 'name'] as const
-const MODEL_OWNER_KEYS = ['owned_by', 'ownedBy', 'provider', 'vendor', 'owner'] as const
+// `models`/`items`/bare-array variants, Bedrock model summaries and Vertex publisher models.
+const MODEL_ARRAY_KEYS = ['data', 'models', 'items', 'modelSummaries', 'publisherModels'] as const
+const MODEL_ID_KEYS = ['id', 'modelId', 'slug', 'model', 'name'] as const
+const MODEL_OWNER_KEYS = ['owned_by', 'ownedBy', 'providerName', 'provider', 'vendor', 'owner'] as const
 
 // Structural auth markers only — never match on human-readable text, which is
 // localized and would misfire across providers.
@@ -118,7 +127,7 @@ function assertHttpUrl(candidate: string): string {
 
 export function buildModelsUrlCandidates(
   baseUrl: string,
-  options?: { isFullUrl?: boolean; modelsUrl?: string },
+  options?: { isFullUrl?: boolean; modelsUrl?: string; apiFormat?: ApiFormat },
 ): string[] {
   // An explicit override wins outright — no guessing on top of it.
   const override = options?.modelsUrl?.trim()
@@ -129,24 +138,60 @@ export function buildModelsUrlCandidates(
     throw new Error('Base URL is required to derive the models endpoint')
   }
 
-  // A full URL already points at a concrete endpoint (…/v1/chat/completions),
-  // so the catalog is derived from its root and there is nothing to fall back
-  // to.
-  if (options?.isFullUrl) {
-    return [deriveModelsUrlFromFullUrl(trimmed)]
+  const candidates: string[] = []
+  const isGemini = options?.apiFormat === 'gemini' || options?.apiFormat === 'google_vertex'
+  const parsedGeminiUrl = isGemini ? tryParseUrl(trimmed) : null
+  if (parsedGeminiUrl && isVertexEndpointUrl(parsedGeminiUrl.origin)) {
+    // Model Garden lists across projects at the publisher's top-level resource.
+    const publisher = parsedGeminiUrl.pathname.match(/\/publishers\/([^/]+)/i)?.[1] ?? 'google'
+    candidates.push(`${parsedGeminiUrl.origin}/v1beta1/publishers/${publisher}/models`)
   }
 
-  const candidates: string[] = []
-  const lastSegment = trimmed.slice(trimmed.lastIndexOf('/') + 1)
+  // Full inference URLs can also expose a catalog at the API root.
+  if (options?.isFullUrl) {
+    try {
+      candidates.push(deriveModelsUrlFromFullUrl(trimmed))
+    } catch (err) {
+      if (candidates.length === 0) throw err
+    }
+    return dedupe(candidates).map(assertHttpUrl)
+  }
 
-  if (VERSION_SEGMENT_RE.test(lastSegment)) {
-    // Already versioned (…/v1, or Zhipu's …/api/coding/paas/v4).
+  const lastSegment = trimmed.slice(trimmed.lastIndexOf('/') + 1)
+  const isVertex = options?.apiFormat === 'google_vertex' || (isGemini && isVertexEndpointUrl(trimmed))
+  const isBedrock = options?.apiFormat === 'bedrock_converse'
+  const isAzure = options?.apiFormat === 'azure_openai' || isAzureOpenaiEndpoint(trimmed)
+  const geminiActionCatalogUrl = parsedGeminiUrl ? deriveGeminiModelsUrlFromActionUrl(parsedGeminiUrl) : null
+
+  if (isBedrock) {
+    candidates.push(...buildBedrockModelsEndpoints(trimmed))
+  } else if (isAzure) {
+    candidates.push(...buildAzureModelsUrlCandidates(trimmed))
+  } else if (geminiActionCatalogUrl) {
+    candidates.push(geminiActionCatalogUrl)
+  } else if (isGemini && /\/models$/i.test(trimmed)) {
+    candidates.push(trimmed)
+  } else if (isVertex && /\/publishers\/[^/]+$/i.test(trimmed)) {
+    candidates.push(`${trimmed}/models`)
+  } else if (isVertex && /\/projects\/[^/]+\/locations\/[^/]+$/i.test(trimmed)) {
+    candidates.push(`${trimmed}/publishers/google/models`)
+  } else if (isVertex && VERSION_SEGMENT_RE.test(lastSegment)) {
+    candidates.push(`${trimmed}/publishers/google/models`)
+    candidates.push(`${trimmed}/models`)
+  } else if (isVertex) {
+    candidates.push(`${trimmed}/v1/publishers/google/models`)
+    candidates.push(`${trimmed}/v1/models`)
+  } else if (VERSION_SEGMENT_RE.test(lastSegment)) {
+    // Already versioned (…/v1, …/v1beta, or Zhipu's …/api/coding/paas/v4).
     candidates.push(`${trimmed}/models`)
     // A non-v1 API root may still mirror the catalog under the OpenAI-style
-    // /v1 prefix, so keep that as a fallback.
-    if (!trimmed.endsWith('/v1')) {
+    // /v1 prefix, so keep that as a fallback unless it is a Gemini endpoint.
+    if (!isGemini && !trimmed.endsWith('/v1')) {
       candidates.push(`${trimmed}/v1/models`)
     }
+  } else if (isGemini) {
+    candidates.push(`${trimmed}/v1beta/models`)
+    candidates.push(`${trimmed}/v1/models`)
   } else {
     candidates.push(`${trimmed}/v1/models`)
   }
@@ -177,11 +222,15 @@ export async function fetchProviderModels(
   const baseUrl = input.baseUrl?.trim() ?? ''
   const apiKey = input.apiKey?.trim() ?? ''
 
-  if (!baseUrl || !apiKey) {
+  const allowsAmbientCloudCredential =
+    input.apiFormat === 'google_vertex' || input.apiFormat === 'bedrock_converse'
+  if (!baseUrl || (!apiKey && !allowsAmbientCloudCredential)) {
     return {
       ok: false,
       errorCode: 'missing-config',
-      message: 'Base URL and API key are both required to fetch models',
+      message: allowsAmbientCloudCredential
+        ? 'Base URL is required to fetch models'
+        : 'Base URL and API key are both required to fetch models',
       endpointsTried: [],
     }
   }
@@ -191,6 +240,7 @@ export async function fetchProviderModels(
     candidates = buildModelsUrlCandidates(baseUrl, {
       isFullUrl: input.isFullUrl,
       modelsUrl: input.modelsUrl,
+      apiFormat: input.apiFormat,
     })
   } catch (err) {
     // Undeducible endpoint is a configuration problem, not a network one.
@@ -210,18 +260,24 @@ export async function fetchProviderModels(
   for (const endpoint of candidates) {
     endpointsTried.push(endpoint)
 
+    let requestHeaders: Record<string, string>
+    try {
+      requestHeaders = await buildModelsRequestHeaders(endpoint, apiKey, input.apiFormat)
+    } catch (err) {
+      return {
+        ok: false,
+        errorCode: 'auth-failed',
+        message: redactApiKey(errorMessage(err), apiKey),
+        endpointsTried,
+      }
+    }
+
     let response: Response
     try {
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, endpoint)
       response = await fetch(endpoint, {
         method: 'GET',
-        // cc-switch sends a bearer token to every provider, including the
-        // Anthropic- and Gemini-compatible ones. There is deliberately no
-        // x-api-key / anthropic-version branch here.
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'application/json',
-        },
+        headers: requestHeaders,
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         ...proxyOptions,
       })
@@ -290,7 +346,7 @@ export async function fetchProviderModels(
       }
     }
 
-    return { ok: true, models: toFetchedModels(rawList), endpoint }
+    return { ok: true, models: toFetchedModels(rawList, input.apiFormat), endpoint }
   }
 
   return {
@@ -306,6 +362,28 @@ export async function fetchProviderModels(
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '')
+}
+
+function tryParseUrl(value: string): URL | null {
+  try {
+    return new URL(value)
+  } catch {
+    return null
+  }
+}
+
+function deriveGeminiModelsUrlFromActionUrl(parsed: URL): string | null {
+  const pathname = stripTrailingSlashes(parsed.pathname)
+  if (!GEMINI_ACTION_PATH_RE.test(pathname)) return null
+  const modelsUrl = new URL(parsed.toString())
+  modelsUrl.pathname = pathname.replace(GEMINI_ACTION_PATH_RE, '/models')
+  modelsUrl.hash = ''
+  for (const value of modelsUrl.searchParams.getAll('alt')) {
+    if (value.toLowerCase() === 'sse') {
+      modelsUrl.searchParams.delete('alt', value)
+    }
+  }
+  return modelsUrl.toString()
 }
 
 /** `true` when the URL has a scheme separator with a host behind it. */
@@ -362,12 +440,15 @@ function findModelArray(payload: unknown): unknown[] | null {
 }
 
 /** Map a model array leniently: entries may be plain strings or objects. */
-function toFetchedModels(entries: unknown[]): FetchedModel[] {
+function toFetchedModels(entries: unknown[], apiFormat?: ApiFormat): FetchedModel[] {
   const models: FetchedModel[] = []
   const seen = new Set<string>()
+  const isGemini = apiFormat === 'gemini' || apiFormat === 'google_vertex'
 
   for (const entry of entries) {
-    const id = readModelId(entry)
+    if (isGemini && !supportsGeminiGenerateContent(entry)) continue
+    const rawId = readModelId(entry)
+    const id = rawId && isGemini ? normalizeGeminiModelName(rawId) : rawId
     if (!id || seen.has(id)) continue
     seen.add(id)
     const ownedBy = readModelOwner(entry)
@@ -379,6 +460,106 @@ function toFetchedModels(entries: unknown[]): FetchedModel[] {
   // the host's locale data.
   models.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   return models
+}
+
+function buildAzureModelsUrlCandidates(trimmed: string): string[] {
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return [`${trimmed}/v1/models`]
+  }
+  const pathname = parsed.pathname.replace(/\/+$/, '')
+  const apiVersion = parsed.searchParams.get('api-version')
+  const candidates: string[] = []
+
+  // Strip `/deployments/<name>...` back to the `/openai` prefix so `/models` is discoverable.
+  const deploymentIdx = pathname.toLowerCase().indexOf('/openai/deployments/')
+  if (deploymentIdx >= 0) {
+    const openaiRoot = pathname.slice(0, deploymentIdx + '/openai'.length)
+    const classic = new URL(parsed.origin)
+    classic.pathname = `${openaiRoot}/models`
+    classic.searchParams.set('api-version', apiVersion || DEFAULT_AZURE_OPENAI_API_VERSION)
+    candidates.push(classic.toString())
+
+    const modern = new URL(parsed.origin)
+    modern.pathname = `${openaiRoot}/v1/models`
+    candidates.push(modern.toString())
+    return candidates
+  }
+
+  if (/\/openai\/v1$/i.test(pathname)) {
+    const modern = new URL(parsed.toString())
+    modern.pathname = `${pathname}/models`
+    candidates.push(modern.toString())
+    return candidates
+  }
+
+  const openaiRoot = /\/openai$/i.test(pathname)
+    ? pathname
+    : pathname === ''
+      ? '/openai'
+      : `${pathname}/openai`
+
+  const modern = new URL(parsed.origin)
+  modern.pathname = `${openaiRoot}/v1/models`
+  candidates.push(modern.toString())
+
+  const classic = new URL(parsed.origin)
+  classic.pathname = `${openaiRoot}/models`
+  classic.searchParams.set('api-version', apiVersion || DEFAULT_AZURE_OPENAI_API_VERSION)
+  candidates.push(classic.toString())
+  return candidates
+}
+
+async function buildModelsRequestHeaders(
+  endpoint: string,
+  apiKey: string,
+  apiFormat?: ApiFormat,
+): Promise<Record<string, string>> {
+  if (apiFormat === 'google_vertex' || (apiFormat === 'gemini' && isVertexEndpointUrl(endpoint))) {
+    const authHeaders = await resolveVertexAuthHeaders(apiKey, 'api_key', endpoint)
+    return {
+      ...authHeaders,
+      Accept: 'application/json',
+    }
+  }
+  if (apiFormat === 'gemini') {
+    return {
+      ...(apiKey ? { 'x-goog-api-key': apiKey } : {}),
+      Accept: 'application/json',
+    }
+  }
+  if (apiFormat === 'bedrock_converse') {
+    return buildBedrockRequestHeaders({
+      url: endpoint,
+      method: 'GET',
+      rawCredential: apiKey,
+      baseHeaders: { Accept: 'application/json' },
+    })
+  }
+  if (apiFormat === 'azure_openai' || isAzureOpenaiEndpoint(endpoint)) {
+    return {
+      ...buildOpenaiAuthHeaders({
+        url: endpoint,
+        apiKey,
+        forceAzure: apiFormat === 'azure_openai',
+      }),
+      Accept: 'application/json',
+    }
+  }
+  return {
+    // cc-switch sends a bearer token to every OpenAI/Anthropic provider.
+    Authorization: `Bearer ${apiKey}`,
+    Accept: 'application/json',
+  }
+}
+
+function supportsGeminiGenerateContent(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return true
+  const methods = (entry as Record<string, unknown>).supportedGenerationMethods
+  if (!Array.isArray(methods)) return true
+  return methods.some(method => method === 'generateContent' || method === 'streamGenerateContent')
 }
 
 function readModelId(entry: unknown): string | undefined {

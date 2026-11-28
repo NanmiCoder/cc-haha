@@ -6,7 +6,6 @@ import type { BackgroundAgentTask, ChatState, ServerMessage, UIMessage } from '.
 import type { TeamWorkbenchSessionTimeline, TeamWorkbenchTask, TeamWorkbenchTimeline } from '../../types/team'
 import type { WorkflowRun } from '../../types/workflow'
 import { browserHost } from '../../lib/desktopHost/browserHost'
-import { tabChipClass } from '@/components/ui/tabChip'
 
 type ToolUseMessage = Extract<UIMessage, { type: 'tool_use' }>
 
@@ -1918,14 +1917,11 @@ describe('TabBar', () => {
     expectNoHeaderText()
   })
 
-  it('keeps the window gutter on the panel paper while the workspace is open', async () => {
+  it('keeps the top window bar uncluttered and transparent when the workspace opens', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
     const { useWorkspaceStore } = await import('../../stores/workspaceStore')
-    // Imported here, not at the top of the file: `vi.resetModules()` hands the
-    // strip a fresh provider module, and a statically imported one would be a
-    // second React context that the strip can never see.
     const { WorkspaceHeaderProvider } = await import('./WorkspaceHeaderContext')
     const sessionId = 'gutter-session'
 
@@ -1939,30 +1935,25 @@ describe('TabBar', () => {
     } as Partial<ReturnType<typeof useChatStore.getState>>)
 
     await act(async () => {
-      // The window owns the header slot; without it the strip falls back to
-      // the dock and there is no header frame to paint.
       render(<WorkspaceHeaderProvider><TabBar /></WorkspaceHeaderProvider>)
     })
 
     const frame = screen.getByTestId('workspace-header-frame')
     const gutter = screen.getByTestId('tab-bar-drag-gutter')
 
-    // Closed, the trough runs to the window edge and the gutter disappears
-    // into it; the frame paints nothing of its own.
     expect(frame.className).not.toMatch(/\bbg-\[/)
 
-    // Open, everything above the panel is one ground — the trough the
-    // workspace's resource tabs sit in, not paper. The gutter is a transparent
-    // sibling of the header, so the element that paints has to contain it.
     await act(async () => {
       useWorkspaceStore.getState().toggleWorkspace(sessionId)
     })
-    expect(frame).toHaveClass('bg-[var(--color-surface-sidebar)]')
-    expect(frame).not.toHaveClass('bg-[var(--color-surface)]')
+    // Decoupled WorkspaceTabStrip stays inside WorkspaceSurface, so the top
+    // window frame never widens or repaints when the side workbench opens.
+    expect(frame.className).not.toMatch(/\bbg-\[/)
     expect(frame).toContainElement(gutter)
+    expect(screen.queryByTestId('workspace-header-slot')).not.toBeInTheDocument()
   })
 
-  it('keeps the open workspace header as window chrome instead of a no-drag tab strip', async () => {
+  it('keeps the open workspace window bar free of a portaled resource tab slot while preserving drag chrome', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -1986,17 +1977,13 @@ describe('TabBar', () => {
       useWorkspaceStore.getState().toggleWorkspace(sessionId)
     })
 
-    const slot = screen.getByTestId('workspace-header-slot')
-    const header = screen.getByTestId('workspace-window-header')
-    // `tab-bar-interactive` marks the node *and every descendant* as no-drag.
-    // The slot hosts the resource strip's leftover flex space, so that class
-    // would make the circled empty titlebar undraggable on every platform.
-    expect(slot).toHaveAttribute('data-desktop-drag-region')
-    expect(slot.className).not.toMatch(/\btab-bar-interactive\b/)
-    expect(header).toHaveAttribute('data-desktop-drag-region')
+    expect(screen.queryByTestId('workspace-header-slot')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tab-bar')).toHaveAttribute('data-desktop-drag-region')
+    expect(screen.getByTestId('tab-bar-scroll-region')).toHaveAttribute('data-desktop-drag-region')
+    expect(screen.getByTestId('workspace-layout-controls')).toHaveClass('tab-bar-interactive')
   })
 
-  it('uses the shared tab chip, with selection strictly stronger than hover', async () => {
+  it('renders V6C low-radius raised glass session tabs without border jumps', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -2020,37 +2007,18 @@ describe('TabBar', () => {
     const active = screen.getByText('Active One').closest('.tab-bar-interactive')
     const inactive = screen.getByText('Inactive One').closest('.tab-bar-interactive')
 
-    // One chip for both strips: the session tabs carry exactly the classes the
-    // workspace's resource tabs do.
-    expect(active?.className).toContain(tabChipClass(true))
-    expect(inactive?.className).toContain(tabChipClass(false))
-
-    // #1123 landed because the strip, the active tab and the content were all
-    // `--color-surface`. The strip stays on the sidebar's ground and only the
-    // active chip is filled with paper at rest.
-    expect(active?.className).toContain('bg-[var(--color-surface)]')
+    expect(active).toHaveClass('v6c-raised', 'rounded-[var(--radius-control)]')
+    expect(inactive).toHaveClass('rounded-[var(--radius-control)]')
+    expect(inactive).not.toHaveClass('v6c-raised')
     expect(inactive?.className).not.toMatch(/(?:^|\s)bg-/)
+    expect(inactive?.className).toContain('hover:bg-[var(--color-surface-hover)]')
 
-    // Paper against the trough is 1.05–1.10:1, so the active chip needs the
-    // `--color-tab-edge` ring to have a shape; `--color-border` lands at
-    // 1.12:1 there and cannot draw it (see contrast.test.ts).
-    expect(active?.className).toContain('0_0_0_1px_var(--color-tab-edge)')
-    expect(active?.className).not.toContain('var(--color-border)')
-
-    // Hover rises to paper with the faint ring and never uses
-    // `--color-surface-hover`, which is brighter than paper on the ink themes
-    // and would make a hovered tab outshine the selected one.
-    expect(inactive?.className).toContain('hover:bg-[var(--color-surface)]')
-    expect(inactive?.className).toContain('hover:shadow-[0_0_0_1px_var(--color-tab-separator)]')
-    expect(inactive?.className).not.toContain('surface-hover')
-    expect(active?.className).not.toContain('--color-tab-separator')
-
-    // Rings are shadows, not borders, so selecting a tab never moves its title.
+    // Rings are box-shadows, not borders, so selecting a tab never shifts its label.
     expect(active?.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/)
     expect(inactive?.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/)
   })
 
-  it('keeps the strip on the frame ground so the active tab can lift off it', async () => {
+  it('frames the editorial studio tab strip with a crisp hairline bottom divider', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -2072,22 +2040,9 @@ describe('TabBar', () => {
 
     const strip = screen.getByTestId('tab-bar')
 
-    // The two halves of the contract. If the strip ever goes back to
-    // `--color-surface` the active tab's fill stops reading as a lift and the
-    // whole bar flattens again, which is the regression #1123 reported.
-    expect(strip).toHaveClass('bg-[var(--color-surface-sidebar)]')
-    expect(screen.getByText('Active One').closest('.tab-bar-interactive')?.className)
-      .toContain('bg-[var(--color-surface)]')
-
-    // And it stays *exactly* the sidebar's ground — not a darkened trough.
-    // Darkening it is the easy way to make the tabs pop, and it is the wrong
-    // one: it turns the titlebar into a separate band running across the top
-    // of the window instead of the same surface the sidebar is already on.
-    expect(strip.className).not.toMatch(/bg-\[var\(--color-(?!surface-sidebar)/)
-
-    // No rule under the strip: like the workspace's resource strip, it is
-    // separated from the content by its ground alone.
-    expect(strip.className).not.toMatch(/\bborder-b\b/)
+    expect(strip).toHaveClass('bg-transparent', 'border-b', 'border-[var(--color-border)]')
+    expect(screen.getByText('Active One').closest('.tab-bar-interactive'))
+      .toHaveClass('v6c-raised')
   })
 
   it('marks every tab with its selection state', async () => {
@@ -3976,6 +3931,107 @@ describe('TabBar', () => {
 
         expect(useTabStore.getState().activeTabId).toBe('a')
       })
+    })
+
+    it('renders a subtle 12px ModelBrandIcon badge only on Antigravity session tabs', async () => {
+      const { TabBar } = await import('./TabBar')
+      const { useTabStore } = await import('../../stores/tabStore')
+      const { useSessionStore } = await import('../../stores/sessionStore')
+      const { useChatStore } = await import('../../stores/chatStore')
+
+      useTabStore.setState({
+        tabs: [
+          { sessionId: 'std-1', title: 'Standard Session', type: 'session', status: 'idle' },
+          { sessionId: 'ag-1', title: 'Antigravity Session', type: 'session', status: 'idle' },
+        ],
+        activeTabId: 'ag-1',
+      })
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: 'std-1',
+            title: 'Standard Session',
+            createdAt: '2026-11-26T00:00:00.000Z',
+            modifiedAt: '2026-11-26T00:00:00.000Z',
+            messageCount: 1,
+            projectPath: '/repo',
+            projectRoot: '/repo',
+            workDir: '/repo',
+            workDirExists: true,
+          },
+          {
+            id: 'ag-1',
+            title: 'Antigravity Session',
+            createdAt: '2026-11-26T00:00:00.000Z',
+            modifiedAt: '2026-11-26T00:00:00.000Z',
+            messageCount: 1,
+            projectPath: '/repo',
+            projectRoot: '/repo',
+            workDir: '/repo',
+            workDirExists: true,
+            runtimeProviderId: 'antigravity-acp',
+            runtimeModelId: 'gemini-3.8-pro',
+          },
+        ],
+      })
+      useChatStore.setState({
+        sessions: {},
+        disconnectSession: vi.fn(),
+      } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+      await act(async () => {
+        render(<TabBar />)
+      })
+
+      const standardTab = screen.getByText('Standard Session').closest('.tab-strip-item') as HTMLElement
+      const agTab = screen.getByText('Antigravity Session').closest('.tab-strip-item') as HTMLElement
+
+      expect(within(standardTab).queryByTestId('tab-antigravity-badge')).not.toBeInTheDocument()
+      const badge = within(agTab).getByTestId('tab-antigravity-badge')
+      const svg = badge.querySelector('svg')
+      expect(svg).not.toBeNull()
+      expect(svg).toHaveAttribute('width', '12')
+      expect(svg).toHaveAttribute('height', '12')
+      expect(svg).toHaveAttribute('data-brand', 'google')
+    })
+
+    it('portals the tab context menu to document.body with menu semantics and focus-visible states', async () => {
+      const { TabBar } = await import('./TabBar')
+      const { useTabStore } = await import('../../stores/tabStore')
+
+      useTabStore.setState({
+        tabs: [
+          { sessionId: 'tab-a', title: 'Session A', type: 'session', status: 'idle' },
+          { sessionId: 'tab-b', title: 'Session B', type: 'session', status: 'idle' },
+        ],
+        activeTabId: 'tab-a',
+        closedSessionTabs: [],
+      })
+
+      let container!: HTMLElement
+      await act(async () => {
+        const rendered = render(<TabBar />)
+        container = rendered.container
+      })
+
+      fireEvent.contextMenu(screen.getByText('Session A'))
+
+      const menu = screen.getByRole('menu')
+      expect(container).not.toContainElement(menu)
+      expect(document.body).toContainElement(menu)
+
+      const items = within(menu).getAllByRole('menuitem')
+      expect(items).toHaveLength(6)
+      for (const item of items) {
+        expect(item).toHaveAttribute('type', 'button')
+        expect(item).toHaveClass(
+          'focus-visible:outline-none',
+          'focus-visible:bg-[var(--color-surface-hover)]',
+          'focus-visible:ring-2',
+          'focus-visible:ring-inset',
+          'focus-visible:ring-[var(--color-border-focus)]',
+        )
+      }
     })
   })
 })

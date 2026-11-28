@@ -7,6 +7,7 @@ import {
   fetchGrokModelCatalog,
   getGrokModelCatalog,
   GROK_MODELS_ENDPOINT,
+  readCachedGrokModelCatalog,
 } from './modelCatalog.js'
 import { GROK_MODEL_CATALOG, getGrokRuntimeModelCatalog } from './models.js'
 import { GROK_CLI_VERSION } from './fetch.js'
@@ -174,5 +175,35 @@ describe('Grok model catalog', () => {
     await new Promise((resolve) => setTimeout(resolve, 5))
 
     expect(calls).toBe(1)
+  })
+
+  test('normalizes context_length and max_context_window and supports waitForInitial / readCachedGrokModelCatalog', async () => {
+    clearGrokModelCatalogCache()
+    expect(readCachedGrokModelCatalog('desktop-a')).toEqual(GROK_MODEL_CATALOG)
+
+    let calls = 0
+    const models = await getGrokModelCatalog({
+      accessToken: 'desktop-a',
+      waitForInitial: true,
+      fetchOverride: async () => {
+        calls += 1
+        return Response.json({
+          models: [
+            { id: 'grok-4.7', context_length: 500_000, max_context_window: 1_000_000 },
+            { id: 'grok-next', total_context_tokens: 750_000, max_context_tokens: 2_000_000 },
+            { id: 'grok-long', context_window: 500_000, max_context_length: 1_500_000 },
+          ],
+        })
+      },
+    })
+    expect(calls).toBe(1)
+    expect(models).toEqual([
+      expect.objectContaining({ value: 'grok-4.7', contextWindow: 500_000, maxContextWindow: 1_000_000 }),
+      expect.objectContaining({ value: 'grok-next', contextWindow: 750_000, maxContextWindow: 2_000_000 }),
+      expect.objectContaining({ value: 'grok-long', contextWindow: 500_000, maxContextWindow: 1_500_000 }),
+    ])
+    expect(readCachedGrokModelCatalog('desktop-a')).toEqual(models)
+    expect(readCachedGrokModelCatalog('desktop-b')).toEqual(GROK_MODEL_CATALOG)
+    expect(readCachedGrokModelCatalog(null)).toEqual(GROK_MODEL_CATALOG)
   })
 })

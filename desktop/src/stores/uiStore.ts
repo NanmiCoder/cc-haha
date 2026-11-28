@@ -57,6 +57,7 @@ const SETTINGS_TABS = [
   'memory',
   'plugins',
   'pets',
+  'browserUse',
   'computerUse',
   'diagnostics',
   'about',
@@ -125,9 +126,8 @@ function getStoredSettingsTab(): SettingsTab {
  */
 function paintDocumentTheme(theme: ThemeMode) {
   document.documentElement.setAttribute('data-theme', theme)
-  // Two of the six palettes sit on a dark ground, so this cannot test for the
-  // literal 'dark' key — ink-blue would render native scrollbars and form
-  // controls in their light variant against a near-black page.
+  // Delegate to `isDarkTheme` so native scrollbars and form controls stay in
+  // sync with the theme system if additional dark palettes are ever added.
   document.documentElement.style.colorScheme = isDarkTheme(theme) ? 'dark' : 'light'
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_BACKGROUNDS[theme])
 }
@@ -136,10 +136,11 @@ export function applyTheme(
   theme: ThemeMode,
   followSystem = readStoredFollowSystemTheme(),
   lightTheme = readStoredLightTheme(),
+  darkTheme = readStoredDarkTheme(),
 ) {
   if (typeof document === 'undefined') return
   paintDocumentTheme(theme)
-  notifyHostAppearance(theme, followSystem, lightTheme)
+  notifyHostAppearance(theme, followSystem, lightTheme, darkTheme)
 }
 
 /**
@@ -147,15 +148,16 @@ export function applyTheme(
  * window background matches it on the next launch. Best effort: the browser
  * host and the Tauri shell have no such channel and simply no-op.
  *
- * `lightBackground` travels along because a cache written at night would
- * otherwise have no way to know which light theme to repaint in the morning.
+ * Both ground preferences travel along so a cache written in one appearance
+ * can paint the other correctly on the next launch or native OS update.
  */
-function notifyHostAppearance(theme: ThemeMode, followSystem: boolean, lightTheme: LightThemeMode) {
+function notifyHostAppearance(theme: ThemeMode, followSystem: boolean, lightTheme: LightThemeMode, darkTheme: DarkThemeMode) {
   void import('../lib/desktopHost')
     .then(({ desktopHost }) => desktopHost.appearance.setApplied({
       isDark: isDarkTheme(theme),
       background: THEME_BACKGROUNDS[theme],
       lightBackground: THEME_BACKGROUNDS[lightTheme],
+      darkBackground: THEME_BACKGROUNDS[darkTheme],
       followSystem,
     }))
     .catch(() => { /* host channel unavailable */ })
@@ -166,7 +168,7 @@ let stopStorageSync: (() => void) | null = null
 
 export function initializeTheme() {
   const state = useUIStore.getState()
-  applyTheme(state.theme, state.followSystemTheme, state.lightTheme)
+  applyTheme(state.theme, state.followSystemTheme, state.lightTheme, state.darkTheme)
   // Pin down the inferred default so it survives the next launch.
   persistThemeState({
     theme: state.theme,
@@ -194,7 +196,7 @@ export function initializeTheme() {
       systemAppearance: appearance,
     })
     if (next === current.theme) return
-    applyTheme(next, true, lightTheme)
+    applyTheme(next, true, lightTheme, darkTheme)
     persistThemeState({ theme: next, lightTheme, darkTheme, followSystem: true })
     useUIStore.setState({ theme: next, lightTheme, darkTheme, followSystemTheme: true })
   })
@@ -255,6 +257,7 @@ export type SettingsTab =
   | 'memory'
   | 'plugins'
   | 'pets'
+  | 'browserUse'
   | 'computerUse'
   | 'diagnostics'
   | 'about'
@@ -367,7 +370,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Picking a palette while following the system does not fight the OS: it
   // becomes the preference for its own half and shows up once the OS is on
-  // that ground. So choosing ink-blue at noon is remembered for tonight.
+  // that ground (e.g. choosing dark during the day is remembered for night).
   setTheme: (theme) => {
     set((state) => {
       const lightTheme = isLightThemeMode(theme) ? theme : state.lightTheme
@@ -379,7 +382,7 @@ export const useUIStore = create<UIStore>((set) => ({
         darkTheme,
         systemAppearance: getSystemAppearance(),
       })
-      applyTheme(applied, state.followSystemTheme, lightTheme)
+      applyTheme(applied, state.followSystemTheme, lightTheme, darkTheme)
       persistThemeState({ theme: applied, lightTheme, darkTheme, followSystem: state.followSystemTheme })
       return { theme: applied, lightTheme, darkTheme }
     })
@@ -396,7 +399,7 @@ export const useUIStore = create<UIStore>((set) => ({
         darkTheme: state.darkTheme,
         systemAppearance: getSystemAppearance(),
       })
-      applyTheme(applied, follow, state.lightTheme)
+      applyTheme(applied, follow, state.lightTheme, state.darkTheme)
       persistThemeState({
         theme: applied,
         lightTheme: state.lightTheme,
@@ -415,7 +418,7 @@ export const useUIStore = create<UIStore>((set) => ({
       const next = THEME_MODES[(currentIndex + 1) % THEME_MODES.length] ?? 'white'
       const lightTheme = isLightThemeMode(next) ? next : state.lightTheme
       const darkTheme = isDarkThemeMode(next) ? next : state.darkTheme
-      applyTheme(next, false, lightTheme)
+      applyTheme(next, false, lightTheme, darkTheme)
       persistThemeState({ theme: next, lightTheme, darkTheme, followSystem: false })
       return { theme: next, lightTheme, darkTheme, followSystemTheme: false }
     })

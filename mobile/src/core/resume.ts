@@ -22,6 +22,7 @@ export function resumeAction({
   connection,
   socketOpen,
   backoffPending,
+  paused = false,
   attemptStartedAt,
   hiddenAt,
   now,
@@ -30,19 +31,22 @@ export function resumeAction({
   connection: ConnectionState
   socketOpen: boolean
   backoffPending: boolean
+  /** 后台断线后暂停了重连循环，回到前台时立即恢复。 */
+  paused?: boolean
   attemptStartedAt?: number
   hiddenAt?: number
   now: number
   staleAfter?: number
 }): ResumeAction {
   if (connection === 'pairing_required') return 'none'
+  if (paused) return 'reconnect'
   if (backoffPending) return 'expedite'
   if (connection === 'ready') return socketOpen ? 'probe' : 'reconnect'
   if (connection === 'offline') return 'reconnect'
   const spannedSuspension =
     hiddenAt !== undefined &&
     attemptStartedAt !== undefined &&
-    attemptStartedAt <= hiddenAt &&
+    attemptStartedAt < now &&
     now - hiddenAt >= staleAfter
   return spannedSuspension ? 'reconnect' : 'none'
 }

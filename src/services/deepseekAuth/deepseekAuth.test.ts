@@ -7,6 +7,7 @@ import {
   DEEPSEEK_PLATFORM_ORIGIN,
   DeepSeekAuthError,
   buildDeepSeekClientHeaders,
+  fetchDeepSeekBalance,
   fetchDeepSeekProfile,
   getDeepSeekPlatformOrigin,
   initDeepSeekAuth,
@@ -289,6 +290,54 @@ describe('DeepSeek platform client', () => {
         }),
       ),
     ).resolves.toEqual({ name: 'A', contact: 'a***@example.com' })
+  })
+
+  test('queries Platform wallet balances and rejects non-decimal values', async () => {
+    const balance = (fetchOverride: typeof fetch) =>
+      fetchDeepSeekBalance('dsh_live_token', { identity, fetchOverride })
+
+    await expect(
+      balance(
+        platformJson({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              normal_wallets: [
+                { currency: 'CNY', balance: '0E-16' },
+                { currency: 'USD', balance: '12.50' },
+              ],
+              bonus_wallets: [{ currency: 'CNY', balance: '5.0000' }],
+            },
+          },
+        }),
+      ),
+    ).resolves.toEqual({
+      normalWallets: [
+        { currency: 'CNY', balance: '0E-16' },
+        { currency: 'USD', balance: '12.50' },
+      ],
+      bonusWallets: [{ currency: 'CNY', balance: '5.0000' }],
+    })
+
+    await expect(
+      balance(
+        platformJson({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              normal_wallets: [{ currency: 'CNY', balance: 'not-a-decimal' }],
+              bonus_wallets: [],
+            },
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'protocol' })
+
+    await expect(balance(platformJson({ code: 40003 }))).rejects.toMatchObject({
+      code: 'unauthorized',
+    })
   })
 
   test('derives the five client headers from platform and locale', () => {

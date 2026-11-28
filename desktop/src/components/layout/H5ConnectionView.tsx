@@ -2,7 +2,6 @@ import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { readStoredH5Connection, saveAndVerifyH5Connection } from '../../lib/desktopRuntime'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { useTranslation } from '../../i18n'
@@ -44,18 +43,14 @@ export function H5ConnectionView({
   }
 
   return (
-    <div className="animate-screen-pop h-screen flex items-center justify-center bg-[var(--color-surface)] px-6">
-      <Card
-        as="section"
-        radius="xl"
-        surface="lowest"
-        padding="lg"
-        shadow="card"
-        className="w-full max-w-md"
+    <div className="animate-screen-pop app-shell-viewport v6c-ambient-shell flex items-center justify-center px-6">
+      <section
+        data-testid="h5-connection-card"
+        className="dialog-glass w-full max-w-[400px] rounded-[var(--radius-3xl)] px-6 pb-6 pt-7"
       >
         <div className="mb-5 flex flex-col items-center gap-3 text-center">
           <BrandSeal size="lg" />
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+          <h1 className="mt-1 text-[18px] font-semibold leading-snug tracking-tight text-[var(--color-text-primary)]">
             {t('h5Connect.title')}
           </h1>
           <p className="text-[13px] leading-6 text-[var(--color-text-tertiary)]">
@@ -105,7 +100,7 @@ export function H5ConnectionView({
             } finally { setSubmitting(false) }
           }}>{t('common.retry')}</Button>}
         </form>
-      </Card>
+      </section>
     </div>
   )
 }

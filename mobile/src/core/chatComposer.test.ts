@@ -64,6 +64,11 @@ describe('real mobile composition', () => {
     const message = buildComposerMessage('Investigate', [], true)
     expect(message.content).toContain('<agent-team-request>')
     expect(visibleMessageText(message.content)).toBe('Investigate')
+    expect(
+      visibleMessageText(
+        '<browser-use-request target="workspace">\nUse Browser Use for this request.\n</browser-use-request>\n\nOpen page'
+      )
+    ).toBe('Open page')
     expect(buildComposerMessage('Next', [], false).content).toBe('Next')
     expect(
       withSkill('review this', {

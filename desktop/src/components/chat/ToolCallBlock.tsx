@@ -13,7 +13,7 @@ import {
   Copy,
   LoaderCircle,
 } from 'lucide-react'
-import { activitySegmentIcon } from './activityGroupModel'
+import { activitySegmentIcon, type ToolErrorSeverity } from './activityGroupModel'
 import { CodeViewer } from './CodeViewer'
 import { DiffViewer } from './DiffViewer'
 import { TerminalChrome } from './TerminalChrome'
@@ -62,12 +62,14 @@ export type ToolCallChrome = 'card' | 'row'
  * waiting on the user is amber, failed is red. Done and idle stay neutral —
  * a finished step should not compete with the one still in flight.
  */
-export type ToolRowStatus = 'idle' | 'running' | 'waiting' | 'done' | 'error' | 'stopped'
+export type ToolRowStatus = 'idle' | 'running' | 'waiting' | 'done' | 'error' | 'recovered' | 'stopped'
 
 type Props = {
   toolName: string
   input: unknown
   result?: { content: unknown; isError: boolean } | null
+  /** Distinguishes self-recovered intermediate tool failures from blocking ones. */
+  errorSeverity?: ToolErrorSeverity
   agentTaskNotification?: AgentTaskNotification
   compact?: boolean
   chrome?: ToolCallChrome
@@ -169,11 +171,12 @@ type ContentStats = {
   windowed?: boolean
 }
 
-export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey, toolUseId, navigationHighlighted = false, awaitingApproval = false, running }: Props) {
+export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, errorSeverity, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey, toolUseId, navigationHighlighted = false, awaitingApproval = false, running }: Props) {
   const isRow = chrome === 'row'
   const isExitPlanTool = isExitPlanModeTool(toolName)
   const isEnterPlanTool = isEnterPlanModeTool(toolName)
-  const [localExpanded, setLocalExpanded] = useState(defaultExpanded || isExitPlanTool)
+  // Pending ExitPlanMode stays expanded for active user review; settled plans default collapsed.
+  const [localExpanded, setLocalExpanded] = useState(defaultExpanded || (isExitPlanTool && !result))
   const expanded = disclosureKey ? (getDisclosure(disclosureKey) ?? localExpanded) : localExpanded
   const setExpanded = (next: boolean | ((value: boolean) => boolean)) => {
     const resolved = typeof next === 'function' ? next(expanded) : next
@@ -203,19 +206,24 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   const pendingTitle = pendingSummary
     ? (liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary)
     : undefined
-  const rowStatus: ToolRowStatus = result?.isError
+  const effectiveErrorSeverity: ToolErrorSeverity = !result?.isError
+    ? 'none'
+    : (errorSeverity ?? 'blocking')
+  const rowStatus: ToolRowStatus = effectiveErrorSeverity === 'blocking'
     ? 'error'
-    : result
-      ? 'done'
-      : stoppedSummary
-        ? 'stopped'
-        : awaitingApproval
-          ? 'waiting'
-          // Input still streaming is live by definition; past that, only an
-          // owner that knows the turn is live may call a resultless step running.
-          : (running || Boolean(pendingSummary))
-            ? 'running'
-            : 'idle'
+    : effectiveErrorSeverity === 'recovered'
+      ? 'recovered'
+      : result
+        ? 'done'
+        : stoppedSummary
+          ? 'stopped'
+          : awaitingApproval
+            ? 'waiting'
+            // Input still streaming is live by definition; past that, only an
+            // owner that knows the turn is live may call a resultless step running.
+            : (running || Boolean(pendingSummary))
+              ? 'running'
+              : 'idle'
   // The text extractors below skip image blocks; this is what gives them a thumbnail.
   const toolImages = useMemo(
     () => toolResultImagesFor({ toolName, input, content: result?.content }),
@@ -226,8 +234,8 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     : ''
 
   const preview = useMemo(
-    () => renderPreview(toolName, obj, result, t, durationSummary),
-    [durationSummary, obj, result, toolName, t],
+    () => renderPreview(toolName, obj, result, t, durationSummary, effectiveErrorSeverity),
+    [durationSummary, effectiveErrorSeverity, obj, result, toolName, t],
   )
   const details = useMemo(
     () => renderDetails(toolName, obj, t, isPending ? partialInput : undefined),
@@ -265,6 +273,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     return (
       <EnterPlanModeToolCallBlock
         result={result}
+        errorSeverity={effectiveErrorSeverity}
         compact={compact}
         isPending={isPending}
       />
@@ -327,26 +336,26 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
           }
         }}
         title={headTitle}
-        className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left after:absolute after:inset-0 after:rounded-[var(--radius-sm)] after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)]"
+        className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left after:absolute after:inset-0 after:rounded-[var(--radius-sm)] after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)]"
       >
         {isRow ? null : <CardToolIcon toolName={toolName} status={rowStatus} />}
         <span
           className={
             labelKind === 'toolName'
-              ? `${target.text ? 'max-w-[40%] shrink-0' : 'min-w-0'} truncate font-mono text-[12px] font-medium text-[var(--color-text-primary)]`
+              ? `${target.text ? 'max-w-[40%] shrink-0' : 'min-w-0'} truncate font-mono text-[12px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]`
               : labelKind === 'description'
-                ? 'min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]'
-                : 'shrink-0 text-[13px] font-medium text-[var(--color-text-primary)]'
+                ? 'min-w-0 truncate text-[13px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]'
+                : 'shrink-0 text-[13px] font-medium text-[var(--color-text-secondary)] transition-colors group-hover/toolhead:text-[var(--color-text-primary)]'
           }
         >
           {verb}
         </span>
         {target.text ? (
           <span
-            className={`min-w-0 truncate ${
+            className={`min-w-0 truncate transition-colors group-hover/toolhead:text-[var(--color-text-secondary)] ${
               target.mono
-                ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
-                : 'text-[13px] text-[var(--color-text-secondary)]'
+                ? 'font-mono text-[12px] text-[var(--color-text-tertiary)]'
+                : 'text-[13px] text-[var(--color-text-tertiary)]'
             }`}
           >
             {target.text}
@@ -386,10 +395,14 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       omitted={toolImages.dropped}
       originalPath={toolImages.originalPath}
       toolName={toolName}
-      // Row: under the text column, where the expanded details also start.
-      className={isRow ? 'pb-1.5 pl-[30px] pt-0.5' : 'px-3 pb-3'}
+      // Row & worklog: under the text column, where the expanded details also start.
+      className="pb-1.5 pl-7 pt-0.5"
     />
   ) : null
+
+  // Only pending user decisions get a highlight ring; routine running or
+  // intermediate/recovered tool errors stay completely borderless and calm.
+  const rowRingClass = rowStatus === 'waiting' ? 'v6c-ring-waiting' : ''
 
   if (isRow) {
     return (
@@ -397,12 +410,13 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         data-tool-call-chrome="row"
         data-tool-use-id={toolUseId}
         data-tool-status={rowStatus}
-        className={`rounded-[var(--radius-sm)]${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
+        data-tool-error-severity={effectiveErrorSeverity !== 'none' ? effectiveErrorSeverity : undefined}
+        className={`rounded-[var(--radius-sm)] ${rowRingClass}${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
       >
-        <div className="flex min-h-[30px] items-center gap-1">
+        <div className="flex min-h-7 items-center gap-1 px-1 py-0.5">
           <ToolNode toolName={toolName} status={rowStatus} />
           <div
-            className={`group/toolhead relative flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-sm)] pl-1 pr-1 transition-colors ${
+            className={`group/toolhead relative flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-[var(--radius-sm)] pl-1 pr-1 transition-colors ${
               expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''
             }`}
           >
@@ -411,7 +425,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         </div>
 
         {SESSION_TOOL_NAMES.has(toolName) ? (
-          <div className="pl-[30px]"><SessionToolLinks input={input} result={result?.content} /></div>
+          <div className="pl-7"><SessionToolLinks input={input} result={result?.content} /></div>
         ) : null}
 
         {/* Outside the disclosure on purpose: a picture the tool returned is the
@@ -421,8 +435,8 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
         {expandable && expanded && (
           <div
             data-tool-call-details="inline"
-            data-tool-output-error={result?.isError ? 'true' : undefined}
-            className="space-y-2 pb-2.5 pl-[30px] pt-1"
+            data-tool-output-error={effectiveErrorSeverity === 'blocking' ? 'true' : undefined}
+            className="space-y-2 pb-2 pl-7 pr-1 pt-1"
           >
             {preview}
             {details}
@@ -437,27 +451,31 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
       data-tool-call-chrome="card"
       data-tool-use-id={toolUseId}
       data-tool-status={rowStatus}
-      className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
-        compact ? 'mb-0' : 'mb-2'
+      data-tool-error-severity={effectiveErrorSeverity !== 'none' ? effectiveErrorSeverity : undefined}
+      className={`overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container-lowest)] ${
+        rowRingClass || 'border border-[var(--color-border)]'
+      } ${
+        compact ? 'mb-0' : 'mb-1.5'
       }${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
     >
       <div
-        className={`group/toolhead relative flex w-full items-center gap-2 px-3 transition-colors ${
-          compact ? 'min-h-9' : 'min-h-10'
-        } ${expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''}`}
+        className={[
+          'group/toolhead relative flex min-h-9 w-full items-center gap-1.5 rounded-[var(--radius-lg)] px-3 py-1 transition-colors',
+          expandable ? 'hover:bg-[var(--color-surface-hover)]' : '',
+        ].filter(Boolean).join(' ')}
       >
         {head}
       </div>
 
-      {SESSION_TOOL_NAMES.has(toolName) ? <SessionToolLinks input={input} result={result?.content} /> : null}
+      {SESSION_TOOL_NAMES.has(toolName) ? <div className="pl-7"><SessionToolLinks input={input} result={result?.content} /></div> : null}
 
       {imageStrip}
 
       {expandable && expanded && (
         <div
           data-tool-call-details="panel"
-          data-tool-output-error={result?.isError ? 'true' : undefined}
-          className="space-y-2.5 border-t border-[var(--color-border)] px-3 py-3"
+          data-tool-output-error={effectiveErrorSeverity === 'blocking' ? 'true' : undefined}
+          className="space-y-2 border-t border-[var(--color-border)] px-3 pb-3 pt-2.5"
         >
           {preview}
           {details}
@@ -467,46 +485,46 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   )
 })
 
-/** The row's node on the run's rail. */
+/** The row's cap-aligned 24px icon column on the run's rail. */
 function ToolNode({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
   const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
   return (
     <span
       aria-hidden="true"
       data-tool-node={status}
-      className={`relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${NODE_TONE[status]}`}
+      className={`relative flex h-6 w-6 shrink-0 items-center justify-center ${NODE_TONE[status]}`}
     >
-      <Icon size={12} strokeWidth={2} className={status === 'running' ? 'animate-spin' : undefined} />
+      <Icon size={13} strokeWidth={1.75} className={status === 'running' ? 'animate-spin' : undefined} />
     </span>
   )
 }
 
 const NODE_TONE: Record<ToolRowStatus, string> = {
-  idle: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  done: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  stopped: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
-  running: 'border-[var(--color-info)] bg-[var(--color-info-container)] text-[var(--color-on-info-container)]',
-  waiting: 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
-  error: 'border-[var(--color-error-soft-hover)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+  idle: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  done: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  stopped: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  recovered: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  running: 'bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  waiting: 'rounded-[var(--radius-sm)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
+  error: 'bg-[var(--color-surface)] text-[var(--color-error)]',
 }
 
-/** A standalone card leads with a plain glyph; the node belongs to the rail. */
+/** Cap-aligned 24px icon column for standalone borderless worklog rows. */
 function CardToolIcon({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
   const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
   const tone = status === 'error'
     ? 'text-[var(--color-error)]'
-    : status === 'running'
-      ? 'text-[var(--color-info)]'
-      : status === 'waiting'
-        ? 'text-[var(--color-warning)]'
-        : 'text-[var(--color-text-tertiary)]'
+    : status === 'waiting'
+      ? 'text-[var(--color-warning)]'
+      : 'text-[var(--color-text-tertiary)]'
   return (
-    <Icon
-      size={14}
-      strokeWidth={1.75}
-      aria-hidden="true"
-      className={`shrink-0 ${tone} ${status === 'running' ? 'animate-spin' : ''}`}
-    />
+    <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center">
+      <Icon
+        size={14}
+        strokeWidth={1.75}
+        className={`${tone} ${status === 'running' ? 'animate-spin' : ''}`}
+      />
+    </span>
   )
 }
 
@@ -539,7 +557,7 @@ function ToolRowMeta({
 
   if (pendingSummary) {
     return (
-      <span className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+      <span className="codex-shimmer-text inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12px] text-[var(--color-text-tertiary)]">
         <span className="truncate">{pendingSummary}</span>
         {liveStatsSummary ? (
           <>
@@ -554,7 +572,7 @@ function ToolRowMeta({
   if (stoppedSummary) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-text-tertiary)]">
-        <CircleStop size={12} strokeWidth={2} aria-hidden="true" />
+        <CircleStop size={12} strokeWidth={1.75} aria-hidden="true" />
         {stoppedSummary}
       </span>
     )
@@ -563,7 +581,7 @@ function ToolRowMeta({
   if (rowStatus === 'waiting') {
     return (
       <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-[var(--color-on-warning-container)]">
-        <CirclePause size={12} strokeWidth={2} aria-hidden="true" />
+        <CirclePause size={12} strokeWidth={1.75} aria-hidden="true" />
         {t('permission.awaitingApproval')}
       </span>
     )
@@ -578,9 +596,24 @@ function ToolRowMeta({
   }
 
   if (result.isError) {
+    if (rowStatus === 'recovered') {
+      // Codex pattern: intermediate self-recovered errors stay quiet monochrome
+      // tertiary text — zero red badge, zero alert icon.
+      const exitCode = isShellTool(toolName)
+        ? parseShellExitCode(extractTextContent(result.content) ?? '', true)
+        : null
+      const quietLabel = exitCode !== null
+        ? t('tool.exitCode', { code: exitCode })
+        : outputSummary
+      return quietLabel ? (
+        <span className="min-w-0 shrink truncate text-[12px] text-[var(--color-text-tertiary)]">
+          {quietLabel}
+        </span>
+      ) : null
+    }
     return outputSummary ? (
       <span className="inline-flex min-w-0 shrink items-center gap-1 text-[12px] text-[var(--color-error)]">
-        <CircleX size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        <CircleX size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
         <span className="min-w-0 truncate">{outputSummary}</span>
       </span>
     ) : null
@@ -660,39 +693,41 @@ function formatSearchSummary(parsed: GrepResult, t: Translate): string {
 
 function EnterPlanModeToolCallBlock({
   result,
+  errorSeverity,
   compact,
   isPending,
 }: {
   result?: { content: unknown; isError: boolean } | null
+  errorSeverity: ToolErrorSeverity
   compact: boolean
   isPending: boolean
 }) {
   const t = useTranslation()
-  const errorText = result?.isError ? extractTextContent(result.content) : null
+  const isBlockingError = errorSeverity === 'blocking'
+  const errorText = isBlockingError && result?.isError ? extractTextContent(result.content) : null
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
-      compact ? 'mb-0' : 'mb-2'
-    }`}>
-      <div className="flex min-h-9 w-full items-center gap-2 px-3 text-left">
-        <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+    <div className={compact ? 'mb-0' : 'mb-1'}>
+      <div className="flex min-h-6 w-full items-center gap-1.5 py-0.5 text-left">
+        <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
+          <ClipboardList size={14} strokeWidth={1.75} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-secondary)]">
           {t('settings.permissions.plan')}
         </span>
         {isPending ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
-            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+          <span className="codex-shimmer-text inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-text-tertiary)]">
             {t('tool.preparingTool')}
           </span>
         ) : null}
-        {result?.isError ? (
+        {isBlockingError ? (
           <CircleX size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
         ) : null}
       </div>
 
-      {result?.isError && errorText ? (
-        <div className="border-t border-[var(--color-border)] px-3 py-3">
-          {renderResultOutput(result, errorText, t)}
+      {isBlockingError && result?.isError && errorText ? (
+        <div className="pb-2 pl-7 pt-1">
+          {renderResultOutput(result, errorText, t, errorSeverity)}
         </div>
       ) : null}
     </div>
@@ -735,9 +770,10 @@ function PlanToolCallBlock({
     }`}>
       <button
         type="button"
+        data-chat-disclosure="true"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex min-h-10 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        className="flex min-h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
         <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -749,8 +785,7 @@ function PlanToolCallBlock({
           </span>
         ) : null}
         {isPending ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
-            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+          <span className="codex-shimmer-text inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-text-tertiary)]">
             {t('tool.preparingTool')}
           </span>
         ) : null}
@@ -763,9 +798,10 @@ function PlanToolCallBlock({
       </button>
 
       {expanded ? (
-        <div className="space-y-2.5 border-t border-[var(--color-border)] px-3 py-3">
+        <div className="space-y-2.5 border-t border-[var(--color-border)] px-3.5 py-3">
           {showPlanPreview ? (
             <PlanPreviewCard
+              embedded
               title={t('permission.planPreviewTitle')}
               plan={preview.plan}
               filePath={preview.filePath}
@@ -775,7 +811,7 @@ function PlanToolCallBlock({
             />
           ) : null}
           {result?.isError && hasRawResult ? (
-            renderResultOutput(result, extractTextContent(result.content) ?? '', t)
+            renderResultOutput(result, extractTextContent(result.content) ?? '', t, 'blocking')
           ) : null}
         </div>
       ) : null}
@@ -791,8 +827,8 @@ function DetailCopyButton({ text, t }: { text: string; t?: Translate }) {
       text={text}
       label={label}
       copiedLabel={t?.('common.copied') ?? 'Copied'}
-      displayLabel={<><Copy size={12} strokeWidth={2} aria-hidden="true" />{label}</>}
-      displayCopiedLabel={<><CircleCheck size={12} strokeWidth={2} aria-hidden="true" />{t?.('common.copied') ?? 'Copied'}</>}
+      displayLabel={<><Copy size={12} strokeWidth={1.75} aria-hidden="true" />{label}</>}
+      displayCopiedLabel={<><CircleCheck size={12} strokeWidth={1.75} aria-hidden="true" />{t?.('common.copied') ?? 'Copied'}</>}
       className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
     />
   )
@@ -820,6 +856,7 @@ function renderPreview(
   result?: { content: unknown; isError: boolean } | null,
   t?: Translate,
   durationSummary = '',
+  errorSeverity: ToolErrorSeverity = 'none',
 ) {
   const filePath = typeof obj.file_path === 'string' ? obj.file_path : 'file'
   // Must match the terminal-block condition below exactly. When they diverged, a
@@ -829,7 +866,7 @@ function renderPreview(
   const shellCommand = isShellTool(toolName) && typeof obj.command === 'string' ? obj.command : null
   const echoesInTerminal = shellCommand !== null
   const resultText = getVisibleResultText(toolName, result, echoesInTerminal)
-  const resultOutput = result && resultText ? renderResultOutput(result, resultText, t) : null
+  const resultOutput = result && resultText ? renderResultOutput(result, resultText, t, errorSeverity) : null
 
   if (toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
     return (
@@ -859,6 +896,7 @@ function renderPreview(
         command={shellCommand}
         result={result ?? null}
         durationSummary={durationSummary}
+        errorSeverity={errorSeverity}
       />
     )
   }
@@ -930,28 +968,32 @@ function ShellTerminal({
   command,
   result,
   durationSummary,
+  errorSeverity,
 }: {
   toolName: string
   command: string
   result: { content: unknown; isError: boolean } | null
   durationSummary: string
+  errorSeverity: ToolErrorSeverity
 }) {
   const [expanded, setExpanded] = useState(false)
   const t = useTranslation()
   const isError = Boolean(result?.isError)
+  const isBlockingError = isError && errorSeverity === 'blocking'
   const resolved = useMemo(
     () => (result ? resolveShellOutputKind(result.content, toolName) : null),
     [result, toolName],
   )
-  // Errors are never windowed. #625 deliberately made full tool error output
-  // visible; putting failures behind a 12-line window would quietly undo that.
-  // Successes get the window because they are the bulk of the transcript.
+  // Unrecovered blocking errors show full output; recovered intermediate
+  // errors and successes use the 12-line window so transient failures never
+  // flood the transcript.
   const output = useMemo(
-    () => prepareShellOutput(resolved?.kind === 'text' ? resolved.text : '', expanded || isError),
-    [resolved, expanded, isError],
+    () => prepareShellOutput(resolved?.kind === 'text' ? resolved.text : '', expanded || isBlockingError),
+    [resolved, expanded, isBlockingError],
   )
-  const showToggle = output.collapsible && !isError
+  const showToggle = output.collapsible && !isBlockingError
   const exitCode = result ? parseShellExitCode(extractTextContent(result.content) ?? '', isError) : null
+  const exitLabel = exitCode === null ? t('agentStatus.failed') : t('tool.exitCode', { code: exitCode })
 
   return (
     <TerminalChrome
@@ -959,12 +1001,21 @@ function ShellTerminal({
       meta={(
         <>
           {result ? (
-            <Badge
-              tone={isError ? 'danger' : 'success'}
-              data-shell-exit={exitCode ?? 'error'}
-            >
-              {exitCode === null ? t('agentStatus.failed') : t('tool.exitCode', { code: exitCode })}
-            </Badge>
+            isBlockingError ? (
+              <Badge
+                tone="danger"
+                data-shell-exit={exitCode ?? 'error'}
+              >
+                {exitLabel}
+              </Badge>
+            ) : !isError ? (
+              <Badge
+                tone="success"
+                data-shell-exit={exitCode ?? 'error'}
+              >
+                {exitLabel}
+              </Badge>
+            ) : null
           ) : null}
           {durationSummary ? (
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationSummary}</span>
@@ -988,8 +1039,8 @@ function ShellTerminal({
             <pre
               data-shell-output=""
               tabIndex={0}
-              className={`mt-1.5 max-h-[420px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
-                isError ? 'text-[var(--color-error)]' : 'text-[var(--color-code-fg)]'
+              className={`scrollbar-autohide scroll-edge-fade mt-1.5 max-h-[420px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+                isBlockingError ? 'text-[var(--color-error)]' : 'text-[var(--color-code-fg)]'
               }`}
             >
               {output.visible}
@@ -1001,6 +1052,16 @@ function ShellTerminal({
           </div>
         )}
       </div>
+      {result && isError && !isBlockingError ? (
+        <div className="flex items-center gap-2 px-3 pb-1.5 pt-0.5 text-[12px] text-[var(--color-text-tertiary)]">
+          <span
+            data-shell-exit={exitCode ?? 'error'}
+            className="ml-auto font-mono text-[11px] tabular-nums"
+          >
+            {exitLabel}
+          </span>
+        </div>
+      ) : null}
       {showToggle ? (
         <button
           type="button"
@@ -1034,7 +1095,7 @@ function SearchResultView({
   return (
     <div
       data-search-result=""
-      className="max-h-[340px] divide-y divide-[var(--color-border)] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] font-mono text-[12px] leading-[1.6]"
+      className="scrollbar-autohide scroll-edge-fade max-h-[340px] divide-y divide-[var(--color-border)] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] font-mono text-[12px] leading-[1.6]"
     >
       {rows.map((row, index) => (
         <div key={`${row.file}:${row.line ?? ''}:${index}`} className="flex gap-3.5 px-2.5 py-1">
@@ -1278,26 +1339,37 @@ function renderResultOutput(
   result: { content: unknown; isError: boolean },
   text: string,
   t?: Translate,
+  errorSeverity: ToolErrorSeverity = 'none',
 ) {
-  const label = result.isError
+  const isBlockingError = result.isError && errorSeverity === 'blocking'
+  const label = isBlockingError
     ? t?.('tool.errorOutput') ?? 'Error Output'
     : t?.('tool.toolOutput') ?? 'Tool Output'
 
   return (
     <>
       <InlineImageGallery text={text} />
-      {result.isError ? (
+      {isBlockingError ? (
         <div
           data-tool-detail-surface="error"
-          className="overflow-hidden rounded-[var(--radius-md)] bg-[var(--color-error-container)]"
+          className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-error-container)]"
         >
           <DetailHead label={label} tone="error">
             <DetailCopyButton text={text} t={t} />
           </DetailHead>
-          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
+          <pre className="scrollbar-autohide scroll-edge-fade max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
             {text}
           </pre>
         </div>
+      ) : result.isError ? (
+        <DetailBlock>
+          <DetailHead label={label}>
+            <DetailCopyButton text={text} t={t} />
+          </DetailHead>
+          <pre className="scrollbar-autohide scroll-edge-fade max-h-[300px] overflow-auto whitespace-pre-wrap break-words bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-text-secondary)]">
+            {text}
+          </pre>
+        </DetailBlock>
       ) : (
         <DetailBlock>
           <CodeViewer code={text} language="plaintext" maxLines={18} chrome="embedded" label={label} />
@@ -1542,7 +1614,7 @@ function renderWriterPreview(
           <span className="shrink-0 pr-1.5 font-mono text-[11px] tabular-nums">{statsSummary}</span>
         </DetailHead>
       </div>
-      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-code-fg)]">
+      <pre className="scrollbar-autohide scroll-edge-fade max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-code-fg)]">
         {visibleContent}
       </pre>
     </div>

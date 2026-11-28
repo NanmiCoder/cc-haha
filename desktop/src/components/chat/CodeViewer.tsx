@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from 'react'
 import { Highlight, type PrismTheme } from 'prism-react-renderer'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, FileCode2, WrapText } from 'lucide-react'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { useTranslation } from '../../i18n'
 
@@ -248,7 +248,7 @@ function CodeArea({
       ref={containerRef}
       data-has-line-numbers={showLineNumbers ? 'true' : 'false'}
       data-unbounded-height={unboundedHeight ? 'true' : undefined}
-      className={`code-viewer-area relative overflow-auto bg-[var(--color-code-bg)] ${unboundedHeight ? '' : 'max-h-[420px]'}`}
+      className={`code-viewer-area scrollbar-autohide relative overflow-auto bg-[var(--color-code-bg)] ${unboundedHeight ? '' : 'max-h-[420px]'}`}
     >
       {(!ShikiHighlighter || !loaded) && (
         <PrismCodeContent
@@ -310,6 +310,10 @@ export function CodeViewer({
 }: Props) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const [wrapped, setWrapped] = useState(wrapLongLines)
+  useEffect(() => {
+    setWrapped(wrapLongLines)
+  }, [wrapLongLines])
   const isEmbedded = chrome === 'embedded'
 
   const allLines = code.split('\n')
@@ -323,6 +327,7 @@ export function CodeViewer({
     { count: allLines.length },
   )
   const showExpandToggle = allLines.length > maxLines
+  const wrapToggleLabel = t(wrapped ? 'workspace.review.disableWrap' : 'workspace.review.enableWrap')
 
   return (
     <div
@@ -334,9 +339,14 @@ export function CodeViewer({
           : 'overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)]'
       }
     >
-      {/* Header: one quiet 30px line on the code's own ground. */}
-      <div className="flex h-[30px] items-center justify-between gap-2 border-b border-[var(--color-border)] pl-3 pr-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+      {/* Header: one quiet 30px line with language icon, wrap toggle, and beveled copy. */}
+      <div
+        className={`flex h-[30px] items-center justify-between gap-2 border-b border-[var(--color-border)] pl-3 pr-1.5 text-[11px] text-[var(--color-text-tertiary)] ${
+          isEmbedded ? '' : 'bg-[var(--color-surface-container-low)]'
+        }`}
+      >
         <div className="flex min-w-0 items-center gap-1.5">
+          <FileCode2 size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           {label ? (
             <>
               <span className="shrink-0 font-medium text-[var(--color-text-secondary)]">{label}</span>
@@ -347,14 +357,30 @@ export function CodeViewer({
           <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
           <span className="shrink-0 tabular-nums">{lineCountLabel}</span>
         </div>
-        <CopyButton
-          text={code}
-          label={t('common.copy')}
-          copiedLabel={t('common.copied')}
-          displayLabel={<><Copy size={12} strokeWidth={2} aria-hidden="true" />{t('common.copy')}</>}
-          displayCopiedLabel={<><Check size={12} strokeWidth={2} aria-hidden="true" />{t('common.copied')}</>}
-          className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-        />
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            aria-pressed={wrapped}
+            aria-label={wrapToggleLabel}
+            title={wrapToggleLabel}
+            onClick={() => setWrapped((value) => !value)}
+            className={`inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+              wrapped
+                ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+            }`}
+          >
+            <WrapText size={12} strokeWidth={1.75} aria-hidden="true" />
+          </button>
+          <CopyButton
+            text={code}
+            label={t('common.copy')}
+            copiedLabel={t('common.copied')}
+            displayLabel={<><Copy size={12} strokeWidth={1.75} aria-hidden="true" />{t('common.copy')}</>}
+            displayCopiedLabel={<><Check size={12} strokeWidth={1.75} aria-hidden="true" />{t('common.copied')}</>}
+            className="control-bevel inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          />
+        </div>
       </div>
 
       {/* Code area */}
@@ -362,7 +388,7 @@ export function CodeViewer({
         code={visibleCode}
         language={language}
         showLineNumbers={effectiveShowLineNumbers}
-        wrapLongLines={wrapLongLines}
+        wrapLongLines={wrapped}
         unboundedHeight={unboundedHeight}
       />
 

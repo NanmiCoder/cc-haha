@@ -69,11 +69,23 @@ describe('SettingsGroup / SettingsRow', () => {
       </SettingsGroup>,
     )
     const group = screen.getByLabelText('Rows')
-    expect(group.className).toContain('rounded-[var(--radius-lg)]')
+    expect(group.className).toContain('rounded-[var(--radius-xl)]')
+    expect(group.className).toContain('v6c-glass-card')
     expect(group.className).toContain('border')
     expect(group.className).toContain('divide-y')
     // Not overflow-hidden: rows host Dropdowns whose menus would be clipped.
     expect(group.className).not.toContain('overflow-hidden')
+  })
+
+  it('renders an optional integrated card header inside SettingsGroup', () => {
+    render(
+      <SettingsGroup title="Network" description="Proxy rules" action={<button type="button">Reset</button>}>
+        <SettingsRow title="Mode">System</SettingsRow>
+      </SettingsGroup>,
+    )
+    expect(screen.getByText('Network')).toBeInTheDocument()
+    expect(screen.getByText('Proxy rules')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeInTheDocument()
   })
 
   it('shows the title, the description and the control of a row', () => {
@@ -166,8 +178,9 @@ describe('SettingsPill', () => {
 
   it('fills with ink when selected and tone is ink', () => {
     render(<SettingsPill selected onClick={() => {}}>Paper</SettingsPill>)
-    expect(screen.getByRole('button', { name: 'Paper' }).className)
-      .toContain('bg-[var(--color-btn-primary-bg)]')
+    const pill = screen.getByRole('button', { name: 'Paper' })
+    expect(pill.className).toContain('bg-[var(--color-btn-primary-bg)]')
+    expect(pill.className).toContain('rounded-[var(--radius-sm)]')
   })
 
   it('outlines in terracotta when selected and tone is terracotta', () => {

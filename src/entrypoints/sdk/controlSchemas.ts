@@ -188,6 +188,17 @@ export const SDKControlSetPromptSuggestionsRequestSchema = lazySchema(() =>
     ),
 )
 
+export const SDKControlSetFastModeRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('set_fast_mode'),
+      enabled: z.boolean(),
+    })
+    .describe(
+      'Enables or disables Claude fast mode for subsequent turns in this session.',
+    ),
+)
+
 export const SDKControlMcpStatusRequestSchema = lazySchema(() =>
   z
     .object({
@@ -211,6 +222,7 @@ export const SDKControlGetContextUsageRequestSchema = lazySchema(() =>
     .object({
       subtype: z.literal('get_context_usage'),
       estimateOnly: z.boolean().optional(),
+      summaryOnly: z.boolean().optional(),
     })
     .describe(
       'Requests a breakdown of current context window usage by category.',
@@ -283,6 +295,7 @@ export const SDKControlGetContextUsageResponseSchema = lazySchema(() =>
   z
     .object({
       categories: z.array(ContextCategorySchema()),
+      summaryOnly: z.boolean().optional(),
       totalTokens: z.number(),
       maxTokens: z.number(),
       rawMaxTokens: z.number(),
@@ -565,6 +578,18 @@ export const SDKControlCancelSideQuestionRequestSchema = lazySchema(() =>
   z.object({ subtype: z.literal('cancel_side_question'), question_id: z.uuid() }),
 )
 
+export const SDKControlOptimizePromptRequestSchema = lazySchema(() =>
+  z.object({
+    subtype: z.literal('optimize_prompt'),
+    request_id: z.uuid().optional(),
+    prompt: z.string().trim().min(1).max(32_000),
+  }),
+)
+
+export const SDKControlCancelOptimizePromptRequestSchema = lazySchema(() =>
+  z.object({ subtype: z.literal('cancel_optimize_prompt'), request_id: z.uuid() }),
+)
+
 export const SDKControlApplyFlagSettingsRequestSchema = lazySchema(() =>
   z
     .object({
@@ -658,6 +683,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     z.object({ subtype: z.literal('team_runtime_snapshot'), team_name: z.string().min(1), created_at: z.number() }),
     z.object({ subtype: z.literal('team_runtime_ended'), team_name: z.string().min(1) }),
     z.object({ subtype: z.literal('team_plan_pause') }),
+    z.object({ subtype: z.literal('team_runtime_resume'), team_name: z.string().min(1), created_at: z.number(), incarnation_id: z.string().min(1), epoch: z.number().int().positive(), request_id: z.string().min(1) }),
     sessionMessageInputSchema,
     scheduledTaskMessageInputSchema,
     SDKControlInterruptRequestSchema(),
@@ -668,6 +694,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSetModelRequestSchema(),
     SDKControlSetMaxThinkingTokensRequestSchema(),
     SDKControlSetPromptSuggestionsRequestSchema(),
+    SDKControlSetFastModeRequestSchema(),
     SDKControlMcpStatusRequestSchema(),
     SDKControlGetContextUsageRequestSchema(),
     SDKControlGetSessionUsageRequestSchema(),
@@ -684,6 +711,8 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSendAgentMessageRequestSchema(),
     SDKControlSideQuestionRequestSchema(),
     SDKControlCancelSideQuestionRequestSchema(),
+    SDKControlOptimizePromptRequestSchema(),
+    SDKControlCancelOptimizePromptRequestSchema(),
     SDKControlApplyFlagSettingsRequestSchema(),
     SDKControlGetSettingsRequestSchema(),
     SDKControlElicitationRequestSchema(),
@@ -767,9 +796,29 @@ export const SDKSessionMessageReceiptSchema = lazySchema(() =>
   }),
 )
 
+export const SDKFastModeStatusMessageSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('system'),
+    subtype: z.literal('fast_mode_status'),
+    fast_mode_state: FastModeStateSchema(),
+    reason: z.enum([
+      'org_disabled',
+      'overage_rejected',
+      'rate_limit',
+      'overloaded',
+      'cooldown_expired',
+    ]),
+    message: z.string().optional(),
+    reset_at: z.number().optional(),
+    session_id: z.string(),
+    uuid: z.string(),
+  }),
+)
+
 export const StdoutMessageSchema = lazySchema(() =>
   z.union([
     SDKSessionMessageReceiptSchema(),
+    SDKFastModeStatusMessageSchema(),
     SDKMessageSchema(),
     SDKStreamlinedTextMessageSchema(),
     SDKStreamlinedToolUseSummaryMessageSchema(),

@@ -2,6 +2,7 @@ import { filterAgentProfileTools, getAgentProfile } from './utils/agentProfile.j
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { sessionCollaborationTools } from './tools/SessionCollaborationTool/SessionCollaborationTool.js'
+import { browserUseTools } from './tools/BrowserUseTool/index.js'
 import { ScheduledTaskTool } from './tools/ScheduledTaskTool/ScheduledTaskTool.js'
 import { isDesktopScheduleAvailable } from './tools/ScheduledTaskTool/gate.js'
 import { AgentTool } from './tools/AgentTool/AgentTool.js'
@@ -239,6 +240,7 @@ export function getAllBaseTools(): Tools {
     ...(isWorktreeModeEnabled() ? [EnterWorktreeTool, ExitWorktreeTool] : []),
     getSendMessageTool(),
     ...sessionCollaborationTools,
+    ...browserUseTools,
     ScheduledTaskTool,
     ...(ListPeersTool ? [ListPeersTool] : []),
     ...(isAgentSwarmsEnabled()

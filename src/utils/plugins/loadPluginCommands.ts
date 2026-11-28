@@ -1,7 +1,7 @@
 import { getAgentProfile } from '../agentProfile.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
 import memoize from 'lodash-es/memoize.js'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, relative, resolve, sep } from 'path'
 import { getInlinePlugins, getSessionId } from '../../bootstrap/state.js'
 import type { Command } from '../../types/command.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
@@ -59,43 +59,73 @@ function isSkillFile(filePath: string): boolean {
 /**
  * Get command name from file path, handling both regular files and skills
  */
-function getCommandNameFromFile(
+export function getCommandNameFromFile(
   filePath: string,
   baseDir: string,
   pluginName: string,
+  pathOps: Pick<typeof import('path'), 'basename' | 'dirname' | 'relative'> = {
+    basename,
+    dirname,
+    relative,
+  },
 ): string {
-  const isSkill = isSkillFile(filePath)
+  const isSkill = /^skill\.md$/i.test(pathOps.basename(filePath))
+  const targetDir = isSkill
+    ? pathOps.dirname(pathOps.dirname(filePath))
+    : pathOps.dirname(filePath)
+  const commandBaseName = isSkill
+    ? pathOps.basename(pathOps.dirname(filePath))
+    : pathOps.basename(filePath).replace(/\.md$/, '')
 
-  if (isSkill) {
-    // For skills, use the parent directory name
-    const skillDirectory = dirname(filePath)
-    const parentOfSkillDir = dirname(skillDirectory)
-    const commandBaseName = basename(skillDirectory)
+  const relPath = pathOps.relative(baseDir, targetDir)
+  const namespace =
+    !relPath || relPath === '.' || relPath.startsWith('..')
+      ? ''
+      : relPath.split(/[\\/]+/).filter(Boolean).join(':')
 
-    // Build namespace from parent of skill directory
-    const relativePath = parentOfSkillDir.startsWith(baseDir)
-      ? parentOfSkillDir.slice(baseDir.length).replace(/^\//, '')
-      : ''
-    const namespace = relativePath ? relativePath.split('/').join(':') : ''
+  return namespace
+    ? `${pluginName}:${namespace}:${commandBaseName}`
+    : `${pluginName}:${commandBaseName}`
+}
 
-    return namespace
-      ? `${pluginName}:${namespace}:${commandBaseName}`
-      : `${pluginName}:${commandBaseName}`
-  } else {
-    // For regular files, use filename without .md
-    const fileDirectory = dirname(filePath)
-    const commandBaseName = basename(filePath).replace(/\.md$/, '')
+export function isWithinPluginRoot(
+  pluginRoot: string,
+  candidatePath: string,
+): boolean {
+  const resolvedRoot = resolve(pluginRoot)
+  const resolvedCandidate = resolve(candidatePath)
+  return (
+    resolvedCandidate === resolvedRoot ||
+    resolvedCandidate.startsWith(resolvedRoot + sep)
+  )
+}
 
-    // Build namespace from file directory
-    const relativePath = fileDirectory.startsWith(baseDir)
-      ? fileDirectory.slice(baseDir.length).replace(/^\//, '')
-      : ''
-    const namespace = relativePath ? relativePath.split('/').join(':') : ''
-
-    return namespace
-      ? `${pluginName}:${namespace}:${commandBaseName}`
-      : `${pluginName}:${commandBaseName}`
+function normalizeArgumentHint(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : undefined
   }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : undefined
+  }
+  if (typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map(item =>
+        typeof item === 'string'
+          ? item.trim()
+          : typeof item === 'number' && Number.isFinite(item)
+            ? String(item)
+            : typeof item === 'boolean'
+              ? String(item)
+              : '',
+      )
+      .filter(Boolean)
+    return parts.length > 0 ? parts.join(' ') : undefined
+  }
+  return undefined
 }
 
 /**
@@ -262,13 +292,26 @@ function createPluginCommand(
       substitutedAllowedTools,
     )
 
-    const argumentHint = frontmatter['argument-hint'] as string | undefined
+    const argumentHint = normalizeArgumentHint(frontmatter['argument-hint'])
     const argumentNames = parseArgumentNames(
       frontmatter.arguments as string | string[] | undefined,
     )
-    const whenToUse = frontmatter.when_to_use as string | undefined
-    const version = frontmatter.version as string | undefined
-    const displayName = frontmatter.name as string | undefined
+    const whenToUse =
+      typeof frontmatter.when_to_use === 'string'
+        ? frontmatter.when_to_use
+        : undefined
+    const version =
+      typeof frontmatter.version === 'string' ||
+      (typeof frontmatter.version === 'number' &&
+        Number.isFinite(frontmatter.version)) ||
+      typeof frontmatter.version === 'boolean'
+        ? String(frontmatter.version)
+        : undefined
+    const displayName =
+      typeof frontmatter.name === 'string' ||
+      (typeof frontmatter.name === 'number' && Number.isFinite(frontmatter.name))
+        ? String(frontmatter.name)
+        : undefined
     const pluginPrefix = `${pluginManifest.name}:`
     const userFacingDisplayName =
       displayName && isSkill && !displayName.startsWith(pluginPrefix)
@@ -303,6 +346,10 @@ function createPluginCommand(
         : parseBooleanFrontmatter(userInvocableValue)
 
     const shell = parseShellFrontmatter(frontmatter.shell, commandName)
+    const executionContext =
+      frontmatter.context === 'fork' ? ('fork' as const) : undefined
+    const agent =
+      typeof frontmatter.agent === 'string' ? frontmatter.agent : undefined
 
     return {
       type: 'prompt',
@@ -320,6 +367,8 @@ function createPluginCommand(
       version,
       model,
       effort,
+      ...(executionContext ? { context: executionContext } : {}),
+      ...(agent ? { agent } : {}),
       disableModelInvocation,
       userInvocable,
       contentLength: content.length,
@@ -451,7 +500,7 @@ export async function loadPluginCommandsFromEnabledPlugins(enabled: LoadedPlugin
       const pluginCommands: Command[] = []
 
       // Load commands from default commands directory
-      if (plugin.commandsPath) {
+      if (plugin.commandsPath && isWithinPluginRoot(plugin.path, plugin.commandsPath)) {
         try {
           const commands = await loadCommandsFromDirectory(
             plugin.commandsPath,
@@ -487,6 +536,13 @@ export async function loadPluginCommandsFromEnabledPlugins(enabled: LoadedPlugin
         const pathResults = await Promise.all(
           plugin.commandsPaths.map(async (commandPath): Promise<Command[]> => {
             try {
+              if (!isWithinPluginRoot(plugin.path, commandPath)) {
+                logForDebugging(
+                  `Skipping plugin command path outside plugin root for ${plugin.name}: ${commandPath}`,
+                  { level: 'warn' },
+                )
+                return []
+              }
               const fs = getFsImplementation()
               const stats = await fs.stat(commandPath)
               logForDebugging(
@@ -886,7 +942,10 @@ export async function loadPluginSkillsFromEnabledPlugins(enabled: LoadedPlugin[]
         `Checking plugin ${plugin.name}: skillsPath=${plugin.skillsPath ? 'exists' : 'none'}, skillsPaths=${plugin.skillsPaths ? plugin.skillsPaths.length : 0} paths`,
       )
       // Load skills from default skills directory
-      if (plugin.skillsPath) {
+      if (
+        plugin.skillsPath &&
+        isWithinPluginRoot(plugin.path, plugin.skillsPath)
+      ) {
         logForDebugging(
           `Attempting to load skills from plugin ${plugin.name} default skillsPath: ${plugin.skillsPath}`,
         )
@@ -922,6 +981,13 @@ export async function loadPluginSkillsFromEnabledPlugins(enabled: LoadedPlugin[]
         const pathResults = await Promise.all(
           plugin.skillsPaths.map(async (skillPath): Promise<Command[]> => {
             try {
+              if (!isWithinPluginRoot(plugin.path, skillPath)) {
+                logForDebugging(
+                  `Skipping plugin skill path outside plugin root for ${plugin.name}: ${skillPath}`,
+                  { level: 'warn' },
+                )
+                return []
+              }
               logForDebugging(
                 `Loading from skillPath: ${skillPath} for plugin ${plugin.name}`,
               )

@@ -49,7 +49,7 @@ export async function handleDesktopUiApi(
     }
 
     if (detail === 'project-directories') {
-      if (req.method === 'GET') return Response.json(await desktopUiPreferencesService.getProjectDirectories(url.searchParams.get('workDir')))
+      if (req.method === 'GET') return Response.json(await desktopUiPreferencesService.getProjectDirectories(url.searchParams.get('workDir'), { createProject: url.searchParams.get('createProject') === 'true' }))
       if (req.method !== 'PUT') throw methodNotAllowed(req.method)
       return Response.json({ ok: true, ...await desktopUiPreferencesService.updateProjectDirectories(await parseJsonBody(req)) })
     }
@@ -78,6 +78,24 @@ export async function handleDesktopUiApi(
       return Response.json({
         ok: true,
         preferences,
+      })
+    }
+
+    if (detail === 'usage-widget') {
+      if (req.method === 'GET') {
+        const result = await desktopUiPreferencesService.readPreferences()
+        return Response.json({
+          exists: result.exists,
+          usageWidget: result.preferences.usageWidget,
+        })
+      }
+      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+      const body = await parseJsonBody(req)
+      const preferences = await desktopUiPreferencesService.updateUsageWidgetPreferences(body)
+      return Response.json({
+        ok: true,
+        preferences,
+        usageWidget: preferences.usageWidget,
       })
     }
 

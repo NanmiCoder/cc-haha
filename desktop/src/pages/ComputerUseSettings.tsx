@@ -329,7 +329,7 @@ function PermissionStatusRow({
       <span className={`min-w-0 flex-1 ${ROW_TITLE_CLASS}`}>
         {label}
       </span>
-      <Badge tone={tone} size="xs">{detail}</Badge>
+      <Badge tone={tone} size="xs" pill={false}>{detail}</Badge>
     </div>
   )
 }
@@ -419,7 +419,7 @@ function NativeComputerUse({
                 title={t('settings.computerUse.agentDesktopRuntime')}
                 description={t('settings.computerUse.agentDesktopReady')}
               >
-                <Badge tone="success" size="xs">{t('settings.computerUse.agentDesktopReadyLabel')}</Badge>
+                <Badge tone="success" size="xs" pill={false}>{t('settings.computerUse.agentDesktopReadyLabel')}</Badge>
               </SettingsRow>
               <SettingsRow
                 title={t('settings.computerUse.agentDesktopInputTitle')}

@@ -102,6 +102,7 @@ const FOREGROUND_529_RETRY_SOURCES = new Set<QuerySource>([
   'hook_prompt',
   'verification_agent',
   'side_question',
+  'prompt_optimize',
   // Security classifiers — must complete for auto-mode correctness.
   // yoloClassifier.ts uses 'auto_mode' (not 'yolo_classifier' — that's
   // type-only). bash_classifier is ant-only; feature-gate so the string
@@ -248,11 +249,12 @@ export class FallbackTriggeredError extends Error {
  *   the response did (reset socket, proxy-reported truncation, clean EOF).
  *   Nothing ruled on the request, so it gets the stream-creation budget.
  * - watchdog: an idle stall. The attempt already burned its idle budget.
+ * - tool_input_watchdog: Codex stopped advancing an uncommitted tool's arguments.
  * - transient: an error the upstream itself reported inside the stream
  *   (api_error/overloaded_error). It is the verdict a 500/529 status would
  *   have carried at stream creation, so it gets that budget too.
  */
-export type StreamRetryKind = 'transport' | 'watchdog' | 'transient'
+export type StreamRetryKind = 'transport' | 'watchdog' | 'tool_input_watchdog' | 'transient'
 
 /**
  * Raised inside the streaming path when a recoverable failure arrives
@@ -411,16 +413,21 @@ export function getStreamRetryKind(input: {
   nonStreamingFallbackAvailable: boolean
   /** Whether an upstream-reported error may re-send this attempt. */
   transientRetryAllowed: boolean
+  /** The Codex transport may replace a stalled, uncommitted tool input once. */
+  toolInputTimeoutRetryAllowed?: boolean
 }): StreamRetryKind | null {
   const { error } = input
   if (!input.canReplay || input.signalAborted || isOpenAIPolicyError(error)) {
     return null
   }
   if (input.streamIdleAborted) {
-    return error instanceof StreamWatchdogTimeoutError &&
-      error.safeToRetryStream()
-      ? 'watchdog'
-      : null
+    if (!(error instanceof StreamWatchdogTimeoutError)) return null
+    if (error.safeToRetryStream()) return 'watchdog'
+    if (input.toolInputTimeoutRetryAllowed && error.reason === 'tool_input_duration' &&
+      error.stalledToolInputProgressed && !error.streamSnapshot.serverToolUseStarted) {
+      return 'tool_input_watchdog'
+    }
+    return null
   }
   if (isRetryableStreamTransportError(error)) return 'transport'
   if (
@@ -465,6 +472,7 @@ export function getMaxStreamTransientRetries(): number {
  * every mid-stream retry.
  */
 export function getMaxStreamRetries(kind: StreamRetryKind): number {
+  if (kind === 'tool_input_watchdog') return Math.min(1, getMaxStreamTransientRetries())
   if (kind === 'watchdog') return getMaxStreamTransientRetries()
   const configured = getDefaultMaxRetries()
   const apiRetries =

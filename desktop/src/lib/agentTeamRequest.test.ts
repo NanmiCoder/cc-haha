@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { extractRestoredUserDisplay } from '@/stores/chatStore'
-import { AGENT_TEAM_REQUEST_INSTRUCTION, stripAgentTeamRequest, withAgentTeamRequest } from './agentTeamRequest'
+import {
+  AGENT_TEAM_REQUEST_INSTRUCTION,
+  isAntigravitySwarmRequest,
+  stripAgentTeamRequest,
+  withAgentTeamRequest,
+  withAntigravitySwarmRequest,
+} from './agentTeamRequest'
 
 describe('agent team request', () => {
   it('puts the team instruction in front of the message and takes it off again', () => {
@@ -30,5 +36,19 @@ describe('agent team request', () => {
     expect(restored.content).not.toContain('agent-team-request')
     expect(restored.content).not.toContain(AGENT_TEAM_REQUEST_INSTRUCTION)
     expect(restored.modelContent).toBe(sent)
+  })
+
+  it('formats Antigravity swarm requests as /swarm without double-prefixing', () => {
+    expect(withAntigravitySwarmRequest('Audit the repository')).toBe('/swarm Audit the repository')
+    expect(withAntigravitySwarmRequest('  /swarm Audit the repository  ')).toBe('/swarm Audit the repository')
+    expect(withAntigravitySwarmRequest('/SWARM\nReview PR')).toBe('/SWARM\nReview PR')
+    expect(withAntigravitySwarmRequest('/swarm')).toBe('/swarm')
+    expect(withAntigravitySwarmRequest('   ')).toBe('/swarm')
+    expect(withAntigravitySwarmRequest('/swarming check')).toBe('/swarm /swarming check')
+
+    expect(isAntigravitySwarmRequest('/swarm hello')).toBe(true)
+    expect(isAntigravitySwarmRequest('/swarm')).toBe(true)
+    expect(isAntigravitySwarmRequest('/swarming')).toBe(false)
+    expect(isAntigravitySwarmRequest('hello')).toBe(false)
   })
 })

@@ -15,6 +15,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { Input } from '@/components/ui/Input'
+import { Kbd, KbdGroup } from '@/components/ui/Kbd'
 import { Button, type ButtonProps } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { cx } from '@/lib/cx'
@@ -48,8 +49,10 @@ import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
+import { CyberRiskInstructionSettings } from './CyberRiskInstructionSettings'
 import { PreventSleepSettings } from './PreventSleepSettings'
 import { IdlePowerSettings } from './IdlePowerSettings'
+import { UsageWidgetSettings } from './UsageWidgetSettings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
 
 /**
@@ -91,10 +94,14 @@ export function GeneralSettings() {
     setEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    fastMode,
+    setFastMode,
     workflowKeywordTriggerEnabled,
     setWorkflowKeywordTriggerEnabled,
     nextPromptSuggestionsEnabled,
     setNextPromptSuggestionsEnabled,
+    maxOutputTokensEscalationMode,
+    setMaxOutputTokensEscalationMode,
     agentTeamsEnabled,
     setAgentTeamsEnabled,
     maxConcurrentSubagents,
@@ -164,6 +171,7 @@ export function GeneralSettings() {
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
+  const [outputEscalationSaving, setOutputEscalationSaving] = useState(false)
   const [subagentLimitInput, setSubagentLimitInput] = useState(String(maxConcurrentSubagents ?? ''))
   const [subagentLimitSaving, setSubagentLimitSaving] = useState(false)
   const [subagentLimitError, setSubagentLimitError] = useState<string | null>(null)
@@ -342,11 +350,7 @@ export function GeneralSettings() {
 
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
     { value: 'white', label: t('settings.general.appearance.white') },
-    { value: 'paper', label: t('settings.general.appearance.paper') },
-    { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') },
-    { value: 'celadon', label: t('settings.general.appearance.celadon') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
-    { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
   ]
   // Split by ground, in the order THEMES already lists them, so the two rows
   // shown while following the system stay consistent with the flat picker.
@@ -684,6 +688,18 @@ export function GeneralSettings() {
     }
   }
 
+  const handleOutputEscalationChange = async (mode: typeof maxOutputTokensEscalationMode) => {
+    if (outputEscalationSaving || mode === maxOutputTokensEscalationMode) return
+    setOutputEscalationSaving(true)
+    try {
+      await setMaxOutputTokensEscalationMode(mode)
+    } catch {
+      addToast({ type: 'error', message: t('settings.general.maxOutputTokensEscalationSaveFailed') })
+    } finally {
+      setOutputEscalationSaving(false)
+    }
+  }
+
   const handleOutputStyleChange = async (value: string) => {
     try {
       await setOutputStyle(value, outputStyleWorkDir)
@@ -782,25 +798,37 @@ export function GeneralSettings() {
       <span>{t('settings.general.uiZoomShortcutHint')}</span>
       <span className="inline-flex items-center gap-1">
         <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">+</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">+</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">-</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">-</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">⌘</kbd>
-        <kbd className="settings-zoom-kbd">0</kbd>
+        <KbdGroup>
+          <Kbd size="xs">⌘</Kbd>
+          <Kbd size="xs">0</Kbd>
+        </KbdGroup>
       </span>
       <span className="inline-flex items-center gap-1">
         <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">+</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">+</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">-</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">-</Kbd>
+        </KbdGroup>
         <span>/</span>
-        <kbd className="settings-zoom-kbd">Ctrl</kbd>
-        <kbd className="settings-zoom-kbd">0</kbd>
+        <KbdGroup>
+          <Kbd size="xs">Ctrl</Kbd>
+          <Kbd size="xs">0</Kbd>
+        </KbdGroup>
       </span>
       <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
     </div>
@@ -866,7 +894,7 @@ export function GeneralSettings() {
                 setUiZoomDraft(UI_ZOOM_DEFAULT)
                 setUiZoom(UI_ZOOM_DEFAULT)
               }}
-              icon={<RotateCw size={12} strokeWidth={2} aria-hidden="true" />}
+              icon={<RotateCw size={12} strokeWidth={1.75} aria-hidden="true" />}
             >
               100%
             </Button>
@@ -894,7 +922,7 @@ export function GeneralSettings() {
         </div>
       )}
 
-      {/* Theme. The six palettes stay, drawn as cards; following the system
+      {/* Theme palettes, drawn as cards; following the system
           splits them into the ground each OS mode returns to. */}
       <SettingsSection title={t('settings.general.appearanceTitle')} description={t('settings.general.appearanceDescription')}>
         <SettingsGroup>
@@ -905,7 +933,7 @@ export function GeneralSettings() {
                   <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
                     {t('settings.general.appearance.lightThemeLabel')}
                   </p>
-                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                  <div className={`grid grid-cols-2 gap-3 ${THEME_GRID_WIDTH}`}>
                     {LIGHT_THEMES.map(({ value, label }) => (
                       <ThemeCard
                         key={value}
@@ -921,7 +949,7 @@ export function GeneralSettings() {
                   <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
                     {t('settings.general.appearance.darkThemeLabel')}
                   </p>
-                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                  <div className={`grid grid-cols-2 gap-3 ${THEME_GRID_WIDTH}`}>
                     {DARK_THEMES.map(({ value, label }) => (
                       <ThemeCard
                         key={value}
@@ -935,7 +963,7 @@ export function GeneralSettings() {
                 </div>
               </div>
             ) : (
-              <div className={`grid grid-cols-3 gap-3.5 ${THEME_GRID_WIDTH}`}>
+              <div className={`grid grid-cols-2 gap-3.5 ${THEME_GRID_WIDTH}`}>
                 {THEMES.map(({ value, label }) => (
                   <ThemeCard
                     key={value}
@@ -1072,15 +1100,25 @@ export function GeneralSettings() {
             checked={thinkingEnabled}
             onChange={(enabled) => void setThinkingEnabled(enabled)}
           />
+          <SettingsSwitchRow
+            title={t('settings.general.fastModeTitle')}
+            description={t('settings.general.fastModeDescription')}
+            checked={fastMode}
+            onChange={(enabled) => {
+              void setFastMode(enabled).catch(() => {
+                addToast({ type: 'error', message: t('slashCmd.fast.saveFailed') })
+              })
+            }}
+          />
           <SettingsRow
             title={t('settings.general.outputStyleTitle')}
             description={selectedOutputStyleDescription || t('settings.general.outputStyleDescription')}
             footer={(
               <div className="space-y-1.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge size="sm">{outputStyleScopeLabel}</Badge>
+                  <Badge size="sm" pill={false}>{outputStyleScopeLabel}</Badge>
                   {selectedOutputStyle && (
-                    <Badge size="sm">{getOutputStyleSourceLabel(selectedOutputStyle.source, t)}</Badge>
+                    <Badge size="sm" pill={false}>{getOutputStyleSourceLabel(selectedOutputStyle.source, t)}</Badge>
                   )}
                   <span className="min-w-0">{outputStyleScopeHint}</span>
                 </div>
@@ -1139,6 +1177,7 @@ export function GeneralSettings() {
             </SettingsRow>
           )}
           <LeanModeSettings />
+          <CyberRiskInstructionSettings />
           <SettingsSwitchRow
             title={t('settings.general.workflowKeywordEnabled')}
             description={t('settings.general.workflowKeywordDescription')}
@@ -1163,6 +1202,23 @@ export function GeneralSettings() {
             }}
             disabled={agentTeamsSaving}
           />
+          <SettingsRow
+            title={t('settings.general.maxOutputTokensEscalationTitle')}
+            description={t('settings.general.maxOutputTokensEscalationDescription')}
+            data-testid="max-output-tokens-escalation-setting"
+          >
+            <SegmentedControl
+              label={t('settings.general.maxOutputTokensEscalationTitle')}
+              items={[
+                { value: 'auto', label: t('settings.general.maxOutputTokensEscalationAuto'), disabled: outputEscalationSaving },
+                { value: 'enabled', label: t('settings.general.maxOutputTokensEscalationEnabled'), disabled: outputEscalationSaving },
+                { value: 'disabled', label: t('settings.general.maxOutputTokensEscalationDisabled'), disabled: outputEscalationSaving },
+              ]}
+              value={maxOutputTokensEscalationMode}
+              onChange={(mode) => void handleOutputEscalationChange(mode)}
+              size="sm"
+            />
+          </SettingsRow>
           <SettingsRow
             title={t('settings.general.subagentConcurrencyTitle')}
             description={t('settings.general.subagentConcurrencyDescription')}
@@ -1275,6 +1331,7 @@ export function GeneralSettings() {
         </SettingsGroup>
       </SettingsSection>
 
+      <UsageWidgetSettings />
       <PreventSleepSettings />
       <IdlePowerSettings />
 
@@ -1881,7 +1938,7 @@ function ThemeCard({ theme, label, selected, onSelect }: {
       type="button"
       aria-pressed={selected}
       onClick={onSelect}
-      className="group grid min-w-0 justify-items-center gap-2 rounded-[var(--radius-md)] text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)]"
+      className="group grid min-w-0 justify-items-center gap-2 rounded-[var(--radius-md)] text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container)]"
     >
       <span
         aria-hidden="true"

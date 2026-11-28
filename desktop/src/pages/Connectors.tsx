@@ -188,7 +188,7 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
       && (installedFilter === 'all' || (installedFilter === 'installed' ? item.installed : !item.installed && item.supported))
       && (category === 'all' || (item.category || 'office') === category)
   })
-  return <section className={`${embedded ? '' : 'h-full overflow-y-auto'} bg-[var(--color-surface)] text-[var(--color-text-primary)]`}>
+  return <section className={`${embedded ? '' : 'scrollbar-autohide h-full overflow-y-auto'} bg-[var(--color-surface)] text-[var(--color-text-primary)]`}>
     <div className={embedded ? 'py-4' : cx(EXTENSION_PAGE_COLUMN, 'pb-10 pt-5')}>
       <h1 className="sr-only">{t(mode === 'skills' ? 'extensions.skills' : 'extensions.plugins')}</h1>
       <header className={embedded ? '' : 'mb-4'}>
@@ -200,7 +200,7 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
               <Button ref={filterButtonRef} size="base" variant="secondary" icon={<SlidersHorizontal aria-hidden="true" size={14} strokeWidth={1.75} />} aria-expanded={filtersOpen} aria-controls={filterPanelId} onClick={() => setFiltersOpen(value => !value)}>
                 {t('extensions.filter')}{activeFilters.length > 0 && <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{activeFilters.length}</span>}
               </Button>
-              {filtersOpen && <div id={filterPanelId} role="region" aria-label={t('extensions.filter')} className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-64 max-w-[calc(100vw-40px)] space-y-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-dropdown)]">
+              {filtersOpen && <div id={filterPanelId} role="region" aria-label={t('extensions.filter')} className="dropdown-glass popover-motion absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-64 max-w-[calc(100vw-40px)] space-y-4 rounded-[var(--radius-xl)] p-4">
                 <Checkbox label={t('connectors.added')} checked={filter === 'added'} onChange={event => setFilter(event.target.checked ? 'added' : 'all')} />
                 {mode === 'plugins' && <SelectField size="md" label={t('connectors.region')} value={region} onChange={setRegion} options={[{ value: 'all', label: t('connectors.region.all') }, { value: 'china', label: t('connectors.region.china') }, { value: 'global', label: t('connectors.region.global') }]} />}
                 <SelectField size="md" label={t('extensions.categories')} value={category} onChange={setCategory} options={[{ value: 'all', label: t('connectors.all') }, ...availableCategories.map(value => ({ value, label: t(`connectors.category.${value}`) }))]} />
@@ -212,17 +212,17 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
         </>}
       </header>
       {(error || localError) && (!detail || confirmation) && <div id="connector-error" className="mb-4"><ErrorState size="sm" title={t('connectors.loadFailed')} detail={localError || error} onRetry={() => { setLocalError(null); void refresh() }} retryLabel={t('connectors.retry')} /></div>}
-      {loading ? <div role="status" aria-label={t('connectors.loading')} className={EXTENSION_CARD_GRID}>{Array.from({ length: 8 }, (_, index) => <div key={index} className="flex min-h-[104px] items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4"><Skeleton shape="block" width="40px" height="40px" /><div className="flex-1 space-y-2 pt-1"><Skeleton width="40%" /><Skeleton /><Skeleton width="72%" /></div></div>)}</div>
+      {loading ? <div role="status" aria-label={t('connectors.loading')} className={EXTENSION_CARD_GRID}>{Array.from({ length: 8 }, (_, index) => <div key={index} className="v6c-glass-card flex min-h-[104px] items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4"><Skeleton shape="block" width="40px" height="40px" /><div className="flex-1 space-y-2 pt-1"><Skeleton width="40%" /><Skeleton /><Skeleton width="72%" /></div></div>)}</div>
         : visible.length ? <div className={EXTENSION_CARD_GRID}>{visible.map(item => <ConnectorRow key={item.id} id={item.id} name={name(item)} description={nativeText(item, 'description')} kind={isTool(item) && mode !== 'skills' ? t('connectors.toolKind') : undefined} status={!item.supported ? t('connectors.unsupported') : item.installed || item.operation || item.status === 'error' ? statusLabel(item) : undefined} statusTone={statusTone(item)} added={item.installed || !!item.operation || management} actionLabel={t('connectors.details')} action={management && item.installed && !item.operation ? <Button size="sm" variant="secondary" disabled={pending[item.id]} onClick={() => requestAction(item, 'remove')}>{t('market.uninstall.action')}</Button> : undefined} onDetails={() => showDetail(item)} onAction={() => showDetail(item)} />)}</div>
           : <EmptyState variant="plain" size="md" title={t('extensions.empty')} description={t(management ? (externalQuery ?? query).trim() ? 'connectors.emptySearch' : 'connectors.emptyAdded' : filter === 'added' ? 'connectors.emptyAdded' : 'connectors.emptySearch')} action={embedded || management ? undefined : { label: t('connectors.resetFilters'), variant: 'secondary', onClick: () => { setFilter('all'); setCategory('all'); setRegion('all'); setQuery('') } }} />}
     </div>
     <Modal open={!!detail && !confirmation} onClose={closeDetail} title={detail ? name(detail) : ''} width={600} footer={detail ? actions(detail) : undefined}>
       {detail && <div className="space-y-4 text-[13px] leading-5">
         <p className="text-[var(--color-text-secondary)]">{nativeText(detail, 'description')}</p>
-        <div className="flex items-center gap-2"><Badge tone={statusTone(detail)}>{statusLabel(detail)}</Badge><span className="text-xs text-[var(--color-text-tertiary)]">{isTool(detail) ? t(mode === 'skills' ? 'extensions.skills' : 'connectors.toolKind') : detail.transport === 'mcp' ? 'MCP' : 'CLI'}</span></div>
+        <div className="flex items-center gap-2"><Badge tone={statusTone(detail)} pill={false}>{statusLabel(detail)}</Badge><span className="text-xs text-[var(--color-text-tertiary)]">{isTool(detail) ? t(mode === 'skills' ? 'extensions.skills' : 'connectors.toolKind') : detail.transport === 'mcp' ? 'MCP' : 'CLI'}</span></div>
         <p className="text-xs text-[var(--color-text-tertiary)]">{nativeText(detail, 'requirements')}</p>
         {(error || localError) && <div id="connector-error"><ErrorState size="sm" title={t('connectors.loadFailed')} detail={localError || error} /></div>}
-        {!isTool(detail) && !!detail.setupFields?.length && <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+        {!isTool(detail) && !!detail.setupFields?.length && <div className="space-y-3 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-3">
           <div><p className="font-medium">{t('connectors.configuration')}</p>
           <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{t('connectors.configurationHint')}</p></div>
           {detail.setupFields.map(field => <Input key={field.key} size="md" label={field.label} type={field.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} placeholder={field.placeholder} value={configuration[field.key] || ''} error={invalidFields.includes(field.key) ? t('connectors.fieldRequired') : undefined} onChange={event => { setConfiguration(state => ({ ...state, [field.key]: event.target.value })); setInvalidFields(state => state.filter(key => key !== field.key)) }} />)}

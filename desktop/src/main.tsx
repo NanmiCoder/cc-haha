@@ -5,7 +5,6 @@ import './theme/globals.css'
 import { initializeAppZoom } from './lib/appZoom'
 import { initializeTouchH5 } from './lib/touchH5'
 import { runDesktopPersistenceMigrations } from './lib/persistenceMigrations'
-import { initWorkspacePersistence } from './lib/workspace/persistenceBridge'
 import { getDesktopHost } from './lib/desktopHost'
 import { initializeLocale } from './i18n/locale'
 import { initializeChatAppearance } from './stores/chatAppearanceStore'
@@ -28,23 +27,37 @@ export function isPetWindowLocation(search = window.location.search): boolean {
   return new URLSearchParams(search).get('petWindow') === '1'
 }
 
+export function isUsageWidgetWindowLocation(search = window.location.search): boolean {
+  return new URLSearchParams(search).get('usageWidgetWindow') === '1'
+}
+
 /**
  * Whether this renderer is the one that owns workspace state.
  *
- * Every window — main and pet — loads this same entry. They share one
- * `localStorage` origin, and the workspace document is written whole rather
- * than merged per session, so a second writer would overwrite the main
+ * Every window — main, pet, and usage widget — loads this same entry. They
+ * share one `localStorage` origin, and the workspace document is written whole
+ * rather than merged per session, so a second writer would overwrite the main
  * window's state with whatever it hydrated at open time.
  */
 export function isPrimaryWorkspaceWindow(search = window.location.search): boolean {
   const params = new URLSearchParams(search)
-  return params.get('petWindow') !== '1'
+  return params.get('petWindow') !== '1' && params.get('usageWidgetWindow') !== '1'
 }
 
-function loadDesktopBootstrapModules() {
+async function loadDesktopBootstrapModules() {
+  if (isPrimaryWorkspaceWindow()) {
+    // Load the workspace's store graph after entry evaluation so production
+    // chunks can initialize their shared dependencies before creating stores.
+    // Migrations have already normalized the data that the hydrator trusts.
+    const { initWorkspacePersistence } = await import('./lib/workspace/persistenceBridge')
+    initWorkspacePersistence()
+  }
+
   const appModule = isPetWindowLocation()
     ? import('./features/pets/PetApp').then(({ PetApp }) => ({ App: PetApp }))
-    : import('./App')
+    : isUsageWidgetWindowLocation()
+      ? import('./components/usage/UsageWidgetApp').then(({ UsageWidgetApp }) => ({ App: UsageWidgetApp }))
+      : import('./App')
   return Promise.all([
     appModule,
     import('./components/ErrorBoundary'),
@@ -55,6 +68,8 @@ function loadDesktopBootstrapModules() {
 
 if (isPetWindowLocation()) {
   document.documentElement.dataset.windowKind = 'pet'
+} else if (isUsageWidgetWindowLocation()) {
+  document.documentElement.dataset.windowKind = 'usage-widget'
 }
 
 export async function bootstrapDesktopApp(
@@ -93,10 +108,9 @@ export async function bootstrapDesktopApp(
 
 runDesktopPersistenceMigrations()
 initializeChatAppearance()
-// Strictly after the migrations: the hydrator trusts the shape the migration
-// step just normalized rather than re-validating a possibly future schema.
-if (isPrimaryWorkspaceWindow()) initWorkspacePersistence()
 initializeTouchH5()
-void initializeAppZoom()
+if (isPrimaryWorkspaceWindow()) {
+  void initializeAppZoom()
+}
 
 void bootstrapDesktopApp()

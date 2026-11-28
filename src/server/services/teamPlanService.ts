@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises'
+import { ApiError } from '../middleware/errorHandler.js'
 import { sessionService } from './sessionService.js'
 import { z } from 'zod/v4'
 import { teamPlanRuntimeSchema, type TeamPlanAction, type TeamPlanIdentity, type TeamPlanRecord } from '../../shared/teamPlan.js'
@@ -39,6 +41,21 @@ const defaultRuntime: TeamPlanRuntimeAdapter = {
   stop: async id => { await (await import('./teamPlanRuntime.js')).stopTeamPlanRuntime(id) },
 }
 
+async function assertTeamPlanSessionSupported(sessionId: string, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  const info = await sessionService.getSessionLaunchInfo(sessionId).catch(async error => {
+    if (!(error instanceof ApiError) || error.code !== 'HISTORY_CHANGED') throw error
+    // A live leader can rewrite its transcript while a plan is under review.
+    // Retry this read once; do not repeat an edit/approval or infer a profile.
+    await delay(10, undefined, { signal })
+    const refreshed = await sessionService.getSessionLaunchInfo(sessionId)
+    if (!refreshed?.agentProfile) throw error
+    return refreshed
+  })
+  signal?.throwIfAborted()
+  if (info?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
+}
+
 /** Only trusted HTTP/UI actions call approve; model tools import the draft store only. */
 export class TeamPlanService {
   private launches = new Map<string, Promise<void>>()
@@ -48,27 +65,44 @@ export class TeamPlanService {
   hasActiveOperations(): boolean { return this.approving.size > 0 || this.launches.size > 0 }
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
+    if (!plan) return null
+    const markLostOwner = async (state: 'launch_failed' | 'interrupted', reason: string) => {
+      try {
+        return await mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({
+          ...current, state, launch: { ...current.launch, status: 'failed', error: reason },
+        }))
+      } catch (error) {
+        if (!(error instanceof TeamPlanError) || error.status !== 409 || error.message !== 'Plan changed; refresh before continuing') throw error
+        // A launch can finish while this GET is awaiting its lookup/recovery.
+        // Return the validated newer snapshot; never replay the recovery write
+        // against its new revision or weaken CAS for a human action.
+        const current = await findTeamPlanForSession(sessionId)
+        if (current && current.sessionId === plan.sessionId && current.teamName === plan.teamName && current.planId === plan.planId &&
+            current.incarnationId === plan.incarnationId && current.revision > plan.revision) return current
+        throw error
+      }
+    }
     // A server restart lost ownership of an unfinished launch. Never silently replay it.
     if (plan?.state === 'launching' && !this.launches.has(plan.planId) && !this.approving.has(plan.planId)) {
       // One that had started no member failed like any launch: the user can
       // approve it again. Otherwise work may have started.
       if (await this.runtime.reclaimUnstarted?.(plan).catch(() => false)) {
-        return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'launch_failed', launch: { ...current.launch, status: 'failed', error: 'Team startup stopped before any member started, because the app or its server stopped. Review the plan to start it again.' } }))
+        return markLostOwner('launch_failed', 'Team startup stopped before any member started, because the app or its server stopped. Review the plan to start it again.')
       }
-      return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'Launch ownership was lost. Work may have started and will not be replayed.' } }))
+      return markLostOwner('interrupted', 'Launch ownership was lost. Work may have started and will not be replayed.')
     }
     if (plan?.state === 'running' && this.runtime.isRunning && !await this.runtime.isRunning(plan.planId)) {
       // A server or app restart lost the in-memory owner, not the team: members
       // keep their transcripts and resume when messaged.
       if (this.runtime.rehydrate && await this.runtime.rehydrate(plan).catch(() => false) && await this.runtime.isRunning(plan.planId)) return plan
-      return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'The worker runtime was interrupted. Started work will not be replayed.' } }))
+      return markLostOwner('interrupted', 'The worker runtime was interrupted. Started work will not be replayed.')
     }
     return plan
   }
-  async update(teamName: string, identity: TeamPlanIdentity, patch: { members?: Array<{ id: string; agentType?: string; runtime?: TeamPlanRecord['leaderRuntime'] }>; tasks?: Array<{ id: string; ownerId: string }> }): Promise<TeamPlanRecord> {
+  async update(teamName: string, identity: TeamPlanIdentity, patch: { members?: Array<{ id: string; agentType?: string; runtime?: TeamPlanRecord['leaderRuntime'] }>; tasks?: Array<{ id: string; ownerId: string }> }, signal?: AbortSignal): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
-    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
+    await assertTeamPlanSessionSupported(current.sessionId, signal)
     for (const member of patch.members ?? []) if (!current.members.some(item => item.id === member.id)) throw new TeamPlanError('Unknown member', 400)
     for (const task of patch.tasks ?? []) if (!current.tasks.some(item => item.id === task.id)) throw new TeamPlanError('Unknown task', 400)
     const members = current.members.map(member => {
@@ -106,10 +140,10 @@ export class TeamPlanService {
     this.launches.set(plan.planId, operation)
     void operation.catch(() => {})
   }
-  async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void> } = {}): Promise<TeamPlanRecord> {
+  async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void>; signal?: AbortSignal } = {}): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
-    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
+    await assertTeamPlanSessionSupported(current.sessionId, options.signal)
     // Idempotent replay still goes through store identity/incarnation checks.
     let validated = current
     if (current.approvedSnapshot?.requestId !== action.requestId) {
@@ -120,12 +154,14 @@ export class TeamPlanService {
       // process is gone until something starts it, and approving a reviewed
       // plan is that something: refusing left the plan unlaunchable.
       if (current.state === 'review_pending' && options.startLeader) {
+        options.signal?.throwIfAborted()
         try { await options.startLeader(current.sessionId) }
         catch (error) { throw new TeamPlanError(`Team leader could not start: ${error instanceof Error ? error.message : String(error)}`) }
       }
     }
     // The approval commits `launching` before this call can register the
     // launch; a plan read in between must not take it for an orphaned launch.
+    options.signal?.throwIfAborted()
     this.approving.add(current.planId)
     try {
       const result = await approveTeamPlan(teamName, action, action.requestId, validated)

@@ -27,11 +27,7 @@ type Rgb = { r: number; g: number; b: number; a: number }
  */
 const THEME_BLOCKS = {
   white: [':root,\n[data-theme="white"]', ':root', '@theme'],
-  paper: ['[data-theme="paper"]', ':root', '@theme'],
-  'warm-classic': ['[data-theme="warm-classic"]', ':root', '@theme'],
-  celadon: ['[data-theme="celadon"]', ':root', '@theme'],
-  dark: ['[data-theme="dark"]', '[data-theme="dark"],\n[data-theme="ink-blue"]', ':root', '@theme'],
-  'ink-blue': ['[data-theme="ink-blue"]', '[data-theme="dark"],\n[data-theme="ink-blue"]', ':root', '@theme'],
+  dark: ['[data-theme="dark"]', ':root', '@theme'],
 } as const
 
 /**

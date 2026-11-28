@@ -1,6 +1,6 @@
 {
   "name": "cc-haha-mobile",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~58.0.22",
@@ -17,6 +17,7 @@
     "expo-font": "~58.0.9",
     "expo-image-manipulator": "~58.0.15",
     "expo-image-picker": "~58.0.10",
+    "expo-keep-awake": "~58.0.3",
     "expo-linear-gradient": "~58.0.3",
     "expo-linking": "~58.0.14",
     "expo-network": "~58.0.4",

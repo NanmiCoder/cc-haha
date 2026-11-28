@@ -449,6 +449,7 @@ describe('cron scheduler launcher resolution', () => {
     expect(env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBe('desktop-local-secret')
     expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0')
     expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('sdk-cli')
+    expect(env.CC_HAHA_TRANSCRIPT_ENTRYPOINT).toBe('claude-desktop')
   })
 
   unixOnly('executeTask applies direct, system, and manual network settings to the sidecar', async () => {

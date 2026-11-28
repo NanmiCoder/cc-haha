@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   isWorkspaceBrowserAvailable: vi.fn(() => false),
   workspaceBrowserHost: {
     create: vi.fn(async () => ({ ok: true })),
+    navigate: vi.fn(async () => ({ ok: true })),
     setVisible: vi.fn(async () => ({ ok: true })),
     close: vi.fn(async () => ({ ok: true })),
     message: vi.fn(async () => ({ ok: true })),
@@ -59,9 +60,12 @@ vi.mock('../../api/review', () => ({
 }))
 
 import { useTabStore } from '../../stores/tabStore'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
-import { WorkspaceSurface, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
+import { WorkspaceSurface, useBrowserUseEventBridge, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
+import { browserHost } from '../../lib/desktopHost/browserHost'
+import type { BrowserUseHostEvent } from '../../lib/desktopHost/types'
 import { WorkspaceHeaderProvider } from '../layout/WorkspaceHeaderContext'
 import { TabBar } from '../layout/TabBar'
 import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
@@ -467,7 +471,7 @@ describe('WorkspaceSurface', () => {
     expect(screen.queryByTestId('workspace-hide-bottom')).not.toBeInTheDocument()
   })
 
-  it('places side tabs in the real window header and keeps bottom tabs beside their content', async () => {
+  it('keeps side and bottom resource tabs inside their own compact h-10 surfaces instead of crowding the window TabBar', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
     const sideId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'side' })!
     useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'bottom' })
@@ -477,27 +481,32 @@ describe('WorkspaceSurface', () => {
       <WorkspaceSurface sessionId={SESSION} dock="bottom" cwd="/repo" />
     </WorkspaceHeaderProvider>)
     const header = screen.getByTestId('workspace-window-header')
-    // Session overflow must stay in its own shrinkable region when the resource header fills the window.
-    const sessionHeader = screen.getByTestId('workspace-session-header')
-    expect(sessionHeader).toContainElement(screen.getByTestId('tab-bar-scroll-region'))
-    expect(sessionHeader).toHaveClass('min-w-0', 'overflow-hidden')
-    expect(sessionHeader).not.toContainElement(screen.getByTestId('workspace-header-frame'))
-    expect(within(header).getByTestId('workspace-tab-strip-side')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-header-slot').className).not.toMatch(/\btab-bar-interactive\b/)
-    expect(within(header).getByTestId('workspace-tab-strip-side')).toHaveAttribute('data-desktop-drag-region')
-    expect(within(header).getByTestId(`workspace-tab-wrap-${sideId}`)).toHaveClass('tab-bar-interactive')
+    const sideSurface = screen.getByTestId('workspace-surface-side')
+    const bottomSurface = screen.getByTestId('workspace-surface-bottom')
+
+    // Side tabs stay decoupled inside WorkspaceSurface with a compact h-10
+    // hairline header so the top 52px TabBar never crowds.
+    expect(within(header).queryByTestId('workspace-tab-strip-side')).toBeNull()
+    expect(screen.queryByTestId('workspace-header-slot')).toBeNull()
     expect(within(header).getByTestId('workspace-toggle-side')).toBeInTheDocument()
-    expect(within(screen.getByTestId('workspace-surface-side')).queryByRole('tablist')).toBeNull()
-    expect(within(screen.getByTestId('workspace-surface-bottom')).getByRole('tablist')).toBeInTheDocument()
-    const content = screen.getByTestId('workspace-surface-side').querySelector('[role="tabpanel"]')
+
+    const sideStrip = within(sideSurface).getByTestId('workspace-tab-strip-side')
+    expect(sideStrip).toHaveClass('h-10', 'border-b')
+    expect(sideStrip).not.toHaveAttribute('data-desktop-drag-region')
+    expect(within(sideSurface).getByRole('tablist')).toBeInTheDocument()
+    expect(within(bottomSurface).getByRole('tablist')).toBeInTheDocument()
+
+    const content = sideSurface.querySelector('[role="tabpanel"]')
     act(() => useWorkspaceStore.getState().toggleFullscreen(SESSION))
-    expect(screen.getByTestId('workspace-surface-side').querySelector('[role="tabpanel"]')).toBe(content)
-    fireEvent.click(within(header).getByTestId('workspace-add-tab-side'))
+    expect(sideSurface.querySelector('[role="tabpanel"]')).toBe(content)
+
+    fireEvent.click(within(sideSurface).getByTestId('workspace-add-tab-side'))
     expect(screen.getByRole('menu')).toBeInTheDocument()
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     expect(screen.getByTestId('workspace-add-tab-side')).toHaveFocus()
+
     act(() => useWorkspaceStore.getState().closeTab(SESSION, sideId))
-    expect(within(header).queryByRole('tablist')).toBeNull()
+    expect(within(sideSurface).queryByRole('tablist')).toBeNull()
     expect(screen.getByTestId('workspace-launcher')).toBeInTheDocument()
     await act(async () => { await Promise.resolve() })
   })
@@ -647,6 +656,292 @@ describe('useWorkspaceBrowserEventBridge', () => {
     // The slot the closed page occupied now belongs to another page; a late
     // event must not repaint it.
     expect(useWorkspaceStore.getState().getTab(SESSION, second)).toMatchObject({ url: 'http://b.test/' })
+  })
+})
+
+describe('useBrowserUseEventBridge', () => {
+  it('resolves ensure-tab by sessionId even while Settings is active and honors createNew=true', async () => {
+    let listener: ((event: BrowserUseHostEvent) => void) | null = null
+    const reportTabReady = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      browserUse: {
+        ...browserHost.browserUse,
+        reportTabReady,
+        onEvent: async (handler) => {
+          listener = handler
+          return () => { listener = null }
+        },
+      },
+    }
+    try {
+      // User switched to Settings tab while a session has an existing browser tab.
+      useTabStore.setState({
+        tabs: [
+          { sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' },
+          { sessionId: '__settings__', title: 'Settings', type: 'settings', status: 'idle' },
+        ],
+        activeTabId: '__settings__',
+      })
+      const existingId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://first.test/' })!
+      expect(existingId).toBeTruthy()
+
+      renderHook(() => useBrowserUseEventBridge())
+      await act(async () => { await Promise.resolve() })
+      expect(listener).not.toBeNull()
+
+      // createNew: true must open a brand-new browser tab in SESSION even though Settings is active.
+      act(() => {
+        listener!({
+          type: 'ensure-tab',
+          requestId: 'req-new-1',
+          sessionId: SESSION,
+          url: 'https://second.test/',
+          createNew: true,
+        })
+      })
+
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-new-1',
+          ok: true,
+        }))
+      })
+      const browserTabs = useWorkspaceStore.getState().getTabs(SESSION, 'side').filter((t) => t.kind === 'browser')
+      expect(browserTabs).toHaveLength(2)
+      expect(browserTabs.some((t) => t.url === 'https://second.test/')).toBe(true)
+    } finally {
+      Reflect.deleteProperty(window, 'desktopHost')
+    }
+  })
+
+  it('handles reuse+navigate, missing session error, focus-tab, control-state, move-cursor, click-ripple, and close-tab', async () => {
+    let listener: ((event: BrowserUseHostEvent) => void) | null = null
+    const reportTabReady = vi.fn().mockResolvedValue(undefined)
+    const reportCursorArrived = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      browserUse: {
+        ...browserHost.browserUse,
+        reportTabReady,
+        reportCursorArrived,
+        onEvent: async (handler) => {
+          listener = handler
+          return () => { listener = null }
+        },
+      },
+    }
+    try {
+      useBrowserUseStore.getState().reset()
+      useTabStore.setState({ tabs: [], activeTabId: null })
+      useWorkspaceStore.setState({ bySession: {} })
+
+      renderHook(() => useBrowserUseEventBridge())
+      await act(async () => { await Promise.resolve() })
+
+      // 1. Missing session reports ok: false
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-no-sess', url: 'https://a.test/' })
+      })
+      expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+        requestId: 'req-no-sess',
+        ok: false,
+      }))
+
+      // 2. Existing tab registration + reuse with new URL
+      useTabStore.setState({
+        tabs: [{ sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' }],
+        activeTabId: SESSION,
+      })
+      const openedId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://one.test/' })!
+      const browserTabId = (useWorkspaceStore.getState().getTab(SESSION, openedId) as WorkspaceBrowserTab).browserTabId
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-first', sessionId: SESSION, tabId: browserTabId, url: 'https://one.test/' })
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-first',
+          tabId: browserTabId,
+          ok: true,
+        }))
+      })
+
+      // Reuse already-registered tab with a different URL
+      act(() => {
+        listener!({ type: 'ensure-tab', requestId: 'req-reuse', sessionId: SESSION, tabId: browserTabId, url: 'https://two.test/' })
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-reuse',
+          tabId: browserTabId,
+          ok: true,
+        }))
+      })
+      expect(mocks.workspaceBrowserHost.navigate).toHaveBeenCalledWith(browserTabId, 'https://two.test/')
+
+      // 3. focus-tab expands hidden panel
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+      act(() => {
+        listener!({ type: 'focus-tab', tabId: browserTabId, revealWorkbench: true })
+      })
+      expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('split')
+
+      // 4. control-state auto-reveals hidden panel
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+      act(() => {
+        listener!({ type: 'control-state', tabId: browserTabId, state: 'active', actionLabel: 'Click', autoReveal: true })
+      })
+      expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('split')
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]?.controlState).toBe('active')
+
+      // 5. move-cursor on hidden slot ACKs synchronously in 0ms
+      act(() => {
+        listener!({ type: 'move-cursor', tabId: browserTabId, moveId: 'mv-hidden', x: 50, y: 60, durationMs: 200 })
+      })
+      expect(reportCursorArrived).toHaveBeenCalledWith({
+        moveId: 'mv-hidden',
+        tabId: browserTabId,
+        skipped: true,
+      })
+
+      // 6. click-ripple updates store
+      act(() => {
+        listener!({ type: 'click-ripple', tabId: browserTabId, x: 50, y: 60, button: 'left' })
+      })
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]?.ripple).toMatchObject({ x: 50, y: 60 })
+
+      // 7. close-tab removes tab and clears overlay state
+      act(() => {
+        listener!({ type: 'close-tab', tabId: browserTabId })
+      })
+      expect(useWorkspaceStore.getState().findBrowserTabOwner(browserTabId)).toBeNull()
+      expect(useBrowserUseStore.getState().tabStates[browserTabId]).toBeUndefined()
+    } finally {
+      Reflect.deleteProperty(window, 'desktopHost')
+    }
+  })
+
+  it('never hijacks another session workspace tab when ensure-tab, focus-tab, or close-tab specifies a different sessionId', async () => {
+    const SESSION_B = 'session-b'
+    let listener: ((event: BrowserUseHostEvent) => void) | null = null
+    const reportTabReady = vi.fn().mockResolvedValue(undefined)
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      browserUse: {
+        ...browserHost.browserUse,
+        reportTabReady,
+        onEvent: async (handler) => {
+          listener = handler
+          return () => { listener = null }
+        },
+      },
+    }
+    try {
+      useTabStore.setState({
+        tabs: [
+          { sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' },
+          { sessionId: SESSION_B, title: 'Session B', type: 'session', status: 'idle' },
+        ],
+        activeTabId: SESSION_B,
+      })
+      const tabAId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://modeldial.com/' })!
+      const browserTabA = (useWorkspaceStore.getState().getTab(SESSION, tabAId) as WorkspaceBrowserTab).browserTabId
+      const tabBId = useWorkspaceStore.getState().openTarget(SESSION_B, { kind: 'browser' })!
+      const browserTabB = (useWorkspaceStore.getState().getTab(SESSION_B, tabBId) as WorkspaceBrowserTab).browserTabId
+
+      renderHook(() => useBrowserUseEventBridge())
+      await act(async () => { await Promise.resolve() })
+
+      // Even if ensure-tab for SESSION_B passes SESSION A's browserTabId, it must stay in SESSION_B!
+      act(() => {
+        listener!({
+          type: 'ensure-tab',
+          requestId: 'req-cross-sess',
+          sessionId: SESSION_B,
+          tabId: browserTabA,
+          url: 'https://modeldial.com/subscriptions',
+        })
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-cross-sess',
+          tabId: browserTabB,
+          ok: true,
+        }))
+      })
+      expect(mocks.workspaceBrowserHost.create).toHaveBeenCalledWith(
+        browserTabB,
+        expect.objectContaining({ sessionId: SESSION_B }),
+      )
+
+      // focus-tab / close-tab / control-state carrying SESSION_B must ignore SESSION A's tab.
+      useWorkspaceStore.getState().setLayout(SESSION, 'hidden')
+      act(() => {
+        listener!({ type: 'focus-tab', tabId: browserTabA, sessionId: SESSION_B, revealWorkbench: true })
+        listener!({ type: 'close-tab', tabId: browserTabA, sessionId: SESSION_B })
+        listener!({ type: 'control-state', tabId: browserTabA, sessionId: SESSION_B, state: 'active', autoReveal: true })
+      })
+      expect(useWorkspaceStore.getState().getSession(SESSION).layout).toBe('hidden')
+      expect(useBrowserUseStore.getState().tabStates[browserTabA]).toBeUndefined()
+      expect(useWorkspaceStore.getState().findBrowserTabOwner(browserTabA)).toEqual({
+        sessionId: SESSION,
+        tabId: tabAId,
+      })
+
+      // ensure-tab with a URL arriving while a blank tab's initial registration is still in flight
+      // must still navigate once that in-flight registration settles.
+      let resolvePendingCreate!: (value: { ok: true }) => void
+      const pendingCreate = new Promise<{ ok: true }>((resolve) => {
+        resolvePendingCreate = resolve
+      })
+      mocks.workspaceBrowserHost.create.mockReturnValueOnce(pendingCreate)
+      mocks.workspaceBrowserHost.navigate.mockClear()
+
+      const blankTabId = useWorkspaceStore.getState().openTarget('session-c', { kind: 'browser' })!
+      const blankBrowserTabId = (useWorkspaceStore.getState().getTab('session-c', blankTabId) as WorkspaceBrowserTab).browserTabId
+      mocks.isWorkspaceBrowserAvailable.mockReturnValue(true)
+      render(<WorkspaceSurface sessionId="session-c" dock="side" cwd="/repo" />)
+      await waitFor(() => {
+        expect(mocks.workspaceBrowserHost.create).toHaveBeenCalledWith(
+          blankBrowserTabId,
+          expect.objectContaining({ sessionId: 'session-c' }),
+        )
+      })
+
+      act(() => {
+        listener!({
+          type: 'ensure-tab',
+          requestId: 'req-inflight-url',
+          sessionId: 'session-c',
+          url: 'https://modeldial.com/live',
+        })
+      })
+      await act(async () => {
+        resolvePendingCreate({ ok: true })
+        await Promise.resolve()
+      })
+      await waitFor(() => {
+        expect(reportTabReady).toHaveBeenCalledWith(expect.objectContaining({
+          requestId: 'req-inflight-url',
+          tabId: blankBrowserTabId,
+          ok: true,
+        }))
+      })
+      expect(mocks.workspaceBrowserHost.navigate).toHaveBeenCalledWith(
+        blankBrowserTabId,
+        'https://modeldial.com/live',
+      )
+    } finally {
+      Reflect.deleteProperty(window, 'desktopHost')
+    }
   })
 })
 

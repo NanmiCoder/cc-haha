@@ -66,24 +66,24 @@ export function MobileNewTaskSheet({ workDir, onCancel }: Props) {
         aria-modal="true"
         aria-label={t('mobile.newTask.title')}
         style={dragY > 0 ? { transform: `translateY(${dragY}px)` } : undefined}
-        className={`animate-sheet-rise absolute inset-x-0 bottom-0 top-[calc(env(safe-area-inset-top,0px)+8px)] flex flex-col overflow-hidden rounded-t-[var(--radius-xl)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)] ${
+        className={`animate-sheet-rise absolute inset-x-0 bottom-0 top-[calc(env(safe-area-inset-top,0px)+8px)] flex flex-col overflow-hidden rounded-t-[var(--radius-2xl)] border-t border-[var(--color-surface-glass-border)] bg-[var(--color-surface-dialog)] shadow-[var(--glass-top-rim),var(--shadow-overlay)] ${
           dragging ? '' : 'transition-transform duration-200 ease-out'
         }`}
       >
         <div
           data-testid="mobile-new-task-grabber"
-          className="shrink-0 touch-none select-none"
+          className="shrink-0 touch-none select-none border-b border-[var(--color-border)] bg-[var(--color-surface-glass)]"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerEnd}
           onPointerCancel={handlePointerEnd}
         >
-          <div aria-hidden="true" className="mx-auto mt-2 h-1 w-9 rounded-[var(--radius-full)] bg-[var(--color-outline)]" />
-          <div className="grid h-12 grid-cols-[1fr_auto_1fr] items-center px-1">
+          <div aria-hidden="true" className="mx-auto mt-2 h-1 w-9 rounded-[var(--radius-xs)] bg-[var(--color-outline)]" />
+          <div className="grid h-12 grid-cols-[1fr_auto_1fr] items-center px-1.5">
             <button
               type="button"
               onClick={onCancel}
-              className="h-11 justify-self-start rounded-[var(--radius-md)] px-3 text-[15px] text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="v6c-pressable h-11 justify-self-start rounded-[var(--radius-control)] px-3 text-[15px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               {t('common.cancel')}
             </button>
@@ -91,7 +91,7 @@ export function MobileNewTaskSheet({ workDir, onCancel }: Props) {
             <span aria-hidden="true" />
           </div>
         </div>
-        <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className="v6c-main-canvas relative flex min-h-0 flex-1 flex-col">
           <EmptySession initialWorkDir={workDir} />
         </div>
       </div>

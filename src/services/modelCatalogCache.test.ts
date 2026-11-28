@@ -86,6 +86,68 @@ describe('model catalog cache', () => {
     expect(settled).toBe(true)
   })
 
+  test('lets runtime wait for the initial refresh already started by the picker', async () => {
+    const cache = makeCache()
+    let complete!: (models: string[]) => void
+    let calls = 0
+    const fetchCatalog = () => {
+      calls++
+      return new Promise<string[]>(resolve => { complete = resolve })
+    }
+    const input = { accountKey: 'a', fetchCatalog, fallback: FALLBACK }
+
+    expect(await cache.resolve(input)).toEqual(FALLBACK)
+    const runtime = cache.resolve({ ...input, waitForInitial: true })
+    complete(REMOTE)
+    expect(await runtime).toEqual(REMOTE)
+    expect(calls).toBe(1)
+  })
+
+  test('lets runtime fall back when the initial refresh fails and respects backoff', async () => {
+    const cache = makeCache({ failureBackoffMs: 10_000 })
+    let calls = 0
+    const input = {
+      accountKey: 'a', fallback: FALLBACK, waitForInitial: true,
+      fetchCatalog: async () => {
+        calls++
+        throw new Error('upstream unreachable')
+      },
+    }
+
+    expect(await cache.resolve(input)).toEqual(FALLBACK)
+    expect(await cache.resolve(input)).toEqual(FALLBACK)
+    expect(calls).toBe(1)
+  })
+
+  test('runtime joins a manual refresh already running during backoff', async () => {
+    const cache = makeCache()
+    const input = { accountKey: 'a', fallback: FALLBACK, waitForInitial: true,
+      fetchCatalog: async () => { throw new Error('initial request failed') } }
+    expect(await cache.resolve(input)).toEqual(FALLBACK)
+
+    const reply = Promise.withResolvers<string[]>()
+    const refresh = cache.resolve({ ...input, forceRefresh: true, fetchCatalog: () => reply.promise })
+    const runtime = cache.resolve(input)
+    reply.resolve(REMOTE)
+    expect(await refresh).toEqual(REMOTE)
+    expect(await runtime).toEqual(REMOTE)
+  })
+
+  test('runtime follows a manual refresh that supersedes its first request', async () => {
+    const cache = makeCache()
+    const original = Promise.withResolvers<string[]>()
+    const input = { accountKey: 'a', fallback: FALLBACK, waitForInitial: true,
+      fetchCatalog: () => original.promise }
+    const runtime = cache.resolve(input)
+    const reply = Promise.withResolvers<string[]>()
+    const refresh = cache.resolve({ ...input, forceRefresh: true, fetchCatalog: () => reply.promise })
+    original.resolve(['outdated'])
+    await sleep(0)
+    reply.resolve(REMOTE)
+    expect(await refresh).toEqual(REMOTE)
+    expect(await runtime).toEqual(REMOTE)
+  })
+
   test('serves the refreshed catalog once the background request lands', async () => {
     const cache = makeCache()
     const fetchCatalog = async () => REMOTE

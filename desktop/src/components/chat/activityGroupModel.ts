@@ -15,12 +15,22 @@ import {
 } from 'lucide-react'
 import type { TranslationKey } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
+import { isExitPlanModeTool, isPlanRevisionResult } from './PlanModePreview'
+import { toolVerb } from './toolCallPresentation'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
 type ThinkingMessage = Extract<UIMessage, { type: 'thinking' }>
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
+
+/**
+ * Distinguishes intermediate/self-recovered tool failures from terminal/blocking
+ * ones. An agent routinely hits non-zero exit codes, missing files, or stale
+ * edit matches while exploring and immediately retries or answers — showing loud
+ * red chrome for those floods the transcript with false alarms.
+ */
+export type ToolErrorSeverity = 'none' | 'recovered' | 'blocking'
 
 /**
  * One entry in a turn's activity run. Thinking and tool calls share a single
@@ -42,16 +52,24 @@ export type ActivitySegment = {
 }
 
 /**
- * Wall-clock gap between the tool_use and its tool_result, used for the "524ms"
- * badge (#1149). The CLI does not report a real execution duration over the wire
- * — BashProgress never leaves the ink renderer — so this is the transcript
- * timestamp delta and therefore includes any permission-approval wait.
+ * Per-tool execution duration for the "524ms" badge (#1149, #1915). Prefers the
+ * runtime's measured `tool.call` duration (`result.durationMs`, which excludes
+ * assistant streaming buffer, serial queue wait, and permission dialog wait),
+ * falling back to the `tool_use` → `tool_result` timestamp delta for legacy
+ * transcripts recorded before `durationMs` existed.
  */
 export function toolCallDurationMs(
   toolCall: Pick<ToolCall, 'timestamp'>,
-  result?: Pick<ToolResult, 'timestamp'>,
+  result?: Pick<ToolResult, 'timestamp' | 'durationMs'>,
 ): number | undefined {
   if (!result) return undefined
+  if (
+    typeof result.durationMs === 'number' &&
+    Number.isFinite(result.durationMs) &&
+    result.durationMs >= 0
+  ) {
+    return result.durationMs
+  }
   const elapsed = result.timestamp - toolCall.timestamp
   return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
@@ -98,6 +116,12 @@ const TOOL_SEGMENT_ICONS: Record<string, LucideIcon> = {
   Agent: Bot,
   WebSearch: Globe,
   WebFetch: Globe,
+  BrowserTabs: Globe,
+  BrowserNavigate: Globe,
+  BrowserSnapshot: Globe,
+  BrowserAct: Globe,
+  BrowserInspect: Globe,
+  BrowserTakeover: Globe,
   TodoWrite: ListTodo,
   TaskCreate: ListTodo,
   TaskUpdate: ListTodo,
@@ -195,7 +219,10 @@ export function toolCallHasError(
   childToolCallsByParent: Map<string, ToolCall[]>,
 ): boolean {
   const result = resultMap.get(toolCall.toolUseId)
-  if (result?.isError) return true
+  // Keep planning is returned as a refusal so the model stays in plan mode.
+  if (result?.isError && !(isExitPlanModeTool(toolCall.toolName) && isPlanRevisionResult(result.content))) {
+    return true
+  }
 
   return (childToolCallsByParent.get(toolCall.toolUseId) ?? []).some((childToolCall) =>
     toolCallHasError(childToolCall, resultMap, childToolCallsByParent),
@@ -210,7 +237,7 @@ export function groupHasErrors(
   return toolCalls.some((toolCall) => toolCallHasError(toolCall, resultMap, childToolCallsByParent))
 }
 
-/** How many root steps in the run failed — drives the `2 failed` header chip. */
+/** How many root steps in the run failed — drives legacy callers/tests. */
 export function countFailedToolCalls(
   toolCalls: ToolCall[],
   resultMap: Map<string, ToolResult>,
@@ -219,6 +246,250 @@ export function countFailedToolCalls(
   return toolCalls.filter((toolCall) =>
     toolCallHasError(toolCall, resultMap, childToolCallsByParent),
   ).length
+}
+
+function isRealToolResultError(toolName: string, result: ToolResult | undefined): boolean {
+  if (!result?.isError) return false
+  return !(isExitPlanModeTool(toolName) && isPlanRevisionResult(result.content))
+}
+
+/**
+ * Classify every failed tool call in the transcript as `'recovered'` (followed
+ * by further tool calls, thinking, or an assistant answer in the same turn, or
+ * occurring in an active still-running turn) vs `'blocking'` (the terminal
+ * unrecovered failure of a settled turn).
+ */
+export function classifyTurnToolErrors(
+  messages: UIMessage[],
+  resultMap: Map<string, ToolResult>,
+  options: { turnActive?: boolean } = {},
+): Map<string, ToolErrorSeverity> {
+  const severities = new Map<string, ToolErrorSeverity>()
+  const turns: UIMessage[][] = []
+  let currentTurn: UIMessage[] = []
+
+  for (const message of messages) {
+    if (message.type === 'user_text' && !message.pending && !message.optimisticQueued) {
+      if (currentTurn.length > 0) turns.push(currentTurn)
+      currentTurn = []
+      continue
+    }
+    currentTurn.push(message)
+  }
+  if (currentTurn.length > 0) turns.push(currentTurn)
+
+  const lastTurnIndex = turns.length - 1
+  turns.forEach((turnMessages, turnIndex) => {
+    const isActiveTurn = options.turnActive === true && turnIndex === lastTurnIndex
+
+    // Track the latest index in this turn where forward progress occurred
+    // (another tool call, thinking, or a non-empty assistant answer).
+    let lastProgressIndex = -1
+    const resultIndexByToolUseId = new Map<string, number>()
+
+    turnMessages.forEach((message, index) => {
+      if (message.type === 'tool_result') {
+        resultIndexByToolUseId.set(message.toolUseId, index)
+      } else if (
+        message.type === 'tool_use' ||
+        message.type === 'thinking' ||
+        (message.type === 'assistant_text' && message.content.trim().length > 0)
+      ) {
+        lastProgressIndex = index
+      }
+    })
+
+    turnMessages.forEach((message, index) => {
+      if (message.type !== 'tool_use') return
+      const result = resultMap.get(message.toolUseId)
+      if (!isRealToolResultError(message.toolName, result)) return
+
+      const settledAtIndex = Math.max(index, resultIndexByToolUseId.get(message.toolUseId) ?? index)
+      const hasRecoveryAfter = lastProgressIndex > settledAtIndex
+      severities.set(
+        message.toolUseId,
+        isActiveTurn || hasRecoveryAfter ? 'recovered' : 'blocking',
+      )
+    })
+  })
+
+  return severities
+}
+
+/**
+ * Resolve a single tool call's effective error severity (including its child
+ * calls). When no turn-level severity map is supplied (e.g. a standalone
+ * `ActivityGroup` in unit tests), intermediate failures followed by a later
+ * step or occurring while live still classify as `'recovered'`.
+ */
+export function resolveToolErrorSeverity(
+  toolCall: ToolCall,
+  resultMap: Map<string, ToolResult>,
+  childToolCallsByParent: Map<string, ToolCall[]>,
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>,
+  options: { hasLaterStep?: boolean; isLive?: boolean } = {},
+): ToolErrorSeverity {
+  if (!toolCallHasError(toolCall, resultMap, childToolCallsByParent)) return 'none'
+
+  if (errorSeverityByToolUseId) {
+    const direct = errorSeverityByToolUseId.get(toolCall.toolUseId)
+    if (direct === 'blocking') return 'blocking'
+
+    const children = childToolCallsByParent.get(toolCall.toolUseId) ?? []
+    for (const child of children) {
+      if (
+        resolveToolErrorSeverity(child, resultMap, childToolCallsByParent, errorSeverityByToolUseId, options) === 'blocking'
+      ) {
+        return 'blocking'
+      }
+    }
+    if (direct === 'recovered') return 'recovered'
+    if (children.some((child) => toolCallHasError(child, resultMap, childToolCallsByParent))) {
+      return 'recovered'
+    }
+  }
+
+  if (options.isLive || options.hasLaterStep) return 'recovered'
+  return 'blocking'
+}
+
+/** Count ONLY unrecovered/blocking failed steps in a run. */
+export function countBlockingFailedToolCalls(
+  steps: ActivityStep[],
+  resultMap: Map<string, ToolResult>,
+  childToolCallsByParent: Map<string, ToolCall[]>,
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>,
+  isLive = false,
+): number {
+  let count = 0
+  steps.forEach((step, index) => {
+    if (step.kind !== 'tool') return
+    const hasLaterStep = index < steps.length - 1
+    const severity = resolveToolErrorSeverity(
+      step.toolCall,
+      resultMap,
+      childToolCallsByParent,
+      errorSeverityByToolUseId,
+      { hasLaterStep, isLive },
+    )
+    if (severity === 'blocking') count += 1
+  })
+  return count
+}
+
+function compactToolTarget(toolCall: ToolCall): string {
+  const input = toolCall.input && typeof toolCall.input === 'object' && !Array.isArray(toolCall.input)
+    ? (toolCall.input as Record<string, unknown>)
+    : {}
+  const str = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+  const filePath = str(input.file_path) || (toolCall.toolName === 'NotebookEdit' ? str(input.notebook_path) : '')
+  if (filePath) return filePath.split(/[/\\]/).pop() || filePath
+
+  switch (toolCall.toolName) {
+    case 'Bash':
+    case 'PowerShell':
+      return str(input.description) || str(input.command)
+    case 'Grep':
+    case 'Glob':
+      return str(input.pattern)
+    case 'WebSearch':
+    case 'ToolSearch':
+      return str(input.query)
+    case 'WebFetch':
+      return str(input.url)
+    case 'Agent':
+      return str(input.description)
+    case 'Skill':
+      return str(input.skill)
+    case 'TaskCreate':
+      return str(input.subject)
+    case 'TaskUpdate':
+    case 'TaskGet':
+      return str(input.subject) || (str(input.taskId) ? `#${str(input.taskId)}` : '')
+    default:
+      return ''
+  }
+}
+
+/**
+ * Concise single-line label for a single-step work row (`Read MessageList.tsx`,
+ * `Create ui-smoke-output.txt`, `Run bun test`).
+ */
+export function describeToolStep(toolCall: ToolCall, t: Translate): { action: string; detail: string } {
+  const input = toolCall.input && typeof toolCall.input === 'object' && !Array.isArray(toolCall.input)
+    ? (toolCall.input as Record<string, unknown>)
+    : {}
+  if (
+    (toolCall.toolName === 'Bash' || toolCall.toolName === 'PowerShell') &&
+    typeof input.description === 'string' &&
+    input.description.trim()
+  ) {
+    return { action: input.description.trim(), detail: '' }
+  }
+  return {
+    action: toolVerb(toolCall.toolName, t),
+    detail: compactToolTarget(toolCall),
+  }
+}
+
+/**
+ * Concise active label for a collapsed live activity strip (Codex style):
+ * smoothly reflects what the model is doing right now without opening 30 rows.
+ */
+export function describeLiveActivityStep(
+  steps: ActivityStep[],
+  resultMap: Map<string, ToolResult>,
+  activeThinkingId: string | null | undefined,
+  t: Translate,
+): { action: string; detail: string } {
+  if (
+    activeThinkingId &&
+    steps.some((step) => step.kind === 'thinking' && step.message.id === activeThinkingId)
+  ) {
+    return { action: t('thinking.label'), detail: '' }
+  }
+
+  // Prefer the newest unresolved tool call.
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]
+    if (step?.kind === 'tool' && !resultMap.has(step.toolCall.toolUseId) && step.toolCall.status !== 'stopped') {
+      return describeToolStep(step.toolCall, t)
+    }
+  }
+
+  // Otherwise reflect the tail step while waiting between tools.
+  const lastStep = steps[steps.length - 1]
+  if (lastStep?.kind === 'thinking') {
+    return { action: t('thinking.label'), detail: '' }
+  }
+  if (lastStep?.kind === 'tool') {
+    return describeToolStep(lastStep.toolCall, t)
+  }
+  return { action: t('serverVerb.Working'), detail: '' }
+}
+
+/**
+ * Surface the basename when a settled run wrote or edited a single file so
+ * filenames remain scannable (and smoke/replay assertions find written paths)
+ * even while the activity group is collapsed.
+ */
+export function singleMutatedFileBasename(steps: ActivityStep[]): string | null {
+  const paths = new Set<string>()
+  for (const step of steps) {
+    if (step.kind !== 'tool') continue
+    if (step.toolCall.toolName !== 'Write' && step.toolCall.toolName !== 'Edit' && step.toolCall.toolName !== 'MultiEdit') {
+      continue
+    }
+    const input = step.toolCall.input
+    if (!input || typeof input !== 'object' || Array.isArray(input)) continue
+    const filePath = (input as Record<string, unknown>).file_path
+    if (typeof filePath === 'string' && filePath.trim()) {
+      const basename = filePath.trim().split(/[/\\]/).pop()
+      if (basename) paths.add(basename)
+    }
+  }
+  if (paths.size === 1) return [...paths][0] ?? null
+  return null
 }
 
 export function isToolCallResolved(

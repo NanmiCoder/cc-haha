@@ -68,8 +68,23 @@ export function createZoomControls(onAction: (action: BrowserZoomAction) => void
   root.addEventListener('pointerdown', event => event.stopPropagation())
   let suppressed = false
   let captureSuppressed = false
+  let agentSuppressed = false
   let latestConfig: ZoomControlsConfig | null = null
-  const updateVisibility = () => host.style.setProperty('visibility', suppressed || captureSuppressed ? 'hidden' : 'visible', 'important')
+  const updateVisibility = () => {
+    if (agentSuppressed) {
+      host.style.setProperty('display', 'none', 'important')
+      host.style.setProperty('visibility', 'hidden', 'important')
+      host.setAttribute('inert', '')
+      host.setAttribute('aria-hidden', 'true')
+      if ('inert' in host) (host as HTMLElement & { inert: boolean }).inert = true
+      return
+    }
+    host.style.removeProperty('display')
+    host.removeAttribute('inert')
+    host.removeAttribute('aria-hidden')
+    if ('inert' in host) (host as HTMLElement & { inert: boolean }).inert = false
+    host.style.setProperty('visibility', suppressed || captureSuppressed ? 'hidden' : 'visible', 'important')
+  }
   const controls = {
     update(config: ZoomControlsConfig) {
       latestConfig = config
@@ -95,6 +110,10 @@ export function createZoomControls(onAction: (action: BrowserZoomAction) => void
       updateVisibility()
     },
     setCaptureSuppressed(hidden: boolean) { captureSuppressed = hidden; updateVisibility() },
+    setAgentSuppressed(hidden: boolean) {
+      agentSuppressed = hidden
+      updateVisibility()
+    },
     ownsTarget(path: EventTarget[]) { return path.includes(host) },
     restore() { if (latestConfig) controls.update(latestConfig) },
     destroy() { host.remove() },

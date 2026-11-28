@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -291,9 +291,11 @@ describe('plan mode permission UI', () => {
     )
 
     expect(container.textContent).toContain('Plan approved')
+    expect(container.textContent).toContain('/tmp/claude-plan.md')
+    // Settled ExitPlanMode cards default collapsed until the reader expands them.
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
     expect(container.textContent).toContain('Release checklist')
     expect(container.textContent).toContain('Update the desktop plan modal.')
-    expect(container.textContent).toContain('/tmp/claude-plan.md')
     expect(container.textContent).not.toContain('Tool Output')
   })
 
@@ -310,6 +312,7 @@ describe('plan mode permission UI', () => {
     )
 
     expect(container.textContent).toContain('Plan rejected')
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
     expect(container.textContent).toContain('Tool permission request failed: AbortError')
     expect(container.textContent).not.toContain("Claude's plan")
     expect(container.textContent).not.toContain('No plan content available.')
@@ -381,8 +384,10 @@ describe('plan mode permission UI', () => {
     )
 
     // The chip shows the planning model by default and no staged badge.
-    expect(screen.getByTestId('plan-execution-model').textContent).toContain('deepseek-v4-pro')
-    expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on approve')
+    const executionModelWrapper = screen.getByTestId('plan-execution-model')
+    expect(executionModelWrapper.className).toContain('rounded-[var(--radius-control)]')
+    expect(executionModelWrapper.textContent).toContain('deepseek-v4-pro')
+    expect(executionModelWrapper.textContent).not.toContain('applies on submit')
     expect(screen.getByText('Execution model')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
@@ -393,7 +398,7 @@ describe('plan mode permission UI', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
 
     await waitFor(() => {
-      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on approve')
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on submit')
     })
     expect(screen.getByTestId('plan-execution-model').textContent).toContain('Sonnet 5')
 
@@ -422,6 +427,172 @@ describe('plan mode permission UI', () => {
     expect(useSessionRuntimeStore.getState().selections['session-1']?.modelId).toBe('deepseek-v4-flash')
   })
 
+  it.each([
+    ['RUNTIME_CONFIG_INVALID', undefined],
+    ['RUNTIME_CONFIG_INVALID', 'perm-plan'],
+    ['SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', 'perm-plan'],
+  ])('keeps plan review retryable when its execution model is rejected (%s, %s)', async (code, permissionRequestId) => {
+    const previousSelection = { providerId: 'deepseek', modelId: 'deepseek-v4-pro' }
+    useSessionRuntimeStore.setState({ selections: { 'session-1': previousSelection } })
+    render(
+      <PermissionDialog sessionId="session-1" requestId="perm-plan" toolName="ExitPlanMode" input={{ plan: PLAN }} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await screen.findByTestId('model-selector-dropdown')
+    fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+    const store = useChatStore.getState()
+    act(() => store.handleServerMessage('session-1', {
+      type: 'error', code, message: 'The execution model is unavailable.', permissionRequestId,
+    }))
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('The execution model is unavailable.')
+    expect(alert.className).toContain('text-[var(--color-error)]')
+    expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('permission_pending')
+    expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual(previousSelection)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+    expect(sendMock).toHaveBeenCalledTimes(2)
+    expect((screen.getByRole('button', { name: 'Approve plan' }) as HTMLButtonElement).disabled).toBe(true)
+    act(() => store.handleServerMessage('session-1', {
+      type: 'permission_resolved', requestId: 'perm-plan', permissionType: 'tool', allowed: true,
+    }))
+    act(() => store.handleServerMessage('session-1', {
+      type: 'error', code, message: 'Late execution model error', permissionRequestId: 'perm-plan',
+    }))
+    expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('tool_executing')
+    expect(screen.queryByRole('button', { name: 'Approve plan' })).toBeNull()
+  })
+
+  it('limits a running side-chat review to its existing provider', async () => {
+    const sessionId = 'side-plan-qa'
+    const session = useChatStore.getState().sessions['session-1']!
+    useChatStore.setState({ sessions: { [sessionId]: session } })
+    useSessionRuntimeStore.setState({ selections: { [sessionId]: { providerId: 'deepseek', modelId: 'deepseek-v4-pro' } } })
+    render(
+      <PermissionDialog sessionId={sessionId} requestId="perm-plan" toolName="ExitPlanMode" input={{ plan: PLAN }} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await screen.findByTestId('model-selector-dropdown')
+    expect(screen.queryByRole('button', { name: /^Sonnet 5(?![.\d])/ })).toBeNull()
+    expect(screen.getByTestId('model-selector-dropdown').textContent).toContain('deepseek-v4-pro')
+  })
+
+  it('sends runtimeOverride and denyMessage when switching model and clicking Keep planning', async () => {
+    useProviderStore.setState({
+      providers: [{
+        id: 'deepseek',
+        presetId: 'custom',
+        name: 'DeepSeek',
+        apiKey: '***',
+        baseUrl: 'https://api.deepseek.com',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'deepseek-v4-pro',
+          haiku: 'deepseek-v4-flash',
+          sonnet: '',
+          opus: '',
+        },
+      }],
+      activeId: 'deepseek',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSettingsStore.setState({
+      currentModel: { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', description: '', context: '' },
+      activeProviderName: 'DeepSeek',
+    })
+    useSessionRuntimeStore.setState({
+      selections: {
+        'session-1': { providerId: 'deepseek', modelId: 'deepseek-v4-pro' },
+      },
+    })
+
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: PLAN, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('Sonnet 5')
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('Tell Claude what to change'), {
+      target: { value: 'Split phase 1 into smaller migrations.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Keep planning' }))
+
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: false,
+      denyMessage: 'Split phase 1 into smaller migrations.',
+      runtimeOverride: {
+        providerId: null,
+        modelId: 'claude-sonnet-5',
+      },
+    })
+    expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual({
+      providerId: null,
+      modelId: 'claude-sonnet-5',
+    })
+  })
+
+  it('sends runtimeOverride without denyMessage when switching model and clicking Keep planning with empty feedback', async () => {
+    useSessionRuntimeStore.setState({
+      selections: {
+        'session-1': { providerId: 'deepseek', modelId: 'deepseek-v4-pro' },
+      },
+    })
+    useSettingsStore.setState({
+      currentModel: { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', description: '', context: '' },
+      activeProviderName: 'DeepSeek',
+    })
+
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: PLAN, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on submit')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep planning' }))
+
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: false,
+      runtimeOverride: {
+        providerId: null,
+        modelId: 'claude-sonnet-5',
+      },
+    })
+  })
+
   it('keeps the approval plain when the user re-selects the current model', async () => {
     useSessionRuntimeStore.setState({
       selections: {
@@ -448,7 +619,7 @@ describe('plan mode permission UI', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: /^Sonnet 5(?![.\d])/ }))
     await waitFor(() => {
-      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on approve')
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on submit')
     })
 
     // Open again and pick the current model back.
@@ -459,7 +630,7 @@ describe('plan mode permission UI', () => {
     fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }))
 
     await waitFor(() => {
-      expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on approve')
+      expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on submit')
     })
     expect(screen.getByTestId('plan-execution-model').textContent).toContain('Opus 4.8')
 
@@ -473,5 +644,175 @@ describe('plan mode permission UI', () => {
     expect(sendMock).not.toHaveBeenCalledWith('session-1', expect.objectContaining({
       runtimeOverride: expect.anything(),
     }))
+  })
+
+  it('collapses long plans with a bottom fade and expands on toggle', () => {
+    const longPlan = Array.from({ length: 20 }, (_, i) => `${i + 1}. Step ${i + 1} implementation detail`).join('\n')
+    const { container } = render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: longPlan, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-plan-expand-toggle="true"]')
+    expect(toggle).toBeTruthy()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle!)
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it.each([
+    { label: 'Cmd+Enter', init: { key: 'Enter', metaKey: true } },
+    { label: 'Ctrl+Enter', init: { key: 'Enter', ctrlKey: true } },
+  ])('submits revision feedback instead of approving when pressing $label inside the feedback textarea', ({ init }) => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    const textarea = screen.getByPlaceholderText('Tell Claude what to change')
+    fireEvent.change(textarea, {
+      target: { value: 'Keep the schema migration in a separate PR.' },
+    })
+    fireEvent.keyDown(textarea, init)
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: false,
+      denyMessage: 'Keep the schema migration in a separate PR.',
+    })
+  })
+
+  it.each([
+    { label: 'empty feedback', value: '' },
+    { label: 'whitespace-only feedback', value: '   \n\t  ' },
+  ])('does not approve when pressing Cmd+Enter inside the feedback textarea with $label', ({ value }) => {
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    const textarea = screen.getByPlaceholderText('Tell Claude what to change')
+    if (value) {
+      fireEvent.change(textarea, { target: { value } })
+    }
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+
+  it('approves with requested permissions when pressing Cmd+Enter on the card outside the feedback textarea', () => {
+    const { container } = render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{
+          plan: PLAN,
+          allowedPrompts: [{ tool: 'Bash', prompt: 'run tests' }],
+        }}
+      />,
+    )
+
+    fireEvent.keyDown(container.firstElementChild!, { key: 'Enter', metaKey: true })
+
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+      permissionUpdates: [
+        {
+          type: 'addRules',
+          rules: [{ toolName: 'Bash', ruleContent: 'prompt: run tests' }],
+          behavior: 'allow',
+          destination: 'session',
+        },
+      ],
+    })
+  })
+
+  it('shows platform-aware shortcut keycap labels on permission and plan cards', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get')
+    const userAgentSpy = vi.spyOn(navigator, 'userAgent', 'get')
+
+    try {
+      platformSpy.mockReturnValue('Win32')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+
+      const { rerender } = render(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-plan"
+          toolName="ExitPlanMode"
+          input={{ plan: PLAN }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: 'Approve plan' }).textContent).toContain('Ctrl+↵')
+
+      act(() => {
+        useChatStore.setState((state) => ({
+          sessions: {
+            ...state.sessions,
+            'session-1': {
+              ...state.sessions['session-1']!,
+              pendingPermission: {
+                requestId: 'perm-bash',
+                toolName: 'Bash',
+                toolUseId: 'toolu-bash',
+                input: { command: 'echo hi' },
+              },
+            },
+          },
+        }))
+      })
+
+      rerender(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-bash"
+          toolName="Bash"
+          input={{ command: 'echo hi' }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /^Allow:/ }).textContent).toContain('Ctrl+↵')
+
+      platformSpy.mockReturnValue('MacIntel')
+      userAgentSpy.mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
+
+      rerender(
+        <PermissionDialog
+          sessionId="session-1"
+          requestId="perm-bash"
+          toolName="Bash"
+          input={{ command: 'echo hi' }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: /^Allow:/ }).textContent).toContain('⌘↵')
+    } finally {
+      platformSpy.mockRestore()
+      userAgentSpy.mockRestore()
+    }
   })
 })

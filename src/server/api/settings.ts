@@ -11,7 +11,7 @@
  * PUT  /api/permissions/mode    — 设置权限模式
  */
 
-import { SettingsService } from '../services/settingsService.js'
+import { getCcHahaFallbackKeys, SettingsService } from '../services/settingsService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureDesktopCliLauncherInstalled } from '../services/desktopCliLauncherService.js'
 import { conversationService } from '../services/conversationService.js'
@@ -102,8 +102,10 @@ export async function handleSettingsApi(
 async function handleUserSettings(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const userSettings = await settingsService.getUserSettings()
+    const fallbackKeys = getCcHahaFallbackKeys(userSettings)
     return Response.json({
       ...userSettings,
+      ...(fallbackKeys.length > 0 ? { ccHahaFallbackKeys: fallbackKeys } : {}),
       leanModeEnabled: await settingsService.getLeanModeEnabled(userSettings),
       autoUpdateEnabled: await settingsService.getAutoUpdateEnabled(userSettings),
       agentTeamsEnabled: await settingsService.getAgentTeamsEnabled(),
@@ -115,6 +117,7 @@ async function handleUserSettings(req: Request): Promise<Response> {
     const body = await parseJsonBody(req)
     await settingsService.updateUserSettings(body)
     syncThinkingSettingToActiveSessions(body)
+    syncFastModeSettingToActiveSessions(body)
     if (Object.prototype.hasOwnProperty.call(body, 'autoQuestion')) {
       conversationService.refreshAutoQuestionSettings()
     }
@@ -311,4 +314,16 @@ function syncThinkingSettingToActiveSessions(settings: Record<string, unknown>):
   conversationService.setMaxThinkingTokensForActiveSessions(
     settings.alwaysThinkingEnabled ? null : 0,
   )
+}
+
+function syncFastModeSettingToActiveSessions(settings: Record<string, unknown>): void {
+  if (!Object.prototype.hasOwnProperty.call(settings, 'fastMode')) {
+    return
+  }
+  const value = settings.fastMode
+  if (typeof value !== 'boolean' && value !== null && value !== undefined) {
+    return
+  }
+
+  conversationService.setFastModeForActiveSessions(value === true)
 }

@@ -40,7 +40,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
     void useOpenTargetStore.getState().openTarget(target.id, absolutePath).catch(() => reportOpenFailure(absolutePath))
     onAfterSelect?.()
   }
-  const itemClass = 'flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]'
+  const itemClass = 'flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 text-left text-[13px] text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]'
   const failure = error ?? discovery.error
   return (
     <>

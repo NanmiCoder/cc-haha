@@ -20,10 +20,12 @@ export const attachmentOnlyPlaceholder = (text: string) =>
   text === 'Please analyze the attached files.' ||
   text === 'Please analyze the attached image.'
 export function visibleMessageText(text: string) {
-  return text.replace(
-    /<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/,
-    ''
-  )
+  return text
+    .replace(/<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/, '')
+    .replace(
+      /<browser-use-request(?:\s+target="(?:auto|workspace|chrome)")?>[\s\S]*?<\/browser-use-request>\n*/,
+      ''
+    )
 }
 // Same generated formats as desktop/src/stores/chatStore.ts. These are only
 // consumed with a real history image or an optimistic image attachment.
@@ -103,17 +105,31 @@ export function restoreFileReferences(text: string): {
     attachments,
   }
 }
+const LEADING_SWARM_COMMAND = /^\/swarm(?:\s|$)/i
+
+export function withAntigravitySwarmRequest(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed) return '/swarm'
+  if (LEADING_SWARM_COMMAND.test(trimmed)) return trimmed
+  return `/swarm ${trimmed}`
+}
+
 export function buildComposerMessage(
   text: string,
   attachments: ComposerAttachment[],
-  team: boolean
+  team: boolean,
+  options?: { antigravity?: boolean }
 ): Extract<ClientMessage, { type: 'user_message' }> {
   const content = text.trim()
   if (!content && !attachments.length)
     throw new Error('请先写下消息或添加材料。')
   return {
     type: 'user_message',
-    content: team ? `${teamBlock}${content ? `\n\n${content}` : ''}` : content,
+    content: team
+      ? (options?.antigravity
+          ? withAntigravitySwarmRequest(content)
+          : `${teamBlock}${content ? `\n\n${content}` : ''}`)
+      : content,
     ...(attachments.length
       ? {
           attachments: attachments.map(

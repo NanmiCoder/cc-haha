@@ -224,6 +224,53 @@ describe('WorkspaceService', () => {
     }
   })
 
+  it('compares staged files and later working-tree edits against an empty tree before the first commit', async () => {
+    const repoDir = await makeTempDir('workspace-service-unborn-')
+    git(repoDir, 'init')
+    const service = new WorkspaceService(async () => repoDir)
+    const file = path.join(repoDir, 'README.md')
+    await fs.writeFile(file, 'staged\n')
+    git(repoDir, 'add', '--', 'README.md')
+    await fs.appendFile(file, 'working tree\n')
+
+    const status = await service.getStatus('session')
+    expect(status).toMatchObject({
+      state: 'ok',
+      changedFiles: [{ path: 'README.md', status: 'added', additions: 2, deletions: 0 }],
+    })
+    const diff = await service.getDiff('session', 'README.md')
+    expect(diff.state).toBe('ok')
+    expect(diff.diff).toContain('+staged')
+    expect(diff.diff).toContain('+working tree')
+  })
+
+  it('does not treat a timed-out HEAD lookup as an unborn repository', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir)
+    const runGit = (service as unknown as {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        errorCode: string | null
+        maxBufferExceeded: boolean
+        timedOut: boolean
+      }>
+    }).runGit.bind(service)
+    let hashObjectCalled = false
+    ;(service as unknown as { runGit: typeof runGit }).runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+        return { stdout: '', stderr: '', code: 1, errorCode: null, maxBufferExceeded: false, timedOut: true }
+      }
+      if (args[0] === 'hash-object') hashObjectCalled = true
+      return runGit(workDir, args)
+    }
+
+    const status = await service.getStatus('session')
+    expect(status.state).toBe('error')
+    expect(hashObjectCalled).toBe(false)
+  })
+
   it('returns git status for modified, added, deleted, and untracked files', async () => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? repoDir : null)
@@ -757,6 +804,185 @@ describe('WorkspaceService', () => {
     expect(result.changedFiles).toEqual([
       { path: 'a.txt', oldPath: undefined, status: 'modified', additions: 1, deletions: 0 },
       { path: 'b.txt', oldPath: undefined, status: 'modified', additions: 2, deletions: 3 },
+    ])
+  })
+
+  it('returns lightweight metadata without running git status or transcript scans when includeChangedFiles is false', async () => {
+    const repoDir = await createGitWorkspace()
+    const gitCalls: string[][] = []
+    let messagesCalled = false
+    let snapshotsCalled = false
+    const service = new WorkspaceService(
+      async () => repoDir,
+      async () => { messagesCalled = true; return [] },
+      async () => { snapshotsCalled = true; return [] },
+    ) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+      }>
+    }
+    const realRunGit = service.runGit.bind(service)
+    service.runGit = async (workDir, args) => {
+      gitCalls.push(args)
+      return realRunGit(workDir, args)
+    }
+
+    const result = await service.getStatus('session-1', { includeChangedFiles: false })
+
+    expect(result).toMatchObject({
+      state: 'ok',
+      workDir: repoDir,
+      repoName: path.basename(repoDir),
+      isGitRepo: true,
+      changedFiles: [],
+    })
+    expect(result.branch).toBeTruthy()
+    expect(messagesCalled).toBe(false)
+    expect(snapshotsCalled).toBe(false)
+    expect(gitCalls.some((args) => args[0] === 'status' || args[0] === 'diff')).toBe(false)
+  })
+
+  it('caps git error output and strips NUL bytes on maxBuffer or giant stdout failures', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        errorCode?: string
+        maxBufferExceeded?: boolean
+      }>
+    }
+
+    let failStatusWithGiantStdout = false
+    service.runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return { stdout: `${workDir}\n`, stderr: '', code: 0 }
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return { stdout: 'main\n', stderr: '', code: 0 }
+      }
+      if (args[0] === 'diff') {
+        return {
+          stdout: `${'?? giant-path\0'.repeat(50_000)}`,
+          stderr: '',
+          code: 1,
+          errorCode: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+          maxBufferExceeded: true,
+        }
+      }
+      if (args[0] === 'status') {
+        if (!failStatusWithGiantStdout) {
+          return { stdout: ' M tracked.txt\0', stderr: '', code: 0 }
+        }
+        return {
+          stdout: `${'bad\0output '.repeat(5_000)}`,
+          stderr: '',
+          code: 128,
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 }
+    }
+
+    const diffResult = await service.getDiff('session-1', 'tracked.txt')
+    expect(diffResult.state).toBe('error')
+    expect(diffResult.error).toContain('exceeded buffer limit')
+    expect(diffResult.error?.length ?? 0).toBeLessThan(1_500)
+    expect(diffResult.error).not.toContain('\0')
+
+    failStatusWithGiantStdout = true
+    const statusResult = await service.getStatus('session-1')
+    expect(statusResult.state).toBe('error')
+    expect(statusResult.error?.length ?? 0).toBeLessThan(1_500)
+    expect(statusResult.error).not.toContain('\0')
+  })
+
+  it('scopes getDiff to the requested file path and scopes nested workDir getStatus before truncating', async () => {
+    const { repoDir, workDir } = await createNestedGitWorkspace()
+    const siblingDir = path.join(repoDir, 'aaa-noisy-sibling')
+    await fs.mkdir(siblingDir, { recursive: true })
+    // Put >2,000 untracked files in an alphabetically earlier sibling directory so any
+    // repo-wide pre-scope truncation would starve `subdir/sub.txt`.
+    const totalSiblingFiles = 2_100
+    for (let batch = 0; batch < totalSiblingFiles; batch += 300) {
+      const writes: Promise<void>[] = []
+      const end = Math.min(batch + 300, totalSiblingFiles)
+      for (let i = batch; i < end; i++) {
+        writes.push(fs.writeFile(path.join(siblingDir, `n-${String(i).padStart(4, '0')}.txt`), 'x\n'))
+      }
+      await Promise.all(writes)
+    }
+
+    const nestedService = new WorkspaceService(async () => workDir)
+    const nestedStatus = await nestedService.getStatus('session-1')
+    expect(nestedStatus.state).toBe('ok')
+    expect(nestedStatus.truncated).toBeUndefined()
+    expect(nestedStatus.changedFiles.map((file) => file.path)).toEqual(['sub.txt'])
+
+    // Even from repo root with >2,000 changed files, getDiff for a file past index 2,000
+    // queries that single pathspec directly and returns its real diff.
+    const rootService = new WorkspaceService(async () => repoDir)
+    const rootDiff = await rootService.getDiff('session-1', 'subdir/sub.txt')
+    expect(rootDiff.state).toBe('ok')
+    expect(rootDiff.diff).toContain('+sub changed')
+
+    // Repo-root getStatus caps changedFiles at 2,000 while reporting true totalChangedFiles > 2,000.
+    const rootStatus = await rootService.getStatus('session-1')
+    expect(rootStatus.state).toBe('ok')
+    expect(rootStatus.truncated).toBe(true)
+    expect(rootStatus.changedFiles).toHaveLength(2_000)
+    expect(rootStatus.totalChangedFiles).toBeGreaterThan(2_000)
+  }, 30_000)
+
+  it('drops split rename records on truncated status output and strips incomplete trailing numstat lines on timeout', async () => {
+    const repoDir = await createGitWorkspace()
+    const service = new WorkspaceService(async () => repoDir) as WorkspaceService & {
+      runGit: (workDir: string, args: string[]) => Promise<{
+        stdout: string
+        stderr: string
+        code: number
+        maxBufferExceeded?: boolean
+        timedOut?: boolean
+      }>
+    }
+
+    service.runGit = async (workDir, args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return { stdout: `${workDir}\n`, stderr: '', code: 0 }
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return { stdout: 'main\n', stderr: '', code: 0 }
+      }
+      if (args[0] === 'status' && args.includes('--untracked-files=all')) {
+        return { stdout: '', stderr: '', code: 1, maxBufferExceeded: true }
+      }
+      if (args[0] === 'status' && args.includes('--untracked-files=normal')) {
+        // Complete tracked file + collapsed untracked dir + truncated rename missing its second NUL oldPath record.
+        return {
+          stdout: ' M tracked.txt\0?? untracked-dir/\0R  renamed-new.txt\0',
+          stderr: '',
+          code: 1,
+          maxBufferExceeded: true,
+        }
+      }
+      if (args[0] === 'diff' && args.includes('--numstat')) {
+        return {
+          stdout: '3\t1\ttracked.txt\n9\t2\ttruncated-path-without-newline',
+          stderr: '',
+          code: 1,
+          timedOut: true,
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 }
+    }
+
+    const result = await service.getStatus('session-1')
+    expect(result.state).toBe('ok')
+    expect(result.truncated).toBe(true)
+    expect(result.changedFiles).toEqual([
+      { path: 'tracked.txt', oldPath: undefined, status: 'modified', additions: 3, deletions: 1 },
     ])
   })
 })

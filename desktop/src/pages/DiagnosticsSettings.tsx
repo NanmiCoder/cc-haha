@@ -611,7 +611,7 @@ function EventRow({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{event.type}</span>
-          <Badge tone={tone} size="xs">{event.severity}</Badge>
+          <Badge tone={tone} size="xs" pill={false}>{event.severity}</Badge>
           <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
             {new Date(event.timestamp).toLocaleString()}
           </span>
@@ -630,7 +630,7 @@ function EventRow({
               const copied = await copyTextToClipboard(event.id)
               addToast({ type: copied ? 'success' : 'error', message: copied ? eventIdCopiedLabel : eventIdCopyFailedLabel })
             }}
-            icon={<Copy size={12} strokeWidth={2} aria-hidden="true" />}
+            icon={<Copy size={12} strokeWidth={1.75} aria-hidden="true" />}
             iconPosition="end"
           >
             <span>{eventIdLabel}:</span>
@@ -640,7 +640,7 @@ function EventRow({
         {detailsText && (
           <details className="group mt-1">
             <summary className="inline-flex cursor-pointer select-none list-none items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
-              <ChevronRight size={12} strokeWidth={2} className="transition-transform group-open:rotate-90" aria-hidden="true" />
+              <ChevronRight size={12} strokeWidth={1.75} className="transition-transform group-open:rotate-90" aria-hidden="true" />
               {detailsLabel}
             </summary>
             <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3 font-mono text-[11px] leading-[1.6] text-[var(--color-text-secondary)]">

@@ -16,7 +16,7 @@ vi.mock('../chat/MermaidRenderer', () => ({
   ),
 }))
 
-import { MarkdownRenderer, __markdownParseCacheInternals } from './MarkdownRenderer'
+import { MarkdownRenderer, __markdownParseCacheInternals, extractResolvedMarkdownImageSources } from './MarkdownRenderer'
 import { CODE_LINK_CLASS } from '../../lib/markdownAutolink'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -100,11 +100,11 @@ describe('MarkdownRenderer', () => {
     const root = container.firstChild as HTMLDivElement
     expect(root).toBeInTheDocument()
     expect(root.className).toContain('prose-code:text-[var(--color-code-fg)]')
-    // A sunken chip, not a bordered box: regular weight, the shared
-    // `surface-container` fill, the smallest radius and no outline.
+    // A sunken 6px V6C inline-code chip: regular weight, shared
+    // `surface-container` fill, `--radius-sm` and no outline.
     expect(root.className).toContain('prose-code:bg-[var(--color-surface-container)]')
     expect(root.className).toContain('prose-code:font-normal')
-    expect(root.className).toContain('prose-code:rounded-[var(--radius-xs)]')
+    expect(root.className).toContain('prose-code:rounded-[var(--radius-sm)]')
     expect(root.className).not.toContain('prose-code:border')
     expect(root.className).not.toContain('prose-code:text-[var(--color-primary-fixed)]')
     expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
@@ -719,5 +719,117 @@ describe('MarkdownRenderer bare-URL autolink', () => {
     const root = container.firstChild as HTMLDivElement
     expect(root.className).toContain(`[&_a.${CODE_LINK_CLASS}]:no-underline`)
     expect(container.querySelector('a')?.className).toContain(CODE_LINK_CLASS)
+  })
+})
+
+describe('MarkdownRenderer inline audio', () => {
+  it('routes Markdown image syntax with audio extensions to an inline audio player instead of <img>', () => {
+    const onImageClick = vi.fn()
+    const seen: string[] = []
+    const { container } = render(
+      <MarkdownRenderer
+        content={'![飞机坠毁音效](N:/project/outputs/sfx/plane-crash.wav)\n\n![cover](outputs/cover.png)'}
+        resolveImageSrc={(src) => `img:${src}`}
+        resolveAudioSrc={(src) => {
+          seen.push(src)
+          return `audio:${src}`
+        }}
+        onImageClick={onImageClick}
+      />,
+    )
+
+    expect(seen).toEqual(['/N:/project/outputs/sfx/plane-crash.wav'])
+    const audio = container.querySelector('audio')!
+    expect(audio).toBeInTheDocument()
+    expect(audio).toHaveAttribute('src', 'audio:/N:/project/outputs/sfx/plane-crash.wav')
+    expect(audio).toHaveAttribute('controls')
+    expect(audio).toHaveAttribute('preload', 'metadata')
+    expect(audio).toHaveAttribute('aria-label', '飞机坠毁音效')
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+
+    fireEvent.click(audio)
+    expect(onImageClick).not.toHaveBeenCalled()
+    expect(
+      extractResolvedMarkdownImageSources(
+        '![飞机坠毁音效](N:/project/outputs/sfx/plane-crash.wav)\n\n![cover](outputs/cover.png)',
+        (src) => `img:${src}`,
+      ),
+    ).toEqual(['img:outputs/cover.png'])
+  })
+
+  it('normalizes raw HTML <audio> and <source> local file/Windows paths, strips autoplay, and keeps safe data URIs', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={[
+          '<audio controls autoplay src="file:///N:/project/outputs/sfx/crash.wav"></audio>',
+          '<audio controls src="N:\\project\\outputs\\sfx\\boom.mp3"></audio>',
+          '<audio controls><source src="outputs/sfx/take.flac" type="audio/flac"></audio>',
+          '<audio controls src="data:audio/mpeg;base64,SUQz"></audio>',
+        ].join('\n\n')}
+        resolveAudioSrc={(src) => (src.startsWith('data:') ? src : `resolved:${src}`)}
+      />,
+    )
+
+    const audios = Array.from(container.querySelectorAll('audio'))
+    expect(audios.map((el) => el.getAttribute('src'))).toEqual([
+      'resolved:/N:/project/outputs/sfx/crash.wav',
+      'resolved:/N:/project/outputs/sfx/boom.mp3',
+      'resolved:outputs/sfx/take.flac',
+      'data:audio/mpeg;base64,SUQz',
+    ])
+    for (const audio of audios) {
+      expect(audio).toHaveAttribute('controls')
+      expect(audio).toHaveAttribute('preload', 'metadata')
+      expect(audio).not.toHaveAttribute('autoplay')
+    }
+  })
+
+  it('strips untrusted or unresolved <audio> tags and ignores raw HTML data-md-audio portal claims', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={[
+          '<span data-md-audio="">spoof</span>',
+          '![remote](https://attacker.example/track.mp3)',
+          '<audio controls src="https://attacker.example/raw.wav"></audio>',
+          '<audio controls src="outputs/local.wav"></audio>',
+          '![valid](data:audio/mpeg;base64,SUQz)',
+        ].join('\n\n')}
+      />,
+    )
+
+    expect(container.querySelectorAll('audio')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-md-audio]')).toHaveLength(1)
+    expect(screen.getByText('spoof')).toBeInTheDocument()
+  })
+
+  it('allows safe inline data:audio base64 sources even without resolveAudioSrc', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={'![inline](data:audio/mpeg;base64,SUQz)\n\n<audio controls src="data:audio/wav;base64,UklGRg=="></audio>'}
+      />,
+    )
+
+    expect(Array.from(container.querySelectorAll('audio')).map((el) => el.getAttribute('src'))).toEqual([
+      'data:audio/mpeg;base64,SUQz',
+      'data:audio/wav;base64,UklGRg==',
+    ])
+  })
+
+  it('strips inline Markdown formatting from audio alt text and keeps audio card clicks from navigating a surrounding link', () => {
+    const onLinkClick = vi.fn()
+    const { container } = render(
+      <MarkdownRenderer
+        content={'[![**Take 1** — *dry*](outputs/sfx/take1.wav)](https://example.com)'}
+        resolveAudioSrc={(src) => `resolved:${src}`}
+        onLinkClick={onLinkClick}
+      />,
+    )
+
+    const audio = container.querySelector('audio')!
+    expect(audio).toHaveAttribute('aria-label', 'Take 1 — dry')
+    expect(screen.getByText('Take 1 — dry')).toBeVisible()
+
+    fireEvent.click(container.querySelector('[data-md-audio-card]')!)
+    expect(onLinkClick).not.toHaveBeenCalled()
   })
 })

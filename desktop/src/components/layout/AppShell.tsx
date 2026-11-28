@@ -33,6 +33,8 @@ import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { useUsageSummaryStore } from '../../stores/usageSummaryStore'
 import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { MobileShell } from '../mobile/MobileShell'
@@ -88,6 +90,9 @@ export function AppShell() {
   })
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
   const isActiveChatTab = isChatTab(activeTab)
+  const isWorkspaceFullscreen = useWorkspaceStore((state) =>
+    isActiveChatTab && activeTabId ? state.bySession[activeTabId]?.layout === 'full' : false,
+  )
 
   useEffect(() => {
     const sessionStore = useSessionStore.getState()
@@ -136,6 +141,17 @@ export function AppShell() {
               preferences.projectDisplayNames ?? {},
               displayNameHydrationRevision,
             )
+            if (preferences.usageWidget) {
+              void useUsageSummaryStore.getState().hydratePreferences(preferences.usageWidget)
+            }
+            if (desktopRuntime && preferences.usageWidget?.floatingEnabled) {
+              void getDesktopHost().usageWidget?.show({
+                compact: preferences.usageWidget.floatingCompact,
+                alwaysOnTop: preferences.usageWidget.floatingAlwaysOnTop,
+              }).then(() => {
+                useUsageSummaryStore.getState().setFloatingVisible(true)
+              }).catch(() => undefined)
+            }
             if (desktopRuntime && preferences.pet.enabled) {
               return getDesktopHost().pets.show()
             }
@@ -180,9 +196,11 @@ export function AppShell() {
     if (!host.isDesktop) return
     let unlisten: (() => void) | undefined
     host.window.onNativeMenuNavigate((target) => {
-      const destination = target as SettingsTab | 'settings'
+      const destination = target as SettingsTab | 'settings' | 'settings:providers'
       if (destination === 'about') {
         useUIStore.getState().setPendingSettingsTab('about')
+      } else if (destination === 'settings:providers') {
+        useUIStore.getState().setPendingSettingsTab('providers')
       }
       useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
     })
@@ -190,6 +208,52 @@ export function AppShell() {
       .catch(() => {})
     return () => { unlisten?.() }
   }, [])
+
+  // Keep usage widget visibility and cross-window preference changes in sync with the main window.
+  const usageMenuBarEnabled = useUsageSummaryStore((s) => s.preferences.menuBarEnabled)
+  const usagePreferencesLoaded = useUsageSummaryStore((s) => s.preferencesLoaded)
+  useEffect(() => {
+    const host = getDesktopHost()
+    if (!host.isDesktop || !host.usageWidget) return
+    let unlistenVisibility: (() => void) | undefined
+    let unlistenPrefs: (() => void) | undefined
+    let disposed = false
+
+    host.usageWidget.onVisibilityChanged((visible) => {
+      useUsageSummaryStore.getState().handleExternalVisibilityChange(visible)
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlistenVisibility = fn
+      })
+      .catch(() => {})
+
+    host.usageWidget.onPreferencesChanged?.(() => {
+      void useUsageSummaryStore.getState().hydratePreferences()
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlistenPrefs = fn
+      })
+      .catch(() => {})
+
+    return () => {
+      disposed = true
+      unlistenVisibility?.()
+      unlistenPrefs?.()
+    }
+  }, [])
+
+  // Keep macOS menu bar / tray usage title fresh while menuBarEnabled is active.
+  useEffect(() => {
+    if (!desktopRuntime || !ready || !usagePreferencesLoaded || !usageMenuBarEnabled) return
+    void useUsageSummaryStore.getState().fetchSummary()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void useUsageSummaryStore.getState().fetchSummary()
+    }, 5 * 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [desktopRuntime, ready, usageMenuBarEnabled, usagePreferencesLoaded])
 
   useEffect(() => {
     const host = getDesktopHost()
@@ -235,7 +299,7 @@ export function AppShell() {
 
   if (!ready || (shellLayout !== 'desktop' && mobileHandoff !== 'unavailable')) {
     return (
-      <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[13px] text-[var(--color-text-tertiary)]">
+      <div className="app-shell-viewport v6c-main-canvas flex items-center justify-center text-[13px] text-[var(--color-text-tertiary)]">
         {t('app.launching')}
       </div>
     )
@@ -246,7 +310,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface)]">
+    <div className="app-shell app-shell-viewport v6c-ambient-shell flex overflow-hidden">
       <div
         id="sidebar-shell"
         ref={sidebarResize.shellRef}
@@ -255,6 +319,14 @@ export function AppShell() {
         data-mobile="false"
         className="sidebar-shell"
       >
+        {/* Render the frosted backdrop as a non-wrapping sibling so `<aside>` and
+            its macOS `[data-desktop-drag-region]` header are not wrapped inside a
+            `backdrop-filter` compositor layer / fixed containing block. */}
+        <div
+          aria-hidden="true"
+          data-testid="sidebar-glass-backdrop"
+          className="v6c-sidebar-glass pointer-events-none absolute inset-0"
+        />
         <Sidebar
           desktopUiPreferencesRequest={desktopUiPreferencesRequest}
           onDesktopUiPreferencesConsumed={consumeDesktopUiPreferencesRequest}
@@ -273,7 +345,12 @@ export function AppShell() {
       <main
         id="content-area"
         data-sidebar-state={sidebarOpen ? 'open' : 'closed'}
-        className="min-w-0 flex-1 flex flex-col overflow-hidden"
+        data-canvas-inset="false"
+        className={`min-w-0 flex-1 flex flex-col overflow-hidden v6c-main-canvas ${
+          isWorkspaceFullscreen
+            ? ''
+            : 'border-l border-[var(--color-border)]'
+        }`}
       >
         <WorkspaceHeaderProvider>
           <TabBar />

@@ -713,6 +713,45 @@ describe('default provider settings ownership', () => {
     expect(saved).not.toHaveProperty('modelContext')
   })
 
+  it.each([
+    ['saved-fennoai', 'fixture-subagent'],
+    ['saved-xuanshuapi', 'fixture-subagent'],
+    ['saved-xuanshuapi', 'inherit'],
+    ['saved-xuanshuapi', ''],
+  ])('retains the active provider %s subagent override %j when reopening and saving JSON', async (activeId, subagentModel) => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      providerEnvOwner: activeId,
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: subagentModel },
+    })
+    vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId(`provider-${activeId}`)).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('ANTHROPIC_BASE_URL'))
+    expect(JSON.parse(settingsJsonOf(dialog)).env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(subagentModel)
+    expect(JSON.parse(settingsJsonOf(dialog))).not.toHaveProperty('providerEnvOwner')
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({ CLAUDE_CODE_SUBAGENT_MODEL: subagentModel }),
+    }), activeId))
+  })
+
+  it('does not preview a previous provider override while activation settings are stale', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: 'saved-fennoai' })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      providerEnvOwner: 'saved-xuanshuapi', env: { CLAUDE_CODE_SUBAGENT_MODEL: 'old-provider-only' },
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('ANTHROPIC_BASE_URL'))
+    expect(JSON.parse(settingsJsonOf(dialog)).env).not.toHaveProperty('CLAUDE_CODE_SUBAGENT_MODEL')
+  })
+
   it.each([null, 'saved-xuanshuapi'])('keeps the draft and refreshes the default after a settings ownership conflict (default=%s)', async (destination) => {
     let serverActive: string | null = 'saved-fennoai'
     vi.spyOn(providersApi, 'list').mockImplementation(async () => ({ providers: savedProviders, activeId: serverActive }))
@@ -890,7 +929,10 @@ describe('OpenCode Go provider', () => {
     }], activeId: null })
     render(<ProviderSettings />)
     const card = await screen.findByTestId('provider-saved-opencode-go')
-    expect(within(card).getByText('Multi-protocol')).toBeInTheDocument()
+    const formatBadge = within(card).getByText('Multi-protocol')
+    expect(formatBadge).toBeInTheDocument()
+    expect(formatBadge).toHaveClass('border-[var(--color-border)]', 'text-[var(--color-text-secondary)]')
+    expect(formatBadge).not.toHaveClass('bg-[var(--color-warning-container)]')
     expect(within(card).queryByText('OpenAI Chat')).not.toBeInTheDocument()
   })
 
@@ -900,8 +942,13 @@ describe('OpenCode Go provider', () => {
     const dialog = within(screen.getByRole('dialog'))
     fireEvent.click(dialog.getByRole('button', { name: 'OpenCode Go' }))
 
-    expect(dialog.getByText('OpenAI Chat Completions (proxy)')).toBeInTheDocument()
+    const fixedFormat = dialog.getByText('OpenAI Chat Completions (proxy)')
+    expect(fixedFormat).toBeInTheDocument()
+    expect(fixedFormat).toHaveClass('rounded-[var(--radius-card-inner)]')
     expect(dialog.getByText(/picks the protocol per model/)).toBeInTheDocument()
+    // Info help IconButtons use the standard control radius rather than shape="circle".
+    expect(dialog.getByRole('button', { name: 'Base URL help' })).not.toHaveClass('rounded-full')
+    expect(dialog.getByRole('button', { name: 'Network proxy mode setting help' })).not.toHaveClass('rounded-full')
     // A record-level format cannot express the per-model split, so the server
     // ignores it; leaving a dropdown here would offer a switch that does nothing.
     expect(dialog.queryByRole('button', { name: /OpenAI Chat Completions \(proxy\)|Anthropic Messages/ })).toBeNull()
@@ -1065,7 +1112,15 @@ describe('provider list tabs and search', () => {
 
     const match = screen.getByTestId('provider-saved-qiniuai')
     expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
-    expect(within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })).toHaveLength(2)
+    const marks = within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })
+    expect(marks).toHaveLength(2)
+    for (const mark of marks) {
+      expect(mark).toHaveClass(
+        'rounded-[var(--radius-xs)]',
+        'bg-[var(--color-search-highlight)]',
+        'text-[var(--color-on-search-highlight)]',
+      )
+    }
     expect(screen.getByRole('tab', { name: /API Key/ })).toHaveTextContent(/API Key\s*1/)
     // A filtered list is not an order to drag within.
     expect(screen.queryByRole('button', { name: 'Drag to reorder' })).not.toBeInTheDocument()
@@ -1216,6 +1271,254 @@ describe('Magpie on the provider list', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Magpie' }))
     expect(await screen.findByRole('dialog', { name: 'Connect Magpie' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Add Model' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Google Gemini API format in ProviderSettings', () => {
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(useMagpieStore.getState(), 'refresh').mockResolvedValue(null)
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false, providerOrder: [],
+      presets: BUNDLED_PROVIDER_PRESETS,
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+  })
+
+  it('shows a Gemini badge for saved Gemini providers and submits apiFormat=gemini with model fetching', async () => {
+    const geminiSaved: SavedProvider = {
+      id: 'saved-gemini',
+      presetId: 'custom',
+      name: 'Gemini Gateway',
+      baseUrl: 'http://127.0.0.1:3425',
+      apiKey: 'fake-gemini-key',
+      apiFormat: 'gemini',
+      models: {
+        main: 'devin/gemini-4-neon',
+        haiku: 'devin/gemini-4-neon',
+        sonnet: 'devin/gemini-4-neon',
+        opus: 'devin/gemini-4-neon',
+      },
+    }
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [geminiSaved], activeId: null })
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      models: [{ id: 'devin/gemini-4-neon' }],
+      endpoint: 'http://127.0.0.1:3425/v1beta/models',
+    })
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'created-gemini', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('provider-saved-gemini')
+    expect(card).toHaveTextContent('Gemini')
+    expect(card).not.toHaveTextContent('OpenAI Responses')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Model' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Custom API' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /^Base URL/ }), { target: { value: 'http://127.0.0.1:3425' } })
+    fireEvent.change(within(dialog).getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'magpie-test-key' } })
+    fireEvent.change(within(dialog).getByLabelText(/Main Model/, { selector: 'input' }), { target: { value: 'devin/gemini-4-neon' } })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Anthropic Messages \(native\)/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Google Gemini \(proxy\)/ }))
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => {
+      expect(fetchModels).toHaveBeenCalledWith({
+        baseUrl: 'http://127.0.0.1:3425',
+        apiKey: 'magpie-test-key',
+        apiFormat: 'gemini',
+      })
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        apiFormat: 'gemini',
+        baseUrl: 'http://127.0.0.1:3425',
+      }))
+    })
+  })
+
+  it('displays cloud protocol badges and saves Vertex AI / Bedrock / Azure OpenAI providers', async () => {
+    const savedCloudProviders: SavedProvider[] = [
+      {
+        id: 'saved-vertex',
+        presetId: 'custom',
+        name: 'GCP Vertex',
+        baseUrl: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1',
+        apiKey: 'ya29.mock',
+        apiFormat: 'google_vertex',
+        models: { main: 'gemini-3-pro', haiku: 'gemini-3-pro', sonnet: 'gemini-3-pro', opus: 'gemini-3-pro' },
+      },
+      {
+        id: 'saved-bedrock',
+        presetId: 'custom',
+        name: 'AWS Bedrock',
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: 'ABSKmock',
+        apiFormat: 'bedrock_converse',
+        models: { main: 'us.anthropic.claude-sonnet-4-6-v1:0', haiku: 'us.anthropic.claude-sonnet-4-6-v1:0', sonnet: 'us.anthropic.claude-sonnet-4-6-v1:0', opus: 'us.anthropic.claude-sonnet-4-6-v1:0' },
+      },
+      {
+        id: 'saved-azure',
+        presetId: 'custom',
+        name: 'Azure OpenAI',
+        baseUrl: 'https://res.openai.azure.com/openai/deployments/gpt-4o?api-version=2024-10-21',
+        apiKey: 'azure-key',
+        apiFormat: 'azure_openai',
+        models: { main: 'gpt-4o', haiku: 'gpt-4o', sonnet: 'gpt-4o', opus: 'gpt-4o' },
+      },
+    ]
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedCloudProviders, activeId: null })
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      models: [{ id: 'us.anthropic.claude-sonnet-4-6-v1:0' }],
+      endpoint: 'https://bedrock.us-east-1.amazonaws.com/foundation-models',
+    })
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'created-bedrock', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+
+    expect(await screen.findByTestId('provider-saved-vertex')).toHaveTextContent('Vertex AI')
+    expect(screen.getByTestId('provider-saved-bedrock')).toHaveTextContent('Bedrock')
+    expect(screen.getByTestId('provider-saved-azure')).toHaveTextContent('Azure OpenAI')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Model' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Custom API' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /^Base URL/ }), {
+      target: { value: 'https://bedrock-runtime.us-east-1.amazonaws.com' },
+    })
+    fireEvent.change(within(dialog).getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'ABSKmock-key' } })
+    fireEvent.change(within(dialog).getByLabelText(/Main Model/, { selector: 'input' }), {
+      target: { value: 'us.anthropic.claude-sonnet-4-6-v1:0' },
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Anthropic Messages \(native\)/ }))
+    expect(await screen.findByRole('option', { name: /Google Vertex AI \/ GCP \(proxy\)/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Azure OpenAI \/ Foundry \(proxy\)/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /AWS Bedrock Converse \(proxy\)/ }))
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => {
+      expect(fetchModels).toHaveBeenCalledWith({
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        apiKey: 'ABSKmock-key',
+        apiFormat: 'bedrock_converse',
+      })
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        apiFormat: 'bedrock_converse',
+      }))
+    })
+  })
+
+  it('allows creating, fetching models, and testing google_vertex and bedrock_converse without an API key for ambient credentials', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      models: [{ id: 'gemini-3-pro' }],
+      endpoint: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models',
+    })
+    const testConfig = vi.spyOn(providersApi, 'testConfig').mockResolvedValue({
+      result: {
+        connectivity: { success: true, latencyMs: 12 },
+        proxy: { success: true, latencyMs: 15 },
+      },
+    })
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'created-vertex-adc', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Model' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Custom API' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /^Base URL/ }), {
+      target: { value: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1' },
+    })
+    fireEvent.change(within(dialog).getByLabelText(/Main Model/, { selector: 'input' }), {
+      target: { value: 'gemini-3-pro' },
+    })
+
+    // Switch to Google Vertex AI without filling an API key
+    fireEvent.click(within(dialog).getByRole('button', { name: /Anthropic Messages \(native\)/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Google Vertex AI \/ GCP \(proxy\)/ }))
+    expect(within(dialog).getByText(/leave blank for local GCP ADC/i)).toBeInTheDocument()
+
+    // Fetch models works with empty apiKey
+    const fetchBtn = within(dialog).getByRole('button', { name: 'Fetch models' })
+    expect(fetchBtn).not.toBeDisabled()
+    fireEvent.click(fetchBtn)
+    await waitFor(() => {
+      expect(fetchModels).toHaveBeenCalledWith({
+        baseUrl: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1',
+        apiKey: '',
+        apiFormat: 'google_vertex',
+      })
+    })
+
+    // Test connection sends empty apiKey (not 'local')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test Connection' }))
+    await waitFor(() => {
+      expect(testConfig).toHaveBeenCalledWith(expect.objectContaining({
+        apiKey: '',
+        apiFormat: 'google_vertex',
+      }))
+    })
+
+    // Add button is enabled and saves with empty apiKey
+    const addBtn = within(dialog).getByRole('button', { name: 'Add' })
+    expect(addBtn).not.toBeDisabled()
+    fireEvent.click(addBtn)
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        apiKey: '',
+        apiFormat: 'google_vertex',
+      }))
+    })
+  })
+
+  it('renders the Local agent runtimes Antigravity card when the server returns antigravity status', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({
+      providers: [],
+      activeId: null,
+      antigravity: {
+        id: 'antigravity-acp',
+        kind: 'acp',
+        status: 'ready',
+        models: [{ id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro' }],
+        version: '1.5.17',
+      },
+    })
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('antigravity-provider-card')
+    expect(within(card).getByText('Antigravity')).toBeInTheDocument()
+    expect(within(card).getByText('1.5.17')).toBeInTheDocument()
+    expect(within(card).getByText('Ready')).toBeInTheDocument()
   })
 })
 

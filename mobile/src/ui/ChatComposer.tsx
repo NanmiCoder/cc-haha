@@ -7,8 +7,10 @@ import type { ApiClient } from '../core/client'
 import { formatBytes, type ComposerAttachment } from '../core/chatComposer'
 import { pickChatMaterial } from './chatMaterials'
 import { Icon, Mono, Spinner, useColors } from './kit'
-import { errorText } from './theme'
+import { radius } from './palette'
+import { errorText, useTheme } from './theme'
 import type { RuntimeConfig } from '../core/types'
+import { isAntigravityProvider } from '../core/runtimeCatalog'
 import {
   candidateTypeLabel,
   composerTrigger,
@@ -33,6 +35,9 @@ import {
 import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { useVoiceDictation } from '../core/useVoiceDictation'
+import { isOptimizablePrompt } from '../core/promptOptimize'
+import { usePromptOptimize } from '../core/usePromptOptimize'
+import { PromptOptimizeButton, PromptOptimizeFeedback } from './compose/PromptOptimize'
 import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/VoiceInput'
 import { simulatedPhoneChrome } from './webChrome'
 import { subscribeWebKeyboard } from './webKeyboard'
@@ -94,18 +99,20 @@ function Pill({
           height: 32,
           paddingLeft: 11,
           paddingRight: removable ? 8 : 11,
-          borderRadius: 16,
-          backgroundColor: colors.runTint,
+          borderRadius: radius.sm,
+          backgroundColor: colors.brandSoft,
+          borderWidth: 1,
+          borderColor: colors.brandBorder,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 6,
         }}
       >
         {icon}
-        <Body numberOfLines={1} style={{ maxWidth: 180, fontSize: 13, fontWeight: '600', color: colors.run }}>
+        <Body numberOfLines={1} style={{ maxWidth: 180, fontSize: 13, fontWeight: '600', color: colors.brandInk }}>
           {label}
         </Body>
-        {removable ? <Icon name="x" size={13} color={colors.run} strokeWidth={2.6} /> : null}
+        {removable ? <Icon name="x" size={13} color={colors.brandInk} strokeWidth={2.6} /> : null}
       </View>
     </Pressable>
   )
@@ -129,7 +136,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
         backgroundColor: colors.ink,
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: `0 0 0 2px ${colors.card}`,
+        boxShadow: `0 0 0 2px ${colors.cardRaised}`,
       }}
     >
       <Icon name="x" size={10} color={colors.bg} strokeWidth={3.5} />
@@ -142,7 +149,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
         <Pressable accessibilityRole="button" accessibilityLabel={`预览 ${attachment.name}`} onPress={onPreview}>
           <Image
             source={{ uri }}
-            style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
+            style={{ width: 52, height: 52, borderRadius: radius.inner, backgroundColor: colors.fill }}
           />
         </Pressable>
         {remove}
@@ -153,7 +160,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
       style={{
         height: 52,
         maxWidth: 220,
-        borderRadius: 12,
+        borderRadius: radius.inner,
         backgroundColor: colors.fill,
         flexDirection: 'row',
         alignItems: 'center',
@@ -179,22 +186,24 @@ function CandidateCard({
   loading,
   error,
   references,
+  antigravity = false,
   onChoose,
 }: {
   candidates: ComposerCandidate[]
   loading: boolean
   error: string
   references: ComposerReference[]
+  antigravity?: boolean
   onChoose(candidate: ComposerCandidate): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   return (
     <View
       style={{
-        backgroundColor: colors.card,
-        borderRadius: 18,
+        backgroundColor: colors.cardRaised,
+        borderRadius: radius.card,
         overflow: 'hidden',
-        boxShadow: `0 1px 2px rgba(28,25,23,0.06), 0 10px 28px rgba(28,25,23,0.14), 0 0 0 1px ${colors.hair}`,
+        boxShadow: shadows.popover,
       }}
     >
       <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 232 }} contentContainerStyle={{ padding: 6 }}>
@@ -224,7 +233,7 @@ function CandidateCard({
                   gap: 10,
                   paddingHorizontal: 10,
                   paddingVertical: 6,
-                  borderRadius: 12,
+                  borderRadius: radius.control,
                   backgroundColor: pressed || active ? colors.runTint : 'transparent',
                 })}
               >
@@ -235,14 +244,16 @@ function CandidateCard({
                   {candidate.description}
                 </Text>
                 {active ? <Icon name="check" size={16} color={colors.run} strokeWidth={2.4} /> : null}
-                <View style={{ height: 22, paddingHorizontal: 7, borderRadius: 7, backgroundColor: colors.fill, justifyContent: 'center' }}>
+                <View style={{ height: 22, paddingHorizontal: 7, borderRadius: radius.sm, backgroundColor: colors.fill, justifyContent: 'center' }}>
                   <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink2 }}>{candidateTypeLabel(candidate)}</Text>
                 </View>
               </Pressable>
             )
           })
         ) : (
-          <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>
+          <Text style={{ padding: 14, color: colors.ink3 }}>
+            {antigravity ? '没有匹配的斜杠命令' : '没有匹配的技能或命令'}
+          </Text>
         )}
       </ScrollView>
     </View>
@@ -327,6 +338,7 @@ export function ChatComposer({
   above,
   caption,
   onHeight,
+  newRequestId,
 }: {
   client: ApiClient | null
   sessionId?: string
@@ -339,7 +351,7 @@ export function ChatComposer({
   attachments: ComposerAttachment[]
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
-  onTeam(value: boolean): void
+  onTeam?(value: boolean): void
   /** Computer authorization; the current message's selection lives in references. */
   computer: ComputerUse
   lean: boolean
@@ -362,8 +374,10 @@ export function ChatComposer({
   caption?: ReactNode
   /** 整块（含渐隐区）的高度，页面给内容留底边距用。 */
   onHeight?(height: number): void
+  /** 为提示词优化等幂等请求生成 v4 UUID（原生端由页面注入 expo-crypto）。 */
+  newRequestId?: () => string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const inset = useBottomInset()
   const keyboard = useKeyboardVisible()
   const input = useRef<ComponentRef<typeof TextInput>>(null)
@@ -409,15 +423,38 @@ export function ChatComposer({
     onSubmit: onSend,
     focus: () => requestAnimationFrame(() => input.current?.focus()),
   })
+  const promptOptimize = usePromptOptimize({
+    client,
+    sessionId,
+    contextKey: `${client?.host.id ?? ''}:${sessionId ?? 'new'}`,
+    draft,
+    blocked: disabled || !!picking || voice.live,
+    onDraft: (text) => {
+      unrendered.current = null
+      sent.current = null
+      onDraft(text)
+      moveCaret(text.length)
+    },
+    focus: () => requestAnimationFrame(() => input.current?.focus()),
+    newRequestId,
+  })
+  const canOptimizePrompt =
+    Boolean(client) &&
+    Boolean(sessionId) &&
+    !disabled &&
+    !picking &&
+    !voice.live &&
+    isOptimizablePrompt(draft)
   const referenceState = useRef({ references, onReferences })
   useEffect(() => {
     referenceState.current = { references, onReferences }
   }, [references, onReferences])
-  const trigger = composerTrigger(draft, selection.start, selection.end)
-  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger
-  const needsCatalog = bringOpen || showCandidates
   const providerId = runtime?.providerId
+  const isAntigravity = isAntigravityProvider(providerId)
   const hasRuntime = !!runtime
+  const trigger = composerTrigger(draft, selection.start, selection.end)
+  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger && (!isAntigravity || trigger.kind === '/')
+  const needsCatalog = bringOpen || showCandidates
   useEffect(() => {
     if (!client || !needsCatalog) return
     const controller = new AbortController()
@@ -485,6 +522,7 @@ export function ChatComposer({
     }
     sendWhenRendered.current = false
     if (slot.kind === 'stop') return onStop?.()
+    promptOptimize.cancel()
     if (runShortcut(draft, references.length > 0 || attachments.length > 0)) {
       onDraft('')
       onOpenRun()
@@ -522,7 +560,8 @@ export function ChatComposer({
     setBringOpen(true)
   }
 
-  const chips = attachments.length > 0 || references.length > 0 || team
+  const teamActive = team && Boolean(onTeam)
+  const chips = attachments.length > 0 || references.length > 0 || teamActive
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -551,17 +590,18 @@ export function ChatComposer({
           loading={loading}
           error={catalogError}
           references={references}
+          antigravity={isAntigravity}
           onChoose={choose}
         />
       ) : null}
       <View
         style={{
-          backgroundColor: colors.card,
-          borderRadius: 22,
+          backgroundColor: colors.cardRaised,
+          borderRadius: radius.composer,
           paddingHorizontal: 6,
           paddingTop: chips ? 10 : 6,
           paddingBottom: 4,
-          boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.10), 0 0 0 1px ${colors.hair}`,
+          boxShadow: shadows.composer,
         }}
       >
         {chips ? (
@@ -591,15 +631,15 @@ export function ChatComposer({
                 onPress={() =>
                   onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))
                 }
-                icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} /> : undefined}
+                icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.brandInk} strokeWidth={2} /> : undefined}
               />
             ))}
-            {team ? (
+            {teamActive && onTeam ? (
               <Pill
                 label="团队"
                 accessibilityLabel="关闭这条消息的 Agent 团队"
                 onPress={() => onTeam(false)}
-                icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
+                icon={<Icon name="users" size={14} color={colors.brandInk} strokeWidth={2} />}
               />
             ) : null}
           </ScrollView>
@@ -612,6 +652,7 @@ export function ChatComposer({
           editable={!disabled && !voice.live}
           onChangeText={(reported) => {
             voice.edited()
+            promptOptimize.edited()
             const value = fieldText(reported)
             const cursor =
               value === reported
@@ -654,10 +695,11 @@ export function ChatComposer({
           }}
         />
         <VoiceFeedback voice={voice} blocked={disabled} onError={onError} />
+        {!voice.live ? <PromptOptimizeFeedback optimize={promptOptimize} blocked={disabled || !!picking} /> : null}
         {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="添加：技能、命令、材料"
+            accessibilityLabel={isAntigravity ? '添加：命令、材料' : '添加：技能、命令、材料'}
             accessibilityState={{ expanded: bringOpen }}
             onPress={openBring}
             style={({ pressed }) => ({
@@ -676,11 +718,15 @@ export function ChatComposer({
           <VoiceMicrophone
             blocked={!client || disabled || !!picking}
             onPress={() => {
+              promptOptimize.edited()
               input.current?.blur()
               Keyboard.dismiss()
               void voice.start()
             }}
           />
+          {sessionId ? (
+            <PromptOptimizeButton optimize={promptOptimize} canOptimize={canOptimizePrompt} />
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={slot.label}
@@ -689,12 +735,12 @@ export function ChatComposer({
             onPress={press}
             style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
           >
-            {/* 一直是墨色实心圆：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
+            {/* 一直是墨色圆角方键：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
             <View
               style={{
                 width: 36,
                 height: 36,
-                borderRadius: 18,
+                borderRadius: radius.key,
                 backgroundColor: colors.btn,
                 opacity: slot.kind === 'blocked' ? 0.35 : 1,
                 alignItems: 'center',
@@ -716,6 +762,7 @@ export function ChatComposer({
         client={client}
         workDir={workDir}
         lean={lean}
+        antigravity={isAntigravity}
         candidates={candidates}
         loading={loading}
         error={catalogError}
@@ -723,7 +770,7 @@ export function ChatComposer({
         draft={draft}
         picking={picking}
         onPick={(kind) => void pick(kind)}
-        team={team}
+        team={teamActive}
         onTeam={onTeam}
         computer={computer}
         onComputerSelected={(value) => {

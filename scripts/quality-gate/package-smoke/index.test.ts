@@ -52,6 +52,14 @@ function writeFile(rootDir: string, relativePath: string, content: string | Uint
   mkdirSync(dirname(fullPath), { recursive: true })
   writeFileSync(fullPath, content)
 
+  if (relativePath.endsWith('.app/Contents/MacOS/Claude Code Haha')) {
+    for (const framework of ['Electron Framework', 'Squirrel', 'ReactiveObjC', 'Mantle']) {
+      const binary = join(dirname(fullPath), '..', 'Frameworks', `${framework}.framework`, framework)
+      mkdirSync(dirname(binary), { recursive: true })
+      writeFileSync(binary, content)
+    }
+  }
+
   const fileName = basename(fullPath)
   if (fileName.startsWith('claude-sidecar-')) {
     const ripgrepName = fileName.endsWith('.exe') ? 'rg.exe' : 'rg'
@@ -375,6 +383,53 @@ describe('packaged artifact inspection', () => {
     expect(report.passedChecks.some((check) => check.label.includes('update metadata referenced artifact'))).toBe(true)
     expect(report.passedChecks.some((check) => check.label.includes('macOS update artifact blockmap'))).toBe(true)
     expect(report.passedChecks.some((check) => check.label === 'macOS unpacked H5 shell')).toBe(true)
+  })
+
+  test('fails macOS inspection when Electron framework binaries are missing or incomplete', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    const appRoot = 'desktop/build-artifacts/electron/mac-arm64/Claude Code Haha.app'
+    const resources = `${appRoot}/Contents/Resources`
+    const frameworks = `${appRoot}/Contents/Frameworks`
+    const unpacked = `${resources}/app.asar.unpacked`
+    const nodePty = `${unpacked}/node_modules/node-pty`
+
+    writeFile(rootDir, `${appRoot}/Contents/Info.plist`)
+    writeFile(rootDir, `${appRoot}/Contents/MacOS/Claude Code Haha`, thinMachO('arm64'))
+    writeFile(rootDir, `${resources}/app.asar`)
+    writeFile(rootDir, `${unpacked}/dist/index.html`)
+    writeFile(rootDir, `${unpacked}/dist/m/index.html`)
+    writeFile(rootDir, `${unpacked}/dist/m/h5.json`)
+    writeFile(rootDir, `${unpacked}/src-tauri/binaries/claude-sidecar-aarch64-apple-darwin`, thinMachO('arm64'))
+    writeFile(rootDir, `${nodePty}/package.json`)
+    writeFile(rootDir, `${nodePty}/prebuilds/darwin-arm64/pty.node`, thinMachO('arm64'))
+    writeFile(rootDir, `${nodePty}/prebuilds/darwin-arm64/spawn-helper`, thinMachO('arm64'))
+
+    const squirrel = `${frameworks}/Squirrel.framework`
+    const squirrelTarget = `${squirrel}/Versions/A/Squirrel`
+    writeFile(rootDir, squirrelTarget, thinMachO('arm64'))
+    rmSync(join(rootDir, squirrel, 'Squirrel'))
+    symlinkSync('Versions/A/Squirrel', join(rootDir, squirrel, 'Squirrel'))
+    const inspect = () => inspectPackagedArtifacts(rootDir, {
+      platform: 'macos',
+      arch: 'arm64',
+      packageKind: 'dir',
+    })
+    expect((await inspect()).passed).toBe(true)
+
+    rmSync(join(rootDir, frameworks, 'Electron Framework.framework', 'Electron Framework'))
+    rmSync(join(rootDir, squirrelTarget))
+    writeFile(rootDir, `${frameworks}/ReactiveObjC.framework/ReactiveObjC`, '')
+    const mantle = join(rootDir, frameworks, 'Mantle.framework', 'Mantle')
+    rmSync(mantle)
+    mkdirSync(mantle)
+
+    const report = await inspect()
+    expect(report.missingChecks).toEqual(['Electron Framework', 'Squirrel', 'ReactiveObjC', 'Mantle'].map(name => ({
+      label: `macOS ${name} binary`,
+      path: `${frameworks}/${name}.framework/${name}`,
+    })))
+    expect(report.passed).toBe(false)
   })
 
   test('fails macOS inspection when bundled ripgrep is missing', async () => {

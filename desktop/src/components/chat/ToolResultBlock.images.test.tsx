@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -52,23 +52,27 @@ describe('ToolResultBlock · images returned by a tool (#1397)', () => {
     expect(container.innerHTML).not.toContain(MARKER)
   })
 
-  it('keeps the text preview when the result has text as well', () => {
+  it('keeps the text behind the quiet disclosure when the result has text as well', () => {
     const { container } = render(
       <ToolResultBlock content={[{ type: 'text', text: 'Captured example.com' }, IMAGE_BLOCK]} isError={false} />,
     )
 
     expect(screen.getByRole('button', { name: 'Open image 1 of 1' })).toBeInTheDocument()
-    expect(container.querySelector('.font-mono')).toHaveTextContent('Captured example.com')
     expect(screen.getByRole('group', { name: 'Tool result' })).toBeInTheDocument()
+    // Collapsed by default: no 200-char monospace preview slab until clicked.
+    expect(container.querySelector('.font-mono')).toBeNull()
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
+    expect(container.textContent).toContain('Captured example.com')
   })
 
   it('shows the picture of a failed result as well', () => {
-    render(
+    const { container } = render(
       <ToolResultBlock content={[{ type: 'text', text: 'Partial capture' }, IMAGE_BLOCK]} isError />,
     )
 
-    expect(screen.getByText('Partial capture')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open image 1 of 1' })).toBeInTheDocument()
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
+    expect(screen.getByText('Partial capture')).toBeInTheDocument()
   })
 
   it('says when a returned image is not shown, and shows no text band for it', () => {
@@ -80,11 +84,13 @@ describe('ToolResultBlock · images returned by a tool (#1397)', () => {
     expect(createObjectURL).not.toHaveBeenCalled()
   })
 
-  it('renders a text-only result exactly as before', () => {
+  it('keeps a text-only result collapsed until expanded', () => {
     const { container } = render(<ToolResultBlock content="plain output" isError={false} />)
 
     expect(container.querySelector('[data-tool-result-images]')).toBeNull()
-    expect(container.querySelector('.font-mono')).toHaveTextContent('plain output')
+    expect(container.textContent).not.toContain('plain output')
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
+    expect(container.textContent).toContain('plain output')
     expect(createObjectURL).not.toHaveBeenCalled()
   })
 

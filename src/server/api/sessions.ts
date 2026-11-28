@@ -8,6 +8,8 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
  * Routes:
  *   GET    /api/sessions            — 列出会话
  *   GET    /api/sessions/project-history — 按逻辑项目分批浏览历史会话
+ *   GET    /api/sessions/prompt-history — 按项目/会话读取输入框历史（共享 CLI history.jsonl）
+ *   POST   /api/sessions/prompt-history — 追加桌面端输入框历史（共享 CLI history.jsonl）
  *   GET    /api/sessions/:id        — 获取会话详情
  *   GET    /api/sessions/:id/summary — 获取不含消息的会话元数据
  *   GET    /api/sessions/:id/messages — 获取会话消息
@@ -33,6 +35,7 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 
 import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
+import { handlePromptOptimizeRoute } from './promptOptimize.js'
 import { sessionService } from '../services/sessionService.js'
 import { loadRenderedToolImage } from '../services/toolImageMedia.js'
 import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
@@ -40,6 +43,8 @@ import { getMobileSessionActivity } from '../services/mobileSessionActivityRunti
 import { getPowerActivitySnapshot } from '../services/powerActivityRuntime.js'
 import { handlePowerActivityLease } from '../services/powerActivityLease.js'
 import { conversationService } from '../services/conversationService.js'
+import { ANTIGRAVITY_PROVIDER_ID, AntigravityError } from '../services/antigravityAcp.js'
+import { forgetAntigravitySwarmSessionMappingsForSession } from '../services/antigravitySwarmAdapter.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import {
@@ -50,13 +55,18 @@ import {
   assertSessionCanArchive,
   runSessionRewind,
 } from '../ws/handler.js'
-import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
+import {
+  listAntigravitySkillSlashCommands,
+  listSkillSlashCommands,
+  type SkillSlashCommand,
+} from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
 import { ReviewService, type ReviewSource } from '../services/reviewService.js'
 import {
   createRepositoryBranch,
   getRepositoryContext,
   type CreateSessionRepositoryOptions,
+  type RepositoryContextResult,
 } from '../services/repositoryLaunchService.js'
 import {
   executeSessionRewind,
@@ -72,6 +82,7 @@ import {
   SessionBranchingError,
 } from '../../utils/sessionBranching.js'
 import { registerChangedFileAccessRoot, registerFilesystemAccessRoot } from '../services/filesystemAccessRoots.js'
+import { findExplicitProjectRoot, readProjectIdentity } from '../services/projectIdentity.js'
 import { findGitRoot } from '../../utils/git.js'
 import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCaptureService.js'
 import { getSubagentRunByAgentId, getSubagentRunByTool } from '../services/subagentRunService.js'
@@ -88,6 +99,7 @@ import { localIndexCoordinator } from '../services/localIndex/coordinator.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { isPetAccessAuthorized } from '../localAccessAuth.js'
 import { PET_SESSION_LIMIT } from '../petAccessPolicy.js'
+import { appendPromptHistory, listPromptHistory } from '../services/promptHistoryService.js'
 
 const DEFAULT_GIT_INFO_COMMAND_TIMEOUT_MS = 3_000
 
@@ -200,6 +212,50 @@ export async function handleSessionsApi(
         ...(url.searchParams.has('beforeModifiedAt') ? { beforeModifiedAt: url.searchParams.get('beforeModifiedAt')! } : {}),
         ...(url.searchParams.has('beforeId') ? { beforeId: url.searchParams.get('beforeId')! } : {}),
       }))
+    }
+
+    if (sessionId === 'prompt-history') {
+      if (segments.length !== 3) throw ApiError.notFound('Prompt history route not found')
+      if (req.method === 'GET') {
+        const limit = url.searchParams.get('limit')
+        if (limit !== null && !/^\d+$/.test(limit)) throw ApiError.badRequest('Invalid limit parameter')
+        const sessionOnlyParam = url.searchParams.get('sessionOnly')
+        const entries = await listPromptHistory({
+          project: url.searchParams.get('project') ?? undefined,
+          projectRoot: url.searchParams.get('projectRoot') ?? undefined,
+          sessionId: url.searchParams.get('sessionId') ?? undefined,
+          ...(limit !== null ? { limit: Number(limit) } : {}),
+          sessionOnly: sessionOnlyParam === '1' || sessionOnlyParam === 'true',
+        })
+        return Response.json({ entries }, { headers: { 'Cache-Control': 'no-store' } })
+      }
+      if (req.method === 'POST') {
+        let body: unknown
+        try { body = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw ApiError.badRequest('Object body is required')
+        }
+        const { display, project, sessionId: entrySessionId } = body as Record<string, unknown>
+        if (typeof display !== 'string' || display.trim().length === 0) {
+          throw ApiError.badRequest('Non-empty display string is required')
+        }
+        if (project !== undefined && typeof project !== 'string') {
+          throw ApiError.badRequest('project must be a string when provided')
+        }
+        if (entrySessionId !== undefined && typeof entrySessionId !== 'string') {
+          throw ApiError.badRequest('sessionId must be a string when provided')
+        }
+        await appendPromptHistory({
+          display,
+          project,
+          sessionId: entrySessionId,
+        })
+        return Response.json({ ok: true })
+      }
+      return Response.json(
+        { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+        { status: 405 },
+      )
     }
 
     // Special collection route: /api/sessions/repository-context
@@ -343,6 +399,11 @@ export async function handleSessionsApi(
       return await handleSideQuestionRoute(req, url, sessionId, segments[4])
     }
 
+    if (subResource === 'optimize-prompt') {
+      if (segments.length > 5) throw ApiError.notFound('Prompt optimization route not found')
+      return await handlePromptOptimizeRoute(req, url, sessionId, segments[4])
+    }
+
     if (subResource === 'turn-checkpoints') {
       if (req.method !== 'GET') {
         return Response.json(
@@ -427,7 +488,7 @@ export async function handleSessionsApi(
             { status: 404 },
           )
         }
-        const byAgent = await getSubagentRunByAgentId(sessionId, agentId)
+        const byAgent = await getSubagentRunByAgentId(sessionId, agentId, { signal: req.signal })
         if (!byAgent) {
           throw ApiError.notFound(`SubAgent run not found: ${agentId}`)
         }
@@ -468,6 +529,7 @@ export async function handleSessionsApi(
         sessionId,
         toolUseId,
         url.searchParams.get('taskId') ?? undefined,
+        { signal: req.signal },
       )
       if (!result) {
         throw ApiError.notFound(`SubAgent run not found: ${toolUseId}`)
@@ -483,6 +545,12 @@ export async function handleSessionsApi(
         if (!content) throw ApiError.badRequest('content (string) is required in request body')
         if (!result.agentId) {
           throw ApiError.conflict(`SubAgent run has no resumable agent id: ${toolUseId}`)
+        }
+        if (!result.canSendMessage) {
+          const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+          if (launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+            throw ApiError.conflict('Antigravity subagent runs are read-only and do not accept follow-up messages.')
+          }
         }
         await ensureCliSessionStartedForControl(sessionId, url)
         const response = await conversationService.requestControl(sessionId, {
@@ -506,6 +574,16 @@ export async function handleSessionsApi(
       )
     }
 
+    // Reject unknown sub-resources before falling through to /api/sessions/:id
+    // item handlers (otherwise DELETE /api/sessions/:id/<unknown> would delete
+    // the session itself).
+    if (subResource) {
+      return Response.json(
+        { error: 'NOT_FOUND', message: `Unknown session sub-resource: ${subResource}` },
+        { status: 404 }
+      )
+    }
+
     // -----------------------------------------------------------------------
     // Item routes: /api/sessions/:id
     // -----------------------------------------------------------------------
@@ -523,6 +601,9 @@ export async function handleSessionsApi(
         )
     }
   } catch (error) {
+    if (error instanceof AntigravityError && error.code === 'ANTIGRAVITY_UNSUPPORTED') {
+      return errorResponse(new ApiError(409, error.message, error.code))
+    }
     const code = (error as { code?: string } | null)?.code
     const status = code === 'TRACE_PAGE_STALE' || code === 'HISTORY_PAGE_STALE' ? 409
       : code === 'TRACE_RECORD_TOO_LARGE' ? 413
@@ -781,8 +862,12 @@ async function handleSessionWorkspaceRoute(
   switch (workspaceResource) {
     case 'watch':
       return handleWorkspaceWatchRoute(req, sessionId, url, workspaceService)
-    case 'status':
-      return Response.json(await workspaceService.getStatus(sessionId))
+    case 'meta':
+      return Response.json(await workspaceService.getStatus(sessionId, { includeChangedFiles: false }))
+    case 'status': {
+      const includeChangedFiles = url.searchParams.get('includeChangedFiles') !== '0'
+      return Response.json(await workspaceService.getStatus(sessionId, { includeChangedFiles }))
+    }
     case 'tree':
       return await runWorkspaceRequest(() => workspaceService.readTree(
         sessionId,
@@ -1006,15 +1091,40 @@ function isReviewPathRejection(error: unknown): error is Error {
 }
 
 async function createSession(req: Request): Promise<Response> {
-  let body: { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
+  let body: {
+    workDir?: string
+    repository?: CreateSessionRepositoryOptions
+    permissionMode?: string
+    agentProfile?: 'standard' | 'lean'
+    launchProviderId?: unknown
+    providerId?: unknown
+    modelId?: unknown
+    effortLevel?: unknown
+    useWorktree?: unknown
+  }
   try {
-    body = (await req.json()) as { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
+    body = (await req.json()) as typeof body
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
 
   if (body.workDir && typeof body.workDir !== 'string') {
     throw ApiError.badRequest('workDir must be a string')
+  }
+  if (body.launchProviderId !== undefined && typeof body.launchProviderId !== 'string') {
+    throw ApiError.badRequest('launchProviderId must be a string')
+  }
+  if (body.providerId !== undefined && typeof body.providerId !== 'string') {
+    throw ApiError.badRequest('providerId must be a string')
+  }
+  if (body.modelId !== undefined && typeof body.modelId !== 'string') {
+    throw ApiError.badRequest('modelId must be a string')
+  }
+  if (body.effortLevel !== undefined && typeof body.effortLevel !== 'string') {
+    throw ApiError.badRequest('effortLevel must be a string')
+  }
+  if (body.useWorktree !== undefined && typeof body.useWorktree !== 'boolean') {
+    throw ApiError.badRequest('useWorktree must be a boolean')
   }
 
   if (body.permissionMode !== undefined && typeof body.permissionMode !== 'string') {
@@ -1036,9 +1146,24 @@ async function createSession(req: Request): Promise<Response> {
     }
   }
 
+  const repository: CreateSessionRepositoryOptions | undefined = body.useWorktree === true
+    ? { ...(body.repository ?? {}), worktree: true }
+    : body.repository
+
   if (body.agentProfile !== undefined && body.agentProfile !== 'standard' && body.agentProfile !== 'lean') throw ApiError.badRequest('agentProfile must be standard or lean')
   if (body.agentProfile === 'lean' && body.permissionMode === 'plan') throw ApiError.badRequest('Plan mode is unavailable in lean sessions. Choose another permission mode.')
-  const result = await sessionService.createSession(body.workDir, body.repository, body.permissionMode, body.agentProfile)
+  const result = await sessionService.createSession(
+    body.workDir,
+    repository,
+    body.permissionMode,
+    body.agentProfile,
+    {
+      launchProviderId: body.launchProviderId as string | undefined,
+      providerId: body.providerId as string | undefined,
+      modelId: body.modelId as string | undefined,
+      effortLevel: body.effortLevel as string | undefined,
+    },
+  )
   recentProjectsCache = null
   return Response.json(result, { status: 201 })
 }
@@ -1049,8 +1174,15 @@ async function getSessionRepositoryContext(url: URL): Promise<Response> {
     throw ApiError.badRequest('workDir query parameter is required')
   }
 
-  const context = await getRepositoryContext(workDir)
-  return Response.json(context)
+  return Response.json(withProjectIdentity(await getRepositoryContext(workDir)))
+}
+
+function withProjectIdentity(context: RepositoryContextResult): RepositoryContextResult & { projectRoot: string } {
+  const explicitRoot = findExplicitProjectRoot(context.workDir, readProjectIdentity(getClaudeConfigHomeDir()).roots)
+  const projectRoot = explicitRoot && (!context.repoRoot || findExplicitProjectRoot(explicitRoot, [context.repoRoot]))
+    ? explicitRoot
+    : context.repoRoot || context.workDir
+  return { ...context, projectRoot }
 }
 
 async function createSessionRepositoryBranch(req: Request): Promise<Response> {
@@ -1078,7 +1210,7 @@ async function createSessionRepositoryBranch(req: Request): Promise<Response> {
     name: body.name,
     from: body.from ?? null,
   })
-  return Response.json(result, { status: 201 })
+  return Response.json({ ...result, context: withProjectIdentity(result.context) }, { status: 201 })
 }
 
 async function requireSessionWorkspace(sessionId: string): Promise<string> {
@@ -1219,6 +1351,7 @@ async function deleteSession(sessionId: string): Promise<Response> {
     throw error
   }
   closeSessionConnection(sessionId, 'session deleted')
+  forgetAntigravitySwarmSessionMappingsForSession(sessionId)
   emitSessionTurnEvent({ type: 'deleted', sessionId })
   cleanupAdapterSessionMappings(sessionId)
   recentProjectsCache = null
@@ -1245,6 +1378,7 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
+    forgetAntigravitySwarmSessionMappingsForSession(sessionId)
     emitSessionTurnEvent({ type: 'deleted', sessionId })
     cleanupAdapterSessionMappings(sessionId)
     void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))
@@ -1308,6 +1442,7 @@ function mergeSessionSlashCommands(
       ...(argumentHint ? { argumentHint } : {}),
       kind: fallbackCommand?.kind ?? 'command',
       ...(fallbackCommand?.source ? { source: fallbackCommand.source } : {}),
+      ...(fallbackCommand?.leanCompatible === false ? { leanCompatible: false } : {}),
     })
   }
 
@@ -1326,7 +1461,16 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
-  const lean = (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean'
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+  const liveProviderId = conversationService.getSessionRuntimeSelection(sessionId)?.providerId
+  if (liveProviderId === ANTIGRAVITY_PROVIDER_ID || launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    if (cachedCommands.length > 0) {
+      return Response.json({ commands: cachedCommands })
+    }
+    return Response.json({ commands: await listAntigravitySkillSlashCommands(workDir) })
+  }
+
+  const lean = launchInfo?.agentProfile === 'lean'
   const hasCliList = !lean && cachedCommands.length > 0
   const skillCommands = await listSkillSlashCommands(workDir, {
     includeCompiledIn: !lean && !hasCliList,
@@ -1343,6 +1487,7 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   const statusOnly = url.searchParams.get('statusOnly') === '1'
   const includeContext = !statusOnly && url.searchParams.get('includeContext') !== '0'
   const contextOnly = includeContext && url.searchParams.get('contextOnly') === '1'
+  const summaryOnly = contextOnly && url.searchParams.get('summaryOnly') === '1'
   // Lightweight polling mode for the context panel: one `get_session_usage` control and
   // nothing else. The full inspection also scans the skills directory and re-reads the whole
   // transcript to cross-check usage, which is far too much work to repeat every few seconds.
@@ -1378,6 +1523,34 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
+  // The composer meter needs the runtime's compaction counter, not a full
+  // inspection. Keep this ahead of skill discovery and transcript metadata;
+  // if the CLI is busy, the client retains its previous confirmed reading.
+  if (active && summaryOnly) {
+    const errors: Record<string, string> = {}
+    const response: Record<string, unknown> = {
+      active,
+      status: {
+        sessionId,
+        workDir,
+        permissionMode: conversationService.getSessionPermissionMode(sessionId),
+      },
+      errors,
+    }
+    try {
+      response.context = await conversationService.requestControl(
+        sessionId,
+        { subtype: 'get_context_usage', estimateOnly: true, summaryOnly: true },
+        5_000,
+        req.signal,
+      )
+    } catch (error) {
+      throwIfRequestAborted(req)
+      errors.context = error instanceof Error ? error.message : String(error)
+    }
+    return Response.json(response)
+  }
+
   const permissionMode = active
     ? conversationService.getSessionPermissionMode(sessionId)
     : launchInfo?.permissionMode ?? 'default'
@@ -1404,7 +1577,7 @@ async function getSessionInspection(req: Request, sessionId: string, url: URL): 
   const hasCliSlashCommands = cachedSlashCommands.length > 0
   // `listSkillSlashCommands` walks every skill directory on disk with no cache. The usage
   // poll does not need a command count, so it must not pay for one.
-  const fallbackSlashCommands = usageOnly
+  const fallbackSlashCommands = usageOnly || contextOnly
     ? []
     : hasCliSlashCommands
       ? mergeSessionSlashCommands(
@@ -1643,15 +1816,23 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
   const repository = launchInfo?.repository
   const worktreeSession = launchInfo?.worktreeSession
-  // The visible business branch comes from Desktop's launch choice when present.
-  // CLI originalBranch is the source checkout before creating the worktree, which
-  // can differ from the selected base ref.
-  const sessionBranch = repository?.branch || worktreeSession?.originalBranch || null
+  const preferRepositoryBranch =
+    Boolean(repository?.worktree) &&
+    (!worktreeSession || sameResolvedPath(worktreeSession.worktreePath, repository.worktreePath))
+  // The visible business branch comes from Desktop's isolated worktree launch choice
+  // when it still matches the active worktree. Regular checkouts and subsequent CLI
+  // EnterWorktree transitions prefer CLI originalBranch over stale launch metadata.
+  const sessionBranch = preferRepositoryBranch
+    ? (repository?.branch || worktreeSession?.originalBranch || null)
+    : (worktreeSession?.originalBranch || null)
   const plannedWorktreePath = worktreeSession?.worktreePath || repository?.worktreePath || null
   const activeWorktreePath = worktreeSession?.worktreePath || (
     sameResolvedPath(workDir, plannedWorktreePath) ? workDir : null
   )
-  const worktree = repository?.worktree || worktreeSession
+  const hasActiveOrPlannedWorktree = Boolean(worktreeSession) || (
+    Boolean(repository?.worktree) && worktreeSession !== null
+  )
+  const worktree = hasActiveOrPlannedWorktree
     ? {
         enabled: true,
         path: activeWorktreePath,
@@ -1669,7 +1850,7 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   if (!gitRoot) {
     const dirName = repoNameFromWorkDir(workDir)
     return Response.json({
-      branch: sessionBranch,
+      branch: worktree ? sessionBranch : null,
       repoName: dirName,
       workDir,
       changedFiles: 0,
@@ -1678,17 +1859,37 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   }
 
   try {
-    // Get branch name
-    const gitBranch = await runGitInfoCommand(workDir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    // `branch --show-current` reports the live branch on normal and unborn checkouts,
+    // empty stdout (`''`) on detached HEAD, and `null` when git fails or times out.
+    const rawGitBranch = await runGitInfoCommand(workDir, ['branch', '--show-current'])
+    const isDetachedHead = rawGitBranch === ''
+    const gitBranch = rawGitBranch || null
     const materializedWorktree = !!worktree && (
       sameResolvedPath(workDir, worktree.path) ||
       sameResolvedPath(workDir, worktree.plannedPath)
     )
-    const branch = sessionBranch || (
-      materializedWorktree
-        ? (worktree.branch || gitBranch)
-        : gitBranch
-    )
+    const plannedUnmaterializedWorktree = !!worktree &&
+      !materializedWorktree &&
+      (launchInfo?.transcriptMessageCount ?? 0) === 0 &&
+      !!repository?.worktree &&
+      worktreeSession !== null
+
+    let branch: string | null
+    if (plannedUnmaterializedWorktree) {
+      branch = sessionBranch || gitBranch
+    } else if (materializedWorktree) {
+      if (isDetachedHead) {
+        branch = null
+      } else if (rawGitBranch === null) {
+        branch = sessionBranch || worktree.branch || null
+      } else if (worktree.branch && gitBranch === worktree.branch) {
+        branch = sessionBranch || worktree.branch
+      } else {
+        branch = gitBranch
+      }
+    } else {
+      branch = gitBranch
+    }
 
     // Get repo name from remote or directory
     const remote = await runGitInfoCommand(workDir, ['remote', 'get-url', 'origin'])
@@ -1708,7 +1909,7 @@ async function getGitInfo(sessionId: string): Promise<Response> {
   } catch {
     // Not a git repo or git not available
     return Response.json({
-      branch: sessionBranch,
+      branch: worktree ? sessionBranch : null,
       repoName: null,
       workDir,
       changedFiles: 0,
@@ -1718,6 +1919,9 @@ async function getGitInfo(sessionId: string): Promise<Response> {
 }
 
 async function rewindSession(req: Request, sessionId: string): Promise<Response> {
+  if ((await sessionService.getSessionLaunchInfo(sessionId))?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    throw ApiError.conflict('Antigravity does not support rewinding a conversation.')
+  }
   let body: RewindTargetSelector & { dryRun?: boolean; mode?: unknown }
   try {
     body = (await req.json()) as RewindTargetSelector & { dryRun?: boolean; mode?: unknown }
@@ -1760,6 +1964,9 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
   if (!launchInfo) {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
+  }
+  if (launchInfo.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
+    throw ApiError.conflict('Antigravity does not support forking a conversation.')
   }
 
   try {
@@ -1867,6 +2074,7 @@ type RecentProjectEntry = {
 
 // In-memory cache for recent projects (TTL: 30s)
 let recentProjectsCache: {
+  identityRevision: string
   scope: string
   /** How many sessions were scanned to build `projects` — see getRecentProjects. */
   scanLimit: number
@@ -1895,12 +2103,14 @@ async function getRecentProjects(url: URL): Promise<Response> {
     ? Math.min(Math.max(scanParam, 100), 5000)
     : Math.min(Math.max(limit * 16, 100), 500)
   const scope = path.resolve(getClaudeConfigHomeDir())
+  const identityRevision = readProjectIdentity(scope).revision
 
   // Return cached response if fresh. The cache is only valid for requests whose
   // scan depth it already covers — a shallow (small-limit) scan must not serve
   // a deeper one, or older projects would be silently truncated away.
   if (
     recentProjectsCache?.scope === scope &&
+    recentProjectsCache.identityRevision === identityRevision &&
     recentProjectsCache.scanLimit >= sessionScanLimit &&
     Date.now() - recentProjectsCache.timestamp < RECENT_PROJECTS_CACHE_TTL
   ) {
@@ -2010,6 +2220,6 @@ async function getRecentProjects(url: URL): Promise<Response> {
   // Sort by most recent
   projects.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
 
-  recentProjectsCache = { scope, scanLimit: sessionScanLimit, projects, timestamp: Date.now() }
+  recentProjectsCache = { scope, identityRevision, scanLimit: sessionScanLimit, projects, timestamp: Date.now() }
   return Response.json({ projects: projects.slice(0, limit) })
 }

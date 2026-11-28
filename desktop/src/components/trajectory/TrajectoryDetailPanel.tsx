@@ -56,7 +56,7 @@ type Props = {
   maxWidth: number
   /** `drawer` overlays the ledger when the column is too narrow to share. */
   mode: 'side' | 'drawer'
-  /** The raw-request tab (captures exist only for the main session's calls). */
+  /** Whether to show the raw-request tab on assistant responses. */
   allowRawRequest: boolean
   running: boolean
   onWidthChange: (width: number) => void
@@ -129,7 +129,7 @@ export function TrajectoryDetailPanel({
         {row.snapshot ? (
           <SnapshotDetail sessionId={sessionId} snapshot={row.snapshot} tab={tab as SnapshotTab} />
         ) : tab === 'request' ? (
-          <RawRequestTab sessionId={sessionId} row={row} />
+          <RawRequestTab sessionId={sessionId} agentId={agentId} row={row} />
         ) : (
           <RowDetail
             sessionId={sessionId}
@@ -238,7 +238,7 @@ function RowDetail({
     <div className="flex flex-col gap-4">
       {truncatedNotice}
       {content.thinking.length > 0 && (
-        <details className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2" open={!text}>
+        <details className="v6c-glass-card rounded-[var(--radius-card-inner)] border border-[var(--color-border)] px-3 py-2" open={!text}>
           <summary className="cursor-pointer text-[12px] text-[var(--color-text-tertiary)]">{t('trajectory.detail.thinking')}</summary>
           <div className="mt-2 text-[13px]"><MarkdownText text={content.thinking.join('\n\n')} /></div>
         </details>
@@ -252,7 +252,7 @@ function RowDetail({
                 key={use.id}
                 type="button"
                 onClick={() => onSelectRow(`t:${use.id}`)}
-                className="rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-2 py-0.5 font-mono text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                className="rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-0.5 font-mono text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
               >
                 {use.name}
               </button>

@@ -6,10 +6,12 @@
  * the failure paths a real provider cannot be made to produce on demand.
  */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
+import type { CollaborationMessage, CollaborationSnapshot, CollaborationState } from '../../../src/server/services/sessionCollaborationService'
+import { formatSessionCollaborationPrompt } from '../../../src/utils/sessionCollaborationEnvelope'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
@@ -27,10 +29,13 @@ import {
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 import { runGlobPermissions } from './globPermissions'
 import { runNotebookReadGuards } from './notebookReadGuards'
+import { runWorktreeSession } from './worktreeSession'
 
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-provider-subagent-model', title: 'Provider JSON subagent models survive save and reach real child requests in new sessions' },
+  { id: 'mock-worktree-session', title: 'Enter/ExitWorktree synchronizes the same turn, reconnect, Git and persisted session without changing other sessions' },
   { id: 'mock-glob-absolute-permissions', title: 'Absolute Glob roots require approval and denied enumeration recovers on the next workspace turn' },
   { id: 'mock-notebook-read-guards', title: 'Notebook edits reject unread and concurrently modified files, then recover after a fresh read' },
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
@@ -41,6 +46,7 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
   { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
   { id: 'mock-session-delegation-review', title: 'Real CLI yields for model allocation and starts a child only after UI confirmation' },
+  { id: 'mock-session-message-handoff', title: 'A completed conversation runs a peer handoff in the background while a stopped conversation waits for user input' },
   { id: 'mock-scheduled-task-roundtrip', title: 'Real CLI creates a desktop schedule and reads a persisted execution result through the scheduled task tool' },
   { id: 'mock-scheduled-task-session-resume', title: 'Desktop scheduler resumes the actual original CLI conversation and persists scheduled provenance' },
   { id: 'mock-scheduled-task-default-runtime', title: 'A task-page new conversation without model overrides runs on the active custom provider' },
@@ -131,23 +137,81 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-provider-subagent-model'(ctx) {
+      const endpoint = `${ctx.baseUrl}/api/providers`
+      const settingsPath = join(ctx.configDir, 'cc-haha', 'settings.json')
+      const originalSettings = existsSync(settingsPath) ? readFileSync(settingsPath, 'utf8') : undefined
+      const providers = await (await fetch(endpoint)).json() as { activeId: string | null }
+      const request = async (method: string, route: string, body?: unknown) => {
+        const response = await fetch(`${endpoint}/${route}`, {
+          method, headers: { 'Content-Type': 'application/json' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        })
+        if (!response.ok) throw new Error(`Provider ${route} failed: ${response.status} ${await response.text()}`)
+        return response.json()
+      }
+      try {
+        await request('POST', `${ctx.target.providerId}/activate`)
+        for (const override of ['mock-subagent-model', 'inherit', '']) {
+          const settings = await request('GET', 'settings') as { env?: Record<string, string> }
+          await request('PUT', `settings?expectedActiveProviderId=${ctx.target.providerId}`, {
+            ...settings, env: { ...settings.env, CLAUDE_CODE_SUBAGENT_MODEL: override },
+          })
+          await request('PUT', ctx.target.providerId, { notes: 'Saved through the provider editor' })
+          const persisted = await request('GET', 'settings') as { env: Record<string, string> }
+          if (persisted.env.CLAUDE_CODE_SUBAGENT_MODEL !== override) throw new Error('Provider save discarded the subagent model')
+          const sessionId = await ctx.createSession()
+          const socket = await ctx.openSocket(sessionId)
+          try {
+            ctx.pinRuntime(socket)
+            const since = requests.length
+            socket.send({ type: 'user_message', content: `MOCK_TEAM_OWNER ${JSON.stringify({
+              tool: 'Agent', input: { subagent_type: 'general-purpose', description: 'Verify saved subagent model', prompt: 'Return a short deterministic fixture reply.' },
+            })}` })
+            await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'saved subagent model turn')
+            const selected = !override || override === 'inherit' ? ctx.target.modelId : override
+            const isChild = (item: RecordedRequest) => {
+              const content = item.body.messages?.findLast(message => message.role === 'user')?.content
+              return typeof content === 'string'
+                ? content === 'Return a short deterministic fixture reply.'
+                : content?.some(block => block.type === 'text' && block.text === 'Return a short deterministic fixture reply.')
+            }
+            const agentRequests = requests.slice(since).filter(item => (item.body.tools?.length ?? 0) > 0)
+            const childRequests = agentRequests.filter(isChild)
+            if (!childRequests.length || childRequests.some(item => item.body.model !== selected)) throw new Error(`Child requests did not use saved subagent model ${selected}`)
+            if (!agentRequests.some(item => !isChild(item)) || agentRequests.filter(item => !isChild(item)).some(item => item.body.model !== ctx.target.modelId)) throw new Error('Subagent override changed the parent model')
+            if (!toolResultsSentUpstream(requests, since).some(result => !result.is_error && contentText(result.content).includes('agentId:'))) {
+              throw new Error('The real Agent did not return its result to the parent')
+            }
+          } finally {
+            socket.close()
+            await fetch(`${ctx.baseUrl}/api/sessions/${sessionId}`, { method: 'DELETE' })
+          }
+        }
+      } finally {
+        await request('POST', providers.activeId ? `${providers.activeId}/activate` : 'official')
+        if (originalSettings !== undefined) writeFileSync(settingsPath, originalSettings)
+        else rmSync(settingsPath, { force: true })
+      }
+    },
+    'mock-worktree-session': ctx => runWorktreeSession(ctx, () => toolResultsSentUpstream(requests)),
     'mock-glob-absolute-permissions': ctx => runGlobPermissions(ctx, () => toolResultsSentUpstream(requests)),
     'mock-notebook-read-guards': ctx => runNotebookReadGuards(ctx, () => toolResultsSentUpstream(requests)),
     async 'mock-project-additional-directories'(ctx) {
-      const directory = join(dirname(ctx.workRoot), 'auxiliary 数据 files')
-      mkdirSync(directory, { recursive: true })
+      rmSync(join(ctx.artifactDir, 'project-directories.json'), { force: true })
+      const directory = mkdtempSync(join(dirname(ctx.workRoot), 'cc-haha-auxiliary 数据 files-'))
       const endpoint = `${ctx.baseUrl}/api/desktop-ui/preferences/project-directories`
       const update = async (additionalDirectories: string[]) => {
         const response = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workDir: ctx.workRoot, additionalDirectories }) })
         if (!response.ok) throw new Error(`Project directory save failed: ${response.status} ${await response.text()}`)
       }
-      const original = await ctx.createSession()
-      await update([directory])
-      const created = await ctx.createSession()
-      await update([])
-      const allowedPath = join(directory, 'allowed.txt')
       const sockets = []
       try {
+        const original = await ctx.createSession()
+        await update([directory])
+        const created = await ctx.createSession()
+        await update([])
+        const allowedPath = join(directory, 'allowed.txt')
         const current = await ctx.openSocket(created)
         sockets.push(current)
         ctx.pinRuntime(current)
@@ -178,8 +242,12 @@ export function createMockOnlyRunners(
         if (existsSync(deniedPath)) throw new Error('Old task wrote outside its saved scope')
         writeFileSync(join(ctx.artifactDir, 'project-directories.json'), JSON.stringify({ original, created, directory, allowedPath, deniedPath, primaryDirectory: ctx.workRoot, permissionMode: 'acceptEdits', newTaskReadWrite: true, oldTaskRequestedPermission: true }, null, 2))
       } finally {
-        for (const socket of sockets) socket.close()
-        await update([])
+        try {
+          for (const socket of sockets) socket.close()
+          await update([])
+        } finally {
+          rmSync(directory, { recursive: true, force: true })
+        }
       }
     },
     async 'mock-cold-permission-switch'(ctx) {
@@ -666,6 +734,88 @@ export function createMockOnlyRunners(
           await fetch(`${ctx.baseUrl}/api/session-collaboration/${explicitId}/stop`, { method: 'POST' })
         } finally { explicitSocket.close() }
       } finally { socket.close() }
+    },
+    async 'mock-session-message-handoff'(ctx) {
+      const target = await ctx.createSession()
+      const base = `${ctx.baseUrl}/api/session-collaboration/${target}`
+      const waitForTarget = async (state: CollaborationState, consumedId?: string) => {
+        const deadline = Date.now() + ctx.stepTimeoutMs
+        let snapshot: CollaborationSnapshot
+        do {
+          const response = await fetch(`${base}/status`)
+          if (!response.ok) throw new Error(`Target status failed: ${response.status}`)
+          snapshot = await response.json() as CollaborationSnapshot
+          if (snapshot.members.find(member => member.sessionId === target)?.state === state &&
+            (!consumedId || snapshot.messages.some(message => message.id === consumedId && message.status === 'consumed'))) return
+          await Bun.sleep(50)
+        } while (Date.now() < deadline)
+        throw new Error(`Target did not reach ${state} with receipt ${consumedId ?? 'n/a'}: ${JSON.stringify(snapshot)}`)
+      }
+      const firstTarget = await ctx.openSocket(target)
+      try {
+        ctx.pinRuntime(firstTarget)
+        firstTarget.send({ type: 'user_message', content: 'Complete the initial target turn.' })
+        await firstTarget.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'initial target turn')
+        await waitForTarget('completed')
+      } finally { firstTarget.close() }
+      if (!ctx.restartServer) throw new Error('The handoff scenario requires a real server restart')
+      await ctx.restartServer()
+      const source = await ctx.createSession()
+      const sender = await ctx.openSocket(source)
+      try {
+        ctx.pinRuntime(sender)
+        const call = async <T>(tool: 'ListSessions' | 'SendSessionMessage' | 'WaitSessions', input: object): Promise<T> => {
+          const since = requests.length
+          const start = sender.messages.length
+          sender.send({ type: 'user_message', content: `MOCK_SESSION_COLLABORATION ${tool} ${JSON.stringify(input)}` })
+          await sender.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, tool, start)
+          const result = toolResultsSentUpstream(requests, since).at(-1)
+          if (!result || result.is_error) throw new Error(`${tool} did not return data: ${contentText(result?.content)}`)
+          return JSON.parse(contentText(result.content)) as T
+        }
+        const send = (id: string, content: string) => call<CollaborationMessage & { targetState: CollaborationState }>('SendSessionMessage', { targetSessionId: target, content, messageId: id })
+        const listedState = async () => {
+          const page = await call<{ sessions: Array<{ id: string; state: CollaborationState }> }>('ListSessions', { limit: 10 })
+          return page.sessions.find(session => session.id === target)?.state
+        }
+        const wasSentUpstream = (id: string, text: string) => requests.some(request =>
+          contentText(request.body.messages?.at(-1)?.content).includes(formatSessionCollaborationPrompt({ senderSessionId: source, messageId: id, text })))
+        if (await listedState() !== 'completed') throw new Error('ListSessions did not report the completed target after restart')
+        const completedMessage = { id: `${target}:completed`, text: 'Run the peer handoff in the background.' }
+        const activeReceipt = await send(completedMessage.id, completedMessage.text)
+        if (!['accepted', 'consumed'].includes(activeReceipt.status)) throw new Error(`A completed session did not accept the handoff: ${JSON.stringify(activeReceipt)}`)
+        await waitForTarget('completed', completedMessage.id)
+        if (!wasSentUpstream(completedMessage.id, completedMessage.text)) throw new Error('The cold target did not receive the handoff in its real CLI turn')
+
+        const beforeStop = await ctx.openSocket(target)
+        try {
+          const start = beforeStop.messages.length
+          beforeStop.send({ type: 'user_message', content: 'Count from 1 to 200.' })
+          await beforeStop.waitFor(message => message.type === 'content_delta', ctx.stepTimeoutMs, 'target is generating', start)
+          beforeStop.send({ type: 'stop_generation' })
+          await waitForTarget('stopped')
+        } finally { beforeStop.close() }
+        const pausedMessage = { id: `${target}:paused`, text: 'Wait for the human to resume before running this handoff.' }
+        const receipt = await send(pausedMessage.id, pausedMessage.text)
+        if (receipt.status !== 'queued' || receipt.targetState !== 'stopped') throw new Error(`The stopped session must leave the handoff queued: ${JSON.stringify(receipt)}`)
+        if (await listedState() !== 'stopped') throw new Error('ListSessions did not report the stopped target')
+
+        const reopened = await ctx.openSocket(target)
+        try {
+          const waiting = await call<CollaborationSnapshot>('WaitSessions', { afterRevision: 0, sessionIds: [target] })
+          if (waiting.members.find(member => member.sessionId === target)?.state !== 'stopped' ||
+            waiting.messages.find(message => message.id === pausedMessage.id)?.status !== 'queued' || wasSentUpstream(pausedMessage.id, pausedMessage.text)) {
+            throw new Error(`Opening a stopped session must not consume the handoff: ${JSON.stringify(waiting)}`)
+          }
+          ctx.pinRuntime(reopened)
+          reopened.send({ type: 'user_message', content: 'Resume the target session.' })
+          await waitForTarget('completed', pausedMessage.id)
+          const delivered = await call<CollaborationSnapshot>('WaitSessions', { afterRevision: receipt.revision, sessionIds: [target] })
+          if (!delivered.messages.some(message => message.id === pausedMessage.id && message.status === 'consumed') || !wasSentUpstream(pausedMessage.id, pausedMessage.text)) {
+            throw new Error('The explicit user turn did not consume the queued handoff in the target CLI')
+          }
+        } finally { reopened.close() }
+      } finally { sender.close() }
     },
     async 'mock-image-provider-protocols'(ctx) {
       const providerUrl = `${ctx.baseUrl}/api/providers/${ctx.target.providerId}`

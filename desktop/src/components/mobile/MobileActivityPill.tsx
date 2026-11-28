@@ -26,23 +26,25 @@ export function MobileActivityPill({ sessionId }: { sessionId: string }) {
       aria-haspopup="dialog"
       aria-expanded={isOpen}
       onClick={() => open(sessionId)}
-      className={`flex h-11 shrink-0 items-center gap-1.5 rounded-[var(--radius-full)] px-3 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+      className={`v6c-pressable flex h-11 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-1.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
         busy
           ? 'text-[var(--color-on-info-container)]'
           : 'text-[var(--color-text-secondary)]'
       }`}
     >
       <span
-        className={`flex h-8 items-center gap-1.5 rounded-[var(--radius-full)] border px-2.5 ${
+        className={`v6c-raised flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-surface-glass-border)] px-2.5 tabular-nums ${
           busy
-            ? 'border-[var(--color-info)] bg-[var(--color-info-container)]'
-            : 'border-[var(--color-border)] bg-[var(--color-surface)]'
+            ? 'text-[var(--color-info)]'
+            : 'text-[var(--color-text-secondary)]'
         }`}
       >
         {busy
           ? <Spinner size={12} />
           : <ListChecks size={14} strokeWidth={1.75} aria-hidden="true" />}
-        {busy ? t('mobile.activity.inProgress', { count: summary.count }) : t('session.activity.title')}
+        {busy
+          ? <span className="codex-shimmer-text font-medium">{t('mobile.activity.inProgress', { count: summary.count })}</span>
+          : t('session.activity.title')}
       </span>
     </button>
   )

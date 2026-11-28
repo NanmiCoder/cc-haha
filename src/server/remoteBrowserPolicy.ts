@@ -1,14 +1,15 @@
 import type { RequestCompatibility, SavedProvider } from './types/provider.js'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS, normalizeAutoQuestionSettings } from '../shared/autoQuestionSettings.js'
+import { ANTIGRAVITY_PROVIDER_ID } from './services/antigravityAcp.js'
 
 export type ApiRequestContext = { remoteBrowser?: boolean; remoteDeviceId?: string; remoteDeviceExpiresAt?: number }
 // `nextPromptSuggestionsEnabled` is readable so a remote desktop-class browser,
 // which asks for suggestions on its session socket, also renders them; turning
 // on the extra per-turn request stays a desktop-only decision.
-const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'nextPromptSuggestionsEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
+const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'nextPromptSuggestionsEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language', 'maxOutputTokensEscalationMode']
 const WRITE_SETTINGS = new Set(['language', 'chatSendBehavior', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'outputStyle', 'autoQuestion'])
 const RESERVED_PROVIDER_PATHS = new Set(['settings', 'cc-switch', 'test', 'models', 'presets', 'auth-status', 'official', 'reorder'])
-const REMOTE_COMPATIBILITY_KEYS = new Set(['maxOutputTokens', 'outputTokenLimit', 'outputTokenField', 'sampling', 'reasoning', 'parallelTools', 'structuredOutput'])
+const REMOTE_COMPATIBILITY_KEYS = new Set(['maxOutputTokens', 'outputTokenLimit', 'outputTokenField', 'serviceTier', 'sampling', 'reasoning', 'parallelTools', 'structuredOutput'])
 
 /** The browser replaces the fields it can edit, while hidden extensions stay on the desktop. */
 export function replaceRemoteCompatibility(current: RequestCompatibility | undefined, input: Record<string, unknown> | null) {
@@ -21,6 +22,7 @@ export function replaceRemoteCompatibility(current: RequestCompatibility | undef
 export function remoteProviderRouteAllowed(parts: string[], method: string): boolean {
   const id = parts[2]
   if (!id) return method === 'GET' || method === 'POST'
+  if (id === ANTIGRAVITY_PROVIDER_ID) return parts.length === 4 && parts[3] === 'discover' && method === 'POST'
   if (parts.length === 3) {
     if (['presets', 'auth-status'].includes(id)) return method === 'GET'
     if (id === 'official') return method === 'POST'
@@ -120,6 +122,43 @@ export function projectRemoteConnectors(body: Record<string, unknown>) {
 export function projectRemoteWorkflows(body: Record<string, unknown>) {
   return {
     workflows: asRecords(body.workflows).map(workflow => pickScalars(workflow, ['name', 'description', 'whenToUse', 'source'])),
+  }
+}
+
+const WORKFLOW_RUN_PUBLIC_KEYS = [
+  'runId', 'sessionId', 'workflowName', 'startedAt', 'completedAgents', 'status',
+] as const
+
+/** `GET /api/workflows/runs`: omit local desktop `scriptPath`. */
+export function projectRemoteWorkflowRuns(body: Record<string, unknown>) {
+  return {
+    runs: asRecords(body.runs).map(run => pickScalars(run, WORKFLOW_RUN_PUBLIC_KEYS)),
+  }
+}
+
+const WORKFLOW_RUN_DETAIL_SCALARS = [
+  'runId', 'sessionId', 'workflowName', 'startedAt', 'completedAgents', 'status',
+  'description', 'error', 'totalTokens', 'totalToolCalls',
+] as const
+
+const WORKFLOW_PHASE_META_KEYS = ['title', 'detail', 'model'] as const
+
+/** `GET /api/workflows/runs/:sessionId/:runId`: explicit read-only projection; local paths, scripts and raw logs stay on the desktop. */
+export function projectRemoteWorkflowRunDetail(body: Record<string, unknown>) {
+  const phases = Array.isArray(body.phases)
+    ? asRecords(body.phases).map(phase => pickScalars(phase, WORKFLOW_PHASE_META_KEYS))
+    : undefined
+  const agents = Array.isArray(body.agents)
+    ? asRecords(body.agents).map(agent => ({
+        ...pickScalars(agent, ['key', 'agentId']),
+        ...('result' in agent ? { result: agent.result } : {}),
+      }))
+    : undefined
+  return {
+    ...pickScalars(body, WORKFLOW_RUN_DETAIL_SCALARS),
+    ...(phases ? { phases } : {}),
+    ...(agents ? { agents } : {}),
+    ...(body.result !== undefined ? { result: body.result } : {}),
   }
 }
 

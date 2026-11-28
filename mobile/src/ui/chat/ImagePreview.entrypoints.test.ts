@@ -28,12 +28,18 @@ function checkEntryPoint(entry: 'composer' | 'message') {
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
       Callout: 'Callout', CodeBlock: 'CodeBlock', Icon: 'Icon', InlineCode: 'InlineCode', Mono: 'Mono', Spinner: 'Spinner', useColors: () => ({}),
     }))
-    mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({ errorText: String }))
+    mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({ errorText: String, useTheme: () => ({ colors: {}, shadows: {}, dark: false, scheme: 'light' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
     mock.module(${JSON.stringify(import.meta.resolve('../compose/BringSheet'))}, () => ({ BringSheet: 'BringSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('../compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))
     mock.module(${JSON.stringify(new URL('./ImagePreview.tsx', import.meta.url).pathname)}, () => ({ ImagePreview: 'ImagePreview' }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/useVoiceDictation'))}, () => ({ useVoiceDictation: () => ({ phase: 'idle', live: false, issue: null, pendingText: null }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../core/usePromptOptimize'))}, () => ({
+      usePromptOptimize: () => ({
+        phase: 'idle', optimizing: false, restoreSnapshot: null, notice: null, issue: null,
+        optimize() {}, cancel() {}, restore() {}, edited() {}, dismissRestore() {}, dismissNotice() {}, dismissIssue() {},
+      }),
+    }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('../ChatComposer'))})
     const { Message } = require(${JSON.stringify(import.meta.resolve('../Message'))})
     const attachments = [

@@ -10,6 +10,8 @@ import {
   hasVisibleSessionActivity,
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { useUIStore } from './uiStore'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
@@ -3820,16 +3822,40 @@ describe('chatStore history mapping', () => {
   // forwards a finished block. Concatenating the first is required; concatenating the
   // second glued words together on screen.
   describe('thinking blocks merge by granularity, not by content', () => {
-    it('concatenates stream fragments with nothing between them', () => {
-      useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
-      const store = useChatStore.getState()
-      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the ' })
-      store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'fix' })
+    it('batches rapid stream fragments on a 50ms timer and concatenates them with nothing between', async () => {
+      vi.useFakeTimers()
+      try {
+        useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({}) } })
+        const store = useChatStore.getState()
+        const updates: string[] = []
+        let prevMessages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+        const unsubscribe = useChatStore.subscribe((state) => {
+          const messages = state.sessions[TEST_SESSION_ID]?.messages
+          if (messages === prevMessages) return
+          prevMessages = messages
+          const content = messages?.find((message) => message.type === 'thinking')?.content
+          if (content !== undefined) updates.push(content)
+        })
+        try {
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'plan the ' })
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: 'fix' })
+          store.handleServerMessage(TEST_SESSION_ID, { type: 'thinking', text: ' cleanly' })
 
-      const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
-        .filter((message) => message.type === 'thinking')
-      expect(thinking).toHaveLength(1)
-      expect(thinking?.[0]).toMatchObject({ content: 'plan the fix' })
+          // First chunk commits synchronously; subsequent chunks coalesce in one 50ms flush.
+          expect(updates).toEqual(['plan the '])
+          vi.advanceTimersByTime(50)
+
+          const thinking = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+            .filter((message) => message.type === 'thinking')
+          expect(thinking).toHaveLength(1)
+          expect(thinking?.[0]).toMatchObject({ content: 'plan the fix cleanly' })
+          expect(updates).toEqual(['plan the ', 'plan the fix cleanly'])
+        } finally {
+          unsubscribe()
+        }
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('separates two finished blocks so their words do not run together', () => {
@@ -5897,6 +5923,84 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.slashCommands).toEqual([
       projectSkill,
     ])
+  })
+
+  it('preserves existing and live slashCommands when initial connectToSession discovery fails', async () => {
+    const id = 'slash-failure-session'
+    const existingPluginCommand = {
+      name: 'nexuskit:nk-build',
+      description: 'Build with NexusKit',
+      kind: 'command' as const,
+      source: 'plugin' as const,
+    }
+    let rejectInitial!: (error: Error) => void
+    vi.mocked(sessionsApi.getSlashCommands)
+      .mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectInitial = reject }),
+      )
+      .mockResolvedValueOnce({
+        commands: [existingPluginCommand],
+      })
+    useChatStore.setState({
+      sessions: {
+        [id]: makeSession({
+          connectionState: 'disconnected',
+          slashCommands: [existingPluginCommand],
+        }),
+      },
+    })
+
+    useChatStore.getState().connectToSession(id, { prewarm: false, applyRuntimeSelection: false })
+    expect(useChatStore.getState().sessions[id]?.slashCommands).toEqual([existingPluginCommand])
+
+    rejectInitial(new Error('transient error'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useChatStore.getState().sessions[id]?.slashCommands).toEqual([existingPluginCommand])
+    useChatStore.getState().disconnectSession(id)
+  })
+
+  it('does not clobber live CLI slash_commands with a late initial getSlashCommands response', async () => {
+    const id = 'slash-race-session'
+    const staleInitialCommand = {
+      name: 'stale-only',
+      description: 'Pre-CLI fallback command',
+      kind: 'command' as const,
+    }
+    const liveCliCommand = {
+      name: 'nexuskit:nk-build',
+      description: 'Live CLI plugin command',
+      kind: 'command' as const,
+      source: 'plugin' as const,
+    }
+
+    let resolveInitial!: (value: { commands: typeof staleInitialCommand[] }) => void
+    vi.mocked(sessionsApi.getSlashCommands)
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { resolveInitial = resolve }),
+      )
+      .mockResolvedValueOnce({
+        commands: [liveCliCommand],
+      })
+
+    useChatStore.getState().connectToSession(id, { prewarm: false, applyRuntimeSelection: false })
+
+    // Live CLI slash_commands event arrives while the initial HTTP discovery is still in flight.
+    useChatStore.getState().handleServerMessage(id, {
+      type: 'system_notification',
+      subtype: 'slash_commands',
+      data: [liveCliCommand],
+    })
+    await Promise.resolve()
+
+    expect(useChatStore.getState().sessions[id]?.slashCommands).toEqual([liveCliCommand])
+
+    // Now the stale pre-CLI request resolves late; it must not overwrite the live CLI list.
+    resolveInitial({ commands: [staleInitialCommand] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useChatStore.getState().sessions[id]?.slashCommands).toEqual([liveCliCommand])
+    useChatStore.getState().disconnectSession(id)
   })
 
   it('syncs live TodoWrite tool input into the task store for that session', () => {
@@ -8890,6 +8994,9 @@ describe('chatStore history mapping', () => {
     onConnectionState?.('reconnecting')
     onConnectionState?.('connected')
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'permission_requests_snapshot', toolRequestIds: [], computerUseRequestIds: [], turnActive: false,
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'session_state',
       turnState: 'idle',
       activeBackgroundTaskIds: ['agent-task-idle-reconnect'],
@@ -8940,6 +9047,9 @@ describe('chatStore history mapping', () => {
       expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('ready')
     })
     const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+    expect(useChatStore.getState().unreadCompletions.get(TEST_SESSION_ID)).toMatchObject({
+      transcriptId: 'persisted-during-idle-reconnect',
+    })
     expect(messages).toContainEqual(
       expect.objectContaining({
         type: 'assistant_text',
@@ -17112,6 +17222,216 @@ describe('chatStore AskUserQuestion drafts', () => {
     store.disconnectSession(TEST_SESSION_ID)
 
     expect(useChatStore.getState().askUserQuestionDrafts[TEST_SESSION_ID]).toBeUndefined()
+  })
+
+  it('retains image-only AskUserQuestion drafts and restores AskUserQuestion annotations and sibling images from history', () => {
+    const store = useChatStore.getState()
+    store.setAskUserQuestionDraft('session-drafts', 'tool-img', {
+      activeTab: 0,
+      selections: {},
+      freeTexts: {},
+      images: {
+        0: [{ id: 'img-1', type: 'image', name: 'shot.png', data: 'data:image/png;base64,aGVsbG8=' }],
+      },
+    })
+    expect(useChatStore.getState().askUserQuestionDrafts['session-drafts']?.['tool-img']?.images?.[0]).toHaveLength(1)
+
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-1',
+        type: 'user',
+        timestamp: '2026-11-21T00:00:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-tool-1',
+            content: 'User has answered your questions: "Which layout?"="Compact" user notes: Match screenshot.',
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/shot.png]',
+          },
+        ],
+        toolUseResult: {
+          questions: [{ question: 'Which layout?', options: [{ label: 'Compact' }] }],
+          answers: { 'Which layout?': 'Compact' },
+          annotations: { 'Which layout?': { notes: 'Match screenshot.' } },
+        },
+      },
+    ])
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-tool-1',
+      content: {
+        questions: [{ question: 'Which layout?', options: [{ label: 'Compact' }] }],
+        answers: { 'Which layout?': 'Compact' },
+        annotations: { 'Which layout?': { notes: 'Match screenshot.' } },
+        attachments: [
+          {
+            type: 'image',
+            name: 'shot.png',
+            path: '/tmp/uploads/session-1/shot.png',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    })
+  })
+
+  it('absorbs sibling images and path-only fallbacks onto denied AskUserQuestion clarify tool_results without emitting user_text bubbles', () => {
+    const clarifyText = `${ASK_USER_QUESTION_CLARIFY_MESSAGE}\n\n    Questions asked:\n- "Which layout?"\n  Answer: Compact`
+
+    const mappedWithImage = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-deny-1',
+        type: 'user',
+        timestamp: '2026-11-21T00:01:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-deny-tool-1',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/clarify-shot.png]',
+          },
+        ],
+      },
+    ])
+
+    expect(mappedWithImage).toHaveLength(1)
+    expect(mappedWithImage[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-deny-tool-1',
+      isError: true,
+      content: {
+        handedOff: true,
+        message: clarifyText,
+        attachments: [
+          {
+            type: 'image',
+            name: 'clarify-shot.png',
+            path: '/tmp/uploads/session-1/clarify-shot.png',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    })
+
+    const mappedPathOnly = mapHistoryMessagesToUiMessages([
+      {
+        id: 'u-ask-deny-path',
+        type: 'user',
+        timestamp: '2026-11-21T00:02:00Z',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'ask-deny-tool-2',
+            is_error: true,
+            content: clarifyText,
+          },
+          {
+            type: 'text',
+            text: '[Image source: /tmp/uploads/session-1/oversized-fallback.png]',
+          },
+        ],
+      },
+    ])
+
+    expect(mappedPathOnly).toHaveLength(1)
+    expect(mappedPathOnly[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'ask-deny-tool-2',
+      isError: true,
+      content: {
+        handedOff: true,
+        message: clarifyText,
+        attachments: [
+          {
+            type: 'image',
+            name: 'oversized-fallback.png',
+            path: '/tmp/uploads/session-1/oversized-fallback.png',
+          },
+        ],
+      },
+    })
+  })
+
+  it('restores pendingPermission and clears submitted/handedOff flags on ATTACHMENT_PROCESSING_FAILED', async () => {
+    const request = {
+      requestId: 'perm-img-fail',
+      toolName: 'AskUserQuestion',
+      toolUseId: 'tool-img-fail',
+      input: { questions: [{ question: 'Pick one?', options: [{ label: 'A' }] }] },
+    }
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'permission_pending',
+          pendingPermission: request,
+          pendingPermissions: { [request.requestId]: request },
+        }),
+      },
+      askUserQuestionDrafts: {
+        [TEST_SESSION_ID]: {
+          'tool-img-fail': {
+            activeTab: 0,
+            selections: { 0: ['A'] },
+            freeTexts: { 0: 'Keep this note' },
+            images: {
+              0: [{ id: 'img-1', type: 'image', name: 'shot.png', data: 'data:image/png;base64,aGVsbG8=' }],
+            },
+            submitted: true,
+          },
+        },
+      },
+    })
+    useUIStore.setState({ toasts: [] })
+
+    const accepted = useChatStore.getState().respondToPermission(
+      TEST_SESSION_ID,
+      request.requestId,
+      true,
+      {
+        updatedInput: { answers: { 'Pick one?': 'A' } },
+        attachments: [{ type: 'image', name: 'shot.png', mimeType: 'image/png', data: 'data:image/png;base64,aGVsbG8=' }],
+      },
+    )
+    expect(accepted).toBe(true)
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.pendingPermission).toBeNull()
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error',
+      code: 'ATTACHMENT_PROCESSING_FAILED',
+      message: 'Failed to process attached images',
+      permissionRequestId: request.requestId,
+    })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(session.pendingPermission).toEqual(request)
+    expect(session.pendingPermissions?.[request.requestId]).toEqual(request)
+    expect(session.chatState).toBe('permission_pending')
+    const draft = useChatStore.getState().askUserQuestionDrafts[TEST_SESSION_ID]?.['tool-img-fail']
+    expect(draft?.submitted).toBeUndefined()
+    expect(draft?.handedOff).toBeUndefined()
+    expect(draft?.freeTexts[0]).toBe('Keep this note')
+    await vi.waitFor(() => {
+      expect(useUIStore.getState().toasts.some((toast) =>
+        toast.type === 'error' && toast.message.includes('Failed to process attached images'),
+      )).toBe(true)
+    })
   })
 })
 

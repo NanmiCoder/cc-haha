@@ -4,11 +4,12 @@ import { DelegatedSessionsManageButton, DelegationChangeStatusList, DelegationSy
 import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore, useSessionDelegationSync } from '@/stores/sessionDelegationStore'
 import { openSessionSource } from '@/lib/sessionNavigation'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { ArrowLeft, Folder, GitBranch, GitFork, History, Target, MessageCircleQuestion, TriangleAlert } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { openSideChat } from '@/lib/workspace/openSideChat'
+import { workspaceOpen } from '@/lib/workspace/openTarget'
 import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
@@ -19,7 +20,9 @@ import {
   type TabType,
 } from '../stores/tabStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useChatStore } from '../stores/chatStore'
+import { ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../stores/teamStore'
 import { interruptedTeamNameOf, useTeamPlanStore } from '../stores/teamPlanStore'
@@ -36,7 +39,7 @@ import { Tooltip } from '@/components/ui/Tooltip'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { getSessionProjectKey, getSessionWorkspaceLabel } from '@/components/layout/sidebarTaskGroups'
-import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
+import { resolveProjectDisplayName, useProjectDisplayNameRevision } from '../stores/projectDisplayNameStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { TrajectoryViewSwitch } from '../components/trajectory/TrajectoryViewSwitch'
@@ -48,17 +51,15 @@ import {
   type SessionHeaderMetaItem,
 } from '@/components/chat/SessionChatSurface'
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
-import {
-  WorkspaceSurface,
-  useWorkspaceBrowserEventBridge,
-} from '../components/workbench/WorkspaceSurface'
+import { WorkspaceSurface } from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
-import { endedBeforeAnyMemberJoined, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { endedBeforeAnyMemberJoined, getWorkbenchPhase, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { isAntigravitySwarmPaused } from '../lib/teamRunning'
 import {
   SessionActivityPanel,
   type OpenSubagentPayload,
 } from '../components/activity/SessionActivityPanel'
-import { getMainSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
+import { getMainSessionActivityModel, hasVisibleSessionActivity, type ActivityRow } from '../components/activity/sessionActivityModel'
 import { runsForSession, useWorkflowStore } from '../stores/workflowStore'
 import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState, TokenUsage } from '../types/chat'
@@ -68,6 +69,7 @@ import { useMobileViewport } from '../hooks/useMobileViewport'
 import { useWorkspaceShortcuts } from '../hooks/useWorkspaceShortcuts'
 import { useWorkspaceFocusReturn } from '../hooks/useWorkspaceFocusReturn'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
+import { constrainWorkspaceSideWidth, measureWorkspaceSidePanel, WORKSPACE_SIDE_MIN_WIDTH, type WorkspaceSideBounds } from '@/lib/workspace/sidePanelSize'
 import { formatTokenCount } from '../lib/formatTokenCount'
 import {
   createBackgroundTaskDismissKey,
@@ -76,7 +78,7 @@ import {
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { getSessionBrowsablePath, getSessionWorkspaceState } from '../lib/sessionWorkspace'
 import type { AgentTaskNotification, UIMessage } from '../types/chat'
-import { sessionsApi, type SessionGitInfo } from '../api/sessions'
+import { useSessionGitInfo } from '../hooks/useSessionGitInfo'
 
 /**
  * Stable fallbacks for optional session state. A `?? []` / `?? {}` literal allocates a
@@ -151,11 +153,11 @@ function ActiveGoalStrip({
     <div
       data-testid="active-goal-strip"
       className={[
-        'mt-2 flex max-w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)] px-2.5 py-1.5',
+        'v6c-glass-card mt-2 flex max-w-full items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-memory-border)] bg-[var(--color-memory-surface)] px-2.5 py-1.5',
         compact ? 'text-[11px]' : 'text-[12px]',
       ].join(' ')}
     >
-      <Target size={compact ? 13 : 14} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={2.25} aria-hidden="true" />
+      <Target size={compact ? 13 : 14} className="shrink-0 text-[var(--color-memory-accent)]" strokeWidth={1.75} aria-hidden="true" />
       <span className="shrink-0 font-semibold text-[var(--color-text-primary)]">
         {t('chat.activeGoal.title')}
       </span>
@@ -175,13 +177,6 @@ function ActiveGoalStrip({
   )
 }
 
-function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallbackWidth: number) {
-  const renderedWidth = panelRef.current?.getBoundingClientRect().width ?? 0
-  return Number.isFinite(renderedWidth) && renderedWidth > 0
-    ? renderedWidth
-    : fallbackWidth
-}
-
 /**
  * Bounds of the split workspace panel. It may take up to 70% of the row, but
  * never the room the chat column needs: `SessionChatSurface` pins the compact
@@ -193,70 +188,106 @@ function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallba
  */
 const WORKSPACE_SPLIT_PANEL_BOUNDS = 'max-w-[min(70%,calc(100%_-_401px))] min-w-[min(420px,54%,calc(100%_-_401px))]'
 
-function WorkspaceResizeHandle({ panelRef }: { panelRef: RefObject<HTMLElement> }) {
+function WorkspaceResizeHandle({ panelRef, active }: { panelRef: RefObject<HTMLElement>; active: boolean }) {
   const t = useTranslation()
   const width = useWorkspaceStore((state) => state.sideWidth)
   const setWidth = useWorkspaceStore((state) => state.setSideWidth)
-  const [dragState, setDragState] = useState<{ startX: number; startWidth: number } | null>(null)
-  const dragStateRef = useRef(dragState)
+  const [bounds, setBounds] = useState<WorkspaceSideBounds | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragRef = useRef<{
+    startX: number; startWidth: number; scale: number; pointerId: number; target: HTMLElement
+  } | null>(null)
+  const stopDrag = useCallback(() => {
+    dragRef.current = null
+    setDragging(false)
+  }, [])
 
   useEffect(() => {
-    dragStateRef.current = dragState
-  }, [dragState])
+    if (!active) stopDrag()
+  }, [active, stopDrag])
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = measureWorkspaceSidePanel(panelRef.current, 0).bounds
+      setBounds(current => current?.min === next?.min && current?.max === next?.max ? current : next)
+    }
+    measure()
+    const row = panelRef.current?.parentElement
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (row) observer?.observe(row)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [panelRef])
 
   useEffect(() => {
-    if (!dragState) return
-
+    if (!dragging) return
+    const drag = dragRef.current
+    const originalCursor = document.body.style.cursor
+    const originalSelect = document.body.style.userSelect
+    const matchesPointer = (event: PointerEvent) => event.pointerId === undefined || event.pointerId === drag?.pointerId
     const handlePointerMove = (event: PointerEvent) => {
-      const current = dragStateRef.current
-      if (!current) return
-      setWidth(current.startWidth + current.startX - event.clientX)
+      const current = dragRef.current
+      if (!current || !matchesPointer(event)) return
+      if (typeof event.buttons === 'number' && (event.buttons & 1) === 0) {
+        stopDrag()
+        return
+      }
+      const next = current.startWidth + (current.startX - event.clientX) / current.scale
+      const available = measureWorkspaceSidePanel(panelRef.current, current.startWidth).bounds
+      setWidth(constrainWorkspaceSideWidth(next, available))
     }
-
-    const handlePointerUp = () => {
-      setDragState(null)
-    }
-
+    const handlePointerUp = (event: PointerEvent) => { if (matchesPointer(event)) stopDrag() }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     window.addEventListener('pointercancel', handlePointerUp)
-
+    window.addEventListener('blur', stopDrag)
     return () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
+      dragRef.current = null
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalSelect
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
       window.removeEventListener('pointercancel', handlePointerUp)
+      window.removeEventListener('blur', stopDrag)
+      if (drag && drag.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId)
     }
-  }, [dragState, setWidth])
+  }, [dragging, panelRef, setWidth, stopDrag])
 
   return (
     <div
       role="separator"
       aria-label={t('workspace.resizePanel')}
       aria-orientation="vertical"
-      aria-valuenow={width}
-      tabIndex={0}
+      aria-valuemin={Math.round(bounds?.min ?? WORKSPACE_SIDE_MIN_WIDTH)}
+      aria-valuemax={Math.round(bounds?.max ?? Math.max(width, WORKSPACE_SIDE_MIN_WIDTH))}
+      aria-valuenow={Math.round(constrainWorkspaceSideWidth(width, bounds))}
+      tabIndex={active ? 0 : -1}
       data-testid="workspace-resize-handle"
       onPointerDown={(event) => {
-        if (event.button !== 0) return
+        if (!active || event.button !== 0 || event.isPrimary === false || dragRef.current) return
         event.preventDefault()
-        setDragState({ startX: event.clientX, startWidth: getRenderedWorkspacePanelWidth(panelRef, width) })
+        const measured = measureWorkspaceSidePanel(panelRef.current, width)
+        dragRef.current = {
+          startX: event.clientX, startWidth: measured.width, scale: measured.scale,
+          pointerId: event.pointerId, target: event.currentTarget,
+        }
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        setDragging(true)
       }}
+      onLostPointerCapture={stopDrag}
       onKeyDown={(event) => {
-        const renderedWidth = getRenderedWorkspacePanelWidth(panelRef, width)
-        if (event.key === 'ArrowLeft') {
-          event.preventDefault()
-          setWidth(renderedWidth + WORKSPACE_RESIZE_STEP)
-        }
-        if (event.key === 'ArrowRight') {
-          event.preventDefault()
-          setWidth(renderedWidth - WORKSPACE_RESIZE_STEP)
-        }
+        if (!active || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+        event.preventDefault()
+        const measured = measureWorkspaceSidePanel(panelRef.current, width)
+        const next = measured.width + (event.key === 'ArrowLeft' ? WORKSPACE_RESIZE_STEP : -WORKSPACE_RESIZE_STEP)
+        setWidth(constrainWorkspaceSideWidth(next, measured.bounds))
       }}
-      className="relative z-10 w-px shrink-0 cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
+      className="relative z-[var(--z-raised)] w-px shrink-0 touch-none cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
     >
       <div aria-hidden="true" className="absolute -inset-x-1 inset-y-0" />
     </div>
@@ -344,6 +375,7 @@ function TerminalResizeHandle() {
 }
 
 export function ActiveSession({ sessionId, active = true }: { sessionId?: string; active?: boolean } = {}) {
+  useProjectDisplayNameRevision()
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const workbenchPanelRef = useRef<HTMLElement>(null)
   const selectedTabId = useTabStore((s) => s.activeTabId)
@@ -379,6 +411,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const stoppingBackgroundTaskIds = sessionState?.stoppingBackgroundTaskIds
 
   const session = sessions.find((s) => s.id === activeTabId)
+  const runtimeProviderId = useSessionRuntimeStore((s) => activeTabId ? s.selections[activeTabId]?.providerId : undefined)
+  const isAntigravity = runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID || session?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
   const isLean = session?.agentProfile === 'lean'
   const sessionMessageCount = Math.max(
     sessionState?.messages.length ?? 0,
@@ -398,10 +432,16 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     ? s.activeTeamStartedAtBySession[activeTabId]
     : undefined)
   const fetchTeamForSession = useTeamStore((s) => s.fetchTeamForSession)
-  const [sessionGitInfo, setSessionGitInfo] = useState<{
-    sessionId: string
-    info: SessionGitInfo
-  } | null>(null)
+  const isSessionTab = Boolean(activeTabId) && isSessionTabState(activeTabId, activeTabType)
+  const { gitInfo: currentGitInfo } = useSessionGitInfo({
+    sessionId: activeTabId,
+    enabled: isSessionTab,
+    visible: active,
+    workDir: session?.workDir,
+    chatState,
+    messageCount: sessionMessageCount,
+    secondaryRefreshKey: sessionSlashCommandCount,
+  })
   const activeWorkspaceIsSideChat = useWorkspaceStore(state => {
     const workspace = activeTabId ? state.bySession[activeTabId] : undefined
     return Boolean(workspace?.tabs.some(tab => tab.id === workspace.activeSideTabId && tab.kind === 'side-chat'))
@@ -448,68 +488,12 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     void useWorkspaceContentStore.getState().loadStatus(activeTabId)
   }, [activeTabId, activeTabType])
 
-  // Subscribed once for the app, not per task: the owner of each event is
-  // resolved from the page id, so a background task's pages keep reporting.
-  useWorkspaceBrowserEventBridge(active && !isMobileLayout)
   useWorkspaceFocusReturn(active && workspaceEnabled ? activeTabId : null)
   useWorkspaceShortcuts({
     sessionId: activeTabId,
     cwd: getSessionTerminalCwd(session) ?? '',
     enabled: active && workspaceEnabled,
   })
-
-  useEffect(() => {
-    if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
-
-    let cancelled = false
-    setSessionGitInfo((current) => current?.sessionId === activeTabId ? null : current)
-    // Kept for every session, not only worktree ones: the header names the
-    // branch too. The worktree indicator reads `worktree.enabled` itself.
-    void sessionsApi.getGitInfo(activeTabId)
-      .then((info) => {
-        if (!cancelled) {
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        }
-      })
-      .catch(() => {
-        // Git metadata is supplementary; the session remains usable without it.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeTabId, activeTabType])
-
-  useEffect(() => {
-    if (
-      !activeTabId ||
-      !isSessionTabState(activeTabId, activeTabType) ||
-      sessionMessageCount === 0
-    ) return
-
-    let cancelled = false
-    const timeout = setTimeout(() => {
-      void sessionsApi.getGitInfo(activeTabId)
-        .then((info) => {
-          if (cancelled) return
-          setSessionGitInfo({ sessionId: activeTabId, info })
-        })
-        .catch(() => {
-          // Keep the last useful snapshot when supplementary Git metadata cannot refresh.
-        })
-    }, chatState === 'idle' ? 0 : 500)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timeout)
-    }
-  }, [
-    activeTabId,
-    activeTabType,
-    chatState,
-    sessionMessageCount,
-    sessionSlashCommandCount,
-  ])
 
   useEffect(() => {
     if (!activeTabId) return
@@ -579,7 +563,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       : null
   const visibleMessageCount = messages.length > 0 ? messages.length : session?.messageCount ?? 0
   const headerTitle = session?.title || activeTabTitle || t('session.untitled')
-  const currentGitInfo = sessionGitInfo?.sessionId === activeTabId ? sessionGitInfo.info : null
   const worktree = currentGitInfo?.worktree?.enabled ? currentGitInfo.worktree : null
   const worktreePath = worktree?.path || worktree?.plannedPath || null
   const worktreeName = getWorktreeDisplayName(worktree?.slug, worktreePath)
@@ -718,6 +701,13 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     if (!activeTabId) return
     stopBackgroundTask(activeTabId, taskId)
   }, [activeTabId, stopBackgroundTask])
+  const handleOpenBackgroundTaskOutput = useCallback((row: ActivityRow) => {
+    if (!activeTabId || !row.taskId) return
+    workspaceOpen.backgroundTask(activeTabId, row.taskId, {
+      title: row.label,
+      toolUseId: row.toolUseId,
+    })
+  }, [activeTabId])
 
   const lastUpdated = useMemo(() => {
     if (!session?.modifiedAt) return ''
@@ -743,6 +733,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const showNewSessionStarter = isEmpty && !showRightPanel && !compactEmptyHero && !isMobileLayout
   // Where the session runs, first: the project by the name the sidebar shows,
   // then the branch git reports for it (「素」 su-01: folder · branch · …).
+  const headerProjectRoot = session ? getSessionProjectKey(session) : null
+  const headerProjectAlias = headerProjectRoot ? resolveProjectDisplayName(headerProjectRoot) : null
   const headerProjectLabel = session && (session.projectRoot || session.workDir)
     ? getSessionWorkspaceLabel(session, resolveProjectDisplayName)
     : null
@@ -757,7 +749,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               className="flex max-w-[160px] shrink-0 items-center gap-1"
               title={session?.workDir ?? undefined}
             >
-              <Folder size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <Folder size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{headerProjectLabel}</span>
             </span>
           ),
@@ -769,10 +761,10 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           content: (
             <span
               data-testid="session-header-branch"
-              className="flex max-w-[160px] shrink-0 items-center gap-1"
+              className="flex min-w-0 max-w-[260px] shrink items-center gap-1"
               title={headerBranch}
             >
-              <GitBranch size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <GitBranch size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{headerBranch}</span>
             </span>
           ),
@@ -795,14 +787,20 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           content: (
             <Tooltip
               placement="bottom-start"
-              content={<WorktreeDetails name={worktreeName} path={worktreePath} />}
+              content={
+                <WorktreeDetails
+                  name={worktreeName}
+                  path={worktreePath}
+                  projectRoot={headerProjectAlias ? headerProjectRoot : null}
+                />
+              }
             >
               <span
                 data-testid="session-worktree-indicator"
                 tabIndex={0}
                 className="flex min-w-0 max-w-[260px] shrink cursor-help items-center gap-1 rounded-[var(--radius-xs)] text-[var(--color-text-secondary)] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <GitFork size={12} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+                <GitFork size={12} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                 <span className="shrink-0 capitalize">{t('sidebar.worktree')}:</span>
                 <span className="min-w-0 truncate font-medium">{worktreeName}</span>
               </span>
@@ -862,6 +860,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           open={isActivityPanelOpen}
           onClose={() => closeActivityPanel(activeTabId)}
           onOpenSubagent={handleOpenSubagentRun}
+          onOpenBackgroundTaskOutput={handleOpenBackgroundTaskOutput}
           onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
           onOpenMember={handleOpenTeamMember}
           onStopBackgroundTask={handleStopBackgroundTask}
@@ -875,7 +874,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       sidePanel={<>
         {showWorkbench ? (
         <>
-          {isWorkspaceFull ? null : <WorkspaceResizeHandle panelRef={workbenchPanelRef} />}
+          {isWorkspaceFull ? null : <WorkspaceResizeHandle key={activeTabId} panelRef={workbenchPanelRef} active={active} />}
           <aside
             ref={workbenchPanelRef}
             data-testid="workbench-panel"
@@ -900,7 +899,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               dock="side"
               cwd={getSessionTerminalCwd(session) ?? ''}
               reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
-              sideChatAvailable={!isEmpty && !isLean}
+              sideChatAvailable={!isEmpty && !isLean && !isAntigravity}
               visible={active}
             />
           </aside>
@@ -908,13 +907,52 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       ) : null}</>}
     >
           {/*
-            Mobile has no session header, so its side-chat entry lives here. A
-            blank session has nothing for a side chat to fork, so it gets none.
+            Mobile has no session header, so workspace warnings and the
+            side-chat entry live here. A blank session has nothing to warn about
+            or fork, so it gets neither.
           */}
-          {isMobileLayout && !isEmpty && !isLean && (
-            <div className="flex justify-end px-4 py-2">
-              <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
-                pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
+          {isMobileLayout && !isEmpty && (
+            (session && getSessionWorkspaceState(session) !== 'available') || (!isLean && !isAntigravity)
+          ) && (
+            <div
+              data-testid="mobile-session-subbar"
+              className={`flex shrink-0 items-center gap-2 px-3 py-1.5 ${
+                session && getSessionWorkspaceState(session) !== 'available'
+                  ? 'justify-between border-b border-[var(--color-border)]'
+                  : 'justify-end'
+              }`}
+            >
+              {session && getSessionWorkspaceState(session) !== 'available' && (
+                <div
+                  data-testid="mobile-workspace-unavailable-banner"
+                  role="status"
+                  className={`inline-flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-3 py-1.5 text-[12px] ${
+                    getSessionWorkspaceState(session) === 'worktree_removed'
+                      ? 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+                      : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                  }`}
+                >
+                  {getSessionWorkspaceState(session) === 'worktree_removed'
+                    ? <History size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
+                    : <TriangleAlert size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />}
+                  <span className="truncate">
+                    {getSessionWorkspaceState(session) === 'worktree_removed'
+                      ? t('session.worktreeRemoved', { dir: session.projectRoot || '' })
+                      : t('session.workspaceUnavailable', { dir: session.workDir || 'directory no longer exists' })}
+                  </span>
+                </div>
+              )}
+              {!isLean && !isAntigravity && (
+                <IconButton
+                  icon={<MessageCircleQuestion size={20} strokeWidth={1.75} aria-hidden="true" />}
+                  label={t('sideChat.title')}
+                  size="2xl"
+                  tone="secondary"
+                  className="shrink-0 rounded-[var(--radius-control)]! v6c-pressable"
+                  pressed={sideChatOpen}
+                  onClick={() => void openSideChat(activeTabId)}
+                />
+              )}
             </div>
           )}
           {isEmpty ? (
@@ -939,8 +977,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     ? t('empty.heroTitle', { project: emptyHeroProject })
                     : t('empty.heroTitleNoProject')}
                 </h1>
-                <p className="text-[14px] text-[var(--color-text-tertiary)]">
-                  {t('empty.heroSubtitle')}
+                <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
+                  {t(isAntigravity ? 'empty.heroSubtitleAntigravity' : 'empty.heroSubtitle')}
                 </p>
               </div>
             </div>
@@ -954,12 +992,12 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   metadata={headerMetadata}
                   actions={<>
                     {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
-                    {!isLean && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
+                    {!isLean && !isAntigravity && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                       pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
                   </>}
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
-                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-[12px] ${
+                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-control)] px-3 py-1.5 text-[12px] ${
                       getSessionWorkspaceState(session) === 'worktree_removed'
                         ? 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
                         : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
@@ -983,10 +1021,22 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     <AgentTeamsStrip
                       snapshot={agentTeamsSnapshot}
                       compact={showRightPanel}
-                      phaseOverride={!agentTeamsSnapshot.deletedAt && interruptedTeamName === agentTeamsSnapshot.team.name ? 'interrupted' : undefined}
+                      phaseOverride={
+                        !agentTeamsSnapshot.deletedAt && (
+                          interruptedTeamName === agentTeamsSnapshot.team.name ||
+                          (isAntigravitySwarmPaused(agentTeamsSnapshot) && (
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'running' ||
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'forming'
+                          ))
+                        )
+                          ? 'interrupted'
+                          : undefined
+                      }
                       onOpen={() => useTabStore.getState().openTeamWorkbenchTab(
                         activeTabId,
-                        agentTeamsSnapshot.team.name,
+                        agentTeamsSnapshot.team.name.startsWith('agy-swarm-') && agentTeamsSnapshot.team.description
+                          ? agentTeamsSnapshot.team.description
+                          : agentTeamsSnapshot.team.name,
                       )}
                     />
                   ) : null}
@@ -1005,7 +1055,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   </div>
                 ) : (
                   <TrajectoryLinkContext.Provider value={isMobileLayout ? null : trajectoryLink}>
-                    <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} decisionsInComposer={isMobileLayout} />
+                    <MessageList sessionId={activeTabId ?? undefined} visible={active && !showTrajectory && !isWorkspaceFull}
+                      compact={showRightPanel} mobileLayout={isMobileLayout} decisionsInComposer={isMobileLayout} />
                   </TrajectoryLinkContext.Provider>
                 )}
               </div>
@@ -1030,6 +1081,10 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               open={isActivityPanelOpen}
               onClose={() => closeActivityPanel(activeTabId)}
               onOpenSubagent={handleOpenSubagentRun}
+              onOpenBackgroundTaskOutput={(row) => {
+                closeActivityPanel(activeTabId)
+                handleOpenBackgroundTaskOutput(row)
+              }}
               onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
               onOpenMember={handleOpenTeamMember}
               onStopBackgroundTask={handleStopBackgroundTask}

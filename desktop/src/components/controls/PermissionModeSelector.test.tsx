@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -45,6 +45,20 @@ vi.mock('../../i18n', () => ({
     'permMode.enableAutoBody': 'Auto mode reduces prompts but does not guarantee safety.',
     'permMode.enableAutoDetail': 'Claude reviews tool calls and blocks actions it considers risky.',
     'permMode.enableAutoBtn': 'Enable Auto mode',
+    'permMode.badge.optIn': 'Opt-in required',
+    'permMode.badge.risky': 'High risk',
+    'permMode.antigravity.default': 'Default',
+    'permMode.antigravity.defaultDesc': 'Ask before edits and commands, per your Antigravity permission settings',
+    'permMode.antigravity.acceptEdits': 'Accept edits',
+    'permMode.antigravity.acceptEditsDesc': 'Approve file edits in the workspace without asking',
+    'permMode.antigravity.auto': 'Auto',
+    'permMode.antigravity.autoDesc': 'Approve edits and safe commands; ask before irreversible actions',
+    'permMode.antigravity.plan': 'Plan',
+    'permMode.antigravity.planDesc': 'Plan carefully before executing a task without editing files',
+    'permMode.antigravity.bypass': 'Turbo (Bypass all)',
+    'permMode.antigravity.bypassDesc': 'Run all edits and commands without restrictions (--dangerously-skip-permissions)',
+    'permMode.antigravity.enableBypassBody': 'Antigravity will have unrestricted access to execute shell commands and modify files within:',
+    'permMode.antigravity.label.bypassPermissions': 'Turbo',
     'common.cancel': 'Cancel',
     'tabs.close': 'Close',
   }[key] ?? key),
@@ -445,6 +459,67 @@ describe('PermissionModeSelector', () => {
     expect(menu).not.toHaveClass('left-0')
   })
 
+  it('caps height under the top bar or flips below when room above is tight', () => {
+    const origRect = HTMLElement.prototype.getBoundingClientRect
+    const origOffsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent')
+    const makeRect = (top: number, bottom: number) => ({
+      top,
+      bottom,
+      left: 0,
+      right: 340,
+      width: 340,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      let anchorTop = 331
+      let anchorBottom = 359
+      HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(this: HTMLElement) {
+        if (this.dataset.testid === 'clip-page') return makeRect(52, 626)
+        if (this.className.includes('relative')) return makeRect(anchorTop, anchorBottom)
+        return makeRect(0, 0)
+      }
+      Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.parentElement
+        },
+      })
+
+      const { unmount } = render(
+        <div data-testid="clip-page" style={{ overflowY: 'hidden' }}>
+          <PermissionModeSelector value="default" onChange={vi.fn()} />
+        </div>,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+      const aboveMenu = screen.getByRole('menu')
+      expect(aboveMenu).toHaveClass('bottom-full', 'overflow-y-auto')
+      // 331 - 8 (gap) - 52 (topbar) - 8 (edge) = 263px, keeping top edge below the 52px tab bar.
+      expect(aboveMenu.style.maxHeight).toBe('263px')
+      unmount()
+
+      // When the composer sits higher up in a short window, flip cleanly below.
+      anchorTop = 220
+      anchorBottom = 248
+      render(
+        <div data-testid="clip-page" style={{ overflowY: 'hidden' }}>
+          <PermissionModeSelector value="default" onChange={vi.fn()} />
+        </div>,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+      const belowMenu = screen.getByRole('menu')
+      expect(belowMenu).toHaveClass('top-full', 'overflow-y-auto')
+      expect(belowMenu.style.maxHeight).toBe('362px')
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = origRect
+      if (origOffsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', origOffsetParent)
+      else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent
+    }
+  })
+
   it('shows Auto beside the existing permission modes', () => {
     render(<PermissionModeSelector value="default" onChange={vi.fn()} />)
 
@@ -531,7 +606,7 @@ describe('PermissionModeSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     const current = screen.getByRole('menuitem', { name: /Ask permissions/ })
     expect(current.querySelector('svg.lucide-check')).toHaveClass('text-[var(--color-brand)]')
-    expect(current).toHaveClass('bg-[var(--color-surface-hover)]')
+    expect(current).toHaveClass('v6c-row-highlight')
     expect(screen.getByRole('menuitem', { name: /Auto accept edits/ }).querySelector('svg.lucide-check'))
       .not.toBeInTheDocument()
   })
@@ -797,5 +872,47 @@ describe('the quiet trigger', () => {
     render(<PermissionModeSelector trigger="quiet" />)
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
+  })
+
+  it('uses Antigravity ACP modes including Turbo, omits Claude copy, and applies native Auto without Claude opt-in dialog', () => {
+    viewportMocks.isMobile = false
+    useSettingsStore.setState({ locale: 'en' })
+    const onChange = vi.fn()
+    render(
+      <PermissionModeSelector
+        antigravity
+        allowedModes={['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']}
+        value="default"
+        onChange={onChange}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    const trigger = screen.getByRole('button', { name: 'Ask permissions' })
+    expect(trigger).toHaveAttribute('type', 'button')
+    const menu = screen.getByRole('menu')
+    for (const item of within(menu).getAllByRole('menuitem')) {
+      expect(item).toHaveAttribute('type', 'button')
+    }
+    expect(menu.textContent).not.toContain('Claude')
+    expect(menu.textContent).not.toContain('Opt-in required')
+    expect(screen.getByRole('menuitem', { name: /Accept edits/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /^Auto\b/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Turbo \(Bypass all\)/ })).toBeInTheDocument()
+
+    // Antigravity native Auto switches directly without Claude Code's AutoModeOptInDialog
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Auto\b/ }))
+    expect(onChange).toHaveBeenCalledWith('auto')
+    expect(screen.queryByText(/Enable Auto mode/i)).not.toBeInTheDocument()
+
+    // Turbo (bypassPermissions) opens confirmation dialog with Antigravity copy and applies on confirm
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Turbo \(Bypass all\)/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.querySelector('code')?.parentElement).toHaveClass('rounded-[var(--radius-card-inner)]')
+    expect(dialog.textContent).toContain('Antigravity')
+    expect(dialog.textContent).not.toContain('Claude')
+    fireEvent.click(screen.getByRole('button', { name: 'Enable bypass' }))
+    expect(onChange).toHaveBeenCalledWith('bypassPermissions')
   })
 })

@@ -105,7 +105,8 @@ describe('SegmentedControl', () => {
       expect(group.className).toContain('flex-wrap')
       expect(group.className).not.toMatch(/\bh-8\b/)
       for (const radio of screen.getAllByRole('radio')) {
-        expect(radio.className).toContain('rounded-full')
+        expect(radio.className).toContain('rounded-[var(--radius-sm)]')
+        expect(radio.className).not.toContain('rounded-full')
         expect(radio.className).toMatch(/\bh-8\b/)
       }
     })
@@ -128,7 +129,15 @@ describe('SegmentedControl', () => {
       render(<SegmentedControl items={ITEMS} value="all" onChange={() => {}} label="Category" appearance="chip" />)
 
       expect(screen.getByRole('radio', { name: 'All' }).className).toContain('bg-[var(--color-btn-primary-bg)]')
+      expect(screen.getByRole('radio', { name: 'All' }).className).toContain('control-bevel-cta')
       expect(screen.getByRole('radio', { name: 'Done' }).className).toContain('bg-[var(--color-surface)]')
+      expect(screen.getByRole('radio', { name: 'Done' }).className).toContain('control-bevel')
     })
+  })
+
+  it('gives the recessed track a pressed bevel and the active pill a surface bevel', () => {
+    render(<SegmentedControl items={ITEMS} value="active" onChange={() => {}} label="Filter" />)
+    expect(screen.getByRole('radiogroup', { name: 'Filter' }).className).toContain('shadow-[var(--bevel-surface-pressed)]')
+    expect(screen.getByRole('radio', { name: 'Active' }).className).toContain('control-bevel')
   })
 })

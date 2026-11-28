@@ -1,5 +1,6 @@
 import { useCallback, useId, useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
+import { getDisclosure, setDisclosure } from '@/lib/disclosureMemory'
 import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, FileDiff, TriangleAlert, Undo2 } from 'lucide-react'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -27,6 +28,7 @@ type CurrentTurnChangeCardProps = {
   workDir: string | null
   error: string | null
   isUndoing: boolean
+  undoDisabled?: boolean
   isLatest: boolean
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
@@ -46,6 +48,7 @@ export function CurrentTurnChangeCard({
   workDir,
   error,
   isUndoing,
+  undoDisabled,
   isLatest,
   onUndo,
   expanded,
@@ -54,7 +57,8 @@ export function CurrentTurnChangeCard({
   const t = useTranslation()
   const filesId = useId()
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
-  const [showAllFiles, setShowAllFiles] = useState(false)
+  const filesDisclosureKey = JSON.stringify(['turn-change-files', sessionId, checkpoint.target.targetUserMessageId])
+  const [showAllFiles, setShowAllFiles] = useState(() => getDisclosure(filesDisclosureKey) ?? false)
   // A phone has no workspace beside the chat to open a file in; the turn's
   // change to it opens full height in a sheet instead.
   const isMobile = useMobileViewport() && !isDesktopRuntime()
@@ -181,13 +185,13 @@ export function CurrentTurnChangeCard({
       // Follows the message it belongs to inside the same rail box, so it takes a
       // top margin and no width of its own — `max-w-[900px]` here would have
       // overflowed the column once the rail indented it.
-      className="mt-2.5 w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
+      className="mt-2.5 w-full overflow-x-clip rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
       aria-label={cardLabel}
     >
-      {/* One 40px line. The disclosure's hit area is stretched over the whole
-          row (its ::after), so the trailing chevron toggles too; the undo
+      {/* One sticky 36px line. The disclosure's hit area is stretched over the
+          whole row (its ::after), so the trailing chevron toggles too; the undo
           button is lifted above that layer to keep its own click. */}
-      <div className="relative flex h-10 items-center gap-2 pl-3 pr-2">
+      <div className={`sticky top-0 z-[var(--z-sticky)] flex h-9 items-center gap-2 bg-[var(--color-surface-container-lowest)] pl-3 pr-2 ${expanded || hasUnverifiedChanges || Boolean(error) ? 'rounded-t-[var(--radius-lg)]' : 'rounded-[var(--radius-lg)]'}`}>
         <button
           type="button"
           data-chat-disclosure="true"
@@ -202,21 +206,21 @@ export function CurrentTurnChangeCard({
           className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] focus-visible:outline-none after:absolute after:inset-0 after:rounded-[var(--radius-lg)] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-[var(--color-border-focus)]"
         >
           <FileDiff size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-          <span className="truncate font-medium text-[var(--color-text-primary)]">
+          <span className="truncate font-medium tabular-nums text-[var(--color-text-primary)]">
             {t('chat.turnChangesTitle', { count: files.length })}
           </span>
-          <span className="shrink-0 font-mono text-xs tabular-nums text-[var(--color-diff-added-text)]">+{checkpoint.code.insertions}</span>
-          <span className="shrink-0 font-mono text-xs tabular-nums text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-xs tabular-nums">
+            <span className="text-[var(--color-diff-added-text)]">+{checkpoint.code.insertions}</span>
+            <span className="text-[var(--color-diff-removed-text)]">-{checkpoint.code.deletions}</span>
+          </span>
         </button>
 
-        {/* Never disabled: rolling the conversation back is always possible, even
-            when the files are not restorable. The dialog picks what to touch.
-            What the checkpoint covers is the button's hint rather than a line
-            of grey text under every card; the confirm dialog repeats it. */}
+        {/* 无法恢复文件时，仍可选择只回退对话。 */}
         <Button
-          variant="ghost"
-          size="sm"
+          variant="secondary"
+          size="xs"
           loading={isUndoing}
+          disabled={undoDisabled}
           onClick={onUndo}
           aria-label={undoAria}
           title={subtitle}
@@ -243,7 +247,7 @@ export function CurrentTurnChangeCard({
       )}
 
       <div id={filesId} hidden={!expanded}>
-        {expanded && <div className="border-t border-[var(--color-border)] py-1">
+        {expanded && <div className="scrollbar-autohide scroll-edge-fade max-h-[320px] overflow-y-auto border-t border-[var(--color-border)] py-1">
           {visibleFiles.map((fileEntry) => {
             const fileName = fileEntry.displayPath.split('/').pop() || fileEntry.displayPath
             const directory = fileEntry.displayPath.slice(0, fileEntry.displayPath.length - fileName.length)
@@ -263,7 +267,7 @@ export function CurrentTurnChangeCard({
                     { path: fileEntry.displayPath },
                   )}
                   title={fileEntry.displayPath}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-card-inner)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   <FileTypeIcon path={fileEntry.displayPath} size={14} />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-tertiary)]">
@@ -292,7 +296,10 @@ export function CurrentTurnChangeCard({
             type="button"
             data-chat-disclosure="true"
             aria-expanded={showAllFiles}
-            onClick={() => setShowAllFiles((current) => !current)}
+            onClick={() => {
+              setDisclosure(filesDisclosureKey, !showAllFiles)
+              setShowAllFiles(!showAllFiles)
+            }}
             className="flex h-8 w-full items-center justify-center gap-1 border-t border-[var(--color-border)] px-4 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             {showAllFiles ? (
@@ -312,7 +319,7 @@ export function CurrentTurnChangeCard({
       </div>
 
       {error && (
-        <div role="alert" className="border-t border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">
+        <div role="alert" className="rounded-b-[var(--radius-lg)] border-t border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">
           {error}
         </div>
       )}

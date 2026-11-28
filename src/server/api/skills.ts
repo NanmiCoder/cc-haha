@@ -9,6 +9,7 @@ import { isLeanCompatibleSkill } from '../../utils/agentProfile.js'
  * GET /api/skills/mentions     — Composer @ candidates (?cwd=&providerId=)
  */
 
+import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { parseFrontmatter } from '../../utils/frontmatterParser.js'
@@ -20,12 +21,21 @@ import {
   type SkillRoot,
   type SkillRootFlavor,
 } from '../../skills/skillRoots.js'
+import { walkProjectDirsUpToHome } from '../../utils/markdownConfigLoader.js'
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
-import { clearPluginCache, loadAllPlugins, loadAllPluginsCacheOnly } from '../../utils/plugins/pluginLoader.js'
-import { getSkillDirCommands } from '../../skills/loadSkillsDir.js'
+import {
+  isWithinPluginRoot,
+  loadPluginCommandsFromEnabledPlugins,
+} from '../../utils/plugins/loadPluginCommands.js'
+import { loadActivePluginsForProject } from '../../utils/plugins/pluginLoader.js'
+import { clearSkillCaches, getSkillDirCommands } from '../../skills/loadSkillsDir.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  getAntigravityDiscoveredCommands,
+} from '../services/antigravityAcp.js'
 import { readMarketMeta } from '../services/market/marketService.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -306,11 +316,29 @@ export type SkillSlashCommand = {
   name: string
   description: string
   argumentHint?: string
-  kind: 'command' | 'skill'
+  kind?: 'command' | 'skill'
   source?: SkillSource
+  leanCompatible?: boolean
 }
 
-async function collectLegacySlashCommands(cwd: string, lean = false): Promise<SkillSlashCommand[]> {
+function resetExternalSkillAndPluginCaches(): void {
+  resetSettingsCache()
+  clearInstalledPluginsCache()
+  clearSkillCaches()
+}
+
+async function loadEnabledPluginsForCwd(cwd: string): Promise<LoadedPlugin[]> {
+  try {
+    return (await loadActivePluginsForProject(cwd)).enabled
+  } catch {
+    return []
+  }
+}
+
+async function collectLegacySlashCommands(
+  cwd: string,
+  lean = false,
+): Promise<Array<{ command: SkillSlashCommand; leanCompatible: boolean }>> {
   const commands = await getSkillDirCommands(cwd)
   return commands
     .filter((command) =>
@@ -319,42 +347,83 @@ async function collectLegacySlashCommands(cwd: string, lean = false): Promise<Sk
       command.loadedFrom === 'commands_DEPRECATED' &&
       command.userInvocable !== false &&
       !command.isHidden)
-    .map((command) => ({
-      name: command.name,
-      description: command.description || '',
-      ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-      kind: 'command' as const,
-    }))
+    .map((command) => {
+      const leanCompatible = isLeanCompatibleSkill(command)
+      const argumentHint =
+        typeof command.argumentHint === 'string' && command.argumentHint.trim()
+          ? command.argumentHint.trim()
+          : undefined
+      return {
+        command: {
+          name: command.name,
+          description: command.description || '',
+          ...(argumentHint ? { argumentHint } : {}),
+          kind: 'command' as const,
+          ...(!lean && !leanCompatible ? { leanCompatible: false } : {}),
+        },
+        leanCompatible,
+      }
+    })
+}
+
+async function collectPluginSlashCommands(
+  enabledPlugins: LoadedPlugin[],
+  lean = false,
+): Promise<Array<{ command: SkillSlashCommand; leanCompatible: boolean }>> {
+  if (enabledPlugins.length === 0) return []
+  const commands = await loadPluginCommandsFromEnabledPlugins(enabledPlugins)
+  return commands
+    .filter(
+      (command) =>
+        (!lean || isLeanCompatibleSkill(command)) &&
+        command.type === 'prompt' &&
+        command.userInvocable !== false &&
+        !command.isHidden &&
+        command.isEnabled?.() !== false,
+    )
+    .map((command) => {
+      const leanCompatible = isLeanCompatibleSkill(command)
+      const argumentHint =
+        typeof command.argumentHint === 'string' && command.argumentHint.trim()
+          ? command.argumentHint.trim()
+          : undefined
+      return {
+        command: {
+          name: command.name,
+          description: command.description || '',
+          ...(argumentHint ? { argumentHint } : {}),
+          kind: command.loadedFrom === 'plugin' ? ('skill' as const) : ('command' as const),
+          source: 'plugin' as const,
+          ...(!lean && !leanCompatible ? { leanCompatible: false } : {}),
+        },
+        leanCompatible,
+      }
+    })
 }
 
 function buildPluginSkillName(pluginName: string, skillDir: string): string {
   return `${pluginName}:${path.basename(skillDir)}`
 }
 
-async function collectPluginSkillDirectories(): Promise<Map<string, PluginSkillLocation>> {
+async function collectPluginSkillDirectories(
+  cwd?: string,
+  preloadedPlugins?: LoadedPlugin[],
+): Promise<Map<string, PluginSkillLocation>> {
   const locations = new Map<string, PluginSkillLocation>()
 
   let enabledPlugins: LoadedPlugin[]
-  try {
-    resetSettingsCache()
-    clearInstalledPluginsCache()
-    clearPluginCache('skills-api-external-plugin-state')
-
-    const result = await loadAllPluginsCacheOnly()
-    if (result.errors.some((error) => error.type === 'plugin-cache-miss')) {
-      enabledPlugins = (await loadAllPlugins()).enabled
-    } else {
-      enabledPlugins = result.enabled
-    }
-  } catch {
-    return locations
+  if (preloadedPlugins) {
+    enabledPlugins = preloadedPlugins
+  } else {
+    resetExternalSkillAndPluginCaches()
+    enabledPlugins = await loadEnabledPluginsForCwd(cwd ?? getCwd())
   }
 
   for (const plugin of enabledPlugins) {
     const candidateRoots = [plugin.skillsPath, ...(plugin.skillsPaths ?? [])]
 
     for (const root of candidateRoots) {
-      if (!root) continue
+      if (!root || !isWithinPluginRoot(plugin.path, root)) continue
 
       const directSkillFile = path.join(root, 'SKILL.md')
       try {
@@ -400,8 +469,11 @@ async function collectPluginSkillDirectories(): Promise<Map<string, PluginSkillL
   return locations
 }
 
-async function collectPluginSkills(): Promise<SkillMeta[]> {
-  const locations = await collectPluginSkillDirectories()
+async function collectPluginSkills(
+  cwd?: string,
+  preloadedPlugins?: LoadedPlugin[],
+): Promise<SkillMeta[]> {
+  const locations = await collectPluginSkillDirectories(cwd, preloadedPlugins)
   const skills: SkillMeta[] = []
 
   for (const [name, location] of locations) {
@@ -419,11 +491,20 @@ async function collectPluginSkills(): Promise<SkillMeta[]> {
   return skills
 }
 
-async function collectAllSkills(cwd?: string): Promise<SkillMeta[]> {
+async function collectAllSkills(
+  cwd?: string,
+  options?: { preloadedPlugins?: LoadedPlugin[]; skipCacheReset?: boolean },
+): Promise<SkillMeta[]> {
+  const resolvedCwd = cwd ?? getCwd()
+  if (!options?.skipCacheReset) {
+    resetExternalSkillAndPluginCaches()
+  }
+  const enabledPlugins =
+    options?.preloadedPlugins ?? (await loadEnabledPluginsForCwd(resolvedCwd))
   const [userSkills, projectSkills, pluginSkills] = await Promise.all([
     collectSkillsFromRoots(getUserSkillRoots(), 'user'),
-    collectSkillsFromRoots(getProjectSkillRoots(cwd ?? getCwd()), 'project'),
-    collectPluginSkills(),
+    collectSkillsFromRoots(getProjectSkillRoots(resolvedCwd), 'project'),
+    collectPluginSkills(resolvedCwd, enabledPlugins),
   ])
 
   const skills = [...userSkills, ...projectSkills, ...pluginSkills]
@@ -444,7 +525,9 @@ export async function collectUserSkillNames(): Promise<Set<string>> {
  * graph costs a few hundred milliseconds, and a server that never serves a
  * slash-command request should not pay it.
  */
-async function collectCompiledInSlashCommands(lean: boolean): Promise<SkillSlashCommand[]> {
+async function collectCompiledInSlashCommands(
+  lean: boolean,
+): Promise<Array<{ command: SkillSlashCommand; leanCompatible: boolean }>> {
   try {
     const [{ getCompiledInCommands }, { supportsHeadlessSlashCommand }] =
       await Promise.all([
@@ -464,11 +547,22 @@ async function collectCompiledInSlashCommands(lean: boolean): Promise<SkillSlash
           // the local built-ins lean keeps from its mirror of that table.
           (!lean || isLeanCompatibleSkill(command)),
       )
-      .map(command => ({
-        name: command.name,
-        description: command.description || '',
-        ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-      }))
+      .map(command => {
+        const leanCompatible = isLeanCompatibleSkill(command)
+        const argumentHint =
+          typeof command.argumentHint === 'string' && command.argumentHint.trim()
+            ? command.argumentHint.trim()
+            : undefined
+        return {
+          command: {
+            name: command.name,
+            description: command.description || '',
+            ...(argumentHint ? { argumentHint } : {}),
+            ...(!lean && !leanCompatible ? { leanCompatible: false } : {}),
+          },
+          leanCompatible,
+        }
+      })
   } catch (error) {
     // A fallback that throws would blank the whole slash menu, so degrade to
     // disk-only skills — the behaviour this function was added to improve on.
@@ -498,12 +592,17 @@ export async function listSkillSlashCommands(
   } = {},
 ): Promise<SkillSlashCommand[]> {
   const requestedCwd = cwd || getCwd()
-  const [skills, legacyCommands, compiledInCommands] = await Promise.all([
-    collectAllSkills(requestedCwd),
-    collectLegacySlashCommands(requestedCwd, options.agentProfile === 'lean'),
+  const lean = options.agentProfile === 'lean'
+  resetExternalSkillAndPluginCaches()
+  const enabledPlugins = await loadEnabledPluginsForCwd(requestedCwd)
+
+  const [skills, pluginCommands, legacyCommands, compiledInCommands] = await Promise.all([
+    collectAllSkills(requestedCwd, { preloadedPlugins: enabledPlugins, skipCacheReset: true }),
+    collectPluginSlashCommands(enabledPlugins, lean),
+    collectLegacySlashCommands(requestedCwd, lean),
     options.includeCompiledIn === false
       ? Promise.resolve([])
-      : collectCompiledInSlashCommands(options.agentProfile === 'lean'),
+      : collectCompiledInSlashCommands(lean),
   ])
 
   // Same precedence the CLI loader applies, so the composer menu and the
@@ -522,36 +621,198 @@ export async function listSkillSlashCommands(
     ) {
       continue
     }
+    const leanCompatible = isLeanCompatibleSkill({
+      type: 'prompt',
+      context: skill.context,
+      source: skill.source,
+    })
     byName.set(skill.name, {
       command: {
         name: skill.name,
         description: skill.description || '',
         kind: 'skill',
         source: skill.source,
+        ...(!lean && !leanCompatible ? { leanCompatible: false } : {}),
       },
       flavor: skill.rootFlavor,
-      leanCompatible: isLeanCompatibleSkill({ type: 'prompt', context: skill.context, source: skill.source }),
+      leanCompatible,
     })
   }
 
-  for (const command of legacyCommands) {
-    if (!byName.has(command.name)) {
-      byName.set(command.name, { command, flavor: undefined })
+  for (const entry of legacyCommands) {
+    if (!byName.has(entry.command.name)) {
+      byName.set(entry.command.name, {
+        command: entry.command,
+        flavor: undefined,
+        leanCompatible: entry.leanCompatible,
+      })
+    }
+  }
+
+  for (const entry of pluginCommands) {
+    if (!byName.has(entry.command.name)) {
+      byName.set(entry.command.name, {
+        command: entry.command,
+        flavor: undefined,
+        leanCompatible: entry.leanCompatible,
+      })
     }
   }
 
   // Last, and only to fill gaps: a same-named skill on disk is what the CLI
   // would actually run, so it keeps the entry.
-  for (const command of compiledInCommands) {
-    if (!byName.has(command.name)) {
-      byName.set(command.name, { command, flavor: undefined })
+  for (const entry of compiledInCommands) {
+    if (!byName.has(entry.command.name)) {
+      byName.set(entry.command.name, {
+        command: entry.command,
+        flavor: undefined,
+        leanCompatible: entry.leanCompatible,
+      })
     }
   }
 
   return [...byName.values()]
-    .filter(claim => options.agentProfile !== 'lean' || claim.leanCompatible !== false)
+    .filter(claim => !lean || claim.leanCompatible !== false)
     .map(claim => claim.command)
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+const ANTIGRAVITY_BUILTIN_COMMAND_NAMES = new Set([
+  'swarm',
+  'plan',
+  'boost',
+  'teamwork',
+  'goal',
+  'grill-me',
+  'compact',
+  'browser',
+  'schedule',
+  'learn',
+  'model',
+  'config',
+  'settings',
+  'clear',
+])
+
+const ANTIGRAVITY_PROJECT_SKILL_SUBDIRS = [
+  ['.agents', 'skills'],
+  ['.agent', 'skills'],
+  ['_agents', 'skills'],
+  ['_agent', 'skills'],
+] as const
+
+async function readAntigravitySkillEntry(
+  skillDir: string,
+  fallbackName: string,
+  source: 'user' | 'project',
+): Promise<SkillSlashCommand | null> {
+  let raw: string
+  let skillFile = path.join(skillDir, 'SKILL.md')
+  try {
+    raw = await fs.readFile(skillFile, 'utf-8')
+  } catch {
+    skillFile = path.join(skillDir, 'skill.md')
+    try {
+      raw = await fs.readFile(skillFile, 'utf-8')
+    } catch {
+      return null
+    }
+  }
+
+  const { frontmatter, body } = normalizeFrontmatter(raw, skillFile)
+  if (frontmatter['user-invocable'] === false || frontmatter['disable-slash-command'] === true) {
+    return null
+  }
+
+  const rawName = typeof frontmatter.name === 'string' ? frontmatter.name.trim() : ''
+  const name = rawName || fallbackName
+  if (!name) return null
+
+  const rawDescription = typeof frontmatter.description === 'string' ? frontmatter.description.trim() : ''
+  const description =
+    rawDescription ||
+    body
+      .split('\n')
+      .find((line) => line.trim().length > 0)
+      ?.trim() ||
+    ''
+
+  return {
+    name,
+    description,
+    kind: 'skill',
+    source,
+  }
+}
+
+/**
+ * Discover Antigravity skills from AGY's own project and user customization roots
+ * (plus any global/builtin skills captured during `discoverAntigravity`), without
+ * pulling in Claude-only `.claude/skills`, plugins, or compiled-in Claude commands.
+ */
+function resolveAntigravityHomeDir(): string {
+  const fromEnv =
+    process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME
+  const home = fromEnv !== undefined && fromEnv !== '' ? fromEnv : os.homedir()
+  return path.resolve(home).normalize('NFC')
+}
+
+export async function listAntigravitySkillSlashCommands(
+  cwd?: string,
+): Promise<SkillSlashCommand[]> {
+  const requestedCwd = cwd || getCwd()
+  const homeDir = resolveAntigravityHomeDir()
+
+  const roots: Array<{ path: string; source: 'project' | 'user' }> = []
+  for (const dir of walkProjectDirsUpToHome(requestedCwd)) {
+    for (const parts of ANTIGRAVITY_PROJECT_SKILL_SUBDIRS) {
+      roots.push({ path: path.join(dir, ...parts), source: 'project' })
+    }
+  }
+  roots.push(
+    { path: path.join(homeDir, '.gemini', 'antigravity-cli', 'skills'), source: 'user' },
+    { path: path.join(homeDir, '.gemini', 'config', 'skills'), source: 'user' },
+    { path: path.join(homeDir, '.agents', 'skills'), source: 'user' },
+  )
+
+  const byLowerName = new Map<string, SkillSlashCommand>()
+  for (const root of roots) {
+    let entries: import('fs').Dirent[]
+    try {
+      entries = await fs.readdir(root.path, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if ((!entry.isDirectory() && !entry.isSymbolicLink()) || entry.name.startsWith('.')) {
+        continue
+      }
+      const skill = await readAntigravitySkillEntry(
+        path.join(root.path, entry.name),
+        entry.name,
+        root.source,
+      )
+      if (!skill) continue
+      const key = skill.name.toLowerCase()
+      if (ANTIGRAVITY_BUILTIN_COMMAND_NAMES.has(key) || byLowerName.has(key)) continue
+      byLowerName.set(key, skill)
+    }
+  }
+
+  for (const command of getAntigravityDiscoveredCommands()) {
+    const key = command.name.toLowerCase()
+    if (ANTIGRAVITY_BUILTIN_COMMAND_NAMES.has(key) || byLowerName.has(key)) continue
+    byLowerName.set(key, {
+      name: command.name,
+      description: command.description || '',
+      ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+      kind: 'skill',
+      source: 'user',
+    })
+  }
+
+  return [...byLowerName.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -576,6 +837,9 @@ export async function handleSkillsApi(
         if (!path.isAbsolute(cwd) || cwd.includes('\0')) throw ApiError.badRequest('cwd must be an absolute directory path')
         const directory = await fs.stat(cwd).catch(() => null)
         if (!directory?.isDirectory()) throw ApiError.badRequest('cwd must be an existing directory')
+        if (url.searchParams.get('providerId') === ANTIGRAVITY_PROVIDER_ID) {
+          return Response.json({ commands: await listAntigravitySkillSlashCommands(cwd) })
+        }
         const lean = url.searchParams.get('agentProfile') === 'lean'
         return Response.json({ commands: await listSkillSlashCommands(cwd, {
           includeCompiledIn: !lean,
@@ -626,7 +890,7 @@ async function getSkillDetail(url: URL): Promise<Response> {
 
   const cwd = getRequestedCwd(url)
   const pluginLocations =
-    source === 'plugin' ? await collectPluginSkillDirectories() : null
+    source === 'plugin' ? await collectPluginSkillDirectories(cwd) : null
 
   const pluginLocation = pluginLocations?.get(name)
   const resolved =

@@ -104,18 +104,23 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
   }
   if (state === 'ready') return children
   const waiting = state === 'loading' || state === 'pending'
-  return <main className="flex min-h-screen items-center justify-center bg-[var(--color-surface)] px-4 py-10 text-[var(--color-text-primary)]">
-    <div className="w-full max-w-[400px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-6 pb-6 pt-7 shadow-[var(--shadow-card)]">
+  return <main className="v6c-ambient-shell flex min-h-[100dvh] items-center justify-center px-4 py-10 text-[var(--color-text-primary)]">
+    <div className="dialog-glass w-full max-w-[400px] rounded-[var(--radius-2xl)] px-6 pb-6 pt-7">
       <div className="flex flex-col items-center text-center">
         <BrandSeal size="lg" />
         <h1 className="mt-4 text-[18px] font-semibold leading-snug">{t('publicAccess.title')}</h1>
         <div className="mt-2 flex w-full items-start justify-center gap-2">
-          {waiting && <Spinner size={14} className="mt-[3px] shrink-0 text-[var(--color-text-tertiary)]" />}
+          {waiting && (
+            <Spinner
+              size={14}
+              className={`mt-[3px] shrink-0 ${state === 'pending' ? 'text-[var(--color-warning)]' : 'text-[var(--color-info)]'}`}
+            />
+          )}
           <p
             id="remote-access-status"
             role={state === 'error' ? 'alert' : 'status'}
             className={state === 'error'
-              ? 'w-full rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-left text-xs leading-[1.6] text-[var(--color-on-error-container)]'
+              ? 'v6c-ring-error w-full rounded-[var(--radius-control)] bg-[var(--color-error-container)] px-3 py-2 text-left text-[12px] leading-[1.6] text-[var(--color-on-error-container)]'
               : 'text-[13px] leading-[1.6] text-[var(--color-text-secondary)]'}
           >
             {state === 'pair' ? t('publicAccess.phoneIntro') : state === 'pending' ? t('publicAccess.phonePending') : state === 'error' ? t('publicAccess.phoneError') : state === 'unpaired' ? t('publicAccess.phoneUnpaired') : t('common.loading')}
@@ -123,10 +128,10 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
         </div>
       </div>
       {state === 'pair' && <div className="mt-5 grid gap-3">
-        <Input size="lg" aria-describedby="remote-access-status" aria-label={t('publicAccess.deviceName')} placeholder={t('publicAccess.deviceName')} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
-        <Button variant="primary" size="lg" block disabled={!name.trim()} onClick={() => void pair()}>{t('publicAccess.requestPair')}</Button>
+        <Input size="xl" aria-describedby="remote-access-status" aria-label={t('publicAccess.deviceName')} placeholder={t('publicAccess.deviceName')} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        <Button variant="primary" size="lg" block className="min-h-11" disabled={!name.trim()} onClick={() => void pair()}>{t('publicAccess.requestPair')}</Button>
       </div>}
-      {state === 'error' && <Button variant="secondary" size="lg" block className="mt-4" onClick={() => void retry()}>{t('common.retry')}</Button>}
+      {state === 'error' && <Button variant="secondary" size="lg" block className="mt-4 min-h-11" onClick={() => void retry()}>{t('common.retry')}</Button>}
     </div>
   </main>
 }

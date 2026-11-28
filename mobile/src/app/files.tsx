@@ -8,7 +8,9 @@ import { useConnection } from '../state/AppContext'
 import { listCheckpoints } from '../core/operations'
 import { useFocusedResource } from '../core/useFocusedResource'
 import { latestCheckpoint, translateReason } from '../core/changesView'
-import { EmptyState, Icon, InlineError, Loading, useColors } from '../ui/kit'
+import { EmptyState, Icon, InlineError, Loading } from '../ui/kit'
+import { radius } from '../ui/palette'
+import { useTheme } from '../ui/theme'
 import { KeyboardViewport } from '../ui/KeyboardViewport'
 import { useCheckpointFileSummaries } from '../ui/results/hooks'
 import { checkpointLists, sessionKey } from '../ui/results/resultsCache'
@@ -20,7 +22,6 @@ import {
   LinkRow,
   SearchResultRow,
   TreeFileRow,
-  floatShadow,
 } from '../ui/files/FileRows'
 import {
   changedRows,
@@ -50,7 +51,7 @@ const sheetOptions = {
 } as const
 
 function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; initialTab: FilesTab }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   const { height: windowHeight } = useWindowDimensions()
   const { client, error: connectionError } = useConnection(hostId)
@@ -242,8 +243,8 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
           style={{
             flex: 1,
             backgroundColor: colors.sheet,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
+            borderTopLeftRadius: radius.sheet,
+            borderTopRightRadius: radius.sheet,
             overflow: 'hidden',
             transform: [
               {
@@ -284,8 +285,8 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
               width: 44,
               height: 44,
               borderRadius: 22,
-              backgroundColor: colors.card,
-              boxShadow: floatShadow(colors.hair),
+              backgroundColor: colors.cardRaised,
+              boxShadow: shadows.floating,
               alignItems: 'center',
               justifyContent: 'center',
               opacity: pressed ? 0.7 : 1,

@@ -48,3 +48,12 @@ test('invalid navigation and unknown option do not change a valid answer', () =>
   expect(changeQuestionFlow(flow, questions, { type: 'choose', label: 'invented' })).toBe(flow)
   expect(changeQuestionFlow(flow, questions, { type: 'open', index: 99 })).toBe(flow)
 })
+test('allowFreeText=false ignores custom text actions and custom drafts', () => {
+  const one = questions.slice(0, 1)
+  const chosen = changeQuestionFlow(initialQuestionFlow(), one, { type: 'choose', label: '红色' }, false)
+  const unchanged = changeQuestionFlow(chosen, one, { type: 'custom', text: '其他' }, false)
+  expect(unchanged).toBe(chosen)
+  const dirtyCustom = { ...initialQuestionFlow(), custom: { '颜色？': '自定义' } }
+  expect(questionFlowValues(dirtyCustom, one, false)).toEqual({ '颜色？': '' })
+  expect(canSubmitQuestions(dirtyCustom, one, true, false)).toBe(false)
+})

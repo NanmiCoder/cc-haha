@@ -3,6 +3,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { App, BrowserWindow } from 'electron'
+import legacyAppearance from '../../src/test/fixtures/appearance-state-v1.json'
 
 import {
   DEFAULT_DARK_THEME,
@@ -30,8 +31,9 @@ const WARM_LIGHT = '#F6F0E1'
 function appearance(overrides: Partial<AppliedAppearance> = {}): AppliedAppearance {
   return {
     isDark: false,
-    background: '#FFFFFF',
-    lightBackground: '#FFFFFF',
+    background: LIGHT_WINDOW_BACKGROUND,
+    lightBackground: LIGHT_WINDOW_BACKGROUND,
+    darkBackground: DARK_WINDOW_BACKGROUND,
     followSystem: false,
     ...overrides,
   }
@@ -118,11 +120,40 @@ describe('appearance state persistence', () => {
 
     expect(readAppearanceState(app, env)).toBeNull()
   })
+
+  it.each([true, false])('migrates the old appearance JSON forward without dropping fields (isDark=%s)', (isDark) => {
+    const { app, env } = makeApp()
+    const statePath = appearanceStatePath(app, env)
+    writeAppearanceState(app, appearance(), env)
+    const oldState = { ...legacyAppearance, isDark, background: isDark ? legacyAppearance.background : WARM_LIGHT }
+    writeFileSync(statePath, JSON.stringify(oldState))
+
+    const migrated = readAppearanceState(app, env)
+    const darkBackground = isDark ? legacyAppearance.background : DARK_WINDOW_BACKGROUND
+    expect(migrated).toEqual({ ...oldState, darkBackground })
+    expect(startupWindowBackground(migrated, true)).toBe(darkBackground)
+    expect(startupWindowBackground(migrated, false)).toBe(WARM_LIGHT)
+    writeAppearanceState(app, migrated!, env)
+    const once = readFileSync(statePath, 'utf8')
+    writeAppearanceState(app, readAppearanceState(app, env)!, env)
+    expect(readFileSync(statePath, 'utf8')).toBe(once)
+    expect(JSON.parse(once)).toEqual({ ...oldState, darkBackground })
+  })
+
+  it('round-trips the dark preference while the applied theme is light', () => {
+    const { app, env } = makeApp()
+    writeAppearanceState(app, appearance({ background: WARM_LIGHT, lightBackground: WARM_LIGHT, darkBackground: '#202020', followSystem: true }), env)
+    const restarted = readAppearanceState(app, env)
+    expect(startupWindowBackground(restarted, true)).toBe('#202020')
+    expect(startupWindowBackground(restarted, false)).toBe(WARM_LIGHT)
+  })
 })
 
 describe('isAppliedAppearance', () => {
   it('accepts a well formed payload', () => {
     expect(isAppliedAppearance(appearance({ isDark: true, background: '#201d17' }))).toBe(true)
+    expect(isAppliedAppearance(legacyAppearance)).toBe(true)
+    expect(isAppliedAppearance(appearance({ darkBackground: '#202020' }))).toBe(true)
   })
 
   it.each([
@@ -132,6 +163,9 @@ describe('isAppliedAppearance', () => {
     ['a missing light background', { isDark: false, background: '#FFFFFF', followSystem: true }],
     ['a shorthand hex', appearance({ background: '#FFF' })],
     ['a named color', appearance({ background: 'white' })],
+    ['a translucent dark background', appearance({ darkBackground: '#80202020' })],
+    ['a named dark background', appearance({ darkBackground: 'black' })],
+    ['a null dark background', { ...appearance(), darkBackground: null }],
     ['a CSS function', appearance({ background: 'rgb(0,0,0)' })],
     ['a bad light background', appearance({ lightBackground: 'white' })],
   ])('rejects %s', (_label, payload) => {
@@ -173,6 +207,17 @@ describe('startupWindowBackground', () => {
 
     expect(startupWindowBackground(cached, false)).toBe(WARM_LIGHT)
   })
+
+  it('keeps the selected dark ground on startup and native appearance updates', () => {
+    const background = THEME_BACKGROUNDS.dark
+    const cached = appearance({ background: WARM_LIGHT, lightBackground: WARM_LIGHT, darkBackground: background, followSystem: true })
+
+    // The app last reported a light theme; its independent dark preference
+    // must survive a restart or any native "updated" event while dark.
+    expect(startupWindowBackground(cached, true)).toBe(background)
+    expect(startupWindowBackground(cached, true)).toBe(background)
+    expect(startupWindowBackground(cached, false)).toBe(WARM_LIGHT)
+  })
 })
 
 describe('applyAppliedAppearance', () => {
@@ -187,6 +232,25 @@ describe('applyAppliedAppearance', () => {
     expect(first.setBackgroundColor).toHaveBeenCalledWith('#201D17')
     expect(second.setBackgroundColor).toHaveBeenCalledWith('#201D17')
     expect(JSON.parse(readFileSync(appearanceStatePath(app, env), 'utf-8'))).toEqual(state)
+  })
+
+  it('repaints every live window cleanly for OLED dark and cold porcelain light themes', () => {
+    const { app, env } = makeApp()
+    const win = fakeWindow()
+
+    applyAppliedAppearance(
+      appearance({ isDark: true, background: '#000000', lightBackground: '#FCFCFC', darkBackground: '#000000' }),
+      { app, windows: () => [win], env },
+    )
+    expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#000000')
+    expect(startupWindowBackground(readAppearanceState(app, env), true)).toBe('#000000')
+
+    applyAppliedAppearance(
+      appearance({ isDark: false, background: '#FCFCFC', lightBackground: '#FCFCFC', darkBackground: '#000000' }),
+      { app, windows: () => [win], env },
+    )
+    expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#FCFCFC')
+    expect(startupWindowBackground(readAppearanceState(app, env), false)).toBe('#FCFCFC')
   })
 
   it('skips windows that were already torn down', () => {
@@ -222,6 +286,8 @@ describe('window background constants', () => {
     // CSS and bootstrapScript.test.ts binds it to index.html, but the main
     // process had its own copies. Without this, changing the palette would
     // leave the pre-paint window color silently behind.
+    expect(LIGHT_WINDOW_BACKGROUND).toBe('#FFFFFF')
+    expect(DARK_WINDOW_BACKGROUND).toBe('#181818')
     expect(LIGHT_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.white)
     expect(DARK_WINDOW_BACKGROUND).toBe(THEME_BACKGROUNDS.dark)
     // The defaults of each half — what a first launch paints before the

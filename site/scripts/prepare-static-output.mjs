@@ -209,6 +209,9 @@ const legacyRoutes = [
   '/docs', '/features/computer-use', '/features/computer-use-architecture',
   '/guide/cli-reference', '/guide/contributing', '/guide/env-vars', '/guide/faq',
   '/guide/global-usage', '/guide/quick-start', '/guide/third-party-models',
+  '/internals/computer-use-cef-injection', '/internals/computer-use-codex-parity-review',
+  '/internals/computer-use-codex-redesign', '/internals/computer-use-handoff',
+  '/internals/computer-use-native-manual-qa', '/internals/computer-use-native-swift-design',
   '/memory', '/memory/01-usage-guide', '/memory/02-implementation', '/memory/03-autodream',
   '/reference/fixes', '/reference/local-server', '/reference/project-structure',
   '/skills', '/skills/01-usage-guide', '/skills/02-implementation'

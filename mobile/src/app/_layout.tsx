@@ -2,9 +2,11 @@ import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useFonts } from 'expo-font'
 import { AppProvider } from '../state/AppContext'
+import { AndroidUpdateProvider } from '../state/AndroidUpdateContext'
 import { LiveActivityBridge } from '../widgets/LiveActivityBridge'
 import { PushRegistrationProvider } from '../state/PushRegistrationContext'
 import { NotificationBridge } from '../state/NotificationBridge'
+import { KeepAwakeBridge } from '../state/KeepAwakeBridge'
 import { NotifyPromptHost } from '../state/NotifyPromptHost'
 import { DashboardProvider } from '../state/DashboardContext'
 import { PreferencesProvider } from '../state/PreferencesContext'
@@ -68,6 +70,7 @@ function Navigation() {
   return (
     <>
       <NotificationBridge />
+      <KeepAwakeBridge />
       <LiveActivityBridge />
       <NotifyPromptHost />
       <StatusBar style={dark ? 'light' : 'dark'} />
@@ -82,7 +85,7 @@ function Navigation() {
           name="connect"
           options={{
             presentation: 'fullScreenModal',
-            contentStyle: { backgroundColor: '#121110' },
+            contentStyle: { backgroundColor: '#131313' },
           }}
         />
         <Stack.Screen
@@ -111,11 +114,13 @@ export default function Layout() {
   return (
     <PreferencesProvider>
       <AppProvider>
-        <PushRegistrationProvider>
-          <DashboardProvider>
-            <Navigation />
-          </DashboardProvider>
-        </PushRegistrationProvider>
+        <AndroidUpdateProvider>
+          <PushRegistrationProvider>
+            <DashboardProvider>
+              <Navigation />
+            </DashboardProvider>
+          </PushRegistrationProvider>
+        </AndroidUpdateProvider>
       </AppProvider>
     </PreferencesProvider>
   )

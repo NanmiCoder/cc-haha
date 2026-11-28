@@ -35,6 +35,63 @@ describe('persistent storage upgrade migrations', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
+  test('upgrades v9 subagent env ownership with a backup and preserves unknown settings', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    await fs.mkdir(dir, { recursive: true })
+    const provider = { id: 'legacy', presetId: 'custom', name: 'Legacy', apiKey: 'fake', baseUrl: 'https://fixture.invalid',
+      models: { main: 'main', haiku: 'small', sonnet: 'medium', opus: 'large' } }
+    const legacy = { futureSetting: { keep: true }, env: { CLAUDE_CODE_SUBAGENT_MODEL: 'selected-subagent', CUSTOM_ENV: 'keep' } }
+    await fs.writeFile(path.join(dir, 'providers.json'), JSON.stringify({ schemaVersion: 9, activeId: 'legacy', providers: [provider] }))
+    await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify(legacy))
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const service = new ProviderService()
+    expect(await service.getManagedSettings()).toEqual({ ...legacy, providerEnvOwner: 'legacy' })
+    expect((await service.getProviderRuntimeEnv('legacy')).CLAUDE_CODE_SUBAGENT_MODEL).toBe('selected-subagent')
+    const backup = (await listFiles(dir)).find(name => name.startsWith('settings.json.bak-before-migration-'))
+    expect(backup).toBeDefined()
+    expect(JSON.parse(await fs.readFile(path.join(dir, backup!), 'utf8'))).toEqual(legacy)
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+  })
+
+  test.each([9, 10])('upgrades the pre-usage-script v%i index with a backup while preserving optional scripts and unknown fields', async (schemaVersion) => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const provider = {
+      id: 'old', presetId: 'custom', name: 'Old', apiKey: 'fake-key', baseUrl: 'https://example.test',
+      models: { main: 'fixture', haiku: '', sonnet: '', opus: '' },
+      futureOwnership: { preserve: true }, futureProvider: { keep: true },
+    }
+    const script = { enabled: true, code: 'fake stored script', accessToken: 'fake-usage-token', futureTemplate: { keep: true } }
+    const old = { schemaVersion, activeId: 'old', providers: [provider, { ...provider, id: 'scripted', usageScript: script }], futureRoot: true }
+    const managed = {
+      ...(schemaVersion === 10 ? { providerEnvOwner: 'scripted' } : {}),
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: 'fixture-subagent', CUSTOM_ENV: 'keep' },
+      futureSetting: { keep: true },
+    }
+    await fs.writeFile(file, JSON.stringify(old))
+    await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify(managed))
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const upgraded = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(upgraded.schemaVersion).toBeGreaterThan(10)
+    expect(upgraded.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    expect(upgraded.providers[0]).not.toHaveProperty('usageScript')
+    expect(upgraded.providers[0].futureOwnership).toEqual(provider.futureOwnership)
+    expect(upgraded.providers[0].futureProvider).toEqual(provider.futureProvider)
+    expect(upgraded.providers[1].usageScript).toEqual(script)
+    expect(upgraded.futureRoot).toBe(true)
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'settings.json'), 'utf8'))).toEqual({
+      ...managed,
+      providerEnvOwner: schemaVersion === 10 ? 'scripted' : 'old',
+    })
+    const backups = (await listFiles(dir)).filter(name => name.startsWith('providers.json.bak-before-migration-'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(dir, backups[0]!), 'utf8'))).toEqual(old)
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+  })
+
   test('upgrades v6 image settings to an explicit protocol and preserves unknown fields on later edits', async () => {
     const dir = path.join(tempDir, 'cc-haha')
     const file = path.join(dir, 'providers.json')
@@ -173,6 +230,43 @@ describe('persistent storage upgrade migrations', () => {
     expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
   })
 
+  test('reads legacy settings without includeCyberRiskInstruction without rewriting shared user settings', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      updateProxy: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    const before = await service.getUserSettings()
+    expect(before.includeCyberRiskInstruction).toBeUndefined()
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+
+    await service.updateUserSettings({ includeCyberRiskInstruction: false })
+    expect((await new SettingsService().getUserSettings()).includeCyberRiskInstruction).toBe(false)
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({
+      ...legacy,
+      includeCyberRiskInstruction: false,
+    })
+
+    await service.updateUserSettings({ includeCyberRiskInstruction: true })
+    expect((await new SettingsService().getUserSettings()).includeCyberRiskInstruction).toBe(true)
+  })
+
+  test('rejects a non-boolean cyber-risk instruction choice without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ includeCyberRiskInstruction: true, unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(
+      new SettingsService().updateUserSettings({ includeCyberRiskInstruction: 'false' }),
+    ).rejects.toThrow('includeCyberRiskInstruction must be a boolean')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
   test('upgrades the legacy automatic update preference on read without rewriting shared user settings', async () => {
     const userPath = path.join(tempDir, 'settings.json')
     const legacy = {
@@ -192,6 +286,35 @@ describe('persistent storage upgrade migrations', () => {
     expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, autoUpdateEnabled: false })
     await service.updateUserSettings({ autoUpdateEnabled: true })
     expect(await new SettingsService().getAutoUpdateEnabled()).toBe(true)
+  })
+
+  test('reads auto escalation mode for missing field and preserves unknown fields on save', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    expect(await service.getMaxOutputTokensEscalationMode()).toBe('auto')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'enabled' })
+
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('enabled')
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, maxOutputTokensEscalationMode: 'enabled' })
+    await service.updateUserSettings({ maxOutputTokensEscalationMode: 'disabled' })
+    expect(await new SettingsService().getMaxOutputTokensEscalationMode()).toBe('disabled')
+  })
+
+  test('rejects an invalid escalation mode without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ maxOutputTokensEscalationMode: 'auto', unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(new SettingsService().updateUserSettings({ maxOutputTokensEscalationMode: 'bogus' })).rejects.toThrow('maxOutputTokensEscalationMode')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
   })
 
   test('rejects a non-boolean automatic update choice without changing the settings file', async () => {
@@ -797,6 +920,143 @@ describe('persistent storage upgrade migrations', () => {
         opus: 'gpt-6-astra',
       },
       'future-official': { main: 'future-model' },
+    })
+  })
+
+  test('keeps an imported usage script, and providers saved without one, unchanged through startup and edits', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const models = { main: 'chat-model', haiku: 'chat-model', sonnet: 'chat-model', opus: 'chat-model' }
+    const usageScript = {
+      enabled: true,
+      language: 'javascript',
+      code: '({ request: { url: "{{baseUrl}}/api/user/self" }, extractor: (r) => ({ remaining: r.quota }) })',
+      templateType: 'newapi',
+      accessToken: 'fake-usage-token',
+      codingPlanProvider: 'kimi',
+    }
+    // `old` is an entry as cc-haha wrote it before usage scripts existed.
+    const fixture = {
+      schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
+      activeId: null,
+      providers: [
+        {
+          id: 'old', presetId: 'custom', name: 'Old', apiKey: 'fake-old-key',
+          baseUrl: 'https://old.example.test', apiFormat: 'anthropic',
+          runtimeKind: 'anthropic_compatible', toolSearchEnabled: false, models,
+          futureProvider: 'keep',
+        },
+        {
+          id: 'scripted', presetId: 'custom', name: 'Scripted', apiKey: 'fake-relay-key',
+          baseUrl: 'https://relay.example.test', apiFormat: 'anthropic',
+          runtimeKind: 'anthropic_compatible', toolSearchEnabled: false, models, usageScript,
+        },
+      ],
+      providerOrder: ['old', 'scripted', 'claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
+      officialProviderModels: {},
+    }
+    await fs.writeFile(file, JSON.stringify(fixture, null, 2))
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).not.toContain('cc-haha/providers.json')
+
+    const service = new ProviderService()
+    await service.updateProvider('old', { notes: 'edited' })
+    await service.updateProvider('scripted', { name: 'Renamed' })
+    const gemini = await service.addProvider({
+      presetId: 'custom',
+      name: 'Saved Gemini',
+      apiKey: 'fake-gemini-key',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      apiFormat: 'gemini',
+      models,
+    })
+    const rewritten = JSON.parse(await fs.readFile(file, 'utf8')) as { providers: Array<Record<string, unknown>> }
+    expect(rewritten.providers[0]).toEqual({ ...fixture.providers[0], notes: 'edited' })
+    expect(rewritten.providers[0]).not.toHaveProperty('usageScript')
+    expect(rewritten.providers[1]).toEqual({ ...fixture.providers[1], name: 'Renamed' })
+    expect(rewritten.providers[2]).toMatchObject({ id: gemini.id, apiFormat: 'gemini' })
+    expect((await service.getProvider(gemini.id)).apiFormat).toBe('gemini')
+  })
+
+  test('keeps old cc-haha/settings.json fixtures unchanged until General preferences are saved and preserves unknown fields', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    const managedPath = path.join(ccHahaDir, 'settings.json')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    const oldFixture = {
+      providerEnvOwner: 'legacy-provider',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://legacy.example.test',
+        ANTHROPIC_AUTH_TOKEN: 'fake-token',
+      },
+      futureManagedField: { keep: true },
+    }
+    await fs.writeFile(managedPath, JSON.stringify(oldFixture, null, 2) + '\n', 'utf-8')
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).not.toContain('cc-haha/settings.json')
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual(oldFixture)
+
+    const settingsSvc = new SettingsService()
+    await settingsSvc.updateUserSettings({ effort: 'xhigh', effortLevel: 'xhigh', language: 'chinese' })
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      ...oldFixture,
+      defaultEffort: 'xhigh',
+      language: 'chinese',
+    })
+
+    // Clearing active provider keeps both the General backups and unknown fields.
+    await new ProviderService().activateOfficial()
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      futureManagedField: { keep: true },
+      defaultEffort: 'xhigh',
+      language: 'chinese',
+    })
+  })
+
+  test('migrates legacy effort and strips malformed General fields in cc-haha/settings.json with a backup', async () => {
+    const ccHahaDir = path.join(tempDir, 'cc-haha')
+    const managedPath = path.join(ccHahaDir, 'settings.json')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    const legacyManaged = {
+      effort: 'xhigh',
+      language: '   ',
+      futureManagedField: { keep: true },
+    }
+    await fs.writeFile(managedPath, JSON.stringify(legacyManaged, null, 2) + '\n', 'utf-8')
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).toContain('cc-haha/settings.json')
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      defaultEffort: 'xhigh',
+      futureManagedField: { keep: true },
+    })
+
+    const backups = (await listFiles(ccHahaDir)).filter((name) =>
+      name.startsWith('settings.json.bak-before-migration-'),
+    )
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(ccHahaDir, backups[0]!), 'utf-8'))).toEqual(legacyManaged)
+
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+
+    // Invalid defaultEffort values and non-object env fields are also cleaned up safely.
+    await fs.writeFile(
+      managedPath,
+      JSON.stringify({ defaultEffort: 'turbo', env: 'not-an-object', futureManagedField: { keep: true } }, null, 2) + '\n',
+      'utf-8',
+    )
+    resetPersistentStorageMigrationsForTests()
+    const secondReport = await ensurePersistentStorageUpgraded()
+    expect(secondReport.failures).toEqual([])
+    expect(JSON.parse(await fs.readFile(managedPath, 'utf-8'))).toEqual({
+      env: {},
+      futureManagedField: { keep: true },
     })
   })
 })

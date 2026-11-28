@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { MessageCircle, FolderClosed, Globe, Ellipsis, Plus, SquareTerminal, SquareSplitVertical, X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
+import { StatusDot } from '@/components/ui/Badge'
 import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { getTerminalRuntime, subscribeTerminalRuntime } from '@/lib/terminalRuntime'
@@ -15,6 +17,7 @@ const DRAG_START_THRESHOLD = 4
 
 const KIND_ICON = {
   'side-chat': MessageCircle,
+  'background-task': SquareTerminal,
   file: FolderClosed,
   browser: Globe,
   review: SquareSplitVertical,
@@ -58,6 +61,7 @@ export function WorkspaceTabStrip({
   onAdd,
 }: WorkspaceTabStripProps) {
   const t = useTranslation()
+  const browserAgentStates = useBrowserUseStore((state) => state.tabStates)
   const [, refreshTerminalState] = useState(0)
   useEffect(() => {
     const unsubscribers = tabs.filter((tab) => tab.kind === 'terminal').map((tab) =>
@@ -236,6 +240,7 @@ export function WorkspaceTabStrip({
               newTab: t('workspace.newTabTitle'),
               review: t('workspace.reviewTabTitle'),
               sideChat: t('sideChat.title'),
+              backgroundTask: t('workspace.backgroundTask.header'),
               files: t('workspace.files.openTitle'),
               terminal: (ordinal) => t('workspace.terminalTabTitle', { n: ordinal }),
             })
@@ -312,11 +317,21 @@ export function WorkspaceTabStrip({
                       setMenu({ tabId: tab.id, x: rect.left, y: rect.bottom })
                     } else handleTabKeyDown(event, index)
                   }}
-                  className="flex h-7 min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className="flex h-7 min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-[var(--radius-control)] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   {tab.kind === 'file' && tab.path ? <WorkspaceFileIcon path={tab.path} /> : (
                     <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
                   )}
+                  {tab.kind === 'browser' && browserAgentStates[tab.browserTabId]?.controlState && browserAgentStates[tab.browserTabId]?.controlState !== 'idle' ? (
+                    <StatusDot
+                      tone={browserAgentStates[tab.browserTabId]?.controlState === 'takeover' ? 'warning' : 'info'}
+                      size="sm"
+                      pulse
+                      label={browserAgentStates[tab.browserTabId]?.controlState === 'takeover'
+                        ? t('browserUse.takeoverCard.title')
+                        : t('browserUse.overlay.controlling')}
+                    />
+                  ) : null}
                   {/*
                     A preview tab is quieter and nothing else: it never takes the
                     active weight. A badge or a dotted border would make the
@@ -330,7 +345,7 @@ export function WorkspaceTabStrip({
                 </button>
                 <span className={`shrink-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
                   <IconButton
-                    icon={<X size={12} strokeWidth={2} />}
+                    icon={<X size={12} strokeWidth={1.75} />}
                     label={t('workspace.tabClose', { title })}
                     size="2xs"
                     tone="muted"
@@ -398,7 +413,7 @@ export function WorkspaceTabStrip({
           aria-label={t('workspace.tabMenu')}
           data-testid="workspace-tab-menu"
           onKeyDown={handleMenuKeyDown}
-          className="fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
+          className="dropdown-glass popover-motion fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-xl)] p-[5px] [-webkit-app-region:no-drag]"
           style={menuPosition.style}
         >
           {menuRuntime ? <>
@@ -454,7 +469,7 @@ function WorkspaceTabMenuItem({
       role="menuitem"
       disabled={disabled}
       onClick={onSelect}
-      className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+      className="flex h-8 w-full items-center rounded-[var(--radius-control)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
     >
       {label}
     </button>

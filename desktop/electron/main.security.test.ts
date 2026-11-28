@@ -47,6 +47,24 @@ describe('Electron preview security boundary', () => {
     expect(mainSource).toContain('resolvePetServerAccess')
   })
 
+  it('isolates the usage widget preload and session from the desktop master access token', () => {
+    const widgetPreloadSource = readFileSync(
+      path.join(desktopRoot, 'electron', 'usage-widget-preload.ts'),
+      'utf8',
+    )
+    const widgetControllerSource = mainSource.slice(
+      mainSource.indexOf('function getUsageWidgetWindowController()'),
+      mainSource.indexOf('function getWorkspaceBrowserService()'),
+    )
+
+    expect(widgetPreloadSource).toContain('runtimeGetUsageWidgetAccessToken')
+    expect(widgetPreloadSource).not.toContain('runtimeGetLocalAccessToken')
+    expect(widgetControllerSource).toContain('usageWidgetPreloadPath()')
+    expect(widgetControllerSource).toContain('configurePreviewSessionPermissions')
+    expect(widgetControllerSource).toContain('resolveUsageWidgetServerAccess')
+    expect(widgetControllerSource).not.toContain('resolveMainRendererServerAccess')
+  })
+
   it('uses a fresh in-memory session partition for every remote preview', () => {
     const firstPartition = createPreviewSessionPartition()
     const secondPartition = createPreviewSessionPartition()
@@ -113,6 +131,8 @@ describe('Electron preview security boundary', () => {
     ['path attachment', 'GET', 'image', 'http://127.0.0.1:49321/api/filesystem/file?path=%2Ftmp%2Fimage.png'],
     ['workspace image', 'GET', 'image', 'http://127.0.0.1:49321/preview-fs/session/image.png'],
     ['workspace video range', 'GET', 'media', 'http://127.0.0.1:49321/preview-fs/session/video.mp4'],
+    ['workspace audio range', 'GET', 'media', 'http://127.0.0.1:49321/preview-fs/session/plane-crash.wav'],
+    ['local audio file', 'GET', 'media', 'http://127.0.0.1:49321/api/filesystem/file?path=%2Ftmp%2Fplane-crash.wav'],
   ])('allows the main renderer %s request', (_name, method, resourceType, url) => {
     expect(isAllowlistedMainRendererMediaRequest({
       method,
@@ -312,5 +332,18 @@ describe('Electron preview security boundary', () => {
       requestHeaders: { Accept: '*/*' },
     }, remoteCallback)
     expect(remoteCallback).toHaveBeenCalledWith({ requestHeaders: { Accept: '*/*' } })
+  })
+
+  it('restricts browser-use IPC to the main desktop frame and never exposes the bridge token to renderers', () => {
+    expect(mainSource).toContain("channel.startsWith('desktop:browser-use:')")
+    expect(mainSource).toContain('event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame')
+    // Bridge initialization must stay outside getWorkspaceBrowserService() and never attach tokens to the guest partition.
+    expect(workspaceBrowserServiceSource).not.toContain('ElectronBrowserBridge')
+    expect(workspaceBrowserServiceSource).not.toContain('getBrowserBridgeToken')
+    const preloadSource = readFileSync(path.join(desktopRoot, 'electron', 'preload.ts'), 'utf8')
+    const channelsSource = readFileSync(path.join(desktopRoot, 'electron', 'ipc', 'channels.ts'), 'utf8')
+    expect(preloadSource).not.toContain('browserBridgeToken')
+    expect(channelsSource).not.toContain('browserBridgeToken')
+    expect(channelsSource).not.toContain('BrowserBridgeToken')
   })
 })

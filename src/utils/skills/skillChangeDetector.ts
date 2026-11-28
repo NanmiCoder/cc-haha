@@ -1,5 +1,6 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import { getComputerUseConfigPath } from '../computerUse/preauthorizedConfig.js'
+import { getBrowserUseConfigPath } from '../../services/browserUse/config.js'
 import * as platformPath from 'path'
 import { getAdditionalDirectoriesForClaudeMd } from '../../bootstrap/state.js'
 import {
@@ -213,6 +214,17 @@ export async function getWatchablePaths(): Promise<string[]> {
     paths.push(computerUseConfigPath)
   } catch {
     // Never toggled the setting; nothing to watch yet.
+  }
+
+  // Browser Use config: same cross-process invalidation signal so toggling
+  // Browser Use in Settings or Composer `+` refreshes the `browser-use` skill
+  // without restarting the CLI.
+  const browserUseConfigPath = getBrowserUseConfigPath()
+  try {
+    await fs.stat(browserUseConfigPath)
+    paths.push(browserUseConfigPath)
+  } catch {
+    // Never toggled Browser Use yet.
   }
 
   // Project skills directory (.claude/skills)

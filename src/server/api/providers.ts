@@ -28,6 +28,7 @@ import { ProviderService } from '../services/providerService.js'
 import { openMagpieApp } from '../services/magpieGateway.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
+  ApiFormatSchema,
   CreateProviderSchema,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   ModelContextWindowsSchema,
@@ -45,6 +46,7 @@ import {
   toCcSwitchScanResult,
 } from '../services/ccSwitchImport.js'
 import { fetchProviderModels } from '../services/providerModelCatalog.js'
+import { ANTIGRAVITY_PROVIDER_ID, discoverAntigravity, getAntigravityStatus } from '../services/antigravityAcp.js'
 
 const providerService = new ProviderService()
 
@@ -54,13 +56,26 @@ const CcSwitchImportSchema = z.object({
 
 const FetchProviderModelsSchema = z.object({
   baseUrl: z.string().min(1),
-  apiKey: z.string().min(1),
+  apiKey: z.string(),
+  apiFormat: ApiFormatSchema.optional(),
   isFullUrl: z.boolean().optional(),
   proxy: ProviderProxyConfigSchema.optional(),
   // `modelsUrl` is deliberately NOT accepted over HTTP. The service still
   // supports the override for internal callers, but exposing a free-form
   // endpoint on an authenticated route only widens the request surface — no
   // client sends it.
+}).superRefine((data, ctx) => {
+  if (
+    data.apiKey.length === 0 &&
+    data.apiFormat !== 'google_vertex' &&
+    data.apiFormat !== 'bedrock_converse'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['apiKey'],
+      message: 'API key is required',
+    })
+  }
 })
 
 const OfficialProviderModelsUpdateSchema = z.object({
@@ -116,6 +131,12 @@ export async function handleProvidersApi(
       throw ApiError.notFound(`Unknown Magpie route: ${action}`)
     }
 
+    if (id === ANTIGRAVITY_PROVIDER_ID) {
+      if (action !== 'discover' || segments.length !== 4) throw ApiError.notFound('Unknown Antigravity route')
+      if (req.method !== 'POST') throw methodNotAllowed(req.method)
+      return Response.json({ antigravity: await discoverAntigravity() })
+    }
+
     // GET /api/providers/presets
     // Carries retired presets too (flagged `deprecated`), so a consumer resolving a saved
     // provider's presetId still finds it. Filter on `deprecated` to build add-provider choices.
@@ -125,7 +146,18 @@ export async function handleProvidersApi(
 
     // GET /api/providers/auth-status[?providerId=<id>]
     if (id === 'auth-status' && req.method === 'GET') {
-      const status = await providerService.checkAuthStatus(readAuthStatusProviderId(url))
+      const providerId = readAuthStatusProviderId(url)
+      if (providerId === ANTIGRAVITY_PROVIDER_ID) {
+        const { status } = getAntigravityStatus()
+        return Response.json({
+          hasAuth: status === 'ready',
+          source: 'none',
+          activeProvider: 'Antigravity',
+          antigravityStatus: status,
+          localAgentStatus: status,
+        })
+      }
+      const status = await providerService.checkAuthStatus(providerId)
       return Response.json(status)
     }
 
@@ -166,7 +198,13 @@ export async function handleProvidersApi(
         // picker shows its alias rows like one, from the mapping the user saved.
         const deepSeekAccountModels =
           await providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID)
-        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels })
+        return Response.json({
+          providers,
+          activeId,
+          providerOrder,
+          deepSeekAccountModels,
+          antigravity: getAntigravityStatus(),
+        })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)

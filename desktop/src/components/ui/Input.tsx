@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from 'react'
 
 import { cx } from '@/lib/cx'
 
@@ -13,6 +13,10 @@ export type InputProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> & {
   error?: string
   required?: boolean
   size?: FieldSize
+  /** Monospace face with tabular numerals for ports, tokens, paths, and IDs. */
+  mono?: boolean
+  /** Tabular numerals without switching to monospace. */
+  tabularNums?: boolean
   containerClassName?: string
 }
 
@@ -28,17 +32,18 @@ export const FIELD_SIZE_CLASSES: Record<FieldSize, string> = {
  * sitting next to each other actually match.
  */
 export const FIELD_BASE_CLASSES = [
-  'w-full rounded-[var(--radius-md)] border outline-none',
+  'w-full rounded-[var(--radius-card-inner)] border outline-none bg-clip-padding',
   'bg-[var(--color-surface)] text-[var(--color-text-primary)]',
   'placeholder:text-[var(--color-text-tertiary)]',
-  'transition-colors duration-150',
-  'disabled:cursor-not-allowed disabled:opacity-60 disabled:bg-[var(--color-surface-container)]',
+  'shadow-[var(--bevel-surface-rest)]',
+  'transition-[border-color,box-shadow,background-color] duration-150 ease-out',
+  'disabled:cursor-not-allowed disabled:opacity-60 disabled:bg-[var(--color-surface-container)] disabled:shadow-none',
 ].join(' ')
 
 export function fieldStateClasses(invalid: boolean): string {
   return invalid
-    ? 'border-[var(--color-error)] focus:shadow-[var(--shadow-error-ring)]'
-    : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'
+    ? 'border-[var(--color-error)] focus:border-[var(--color-error)] focus:shadow-[var(--shadow-error-ring)]'
+    : 'border-[var(--color-border)] enabled:hover:border-[var(--color-outline)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'
 }
 
 /**
@@ -53,18 +58,20 @@ export function fieldStateClasses(invalid: boolean): string {
  * Across the 76 native inputs this replaces, `aria-invalid` appeared once,
  * `disabled:` styling never, and `focus-visible:` never.
  */
-export function Input({
+export const Input = forwardRef<HTMLInputElement, InputProps>(function Input({
   label,
   hint,
   error,
   required,
   size = 'lg',
+  mono = false,
+  tabularNums = false,
   className,
   containerClassName,
   id,
   disabled,
   ...props
-}: InputProps) {
+}, ref) {
   const generatedId = useId()
   const inputId = id ?? generatedId
   const hintId = `${inputId}-hint`
@@ -80,12 +87,20 @@ export function Input({
         </label>
       )}
       <input
+        ref={ref}
         id={inputId}
         disabled={disabled}
         required={required}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={cx(FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES[size], fieldStateClasses(!!error), className)}
+        className={cx(
+          FIELD_BASE_CLASSES,
+          FIELD_SIZE_CLASSES[size],
+          fieldStateClasses(!!error),
+          mono && 'font-mono tabular-nums',
+          !mono && tabularNums && 'tabular-nums',
+          className,
+        )}
         {...props}
       />
       {error
@@ -95,4 +110,4 @@ export function Input({
           : null}
     </div>
   )
-}
+})

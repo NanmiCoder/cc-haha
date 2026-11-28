@@ -49,6 +49,14 @@ const STATE_TONE: Record<TeamPlanRecord['state'], Tone> = {
   interrupted: 'neutral',
 }
 
+const STATE_RING: Partial<Record<TeamPlanRecord['state'], string>> = {
+  draft: 'v6c-ring-running',
+  review_pending: 'v6c-ring-waiting',
+  launching: 'v6c-ring-running',
+  running: 'v6c-ring-running',
+  launch_failed: 'v6c-ring-error',
+}
+
 const CHEVRON = <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
 
 /** Durable plan review is independent of a running chat turn or permission request. */
@@ -140,15 +148,16 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   }[plan.state]
 
   const stateTone = STATE_TONE[plan.state]
+  const stateRing = STATE_RING[plan.state]
 
   return (
-    <section aria-label={t('teamPlan.title')} className="@container min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+    <section aria-label={t('teamPlan.title')} className={`@container v6c-glass-card min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)]${stateRing ? ` ${stateRing}` : ''}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <UsersRound size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         <div className="min-w-0 flex-1 basis-40">
           <p className="text-[11px] text-[var(--color-text-tertiary)]">{t('teamPlan.title')}</p>
           <h3 className="mt-0.5 truncate text-[13px] font-medium text-[var(--color-text-primary)]" title={plan.teamName}>{plan.teamName}</h3>
-          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-secondary)]" role="status">
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs tabular-nums text-[var(--color-text-secondary)]" role="status">
             <StatusDot tone={stateTone} pulse={stateTone === 'warning'} />
             <span className="min-w-0 [overflow-wrap:anywhere]">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</span>
           </p>
@@ -189,10 +198,10 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
             <Badge tone={stateTone} size="sm">{stateLabel}</Badge>
           </div>
           {/* A member that crashed while starting reports its own output, line by line. */}
-          {plan.launch?.error && <p role="alert" data-testid="team-plan-launch-error" className="mb-4 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
+          {plan.launch?.error && <p role="alert" data-testid="team-plan-launch-error" className="scrollbar-autohide mb-4 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
           {entry.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{entry.error}</p>}
           {plan.state === 'review_pending' && invalidNames.length > 0 && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{t('teamPlan.invalidMemberNames', { names: invalidNames.join(', ') })}</p>}
-          {entry.conflict && <div role="alert" className="mb-4 space-y-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] p-3 text-[var(--color-on-warning-container)]">
+          {entry.conflict && <div role="alert" className="v6c-ring-waiting mb-4 space-y-2 rounded-[var(--radius-card-inner)] bg-[var(--color-warning-container)] p-3 text-[var(--color-on-warning-container)]">
             <p>{t('teamPlan.conflict')}</p>
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" onClick={() => discard(sessionId)}>{t('teamPlan.reload')}</Button>
@@ -202,13 +211,13 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
           <div className="grid min-w-0 gap-6 @min-[760px]:grid-cols-[244px_minmax(0,1fr)] @min-[760px]:gap-8">
             <aside className="min-w-0 @min-[760px]:border-r @min-[760px]:border-[var(--color-border-separator)] @min-[760px]:pr-6">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.roster')} <span className="ml-1 font-mono text-[var(--color-text-tertiary)]">{members.length}</span></h4>
+                <h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.roster')} <span className="ml-1 font-mono tabular-nums text-[var(--color-text-tertiary)]">{members.length}</span></h4>
                 {plan.state === 'review_pending' && <Checkbox size="sm" label={t('teamPlan.selectAll')} labelHidden checked={members.length > 0 && members.every(member => selected.includes(member.id))} indeterminate={selected.length > 0 && !members.every(member => selected.includes(member.id))} disabled={!editable} onChange={event => setSelected(event.target.checked ? members.map(member => member.id) : [])} />}
               </div>
               <nav aria-label={t('teamPlan.roster')} className="grid min-w-0 gap-1.5">
-                {members.map((member, index) => <div key={member.id} className={`team-plan-member flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] p-2 ${member.id === activeMember?.id ? 'bg-[var(--color-surface-selected)]' : ''}`}>
+                {members.map((member, index) => <div key={member.id} className={`team-plan-member flex min-w-0 items-center gap-2 rounded-[var(--radius-card-inner)] p-2 ${member.id === activeMember?.id ? 'v6c-row-highlight' : ''}`}>
                   {plan.state === 'review_pending' && <Checkbox label={member.name} labelHidden size="sm" disabled={!editable} checked={selected.includes(member.id)} onChange={event => setSelected(ids => event.target.checked ? [...ids, member.id] : ids.filter(id => id !== member.id))} />}
-                  <button type="button" aria-label={t('teamPlan.configureMember', { name: member.name })} aria-current={member.id === activeMember?.id ? 'true' : undefined} onClick={() => setActiveMemberId(member.id)} className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-sm)] py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
+                  <button type="button" aria-label={t('teamPlan.configureMember', { name: member.name })} aria-current={member.id === activeMember?.id ? 'true' : undefined} onClick={() => setActiveMemberId(member.id)} className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-control)] py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
                     <span aria-hidden="true" className={`mt-0.5 font-mono text-[11px] ${member.id === activeMember?.id ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'}`}>{String(index + 1).padStart(2, '0')}</span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{member.name}</span>
@@ -221,7 +230,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">{t('teamPlan.leader')}: {runtimeName(leaderRuntime)}</p>
               </div>
               {plan.state === 'review_pending' && <div className="mt-4 space-y-3">
-                {selected.length > 0 && <div className="team-plan-batch space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
+                {selected.length > 0 && <div className="team-plan-batch v6c-glass-card space-y-3 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] p-3">
                   <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('teamPlan.selectedCount', { count: selected.length })}</p>
                   <ModelSelector appearance="field" fluid effortEditable ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} onEffortChange={batchEffort} disabled={!editable} />
                   <Button block size="base" variant="ghost" disabled={!editable} onClick={() => batchRuntime(selection(leaderRuntime))}>{t('teamPlan.followLeader')}</Button>
@@ -262,7 +271,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 </details>
               </section>}
               <section className="mt-6" aria-label={t('teamPlan.allTasks')}>
-                <div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.allTasks')}</h4><span className="font-mono text-xs text-[var(--color-text-tertiary)]">{tasks.length}</span></div>
+                <div className="mb-2 flex items-center justify-between"><h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.allTasks')}</h4><span className="font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">{tasks.length}</span></div>
                 {tasks.length === 0 && <p className="py-5 text-sm text-[var(--color-text-tertiary)]">{t('teamPlan.noTasks')}</p>}
                 <div className="divide-y divide-[var(--color-border-separator)]">
                   {tasks.map((task, index) => {

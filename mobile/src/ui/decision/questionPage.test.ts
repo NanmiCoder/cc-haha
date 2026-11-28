@@ -110,4 +110,16 @@ describe('question steps', () => {
     expect(questionPromptLabel(1)).toBe('有 1 个问题等你回答')
     expect(questionPromptLabel(3)).toBe('有 3 个问题等你回答')
   })
+
+  test('allowFreeText=false disables discuss and ignores custom drafts', () => {
+    const one = questions.slice(0, 1)
+    const customFlow = changeQuestionFlow(initialQuestionFlow(), one, { type: 'custom', text: '手写' })
+    expect(questionPageModel(customFlow, one, { ready: true, sent: false, allowFreeText: false })).toMatchObject({
+      allowFreeText: false,
+      customActive: false,
+      answered: false,
+      primaryEnabled: false,
+      discussEnabled: false,
+    })
+  })
 })

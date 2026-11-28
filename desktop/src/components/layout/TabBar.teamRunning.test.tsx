@@ -181,4 +181,68 @@ describe('TabBar running dot for Agent Teams (#1524)', () => {
     const leadTab = useTabStore.getState().tabs.find((tab) => tab.sessionId === leadId)!
     expect(getRunningSessionIds([leadTab])).toEqual([leadId])
   })
+
+  it('tracks Antigravity Swarm running and paused states without a Claude team plan', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
+    const { getRunningSessionIds } = await import('../../stores/tabClose')
+    const leadId = 'agy-lead-session'
+    const otherId = 'other-session'
+    const swarmName = 'agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a'
+
+    const swarmTimeline = (activity: TeamMember['activity'], status: TeamMember['status']): TeamWorkbenchTimeline => ({
+      teamName: swarmName,
+      loading: false,
+      error: null,
+      snapshots: [{
+        version: 'v1',
+        generatedAt: '2026-11-27T00:00:00.000Z',
+        team: {
+          name: swarmName,
+          leadAgentId: `coordinator@${swarmName}`,
+          leadSessionId: leadId,
+          createdAt: '2026-11-27T00:00:00.000Z',
+          members: [
+            { agentId: `coordinator@${swarmName}`, name: 'coordinator', role: 'coordinator', status: 'idle', activity: 'idle' },
+            { agentId: `worker@${swarmName}`, name: 'worker', role: 'worker', status, activity },
+          ],
+        },
+        tasks: [],
+        messages: [],
+      }],
+    })
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: leadId, title: 'Swarm Lead', type: 'session', status: 'idle' },
+        { sessionId: otherId, title: 'Other', type: 'session', status: 'idle' },
+      ],
+      activeTabId: otherId,
+    })
+    useChatStore.setState({
+      sessions: { [leadId]: makeChatSession(), [otherId]: makeChatSession() },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useTeamStore.setState({
+      workbenchesBySession: { [leadId]: swarmTimeline('active', 'running') },
+    } as Partial<ReturnType<typeof useTeamStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+    expect(screen.getByRole('status', { name: 'Session running' })).toBeInTheDocument()
+    const leadTab = useTabStore.getState().tabs.find((tab) => tab.sessionId === leadId)!
+    expect(getRunningSessionIds([leadTab])).toEqual([leadId])
+
+    // Once paused (worker activity becomes 'stopped'), both running dot and close guard clear.
+    await act(async () => {
+      useTeamStore.setState({
+        workbenchesBySession: { [leadId]: swarmTimeline('stopped', 'idle') },
+      } as Partial<ReturnType<typeof useTeamStore.getState>>)
+    })
+    expect(screen.queryByRole('status', { name: 'Session running' })).not.toBeInTheDocument()
+    expect(getRunningSessionIds([leadTab])).toEqual([])
+  })
 })

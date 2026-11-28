@@ -22,14 +22,14 @@ export const ComposerSuggestionRow = forwardRef<HTMLDivElement, Props>(function 
 }, ref) {
   return <div ref={ref} id={id} role="option" tabIndex={-1} aria-selected={selected}
     aria-labelledby={`${id}-label`} aria-describedby={description || details ? `${id}-description` : undefined}
-    className={`flex ${touch ? 'min-h-11' : 'min-h-8'} min-w-0 cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${selected ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'} ${className}`} {...rest}>
+    className={`flex ${touch ? 'min-h-11 py-1.5' : 'min-h-7 py-1'} min-w-0 cursor-default items-center gap-2 rounded-[var(--radius-control)] px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${selected ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'} ${className}`} {...rest}>
     {icon}
-    {details ? <span className="min-w-0 flex-1 space-y-0.5">
-      <span id={`${id}-label`} title={label} className="block truncate text-[13px] font-medium text-[var(--color-text-primary)]">{label}</span>
-      <span id={`${id}-description`} className="flex min-w-0 items-center gap-2 text-[11px] leading-4 text-[var(--color-text-tertiary)]">{details}</span>
+    {details ? <span className="min-w-0 flex-1 space-y-px">
+      <span id={`${id}-label`} title={label} className="block truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">{label}</span>
+      <span id={`${id}-description`} className="flex min-w-0 items-center gap-2 text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{details}</span>
     </span> : <>
-    <span id={`${id}-label`} className={`${description ? 'max-w-[45%] shrink-0' : 'min-w-0 flex-1'} truncate text-[13px] font-medium text-[var(--color-text-primary)]`}>{label}</span>
-    {description ? <span id={`${id}-description`} className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-tertiary)]">{description}</span> : null}
+    <span id={`${id}-label`} className={`${description ? 'max-w-[45%] shrink-0' : 'min-w-0 flex-1'} truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]`}>{label}</span>
+    {description ? <span id={`${id}-description`} className="min-w-0 flex-1 truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{description}</span> : null}
     </>}
     {trailing}
   </div>

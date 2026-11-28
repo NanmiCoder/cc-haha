@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setBaseUrl } from './client'
-import { sessionsApi } from './sessions'
+import { sessionsApi, type SessionHistoryPage } from './sessions'
+import { mapHistoryMessagesToUiMessages } from '@/stores/chatStore'
+import type { AgentTaskNotification } from '@/types/chat'
+import type { MessageEntry } from '@/types/session'
+import fullHistoryReplayPages from './__fixtures__/full-history-replay-pages.json'
 
 describe('sessionsApi', () => {
   afterEach(() => {
@@ -97,6 +101,14 @@ describe('sessionsApi', () => {
 
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/session-1/inspection?statusOnly=1')
+  })
+
+  it('requests only the context summary without calculating the breakdown', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', {
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await sessionsApi.getInspection('session-1', { includeContext: true, contextOnly: true, summaryOnly: true })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/session-1/inspection?includeContext=1&contextOnly=1&summaryOnly=1')
   })
 
   it.each([
@@ -213,6 +225,84 @@ describe('sessionsApi', () => {
     }))
     await sessionsApi.getGitInfo('session-1')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts a fresh Git request after a directory change and keeps it when the old request settles', async () => {
+    const resolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+    const old = sessionsApi.getGitInfo('switching-session')
+    sessionsApi.invalidateGitInfo('switching-session')
+    const fresh = sessionsApi.getGitInfo('switching-session')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolvers[0]!(new Response(JSON.stringify({ workDir: '/repo', worktree: null })))
+    await old
+    const concurrent = sessionsApi.getGitInfo('switching-session')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolvers[1]!(new Response(JSON.stringify({ workDir: '/repo/worktree', worktree: { enabled: true } })))
+    expect(await fresh).toEqual(await concurrent)
+    expect((await fresh).workDir).toBe('/repo/worktree')
+  })
+
+  it('notifies subscribed Git info and invalidation listeners and suppresses invalidated stale responses', async () => {
+    const resolvers: Array<(response: Response) => void> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+
+    const seen: string[] = []
+    let invalidations = 0
+    const unsubscribe = sessionsApi.subscribeGitInfo(
+      'sub-session',
+      (info) => {
+        seen.push(info.branch ?? 'detached')
+      },
+      {
+        onInvalidate: () => {
+          invalidations += 1
+        },
+      },
+    )
+
+    try {
+      const stale = sessionsApi.getGitInfo('sub-session')
+      sessionsApi.invalidateGitInfo('sub-session')
+      expect(invalidations).toBe(1)
+      const fresh = sessionsApi.getGitInfo('sub-session')
+
+      resolvers[0]!(new Response(JSON.stringify({
+        branch: 'master',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await stale
+      expect(seen).toEqual([])
+
+      resolvers[1]!(new Response(JSON.stringify({
+        branch: 'dev_xxxx',
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      })))
+      await fresh
+      expect(seen).toEqual(['dev_xxxx'])
+    } finally {
+      unsubscribe()
+    }
+
+    sessionsApi.invalidateGitInfo('sub-session')
+    expect(invalidations).toBe(1)
+
+    const afterUnsubscribe = sessionsApi.getGitInfo('sub-session')
+    resolvers[2]!(new Response(JSON.stringify({
+      branch: 'after-unsubscribe',
+      repoName: 'repo',
+      workDir: '/repo',
+      changedFiles: 0,
+      worktree: null,
+    })))
+    await afterUnsubscribe
+    expect(seen).toEqual(['dev_xxxx'])
   })
 
   it('fetches a single trace call from the call detail endpoint', async () => {
@@ -409,6 +499,105 @@ describe('full session history assembly', () => {
     ])
   })
 
+  // Captured from the real loopback reader for a synthetic 35,410,048-byte
+  // transcript with 60 records / 58 UUIDs. Only opaque cursors and sourceVersion
+  // are normalized; the five response slices reproduce the full-budget seam.
+  it('projects replayed thinking and tool records once after joining real history pages (#1876)', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    for (const captured of fullHistoryReplayPages) fetchMock.mockResolvedValueOnce(response(captured))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(result.messages).toHaveLength(58)
+    const ui = mapHistoryMessagesToUiMessages(result.messages)
+    expect(new Set(ui.map(message => message.id)).size).toBe(ui.length)
+    expect(ui.filter(message => message.type === 'thinking')).toHaveLength(1)
+    expect(ui.filter(message => message.type === 'tool_use')).toHaveLength(1)
+    expect(ui.filter(message => message.type === 'tool_result')).toHaveLength(1)
+    expect(mapHistoryMessagesToUiMessages(result.messages).map(message => message.id)).toEqual(ui.map(message => message.id))
+    expect(result.page).toMatchObject({ nextCursor: null, hasMore: false, historyComplete: true })
+  })
+
+  it('keeps the last replay record in chronological position with its parent tool metadata', async () => {
+    const oldCall: MessageEntry = {
+      id: 'call', type: 'assistant', parentToolUseId: 'old-parent',
+      content: [{ type: 'tool_use', id: 'shared-tool', name: 'Read', input: {} }],
+      timestamp: '2026-11-01T00:00:00Z',
+    }
+    const newCall: MessageEntry = {
+      ...oldCall, parentToolUseId: 'new-parent',
+      content: [{ type: 'tool_use', id: 'shared-tool', name: 'Read', input: { file_path: '/fixture/new.txt' } }],
+    }
+    const prompt: MessageEntry = { id: 'prompt', type: 'user', content: 'Same body', timestamp: oldCall.timestamp }
+    const answer: MessageEntry = { id: 'answer', type: 'assistant', content: 'Same body', timestamp: oldCall.timestamp }
+    const older: SessionHistoryPage = { ...page('unused', null), messages: [oldCall, prompt], taskNotifications: [] }
+    const newer: SessionHistoryPage = { ...page('unused', 'older'), messages: [answer, newCall], taskNotifications: [] }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response(newer)).mockResolvedValueOnce(response(older))
+
+    expect((await sessionsApi.getFullHistory('fixture')).messages).toEqual([prompt, answer, newCall])
+  })
+
+  it('deduplicates three-page message replays and cross-page task notifications by owner and tool identity', async () => {
+    const timestamp = '2026-11-01T00:00:00Z'
+    const replayedOldest: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v1', parentToolUseId: 'p1', timestamp }
+    const replayedMiddle: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v2', parentToolUseId: 'p2', timestamp }
+    const replayedNewest: MessageEntry = { id: 'replayed', type: 'assistant', content: 'v3', parentToolUseId: 'p3', timestamp }
+    const oldestAnchor: MessageEntry = { id: 'anchor-1', type: 'user', content: 'first', timestamp }
+    const middleAnchor: MessageEntry = { id: 'anchor-2', type: 'user', content: 'second', timestamp }
+    const newestAnchor: MessageEntry = { id: 'anchor-3', type: 'user', content: 'third', timestamp }
+
+    const rootOld: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'stopped', summary: 'queued' }
+    const rootMid: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'failed', summary: 'retrying' }
+    const rootNew: AgentTaskNotification = { taskId: 'task-root', toolUseId: 'shared-tool', status: 'completed', summary: 'root-final' }
+    const agentAOld: AgentTaskNotification = { taskId: 'task-a', toolUseId: 'shared-tool', ownerAgentId: 'agent-a', status: 'stopped', summary: 'a-v1' }
+    const agentANew: AgentTaskNotification = { taskId: 'task-a', toolUseId: 'shared-tool', ownerAgentId: 'agent-a', status: 'completed', summary: 'a-final' }
+    const agentBOnly: AgentTaskNotification = { taskId: 'task-b', toolUseId: 'shared-tool', ownerAgentId: 'agent-b', status: 'completed', summary: 'b-final' }
+    const blankNotice: AgentTaskNotification = { taskId: 'legacy-blank', toolUseId: '  ', status: 'completed' }
+
+    const oldest: SessionHistoryPage = {
+      ...page('unused', null),
+      messages: [replayedOldest, oldestAnchor],
+      taskNotifications: [rootOld, agentAOld, blankNotice],
+    }
+    const middle: SessionHistoryPage = {
+      ...page('unused', 'oldest'),
+      messages: [replayedMiddle, middleAnchor],
+      taskNotifications: [rootMid, agentBOnly],
+    }
+    const newest: SessionHistoryPage = {
+      ...page('unused', 'middle'),
+      messages: [newestAnchor, replayedNewest],
+      taskNotifications: [agentANew, rootNew],
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(newest))
+      .mockResolvedValueOnce(response(middle))
+      .mockResolvedValueOnce(response(oldest))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    expect(result.messages).toEqual([oldestAnchor, middleAnchor, newestAnchor, replayedNewest])
+    expect(result.taskNotifications).toEqual([blankNotice, agentBOnly, agentANew, rootNew])
+  })
+
+  it('preserves equal bodies, shared tool ids, and records without a usable message identity', async () => {
+    const message = (id: unknown, type: MessageEntry['type'] = 'user'): MessageEntry => ({
+      id: id as string, type,
+      content: type === 'assistant'
+        ? [{ type: 'tool_use', id: 'same-tool', name: 'Read', input: {} }]
+        : 'Same body',
+      timestamp: '2026-11-01T00:00:00Z',
+    })
+    const olderMessages = [message('first'), message('first-call', 'assistant'), message(undefined), message(''), message('  ')]
+    const newerMessages = [message('second'), message('second-call', 'assistant'), message(undefined), message(''), message('  ')]
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({ ...page('unused', 'older'), messages: newerMessages }))
+      .mockResolvedValueOnce(response({ ...page('unused', null), messages: olderMessages }))
+
+    const result = await sessionsApi.getFullHistory('fixture')
+    // JSON transport omits an absent id; keep those weak records independently.
+    expect(result.messages).toEqual(JSON.parse(JSON.stringify([...olderMessages, ...newerMessages])))
+  })
+
   it('keeps the single-request fast path', async () => {
     const original = page('all', null, { historyComplete: true })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response(original))
@@ -476,5 +665,14 @@ describe('full session history assembly', () => {
     })
     await expect(sessionsApi.getFullHistory('fixture', { signal: controller.signal })).rejects.toThrow()
     expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('posts immediate session stop to /api/sessions/:id/chat/stop', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response({ ok: true }))
+    await expect(sessionsApi.stopChat('session-1917')).resolves.toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/sessions/session-1917/chat/stop'),
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 })

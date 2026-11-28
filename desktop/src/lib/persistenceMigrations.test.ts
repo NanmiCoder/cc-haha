@@ -5,21 +5,32 @@ import {
   runDesktopPersistenceMigrations,
 } from './persistenceMigrations'
 import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
+import {
+  hydrateWorkspace,
+  readWorkspaceStorage,
+  serializeWorkspace,
+  writeWorkspaceStorage,
+} from './workspace/persistence'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  ANTIGRAVITY_ENABLED_STORAGE_KEY,
+  ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+  ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+} from './antigravityPreferences'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
     window.localStorage.clear()
   })
 
-  test('upgrades a frozen schema-6 install with prevent sleep off and preserves existing preferences', () => {
+  test('upgrades a frozen schema-6 install with prevent sleep off and migrates legacy themes', () => {
     localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '6')
     localStorage.setItem('cc-haha-theme', 'ink-blue')
     localStorage.setItem('unrelated-user-key', 'keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).toContain(PREVENT_SLEEP_STORAGE_KEY)
     expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
-    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(PREVENT_SLEEP_STORAGE_KEY)
     localStorage.setItem(PREVENT_SLEEP_STORAGE_KEY, '1')
@@ -30,7 +41,7 @@ describe('desktop persistence migrations', () => {
     expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
   })
 
-  test('upgrades a frozen schema-4 install with reading defaults without changing zoom or theme', () => {
+  test('upgrades a frozen schema-4 install with reading defaults without changing zoom and migrates legacy theme', () => {
     localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '4')
     localStorage.setItem('cc-haha-app-zoom', '1.25')
     localStorage.setItem('cc-haha-theme', 'ink-blue')
@@ -38,7 +49,7 @@ describe('desktop persistence migrations', () => {
     runDesktopPersistenceMigrations()
     expect(JSON.parse(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)!)).toEqual({ version: 1, ...DEFAULT_CHAT_APPEARANCE })
     expect(localStorage.getItem('cc-haha-app-zoom')).toBe('1.25')
-    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
     expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(CHAT_APPEARANCE_STORAGE_KEY)
   })
@@ -239,31 +250,42 @@ describe('desktop persistence migrations', () => {
     expect(window.localStorage.getItem('cc-haha-theme')).toBe('white')
   })
 
-  test('renames the retired light theme to warm-classic instead of resetting it', () => {
-    // `light` was the warm workspace, labelled 经典暖色 in the picker. Falling
-    // through to the enum check would drop it and silently reset those
-    // installs to pure white, which reads as the app forgetting the setting.
-    window.localStorage.setItem('cc-haha-theme', 'light')
+  test('forward-migrates all legacy light themes to white instead of resetting them', () => {
+    for (const legacyLight of ['light', 'paper', 'warm-classic', 'celadon']) {
+      window.localStorage.setItem('cc-haha-theme', legacyLight)
 
-    const report = runDesktopPersistenceMigrations()
+      const report = runDesktopPersistenceMigrations()
 
-    expect(report.migratedKeys).toContain('cc-haha-theme')
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('warm-classic')
+      expect(report.migratedKeys, legacyLight).toContain('cc-haha-theme')
+      expect(window.localStorage.getItem('cc-haha-theme'), legacyLight).toBe('white')
+    }
   })
 
-  test('applies the same rename to the light half of follow-the-system', () => {
-    // The preference holds a theme name too, so a rename that only reached the
-    // applied theme would silently reset which palette daytime returns to.
+  test('forward-migrates all legacy dark themes to dark instead of resetting them', () => {
+    for (const legacyDark of ['ink-blue', 'neutral-dark']) {
+      window.localStorage.setItem('cc-haha-theme', legacyDark)
+
+      const report = runDesktopPersistenceMigrations()
+
+      expect(report.migratedKeys, legacyDark).toContain('cc-haha-theme')
+      expect(window.localStorage.getItem('cc-haha-theme'), legacyDark).toBe('dark')
+    }
+  })
+
+  test('applies legacy theme migrations to the light and dark halves of follow-the-system', () => {
     window.localStorage.setItem('cc-haha-light-theme', 'light')
+    window.localStorage.setItem('cc-haha-dark-theme', 'ink-blue')
 
     const report = runDesktopPersistenceMigrations()
 
     expect(report.migratedKeys).toContain('cc-haha-light-theme')
-    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('warm-classic')
+    expect(report.migratedKeys).toContain('cc-haha-dark-theme')
+    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
   })
 
-  test('preserves every palette introduced by the redesign', () => {
-    for (const theme of ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue']) {
+  test('preserves both canonical Direction C palettes', () => {
+    for (const theme of ['white', 'dark']) {
       window.localStorage.setItem('cc-haha-theme', theme)
 
       const report = runDesktopPersistenceMigrations()
@@ -271,6 +293,23 @@ describe('desktop persistence migrations', () => {
       expect(report.migratedKeys, `${theme} should survive startup migration`).not.toContain('cc-haha-theme')
       expect(window.localStorage.getItem('cc-haha-theme')).toBe(theme)
     }
+  })
+
+  test.each([undefined, '4', '6', String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION)])('migrates neutral dark to dark with schema %s and keeps migration idempotent', (schema) => {
+    if (schema !== undefined) localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, schema)
+    localStorage.setItem('cc-haha-theme', 'neutral-dark')
+    localStorage.setItem('cc-haha-follow-system-theme', '1')
+    localStorage.setItem('cc-haha-light-theme', 'light')
+    localStorage.setItem('cc-haha-dark-theme', 'neutral-dark')
+    localStorage.setItem('unrelated-user-key', 'keep')
+    runDesktopPersistenceMigrations()
+
+    expect(localStorage.getItem('cc-haha-theme')).toBe('dark')
+    expect(localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
+    expect(localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
+    expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
   })
 
   test('drops a malformed follow-the-system flag rather than reading it as opted in', () => {
@@ -293,8 +332,8 @@ describe('desktop persistence migrations', () => {
 
   test('preserves a valid follow-the-system flag and both ground preferences', () => {
     window.localStorage.setItem('cc-haha-follow-system-theme', '1')
-    window.localStorage.setItem('cc-haha-light-theme', 'celadon')
-    window.localStorage.setItem('cc-haha-dark-theme', 'ink-blue')
+    window.localStorage.setItem('cc-haha-light-theme', 'white')
+    window.localStorage.setItem('cc-haha-dark-theme', 'dark')
 
     const report = runDesktopPersistenceMigrations()
 
@@ -302,8 +341,8 @@ describe('desktop persistence migrations', () => {
     expect(report.migratedKeys).not.toContain('cc-haha-light-theme')
     expect(report.migratedKeys).not.toContain('cc-haha-dark-theme')
     expect(window.localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
-    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('celadon')
-    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('ink-blue')
+    expect(window.localStorage.getItem('cc-haha-light-theme')).toBe('white')
+    expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('dark')
   })
 
   test('preserves every supported locale during startup migration', () => {
@@ -397,8 +436,8 @@ describe('desktop persistence migrations', () => {
 
     expect(report.migratedKeys).not.toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
-    // The schema-1 keys a v0.6.2 install carries must survive untouched.
-    expect(window.localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    // The schema-1 keys a v0.6.2 install carries must survive (with legacy dark theme migrated to dark).
+    expect(window.localStorage.getItem('cc-haha-theme')).toBe('dark')
     expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs')!).openTabs).toHaveLength(1)
     expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
   })
@@ -417,6 +456,112 @@ describe('desktop persistence migrations', () => {
     // newer build is still using.
     expect(report.migratedKeys).not.toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBe(future)
+  })
+
+  test('preserves a frozen size-only workspace through startup migration, hydration and writing', () => {
+    // Closing the last workspace tab writes this valid v2 document. Startup
+    // used to delete it before the persistence bridge could restore its sizes.
+    const frozen = JSON.stringify({
+      version: 2,
+      sideWidth: 972,
+      bottomHeight: 356,
+      sessions: {},
+      futureMetadata: { keep: true },
+    })
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    localStorage.setItem('cc-haha.workspace', frozen)
+
+    const migration = runDesktopPersistenceMigrations()
+
+    expect(migration.migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(frozen)
+    const restored = hydrateWorkspace(readWorkspaceStorage(localStorage), (prefix) => `${prefix}-restored`)
+    expect(restored).toEqual({ bySession: {}, sideWidth: 972, bottomHeight: 356 })
+
+    writeWorkspaceStorage(localStorage, serializeWorkspace(restored.bySession, restored))
+    const written = localStorage.getItem('cc-haha.workspace')
+    expect(JSON.parse(written!)).toEqual({
+      version: WORKSPACE_STORAGE_VERSION,
+      sideWidth: 972,
+      bottomHeight: 356,
+      sessions: {},
+    })
+    // A second startup must retain the same preference even with no tabs.
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(written)
+  })
+
+  test('keeps workspace sizes when startup removes the last stale host-resource tab', () => {
+    localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: 2,
+      sideWidth: 980,
+      bottomHeight: 360,
+      futureMetadata: { keep: true },
+      sessions: {
+        s1: {
+          tabs: [{ kind: 'terminal', id: 't1', runtimeId: 'stale-pty', cwd: '/fixture' }],
+        },
+      },
+    }))
+
+    const migration = runDesktopPersistenceMigrations()
+
+    expect(migration.migratedKeys).toContain('cc-haha.workspace')
+    expect(readWorkspaceStorage(localStorage)).toEqual({
+      version: WORKSPACE_STORAGE_VERSION,
+      sideWidth: 980,
+      bottomHeight: 360,
+      futureMetadata: { keep: true },
+      sessions: {},
+    })
+    const restored = hydrateWorkspace(readWorkspaceStorage(localStorage), (prefix) => `${prefix}-restored`)
+    expect(restored).toEqual({ bySession: {}, sideWidth: 980, bottomHeight: 360 })
+    writeWorkspaceStorage(localStorage, serializeWorkspace(restored.bySession, restored))
+    const written = localStorage.getItem('cc-haha.workspace')
+    runDesktopPersistenceMigrations()
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(written)
+  })
+
+  test.each([
+    { sideWidth: '972', bottomHeight: 356 },
+    { sideWidth: null, bottomHeight: 356 },
+    { sideWidth: 972, bottomHeight: null },
+    { sideWidth: 0, bottomHeight: 356 },
+    { sideWidth: -972, bottomHeight: 356 },
+    { sideWidth: 972, bottomHeight: -356 },
+    {},
+  ])('removes an empty workspace without valid stored sizes: %j', (sizes) => {
+    localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: WORKSPACE_STORAGE_VERSION,
+      sessions: {},
+      ...sizes,
+    }))
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test.each([
+    '{"version":2,"sideWidth":1e999,"bottomHeight":356,"sessions":{}}',
+    '{"version":2,"sideWidth":972,"bottomHeight":1e999,"sessions":{}}',
+  ])('removes an empty workspace with a non-finite JSON number: %s', (raw) => {
+    localStorage.setItem('cc-haha.workspace', raw)
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test('leaves a future size-only workspace untouched even when its size format is unknown', () => {
+    const future = JSON.stringify({
+      version: WORKSPACE_STORAGE_VERSION + 1,
+      sessions: {},
+      sideWidth: { futureUnit: 70 },
+      bottomHeight: 'future-format',
+    })
+    localStorage.setItem('cc-haha.workspace', future)
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(future)
   })
 
   test('upgrades workspace v1 without losing the Files launcher, turns, or unknown metadata', () => {
@@ -496,6 +641,44 @@ describe('desktop persistence migrations', () => {
 
     expect(report.migratedKeys).toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test('upgrades a frozen schema-7 install and normalizes Antigravity preferences idempotently', () => {
+    window.localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '7')
+    window.localStorage.setItem('unrelated-user-key', 'keep')
+
+    const report = runDesktopPersistenceMigrations()
+    expect(window.localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    expect(window.localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBeNull()
+    expect(report.migratedKeys).not.toContain(ANTIGRAVITY_ENABLED_STORAGE_KEY)
+
+    // Preserves valid Antigravity preferences
+    window.localStorage.setItem(ANTIGRAVITY_ENABLED_STORAGE_KEY, '0')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, 'antigravity')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, JSON.stringify({ modelId: 'gemini-3.8-pro', effortLevel: 'high' }))
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBe('0')
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY)).toBe('antigravity')
+    expect(JSON.parse(window.localStorage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)!)).toEqual({
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+
+    // Drops malformed Antigravity preference values cleanly
+    window.localStorage.setItem(ANTIGRAVITY_ENABLED_STORAGE_KEY, 'maybe')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY, 'unknown')
+    window.localStorage.setItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY, '{bad')
+    const cleaned = runDesktopPersistenceMigrations()
+    expect(cleaned.migratedKeys).toEqual(expect.arrayContaining([
+      ANTIGRAVITY_ENABLED_STORAGE_KEY,
+      ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY,
+      ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY,
+    ]))
+    expect(window.localStorage.getItem(ANTIGRAVITY_ENABLED_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_ENGINE_STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(ANTIGRAVITY_LAST_SELECTION_STORAGE_KEY)).toBeNull()
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
   })
 
 })

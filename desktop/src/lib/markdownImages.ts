@@ -12,6 +12,16 @@ export function isSafeMarkdownImageSource(value: string | null): boolean {
   return /^data:image\/(?:avif|gif|jpe?g|png|webp);base64,[a-z0-9+/=\r\n]+$/i.test(value)
 }
 
+/**
+ * In-memory audio sources allowed even without a local-file resolver.
+ * Mirrors {@link isSafeMarkdownImageSource} for `<audio>` elements.
+ */
+export function isSafeMarkdownAudioSource(value: string | null): boolean {
+  if (!value) return false
+  if (/^blob:/i.test(value)) return true
+  return /^data:audio\/(?:mpeg|mp3|wav|x-wav|wave|mp4|x-m4a|ogg|flac|aac|webm|opus);base64,[a-z0-9+/=\r\n]+$/i.test(value)
+}
+
 export type WorkspaceMarkdownImageContext = {
   /** Base URL of the local server (see `getServerBaseUrl`). */
   baseUrl: string
@@ -23,6 +33,7 @@ export type WorkspaceMarkdownImageContext = {
 }
 
 export type AssistantMarkdownImageContext = {
+  aliases?: ReadonlyMap<string, string>
   /** Base URL of the local server (see `getServerBaseUrl`). */
   baseUrl: string
   sessionId: string
@@ -41,9 +52,36 @@ function splitPathSegments(value: string): string[] {
 
 /** What the filesystem route serves; it answers 400 to the rest, so asking is pointless. */
 const LOCAL_IMAGE_NAME_RE = /^.+\.(?:png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i
+const LOCAL_AUDIO_NAME_RE = /^.+\.(?:wav|mp3|m4a|ogg|flac|aac|opus)$/i
 
 function isLocalImageName(path: string): boolean {
   return LOCAL_IMAGE_NAME_RE.test(path.slice(path.lastIndexOf('/') + 1))
+}
+
+export function isLocalAudioName(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/')
+  return LOCAL_AUDIO_NAME_RE.test(normalized.slice(normalized.lastIndexOf('/') + 1))
+}
+
+/**
+ * Whether a Markdown `![alt](destination)` destination names audio rather than an
+ * image. Keeps `blob:` URLs as images because they carry no extension and are used
+ * for pasted/generated images in Markdown; explicit `<audio src="blob:...">` uses
+ * {@link isSafeMarkdownAudioSource} directly.
+ */
+export function isMarkdownAudioDestination(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (/^data:audio\//i.test(trimmed)) return isSafeMarkdownAudioSource(trimmed)
+  if (/^blob:/i.test(trimmed)) return false
+  const withoutSuffix = trimmed.split('#')[0]!.split('?')[0]!
+  let decoded = withoutSuffix
+  try {
+    decoded = decodeURIComponent(withoutSuffix)
+  } catch {
+    // Keep raw path for extension detection; the resolver still rejects malformed escapes.
+  }
+  return isLocalAudioName(decoded)
 }
 
 /**
@@ -193,7 +231,7 @@ export function createAssistantMarkdownImageResolver(
       return null
     }
 
-    const path = parseLocalImagePath(decoded)
+    const path = parseLocalImagePath(context.aliases?.get(decoded) ?? decoded)
     if (!path) return null
     const local = localImagePathString(path)
 
@@ -204,6 +242,46 @@ export function createAssistantMarkdownImageResolver(
       && (context.workDir ? isInsideWorkDir(path, context.workDir) : true)
     if (inSession) return previewFsUrl(context.baseUrl, context.sessionId, local)
     return isLocalImageName(local) ? filesystemImageUrl(context.baseUrl, local) : null
+  }
+}
+
+/**
+ * Create an audio resolver for finalized assistant prose, mirroring
+ * {@link createAssistantMarkdownImageResolver} with an audio extension gate:
+ *
+ * - relative paths and absolute paths inside `workDir` stream through `/preview-fs`;
+ * - absolute paths outside `workDir` and `~/...` stream through `/api/filesystem/file`,
+ *   which serves audio with HTTP byte-range support under `$HOME`, `/tmp`, and registered roots;
+ * - remote URLs, non-audio extensions, malformed escapes, and workspace escapes are rejected.
+ */
+export function createAssistantMarkdownAudioResolver(
+  context: AssistantMarkdownImageContext,
+): (src: string) => string | null {
+  return (src: string): string | null => {
+    const trimmed = src.trim()
+    if (!trimmed) return null
+    if (isSafeMarkdownAudioSource(trimmed)) return trimmed
+    if (trimmed.startsWith('#') || trimmed.startsWith('//')) return null
+    if (!/^[A-Za-z]:[\\/]/.test(trimmed) && /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return null
+
+    const withoutSuffix = trimmed.split('#')[0]!.split('?')[0]!
+    let decoded = withoutSuffix
+    try {
+      decoded = decodeURIComponent(withoutSuffix)
+    } catch {
+      return null
+    }
+
+    const path = parseLocalImagePath(context.aliases?.get(decoded) ?? decoded)
+    if (!path) return null
+    const local = localImagePathString(path)
+    if (!isLocalAudioName(local)) return null
+
+    if (path.root === 'relative') return previewFsUrl(context.baseUrl, context.sessionId, local)
+    const inSession = path.root !== 'home'
+      && (context.workDir ? isInsideWorkDir(path, context.workDir) : true)
+    if (inSession) return previewFsUrl(context.baseUrl, context.sessionId, local)
+    return filesystemImageUrl(context.baseUrl, local)
   }
 }
 
@@ -343,5 +421,91 @@ export function createWorkspaceMarkdownImageResolver(
     absolute.push(...stack)
     const isWindowsDrive = /^[a-zA-Z]:$/.test(absolute[0] ?? '')
     return localFileUrl(context.baseUrl, isWindowsDrive ? absolute.join('/') : `/${absolute.join('/')}`)
+  }
+}
+
+function isAllowedWorkspaceAudioHttpUrl(value: string, baseUrl: string): boolean {
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol === 'http:' && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')) {
+      return true
+    }
+    const base = new URL(baseUrl)
+    return parsed.origin === base.origin
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Create an audio resolver for user-owned workspace Markdown documents.
+ *
+ * Unlike {@link createWorkspaceMarkdownImageResolver}, this stays aligned with
+ * the stricter `media-src` CSP (`'self' data: blob: http://127.0.0.1:* http://localhost:*`)
+ * and routes local audio exclusively through `/preview-fs/` (for workspace files,
+ * including absolute paths inside `workDir`) and `/api/filesystem/file` (for
+ * outside-workspace paths, `~/...`, and `../` escapes) so packaged Electron
+ * streams audio directly with HTTP 206 Range headers without falling back to
+ * full-file blob buffering.
+ */
+export function createWorkspaceMarkdownAudioResolver(
+  context: WorkspaceMarkdownImageContext,
+): (src: string) => string | null {
+  return (src: string): string | null => {
+    const trimmed = src.trim()
+    if (!trimmed) return null
+    if (isSafeMarkdownAudioSource(trimmed)) return trimmed
+    if (/^https?:\/\//i.test(trimmed)) {
+      return isAllowedWorkspaceAudioHttpUrl(trimmed, context.baseUrl) ? trimmed : null
+    }
+    if (trimmed.startsWith('#') || trimmed.startsWith('//')) return null
+    if (!/^[A-Za-z]:[\\/]/.test(trimmed) && /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return null
+
+    const withoutSuffix = trimmed.split('#')[0]!.split('?')[0]!
+    let localPath = withoutSuffix
+    try {
+      localPath = decodeURIComponent(withoutSuffix)
+    } catch {
+      return null
+    }
+
+    const slashed = localPath.replace(/\\/g, '/')
+    const isRooted = slashed.startsWith('/') || slashed === '~' || slashed.startsWith('~/') || /^[A-Za-z]:(?:\/|$)/.test(slashed)
+    if (isRooted) {
+      const parsed = parseLocalImagePath(localPath)
+      if (!parsed) return null
+      const local = localImagePathString(parsed)
+      if (!isLocalAudioName(local)) return null
+      if (parsed.root !== 'home' && context.workDir && isInsideWorkDir(parsed, context.workDir)) {
+        return previewFsUrl(context.baseUrl, context.sessionId, local)
+      }
+      return filesystemImageUrl(context.baseUrl, local)
+    }
+
+    const mdDir = splitPathSegments(context.filePath).slice(0, -1)
+    const stack: string[] = []
+    let escapes = 0
+    for (const segment of [...mdDir, ...splitPathSegments(localPath)]) {
+      if (!segment || segment === '.') continue
+      if (segment === '..') {
+        if (stack.length > 0) stack.pop()
+        else escapes += 1
+        continue
+      }
+      stack.push(segment)
+    }
+
+    if (escapes === 0) {
+      const rel = stack.join('/')
+      return rel && isLocalAudioName(rel) ? previewFsUrl(context.baseUrl, context.sessionId, rel) : null
+    }
+
+    if (!context.workDir) return null
+    const workDirSegments = splitPathSegments(context.workDir).filter(Boolean)
+    const absolute = workDirSegments.slice(0, Math.max(0, workDirSegments.length - escapes))
+    absolute.push(...stack)
+    const isWindowsDrive = /^[a-zA-Z]:$/.test(absolute[0] ?? '')
+    const escapedPath = isWindowsDrive ? absolute.join('/') : `/${absolute.join('/')}`
+    return isLocalAudioName(escapedPath) ? filesystemImageUrl(context.baseUrl, escapedPath) : null
   }
 }

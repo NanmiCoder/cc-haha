@@ -221,8 +221,9 @@ const workspaceBrowserTab: Validator = value =>
 // the main process adopts it solely if it is a browser guest of the main window.
 const workspaceBrowserCreate: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['tabId', 'storageId', 'url', 'webContentsId'])
+  && hasOnlyKeys(value, ['tabId', 'sessionId', 'storageId', 'url', 'webContentsId'])
   && isWorkspaceBrowserId(value.tabId)
+  && (value.sessionId === undefined || sessionIdPayload(value.sessionId))
   && isWorkspaceBrowserId(value.storageId)
   && (value.url === undefined || (typeof value.url === 'string' && value.url.length <= 8_192))
   && typeof value.webContentsId === 'number'
@@ -297,6 +298,30 @@ const workspaceBrowserMessage: Validator = value =>
   && hasOnlyKeys(value, ['tabId', 'payload'])
   && isWorkspaceBrowserId(value.tabId)
 
+const browserUseTabReady: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['requestId', 'tabId', 'ok', 'error'])
+  && isWorkspaceBrowserId(value.requestId)
+  && typeof value.ok === 'boolean'
+  && (value.ok
+    ? isWorkspaceBrowserId(value.tabId)
+    : (value.tabId === undefined || value.tabId === '' || isWorkspaceBrowserId(value.tabId)))
+  && (value.error === undefined || (typeof value.error === 'string' && value.error.length <= 1_000))
+
+const browserUseCursorArrived: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['moveId', 'tabId', 'skipped'])
+  && isWorkspaceBrowserId(value.moveId)
+  && isWorkspaceBrowserId(value.tabId)
+  && (value.skipped === undefined || typeof value.skipped === 'boolean')
+
+const browserUseUserAction: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['tabId', 'action', 'reason'])
+  && isWorkspaceBrowserId(value.tabId)
+  && (value.action === 'takeover' || value.action === 'resume' || value.action === 'stop' || value.action === 'cancel')
+  && (value.reason === undefined || (typeof value.reason === 'string' && value.reason.length <= 500))
+
 // The colors reach BrowserWindow.setBackgroundColor, so they are pinned to a
 // literal 6-digit #RRGGBB. This is load-bearing, not tidiness: that API also
 // accepts #AARRGGBB, so an 8-digit value would let a compromised renderer make
@@ -305,13 +330,15 @@ const workspaceBrowserMessage: Validator = value =>
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const appliedAppearance: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['isDark', 'background', 'lightBackground', 'followSystem'])
+  && hasOnlyKeys(value, ['isDark', 'background', 'lightBackground', 'darkBackground', 'followSystem'])
   && typeof value.isDark === 'boolean'
   && typeof value.followSystem === 'boolean'
   && typeof value.background === 'string'
   && HEX_COLOR.test(value.background)
   && typeof value.lightBackground === 'string'
   && HEX_COLOR.test(value.lightBackground)
+  && (value.darkBackground === undefined
+    || (typeof value.darkBackground === 'string' && HEX_COLOR.test(value.darkBackground)))
 
 const updateCheckOptions: Validator = value => {
   if (value === undefined) return true
@@ -325,6 +352,25 @@ const localePreference: Validator = value =>
   || value === 'zh-TW'
   || value === 'jp'
   || value === 'kr'
+
+export const usageWidgetShowOptions: Validator = value =>
+  value === undefined
+  || (
+    isRecord(value)
+    && hasOnlyKeys(value, ['compact', 'alwaysOnTop'])
+    && (value.compact === undefined || typeof value.compact === 'boolean')
+    && (value.alwaysOnTop === undefined || typeof value.alwaysOnTop === 'boolean')
+  )
+
+const usageWidgetMenuBarSync: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, ['enabled', 'title', 'tooltip'])
+  && typeof value.enabled === 'boolean'
+  && (value.title === undefined || (typeof value.title === 'string' && value.title.length <= 64))
+  && (value.tooltip === undefined || (typeof value.tooltip === 'string' && value.tooltip.length <= 240))
+
+const usageWidgetSettingsTab: Validator = value =>
+  value === undefined || value === 'general' || value === 'providers'
 
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
@@ -347,6 +393,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken]: noPayload,
+  [ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.commandInvoke]: commandInvoke,
   [ELECTRON_IPC_CHANNELS.clipboardReadText]: noPayload,
   [ELECTRON_IPC_CHANNELS.clipboardWriteText]: stringPayload,
@@ -366,6 +413,18 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.petsSetInteractiveRegions]: petInteractiveRegions,
   [ELECTRON_IPC_CHANNELS.petsFocusMainWindow]: noPayload,
   [ELECTRON_IPC_CHANNELS.petsFocusSession]: sessionIdPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetShow]: usageWidgetShowOptions,
+  [ELECTRON_IPC_CHANNELS.usageWidgetHide]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetToggle]: usageWidgetShowOptions,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSetCompact]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetDragWindow]: petWindowDrag,
+  [ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar]: usageWidgetMenuBarSync,
+  [ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings]: usageWidgetSettingsTab,
+  [ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetGetTheme]: noPayload,
   [ELECTRON_IPC_CHANNELS.dialogOpen]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.dialogSave]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.updateCheck]: updateCheckOptions,
@@ -413,6 +472,9 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.workspaceBrowserMessage]: workspaceBrowserMessage,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserClose]: workspaceBrowserTab,
+  [ELECTRON_IPC_CHANNELS.browserUseTabReady]: browserUseTabReady,
+  [ELECTRON_IPC_CHANNELS.browserUseCursorArrived]: browserUseCursorArrived,
+  [ELECTRON_IPC_CHANNELS.browserUseUserAction]: browserUseUserAction,
   [ELECTRON_IPC_CHANNELS.appModeGet]: noPayload,
   [ELECTRON_IPC_CHANNELS.appModeSet]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.appModePrepareRestart]: noPayload,
@@ -445,6 +507,23 @@ const petWindowChannels = new Set<ElectronIpcChannel>([
   ELECTRON_IPC_CHANNELS.petsFocusSession,
 ])
 
+const usageWidgetWindowChannels = new Set<ElectronIpcChannel>([
+  ELECTRON_IPC_CHANNELS.appGetLocalePreference,
+  ELECTRON_IPC_CHANNELS.appGetPreferredSystemLanguages,
+  ELECTRON_IPC_CHANNELS.runtimeGetServerUrl,
+  ELECTRON_IPC_CHANNELS.runtimeGetUsageWidgetAccessToken,
+  ELECTRON_IPC_CHANNELS.usageWidgetHide,
+  ELECTRON_IPC_CHANNELS.usageWidgetSetCompact,
+  ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop,
+  ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop,
+  ELECTRON_IPC_CHANNELS.usageWidgetDragWindow,
+  ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar,
+  ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow,
+  ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings,
+  ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
+  ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+])
+
 export function isElectronIpcChannel(channel: string): channel is ElectronIpcChannel {
   return allowedChannels.has(channel as ElectronIpcChannel)
 }
@@ -455,4 +534,8 @@ export function validateElectronIpcPayload(channel: ElectronIpcChannel, payload:
 
 export function isElectronIpcChannelAllowedForPetWindow(channel: ElectronIpcChannel): boolean {
   return petWindowChannels.has(channel)
+}
+
+export function isElectronIpcChannelAllowedForUsageWidgetWindow(channel: ElectronIpcChannel): boolean {
+  return usageWidgetWindowChannels.has(channel)
 }

@@ -145,7 +145,7 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
     <div
       ref={scrollRef}
       data-testid="market-scroll"
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface)]"
+      className="scrollbar-autohide flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface)]"
     >
       {/* One page surface from the search row to the last card, like the
           plugins tab and the skill detail. The page head (title, description,
@@ -275,7 +275,7 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
           <div
             role="alert"
             data-testid="market-error"
-            className="mt-4 flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-6 py-12 text-center"
+            className="v6c-glass-card mt-4 flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-6 py-12 text-center"
           >
             <span className="mb-1 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]">
               <CloudOff size={20} strokeWidth={1.75} aria-hidden="true" />

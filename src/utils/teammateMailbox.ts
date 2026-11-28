@@ -505,6 +505,7 @@ export async function claimMailboxMessages(
   agentName: string,
   teamName: string | undefined,
   candidates: readonly TeammateMessage[],
+  canClaim: () => boolean = () => true,
 ): Promise<TeammateMessage[] | undefined> {
   if (candidates.length === 0) return []
   const identities = new Set(candidates.map(getMailboxMessageIdentity))
@@ -513,6 +514,7 @@ export async function claimMailboxMessages(
   try {
     await updateInbox(inboxPath, messages => {
       claimed = []
+      if (!canClaim()) return messages
       return messages.map(message => {
         if (
           message.read ||
@@ -538,6 +540,19 @@ export async function claimMailboxMessages(
     if (getErrnoCode(error) !== 'ELOCKED') logError(error)
     return undefined
   }
+}
+
+/** Return an owned batch when its consumer was cancelled after the claim. */
+export async function returnClaimedMailboxMessages(
+  agentName: string,
+  teamName: string | undefined,
+  claimed: readonly TeammateMessage[],
+): Promise<void> {
+  if (claimed.length === 0) return
+  await updateInbox(getInboxPath(agentName, teamName), messages => {
+    const existing = new Set(messages.map(getMailboxMessageIdentity))
+    return [...claimed.filter(message => !existing.has(getMailboxMessageIdentity(message))).map(message => ({ ...message, read: false })), ...messages]
+  })
 }
 
 /**

@@ -77,10 +77,13 @@ export function SubagentRunPage({
     data: SubagentRunResponse
     activityEpoch: number
     streamRevision: number
+    workflowStatusAtRequest: SubagentRunStatus | undefined
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const workflowAgentStatusRef = useRef<SubagentRunStatus | undefined>(undefined)
   const tabId = useTabStore((state) => {
     const activeTab = state.tabs.find((tab) => tab.sessionId === state.activeTabId)
     return activeTab?.type === 'subagent' && activeTab.subagentToolUseId === toolUseId
@@ -118,6 +121,7 @@ export function SubagentRunPage({
     return undefined
   })
   const effectiveStatus = workflowAgentStatus ?? data?.status
+  workflowAgentStatusRef.current = workflowAgentStatus
   const teamSnapshot = useTeamStore((state) => (
     state.workbenchesBySession[sourceSessionId]?.snapshots.at(-1)
   ))
@@ -181,12 +185,40 @@ export function SubagentRunPage({
     store.returnFromSubagent(returningTabId)
   }
 
+  const hasActiveLiveStream = useChatStore((state) => {
+    const session = state.sessions[tabId]
+    return Boolean(
+      session &&
+      (session.chatState !== 'idle' || (session.agentStreamRevision ?? 0) > 0),
+    )
+  })
+  const isTerminalStatus = (status: SubagentRunStatus | undefined) =>
+    status === 'completed' || status === 'failed' || status === 'stopped'
+  // Only stop polling once the persisted snapshot itself was fetched at or
+  // after the terminal workflow status — a live WS completion must still get
+  // one final poll to pull the last persisted tool calls and answer.
+  const hasFreshTerminalWorkflowSnapshot = workflowAgentStatus === undefined ||
+    currentResponse?.workflowStatusAtRequest === workflowAgentStatus
+  const isTerminalStaticRun = data !== null &&
+    !error &&
+    data.canSendMessage !== true &&
+    isTerminalStatus(data.status) &&
+    isTerminalStatus(effectiveStatus) &&
+    hasFreshTerminalWorkflowSnapshot &&
+    data.historyComplete !== false &&
+    data.activityComplete !== false &&
+    !hasActiveLiveStream
+
   const load = useCallback(async (options?: { resetData?: boolean }) => {
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     const requestedSession = useChatStore.getState().sessions[tabId]
     const requestedActivityEpoch = requestedSession?.historyMutationEpoch ?? 0
     const requestedStreamRevision = requestedSession?.agentStreamRevision ?? 0
+    const requestedWorkflowStatus = workflowAgentStatusRef.current
     setLoading(true)
     setError(null)
     if (options?.resetData) setResponse(null)
@@ -194,33 +226,38 @@ export function SubagentRunPage({
       // A workflow agent has no parent Agent tool call, so it is addressed by
       // agent id. Everything downstream of this line is identical.
       const nextData = isAgentIdRef(toolUseId)
-        ? await subagentsApi.getRunByAgent(sourceSessionId, readAgentIdRef(toolUseId))
-        : await subagentsApi.getRunByTool(sourceSessionId, toolUseId, resolvedTaskId)
+        ? await subagentsApi.getRunByAgent(sourceSessionId, readAgentIdRef(toolUseId), { signal: controller.signal })
+        : await subagentsApi.getRunByTool(sourceSessionId, toolUseId, resolvedTaskId, { signal: controller.signal })
       if (requestIdRef.current !== requestId) return
       setResponse({
         tabId,
         data: nextData,
         activityEpoch: requestedActivityEpoch,
         streamRevision: requestedStreamRevision,
+        workflowStatusAtRequest: requestedWorkflowStatus,
       })
     } catch (err) {
-      if (requestIdRef.current !== requestId) return
+      if (requestIdRef.current !== requestId || controller.signal.aborted) return
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       if (requestIdRef.current !== requestId) return
+      if (abortControllerRef.current === controller) abortControllerRef.current = null
       setLoading(false)
     }
   }, [resolvedTaskId, sourceSessionId, tabId, toolUseId])
 
   useEffect(() => {
     void load({ resetData: true })
+    return () => {
+      abortControllerRef.current?.abort()
+    }
   }, [load])
 
   useEffect(() => {
-    if (loading) return
+    if (loading || isTerminalStaticRun) return
     const timer = window.setTimeout(() => void load(), LIVE_RUN_REFRESH_MS)
     return () => window.clearTimeout(timer)
-  }, [data?.updatedAt, load, loading])
+  }, [data?.updatedAt, isTerminalStaticRun, load, loading])
 
   useEffect(() => {
     if (!data) return
@@ -824,6 +861,7 @@ function AgentSessionView({
               <Badge
                 tone="neutral"
                 size="xs"
+                pill={false}
                 bordered
                 mono
                 title={t('subagentRun.model')}
@@ -836,6 +874,7 @@ function AgentSessionView({
               <Badge
                 tone="neutral"
                 size="xs"
+                pill={false}
                 bordered
                 title={t('model.effort')}
                 aria-label={`${t('model.effort')}: ${runEffort}`}
@@ -875,7 +914,7 @@ function AgentSessionView({
         <div role="status" className="flex flex-1 items-center justify-center text-sm text-[var(--color-text-tertiary)]">{loadingLabel}</div>
       ) : null}
       {error ? (
-        <div role="alert" className="mx-auto mt-4 w-[calc(100%-40px)] max-w-[var(--chat-content-max-width)] rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
+        <div role="alert" className="v6c-glass-card v6c-ring-error mx-auto mt-4 w-[calc(100%-40px)] max-w-[var(--chat-content-max-width)] rounded-[var(--radius-lg)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
           {error}
         </div>
       ) : null}
@@ -933,7 +972,7 @@ function effortLabel(effort: string | null, t: TranslationFn): string {
 
 function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationFn }) {
   return (
-    <Badge tone={statusTone(status)} size="xs" bordered>
+    <Badge tone={statusTone(status)} size="xs" pill={false} bordered>
       {getSubagentStatusLabel(status, t)}
     </Badge>
   )

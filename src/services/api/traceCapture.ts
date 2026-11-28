@@ -77,13 +77,14 @@ export type TraceSessionWindow = {
 function traceResourceError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
 }
-// `token(?!s)` keeps secret-bearing keys (token, access_token, api_token) redacted while
-// letting token-count fields (input_tokens, max_tokens, prompt_tokens) through.
+// `token(?!s|count\b)` keeps secret-bearing keys (token, access_token, api_token,
+// continuationToken) redacted while letting token-count fields (input_tokens,
+// max_tokens, prompt_tokens, Gemini's promptTokenCount / candidatesTokenCount) through.
 // `session` covers stable per-conversation identifiers (x-opencode-session,
 // x-session-affinity) that gateways take as routing keys: not credentials, but the
 // same value the local transcript and trace files are named after, and traces are
 // meant to be shareable when reporting a bug.
-const SENSITIVE_KEY_RE = /authorization|api[-_]?key|secret|token(?!s)|cookie|password|bearer|session/i
+const SENSITIVE_KEY_RE = /authorization|api[-_]?key|secret|token(?!s|count\b)|cookie|password|bearer|session/i
 
 export type TraceCaptureSettings = {
   enabled: boolean
@@ -126,6 +127,7 @@ export type TraceCallRecord = {
   sessionId: string
   source: 'anthropic' | 'proxy'
   querySource?: string
+  agentId?: string
   provider?: TraceProviderInfo
   model?: string
   status?: TraceCallStatus
@@ -234,6 +236,7 @@ export type RecordTraceCallInput = {
   sessionId: string
   source: TraceCallRecord['source']
   querySource?: string
+  agentId?: string
   provider?: TraceProviderInfo
   model?: string
   status?: TraceCallStatus
@@ -332,11 +335,22 @@ const traceCaptureDiagnostics = {
   shadowMismatches: 0,
 }
 
+const DESKTOP_TRACE_ENTRYPOINTS = new Set([
+  'claude-desktop',
+  'claude-desktop-team-worker',
+])
+
+function isDesktopTraceEntrypoint(): boolean {
+  const entrypoint =
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT?.trim() ||
+    process.env.CLAUDE_CODE_ENTRYPOINT?.trim()
+  return entrypoint !== undefined && DESKTOP_TRACE_ENTRYPOINTS.has(entrypoint)
+}
+
 export function shouldCaptureApiTrace(): boolean {
   if (isEnvDefinedFalsy(process.env.CC_HAHA_TRACE_API_CALLS)) return false
   if (isEnvTruthy(process.env.CC_HAHA_TRACE_API_CALLS)) return true
-  return readTraceCaptureSettingsSync().enabled &&
-    process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop'
+  return readTraceCaptureSettingsSync().enabled && isDesktopTraceEntrypoint()
 }
 
 export function isTraceCaptureEnabled(): boolean {
@@ -413,20 +427,27 @@ export const TRACE_CAPTURE_DEPTH_LIMIT = 32
 export const TRACE_CAPTURE_CHAR_LIMIT = 1024 * 1024
 const TRACE_REQUEST_PARSE_CHAR_LIMIT = 64 * TRACE_CAPTURE_CHAR_LIMIT
 const TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT = 64 * 1024
-const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"/i
+const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"|"image"\s*:\s*\{\s*"(?:format|source)"/i
 
 type BoundedTraceValue = { value: unknown; omitted?: string }
 type RequestImageMode = 'preview' | 'semantic'
-type RequestImageSource = 'anthropic' | 'gemini' | 'url'
+type RequestImageSource = 'anthropic' | 'gemini' | 'bedrock_image' | 'bedrock_source' | 'url'
 
 function ownTraceValue(value: object, key: string): unknown {
   const property = Object.getOwnPropertyDescriptor(value, key)
   return property?.enumerable ? property.value : undefined
 }
 
-function requestImageSource(key: string, type: unknown, parent?: RequestImageSource): RequestImageSource | undefined {
+function requestImageSource(
+  key: string,
+  type: unknown,
+  parent?: RequestImageSource,
+  bedrockFormat?: unknown,
+): RequestImageSource | undefined {
   if (key === 'source' && type === 'image') return 'anthropic'
   if (key === 'inlineData') return 'gemini'
+  if (key === 'image') return 'bedrock_image'
+  if (key === 'source' && parent === 'bedrock_image' && typeof bedrockFormat === 'string') return 'bedrock_source'
   if (key === 'image_url' && (type === 'image_url' || type === 'input_image')) return 'url'
   if (key === 'url' && parent === 'url') return 'url'
   return undefined
@@ -485,9 +506,12 @@ function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): Bo
     }
     const type = requestImages ? ownTraceValue(value, 'type') : undefined
     const mime = imageSource === 'gemini' ? ownTraceValue(value, 'mimeType') : undefined
+    const bedrockFormat = imageSource === 'bedrock_image' ? ownTraceValue(value, 'format') : undefined
     const base64Image = imageSource === 'anthropic' && type === 'base64'
     const inlineImage = typeof mime === 'string' && mime.startsWith('image/')
-    const imageData = base64Image || inlineImage ? ownTraceValue(value, 'data') : undefined
+    const bedrockImage = imageSource === 'bedrock_source'
+    const imageDataKey = bedrockImage ? 'bytes' : 'data'
+    const imageData = base64Image || inlineImage || bedrockImage ? ownTraceValue(value, imageDataKey) : undefined
     const smallImage = typeof imageData === 'string' && reserveImageChars(imageData.length)
     const compactImage = typeof imageData === 'string' && (requestImages === 'semantic' || !smallImage)
     const result: Record<string, unknown> = {}
@@ -497,8 +521,8 @@ function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): Bo
       countText(key)
       const property = Object.getOwnPropertyDescriptor(value, key)
       if (property?.get || property?.set) throw new Error('accessor')
-      if (compactImage && key === 'data') continue
-      const nestedSource = requestImages ? requestImageSource(key, type, imageSource) : undefined
+      if (compactImage && key === imageDataKey) continue
+      const nestedSource = requestImages ? requestImageSource(key, type, imageSource, bedrockFormat) : undefined
       Object.defineProperty(result, key, { value: visit(property?.value, depth + 1, nestedSource), enumerable: true, configurable: true, writable: true })
     }
     if (compactImage) {
@@ -763,6 +787,7 @@ class TraceCaptureService {
       sessionId: input.sessionId,
       source: input.source,
       ...(input.querySource ? { querySource: input.querySource } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.provider ? { provider: input.provider } : {}),
       ...(input.model ? { model: input.model } : {}),
       status: input.status ?? inferCallStatus(input),
@@ -2258,18 +2283,66 @@ function traceNearRevisionToken(stat: Stats): string {
   return `file:${createHash('sha256').update(`${traceFileIdentity(stat) ?? ''}:${stat.size}:${stat.mtimeMs}`).digest('hex')}`
 }
 
-function traceNearResult(
+const TRACE_NEAR_SCOPE_HEAD_BYTES = 2048
+const TRACE_HEAD_QUERY_SOURCE_RE = /"querySource":"([^"\\]{1,128})"/
+const TRACE_HEAD_AGENT_ID_RE = /"agentId":"([^"\\]{1,128})"/
+
+async function hydrateNearCallScopes(
+  filePath: string,
+  locators: TraceCallLocator[],
+  calls: TraceCallRecord[],
+  signal?: AbortSignal,
+  existingHandle?: Awaited<ReturnType<typeof fs.open>>,
+): Promise<void> {
+  if (!locators.length) return
+  let handle = existingHandle
+  const ownsHandle = !handle
+  if (!handle) {
+    try {
+      handle = await fs.open(filePath, 'r')
+    } catch {
+      return
+    }
+  }
+  try {
+    const buffer = Buffer.allocUnsafe(TRACE_NEAR_SCOPE_HEAD_BYTES)
+    for (let index = 0; index < locators.length; index++) {
+      signal?.throwIfAborted()
+      const locator = locators[index]!
+      const toRead = Math.min(TRACE_NEAR_SCOPE_HEAD_BYTES, locator.byteLength)
+      if (toRead <= 0) continue
+      const { bytesRead } = await handle.read(buffer, 0, toRead, locator.byteStart)
+      if (bytesRead <= 0) continue
+      const text = buffer.subarray(0, bytesRead).toString('utf8')
+      const reqIndex = text.indexOf('"request":{')
+      const prefix = reqIndex >= 0 ? text.slice(0, reqIndex) : text
+      const querySource = TRACE_HEAD_QUERY_SOURCE_RE.exec(prefix)?.[1]
+      const agentId = TRACE_HEAD_AGENT_ID_RE.exec(prefix)?.[1]
+      if (querySource) calls[index]!.querySource = querySource
+      if (agentId) calls[index]!.agentId = agentId
+    }
+  } finally {
+    if (ownsHandle) await handle.close()
+  }
+}
+
+async function traceNearResult(
   sessionId: string,
+  filePath: string,
   locators: TraceCallLocator[],
   revisionToken: string,
   limited: boolean,
-): TraceCallsNearResult {
-  const calls = locators.slice(0, TRACE_NEAR_LIMIT)
+  signal?: AbortSignal,
+  existingHandle?: Awaited<ReturnType<typeof fs.open>>,
+): Promise<TraceCallsNearResult> {
+  const capped = locators.slice(0, TRACE_NEAR_LIMIT)
+  const calls = capped.map(locator => shellTraceCallFromLocator(sessionId, locator))
+  await hydrateNearCallScopes(filePath, capped, calls, signal, existingHandle)
   return {
-    calls: calls.map(locator => shellTraceCallFromLocator(sessionId, locator)),
+    calls,
     revisionToken,
     captured: true,
-    locs: Object.fromEntries(calls.map(locator => [locator.id, `${locator.byteStart}-${locator.byteStart + locator.byteLength}`])),
+    locs: Object.fromEntries(capped.map(locator => [locator.id, `${locator.byteStart}-${locator.byteStart + locator.byteLength}`])),
     ...(limited || locators.length > TRACE_NEAR_LIMIT ? { limited: true } : {}),
   }
 }
@@ -2295,7 +2368,7 @@ async function readIndexedTraceCallsNear(
       source.windowStartByte !== 0 || source.scanTruncated) return null
     if ((await detectTraceSourceChange(filePath, fingerprint)).kind !== 'unchanged') return null
     const revisionToken = createHash('sha256').update(`0:${serializeSourceFingerprint(fingerprint)}`).digest('hex')
-    return traceNearResult(sessionId, hit.calls, revisionToken, false)
+    return await traceNearResult(sessionId, filePath, hit.calls, revisionToken, false, signal)
   } catch (error) {
     if (signal?.aborted) throw error
     if (isTraceIndexSqliteFailure(error)) quarantineTraceIndexFailure(target, error)
@@ -2421,7 +2494,7 @@ async function scanTraceCallsNear(
         await new Promise<void>(resolve => setImmediate(resolve))
       }
       const calls = [...matches.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.byteStart - b.byteStart)
-      return traceNearResult(sessionId, calls, traceNearRevisionToken(stat), limited)
+      return await traceNearResult(sessionId, filePath, calls, traceNearRevisionToken(stat), limited, signal, handle)
     } finally {
       await handle.close()
     }

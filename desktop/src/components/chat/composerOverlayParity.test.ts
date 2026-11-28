@@ -11,13 +11,14 @@ import { describe, expect, it } from 'vitest'
  * shipped at `--radius-lg` in one and `--radius-xl` in the other, and only a
  * walkthrough that opened both in the same session caught it.
  *
- * Every popover above the composer row (「素」: model, effort, permission
- * mode, the + menu, slash commands, references, context) is a menu sheet at
- * the card corner, `--radius-lg`; only the composer card itself is `xl`. The
- * shared recipe lives in `composerMenuStyles.ts`, so a component may either
- * use `COMPOSER_POPOVER` or spell the panel inline — both are held here.
+ * Every popover above the composer row (V6C: model, effort, permission
+ * mode, the + menu, slash commands, references, context) is a 14px frosted
+ * glass sheet at `--radius-xl`, concentric with the 16px (`--radius-2xl`)
+ * composer card itself. The shared recipe lives in `composerMenuStyles.ts`,
+ * so a component may either use `COMPOSER_POPOVER` or spell the panel
+ * inline — both are held here.
  */
-const OVERLAY_RADIUS = 'rounded-[var(--radius-lg)]'
+const OVERLAY_RADIUS = 'rounded-[var(--radius-xl)]'
 
 function source(relativePath: string): string {
   return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8')
@@ -33,11 +34,11 @@ const COMPOSERS = {
 const SLASH_COMMAND_MENU = source('./SlashCommandMenu.tsx')
 const MENU_STYLES = source('./composerMenuStyles.ts')
 
-/** Every className string that also carries a floating-panel background. */
+/** Every className string that carries a frosted-glass floating popover surface. */
 function overlayPanelClassNames(code: string): string[] {
   return code
     .split('\n')
-    .filter((line) => line.includes('bg-[var(--color-surface-container-lowest)]'))
+    .filter((line) => line.includes('dropdown-glass'))
     .filter((line) => /\brounded-\[var\(--radius-/.test(line))
 }
 
@@ -62,9 +63,9 @@ describe('composer overlay chrome', () => {
     })
   }
 
-  it('holds the shared popover recipe to the same corner, edge and fill', () => {
+  it('holds the shared popover recipe to frosted glass, motion and card corner', () => {
     const recipe = /export const COMPOSER_POPOVER =\s*'([^']+)'/.exec(MENU_STYLES)?.[1] ?? ''
-    for (const token of [OVERLAY_RADIUS, 'border-[var(--color-border)]', 'bg-[var(--color-surface-container-lowest)]', 'shadow-[var(--shadow-dropdown)]']) {
+    for (const token of [OVERLAY_RADIUS, 'dropdown-glass', 'popover-motion']) {
       expect(recipe).toContain(token)
     }
   })
@@ -79,7 +80,7 @@ describe('composer overlay chrome', () => {
       expect(code, `${name} must build capability sections through the shared hook`).toContain('useCapabilityMenu')
     }
 
-    for (const token of [OVERLAY_RADIUS, 'border-[var(--color-border)]', 'bg-[var(--color-surface-container-lowest)]']) {
+    for (const token of [OVERLAY_RADIUS, 'dropdown-glass', 'popover-motion']) {
       expect(SLASH_COMMAND_MENU).toContain(token)
       expect(COMPOSERS.ComposerCapabilityMenu).toContain(token)
     }

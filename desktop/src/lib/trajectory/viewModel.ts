@@ -53,8 +53,16 @@ function rowInterval(row: TrajectoryRow): [number, number] | null {
   return null
 }
 
-/** Wall-clock duration a row represents, or null when it has none. */
+/** Duration a row represents (actual execution duration for tool rows when recorded), or null when it has none. */
 export function rowDurationMs(row: TrajectoryRow): number | null {
+  if (
+    row.kind === 'tool' &&
+    typeof row.durationMs === 'number' &&
+    Number.isFinite(row.durationMs) &&
+    row.durationMs >= 0
+  ) {
+    return row.durationMs
+  }
   const interval = rowInterval(row)
   return interval ? interval[1] - interval[0] : null
 }

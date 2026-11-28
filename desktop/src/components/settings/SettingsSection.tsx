@@ -40,7 +40,7 @@ export type SettingsPageHeaderProps = {
  */
 export function SettingsPageHeader({ title, description, action, titleId, className }: SettingsPageHeaderProps) {
   return (
-    <header className={cx('flex flex-wrap items-end gap-x-4 gap-y-3', className)}>
+    <header className={cx('flex flex-wrap items-end gap-x-4 gap-y-3 border-b border-[var(--color-border)] pb-4', className)}>
       <div className="min-w-0 flex-1">
         <h2 id={titleId} className="text-[22px] font-semibold leading-tight tracking-[-0.015em] text-[var(--color-text-primary)]">
           {title}
@@ -87,27 +87,47 @@ export function SettingsSection({ title, description, action, className, childre
 }
 
 export type SettingsGroupProps = {
+  /** Optional integrated card header (`h-12` hairline bar) for grouped cards that carry their own title. */
+  title?: ReactNode
+  description?: ReactNode
+  action?: ReactNode
   className?: string
   children?: ReactNode
 } & Pick<HTMLAttributes<HTMLDivElement>, 'id' | 'role' | 'aria-label' | 'aria-labelledby'>
 
 /**
- * The white card that holds a section's rows, with a hairline between each.
+ * The grouped card that holds a section's rows, with a hairline between each.
+ *
+ * Uses the V6C 14px grouped glass card (`.v6c-glass-card` + `--radius-xl`) so
+ * rows sit cleanly lifted above the page canvas with crisp hairline dividers.
  *
  * Deliberately not `overflow-hidden`: rows host `Dropdown`s, whose menus are
  * absolutely positioned inside the row and would be clipped by the card.
  * Rows paint no background of their own, so the corners stay clean without it.
  */
-export function SettingsGroup({ className, children, ...rest }: SettingsGroupProps) {
+export function SettingsGroup({ title, description, action, className, children, ...rest }: SettingsGroupProps) {
   return (
     <div
       {...rest}
       className={cx(
-        'rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]',
+        'v6c-glass-card rounded-[var(--radius-xl)] border border-[var(--color-border)]',
         'divide-y divide-[var(--color-border)]',
         className,
       )}
     >
+      {title || action ? (
+        <div className="flex min-h-12 items-center justify-between gap-3 px-4 py-2.5">
+          <div className="min-w-0">
+            {title ? (
+              <div className="text-[13px] font-semibold leading-5 text-[var(--color-text-primary)]">{title}</div>
+            ) : null}
+            {description ? (
+              <p className="mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{description}</p>
+            ) : null}
+          </div>
+          {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
+        </div>
+      ) : null}
       {children}
     </div>
   )
@@ -269,12 +289,12 @@ export type SettingsPillProps = {
 } & Pick<ButtonHTMLAttributes<HTMLButtonElement>, 'title' | 'disabled'>
 
 const PILL_SELECTED = {
-  ink: 'bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] border-transparent',
+  ink: 'v6c-pressable bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] border-transparent shadow-[var(--shadow-raised)]',
   terracotta:
-    'bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] border-[var(--color-primary-fixed-dim)]',
+    'v6c-pressable bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)] border-[var(--color-primary-fixed-dim)]',
 } as const
 
-/** A `rounded-full` single-choice chip, for option sets that wrap onto several lines. */
+/** A 6px single-choice chip, for option sets that wrap onto several lines. */
 export function SettingsPill({
   selected,
   tone = 'ink',
@@ -290,13 +310,13 @@ export function SettingsPill({
       onClick={onClick}
       aria-pressed={selected}
       className={cx(
-        'inline-flex h-7 items-center justify-center gap-1.5 rounded-full border px-3 text-xs font-medium',
-        'transition-[background-color,color,border-color] duration-150 ease-out',
+        'inline-flex h-7 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border px-3 text-xs font-medium',
+        'transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
           ? PILL_SELECTED[tone]
-          : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+          : 'v6c-raised v6c-pressable border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]',
         className,
       )}
     >
@@ -317,7 +337,7 @@ export function SettingsStat({ label, value, hint, className }: SettingsStatProp
   return (
     <div
       className={cx(
-        'grid min-w-0 gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3.5',
+        'v6c-glass-card grid min-w-0 gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-3.5',
         className,
       )}
     >
@@ -325,7 +345,7 @@ export function SettingsStat({ label, value, hint, className }: SettingsStatProp
       <div className="text-[22px] font-semibold leading-tight tracking-[-0.02em] tabular-nums text-[var(--color-text-primary)]">
         {value}
       </div>
-      {hint ? <div className="truncate text-xs text-[var(--color-text-tertiary)]">{hint}</div> : null}
+      {hint ? <div className="truncate text-xs tabular-nums text-[var(--color-text-tertiary)]">{hint}</div> : null}
     </div>
   )
 }

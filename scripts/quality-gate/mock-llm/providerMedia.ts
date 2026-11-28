@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { buildProviderManagedEnv } from '../../../src/server/services/providerRuntimeEnv'
 import { createQualityGateSandbox } from '../sandbox'
 import { MOCK_IMAGE_PNG_BASE64, startMockLlmServer } from './server'
@@ -15,8 +16,8 @@ const LARGE_DONE = 'PROVIDER_MEDIA_LARGE_DONE'
 const REUSE_DONE = 'PROVIDER_MEDIA_REUSE_DONE'
 const TIMEOUT_MS = 60_000
 
-type Block = { type?: string; id?: string; tool_use_id?: string; is_error?: boolean; content?: unknown; source?: { type?: string; data?: string; file_id?: string } }
-type MediaEvidence = { bytes: number; fileIds: string[]; base64Images: number; pairedRead: boolean; uploads: number; beta: string | null }
+type Block = { type?: string; id?: string; tool_use_id?: string; is_error?: boolean; text?: string; content?: unknown; source?: { type?: string; data?: string; file_id?: string } }
+type MediaEvidence = { bytes: number; fileIds: string[]; base64Images: number; omittedImages: number; pairedRead: boolean; uploads: number; beta: string | null }
 
 function mediaEvidence(request: MockRequest, bytes: number, uploads: number, beta: string | null): MediaEvidence {
   const blocks = request.messages?.flatMap(message => Array.isArray(message.content) ? message.content : []) as Block[] ?? []
@@ -26,6 +27,7 @@ function mediaEvidence(request: MockRequest, bytes: number, uploads: number, bet
     bytes, uploads, beta,
     fileIds: images.flatMap(image => image.source?.type === 'file' ? [image.source.file_id!] : []),
     base64Images: images.filter(image => image.source?.type === 'base64').length,
+    omittedImages: blocks.filter(block => block.type === 'text' && block.text?.includes('[Image omitted from this request')).length,
     pairedRead: blocks.some(block => block.type === 'tool_use' && block.id === TOOL_ID) &&
       blocks.some(block => block.type === 'tool_result' && block.tool_use_id === TOOL_ID && !block.is_error &&
         Array.isArray(block.content) && block.content.some((image: Block) => image.type === 'image')),
@@ -37,7 +39,7 @@ const textReply = (text: string): MockReply => ({ kind: 'message', content: [{ t
 /**
  * Real SDK input → CLI history → authenticated provider fetch → Files API →
  * messages → real Read tool → next user turn. Only the remote service is faked.
- * The padded PNG is synthetic transport load (not a vision quality fixture).
+ * The padded JPEG is synthetic transport load (not a vision quality fixture).
  */
 export async function runProviderMediaScenario(rootDir: string, artifactDir: string) {
   mkdirSync(artifactDir, { recursive: true })
@@ -50,11 +52,13 @@ export async function runProviderMediaScenario(rootDir: string, artifactDir: str
   mkdirSync(workDir, { recursive: true })
   const imagePath = join(workDir, 'fixture.png')
   writeFileSync(imagePath, Buffer.from(MOCK_IMAGE_PNG_BASE64, 'base64'))
-  // 4 MiB in base64, below the per-image 5 MiB validation limit. Repeated
-  // instances exercise content deduplication and history replacement together.
+  // 4 MiB in base64, below the per-image 5 MiB validation limit. Use an already
+  // lossy image at its final grid: PNG padding is removed by context encoding.
+  // Repeated instances exercise upload deduplication and history handling.
   const paddedImage = Buffer.alloc(3 * MIB)
-  Buffer.from(MOCK_IMAGE_PNG_BASE64, 'base64').copy(paddedImage)
-  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: paddedImage.toString('base64') } }
+  const jpeg = await sharp(Buffer.from(MOCK_IMAGE_PNG_BASE64, 'base64')).jpeg({ quality: 90 }).toBuffer()
+  jpeg.copy(paddedImage)
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: paddedImage.toString('base64') } }
   const evidence: MediaEvidence[] = []
   const uploads: Array<{ bytes: number; type: string; purpose: string; expiry: string }> = []
   const errors: string[] = []
@@ -78,6 +82,7 @@ export async function runProviderMediaScenario(rootDir: string, artifactDir: str
           const form = await req.formData()
           const file = form.get('file')
           assert.ok(file instanceof File)
+          assert.equal(file.type, 'image/jpeg')
           assert.equal(form.get('purpose'), 'user_data')
           assert.equal(form.get('expires_after[anchor]'), 'created_at')
           assert.equal(form.get('expires_after[seconds]'), '86400')
@@ -167,17 +172,20 @@ export async function runProviderMediaScenario(rootDir: string, artifactDir: str
     await send([{ type: 'text', text: 'Review these additional images, then Read fixture.png.' }, ...Array.from({ length: 10 }, () => image)])
     await waitForResult(LARGE_DONE)
     assert.equal(uploads.length, 1, 'large request must deduplicate uploads')
-    assert.equal(evidence[1]!.fileIds.length, 11, 'large history did not convert its repeated images')
+    assert.equal(evidence[1]!.fileIds.length, 10, 'current input images were lost before upload')
+    assert.equal(evidence[1]!.omittedImages, 1, 'older image needs an explicit request-only note')
     assert.equal(evidence[1]!.base64Images, 0)
     assert.ok(evidence[1]!.bytes < 32 * MIB)
     assert.ok(evidence[1]!.beta?.split(',').includes('files-api-2025-04-14'))
     assert.ok(evidence[2]!.pairedRead, 'real Read did not return an image paired with its tool_use')
+    assert.equal(evidence[2]!.fileIds.length, 10, 'a tool round lost current input images')
     phase = 3
     await send([{ type: 'text', text: 'Continue from the same images.' }])
     await waitForResult(REUSE_DONE)
     assert.equal(uploads.length, 1, 'next turn re-uploaded cached images')
     const reused = evidence.at(-1)!
-    assert.equal(reused.fileIds.length, 11)
+    assert.equal(reused.fileIds.length, 5, 'older history did not retain recent images within the image budget')
+    assert.equal(reused.omittedImages, 6, 'older history needs explicit notes')
     assert.ok(reused.fileIds.every(id => id === FILE_ID))
     assert.ok(reused.pairedRead, 'next turn lost tool pairing')
     proc.stdin.end()

@@ -1,6 +1,7 @@
 import { SettingsService } from './settingsService.js'
 import type { ProviderProxyConfig } from '../types/provider.js'
-import { getProxyFetchOptions, getProxyUrl } from '../../utils/proxy.js'
+import { getProxyFetchOptions, getProxyUrl, shouldBypassProxy } from '../../utils/proxy.js'
+import { setMcpHostProxyResolver } from '../../services/mcp/hostProxy.js'
 
 export type NetworkProxyMode = 'direct' | 'system' | 'manual'
 
@@ -169,6 +170,9 @@ export function mergeLoopbackNoProxy(existing: string | undefined): string {
     .split(/[,\s]+/)
     .map(entry => entry.trim())
     .filter(Boolean)
+  // A wildcard already includes loopback. Keep it standalone so child
+  // runtimes and proxy clients retain its bypass-all meaning.
+  if (entries.includes('*')) return '*'
   const lowerEntries = new Set(entries.map(entry => entry.toLowerCase()))
 
   for (const entry of LOOPBACK_NO_PROXY_ENTRIES) {
@@ -224,8 +228,14 @@ export function getNetworkProxyFetchOptions(
   settings: NetworkSettings,
   targetUrl: string | URL,
 ): ReturnType<typeof getProxyFetchOptions> {
-  const noProxy = mergeLoopbackNoProxy(process.env.no_proxy || process.env.NO_PROXY)
-  const proxyUrl = getNetworkProxyUrl(settings)
+  const configuredNoProxy = process.env.no_proxy || process.env.NO_PROXY
+  const noProxy = mergeLoopbackNoProxy(configuredNoProxy)
+  // A target that does not need a proxy must not depend on the system bridge
+  // starting successfully. Check the original list too so a lone '*' keeps
+  // its meaning when loopback entries are appended.
+  const bypass = shouldBypassProxy(String(targetUrl), configuredNoProxy)
+    || shouldBypassProxy(String(targetUrl), noProxy)
+  const proxyUrl = bypass ? null : getNetworkProxyUrl(settings)
 
   return getProxyFetchOptions({
     proxyUrl,
@@ -237,4 +247,21 @@ export function getNetworkProxyFetchOptions(
 export async function loadNetworkSettings(): Promise<NetworkSettings> {
   const settings = await new SettingsService().getUserSettings()
   return normalizeNetworkSettings(settings)
+}
+
+/**
+ * MCP connections the server opens itself (connector checks, MCP status in
+ * Settings) follow the network setting like its other requests do. The
+ * desktop host starts this process without proxy variables (#1864).
+ */
+export function configureMcpHostProxy(): () => void {
+  return setMcpHostProxyResolver(async targetUrl => {
+    const options = getNetworkProxyFetchOptions(await loadNetworkSettings(), targetUrl)
+    // Bun otherwise reads proxy variables again even when the host selected
+    // direct/bypass. Keep that native decision local to registered MCP hosts;
+    // an unregistered CLI retains its existing environment fallback.
+    return typeof Bun !== 'undefined' && !options.proxy
+      ? { ...options, proxy: false as const }
+      : options
+  })
 }

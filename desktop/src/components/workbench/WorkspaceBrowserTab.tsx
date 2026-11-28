@@ -15,7 +15,9 @@ import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { WorkspaceBrowserAddressBar } from '@/components/workbench/WorkspaceBrowserAddressBar'
+import { WorkspaceBrowserAgentOverlay } from '@/components/workbench/WorkspaceBrowserAgentOverlay'
 import { WorkspaceBrowserSelectionBar } from '@/components/workbench/WorkspaceBrowserSelectionBar'
+import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -122,6 +124,8 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
 
   const currentAddress = page?.url || tab.url || ''
   const annotationActive = page?.annotationActive ?? false
+  const agentControlState = useBrowserUseStore((state) => state.tabStates[browserTabId]?.controlState ?? 'idle')
+  const agentControlling = agentControlState === 'active'
 
   useLayoutEffect(() => {
     const request = initialAddressFocusRef.current
@@ -195,6 +199,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
     const request = ++navigationRequestRef.current
     void ensureWorkspaceBrowserGuest(browserTabId, async (webContentsId) => {
       const result = await workspaceBrowserHost.create(browserTabId, {
+        sessionId,
         storageId: tab.storageId,
         webContentsId,
         ...(tab.url ? { url: tab.url } : {}),
@@ -411,7 +416,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         data-testid="workspace-browser-unavailable"
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-8 text-center"
       >
-        <span aria-hidden="true" className="mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
+        <span aria-hidden="true" className="mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
           <Globe size={16} strokeWidth={1.75} />
         </span>
         <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -496,7 +501,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
           }}
           size="sm"
           tone="muted"
-          disabled={!ready || !tab.url || !!tab.loadError}
+          disabled={!ready || !tab.url || !!tab.loadError || agentControlling}
           data-testid="workspace-browser-annotate"
           onClick={pickElement}
         />
@@ -573,7 +578,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         <div ref={stageRef} data-testid="workspace-browser-placeholder" className="absolute inset-0" />
         {!tab.url && !tab.loadError ? (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
-            <span aria-hidden="true" className="mb-1 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
+            <span aria-hidden="true" className="mb-1 flex h-10 w-10 items-center justify-center rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
               <Globe size={20} strokeWidth={1.75} />
             </span>
             <p className="text-[15px] font-medium text-[var(--color-text-primary)]">
@@ -590,7 +595,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
             data-testid="workspace-browser-error"
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--color-surface)] px-8 text-center"
           >
-            <span aria-hidden="true" className="mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]">
+            <span aria-hidden="true" className="v6c-ring-error mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]">
               <Globe size={16} strokeWidth={1.75} />
             </span>
             <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -616,6 +621,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         ) : null}
       </div>
 
+      <WorkspaceBrowserAgentOverlay tabId={browserTabId} />
       <WorkspaceBrowserSelectionBar sessionId={sessionId} browserTabId={browserTabId} />
       <ConfirmDialog
         open={pendingNavigation !== null}
@@ -661,7 +667,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
                   {downloads.map((item) => (
                     <li
                       key={item.id}
-                      className="flex min-h-[30px] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1"
+                      className="flex min-h-[30px] items-center gap-2 rounded-[var(--radius-control)] px-2 py-1"
                     >
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-primary)]">
                         {item.filename}
@@ -698,7 +704,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
                         setPanel(null)
                         navigate(visit.url)
                       }}
-                      className="flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                      className="flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                     >
                       <span className="w-full truncate text-[13px] text-[var(--color-text-primary)]">
                         {visit.title || visit.url}

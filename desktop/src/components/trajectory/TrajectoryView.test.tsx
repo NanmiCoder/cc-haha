@@ -12,6 +12,7 @@ vi.mock('../../api/trajectory', () => ({
     getPage: (sessionId: string, page?: { cursor?: string; after?: string; agentId?: string }) => getPage(sessionId, page),
     getRow: (sessionId: string, rowId: string) => getRow(sessionId, rowId),
     getSnapshot: (sessionId: string, hash: string) => getSnapshot(sessionId, hash),
+    getTraceCallsNear: vi.fn(async () => ({ captured: false, calls: [] })),
   },
 }))
 
@@ -220,7 +221,9 @@ describe('TrajectoryView', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'View subagent trajectory' }))
     expect(await screen.findByText('Subagent prompt')).toBeInTheDocument()
     expect(getPage).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ agentId: 'abc123' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Main session' }))
+    const exitSubagentBtn = screen.getByRole('button', { name: 'Main session' })
+    expect(exitSubagentBtn).toHaveClass('hover:bg-[var(--color-surface-hover)]')
+    fireEvent.click(exitSubagentBtn)
     expect(await screen.findByText('Build the console')).toBeInTheDocument()
     // The row that opened the subagent is selected again.
     await waitFor(() => expect(screen.getByRole('option', { selected: true }).dataset.rowId).toBe('t:toolu_1'))
@@ -284,5 +287,59 @@ describe('TrajectoryView', () => {
     expect(screen.getByText('(call is in earlier history)')).toBeInTheDocument()
     view.rerender(<TrajectoryView sessionId="session-1" visible running={false} activityKey={0} />)
     expect(await screen.findByText('No result')).toBeInTheDocument()
+  })
+
+  it('shows an explicit notice when prompt snapshots are unavailable, and hides it when present', async () => {
+    getPage.mockResolvedValue(page(baseRows(), { snapshots: [] }))
+    const view = renderView()
+    expect(await screen.findByTestId('trajectory-no-snapshots')).toHaveTextContent(
+      /System prompt and tool list snapshots are not available for this session/,
+    )
+
+    view.unmount()
+    clearTrajectoryDataCache()
+    getPage.mockResolvedValue(page(baseRows(), { snapshots: [SNAPSHOT] }))
+    renderView()
+    await screen.findByText('Initial system prompt')
+    expect(screen.queryByTestId('trajectory-no-snapshots')).not.toBeInTheDocument()
+  })
+
+  it('shows an earlier-history hint when snapshots only exist before the loaded tail page', async () => {
+    const earlierSnapshot = { ...SNAPSHOT, ts: at(0) }
+    getPage.mockResolvedValue(page(baseRows(), { olderCursor: 'older-1', snapshots: [earlierSnapshot] }))
+    renderView()
+    const banner = await screen.findByTestId('trajectory-snapshots-earlier')
+    expect(banner).toHaveTextContent(/earlier records/)
+    expect(within(banner).getByRole('button', { name: 'Load earlier records' })).toBeInTheDocument()
+  })
+
+  it('offers the raw request tab inside a subagent trajectory and shows subagent empty snapshot notice', async () => {
+    const rows = baseRows()
+    rows[3] = { ...rows[3]!, toolName: 'Agent', agentId: 'explore42', inputPreview: '{"description":"Explore repo"}' }
+    const subRows = [
+      row({ id: 'u:sub', kind: 'user', preview: 'Subagent prompt' }),
+      row({ id: 'a:sub1', kind: 'assistant', preview: 'Subagent reply' }),
+    ]
+    getPage.mockImplementation(async (_sessionId, request) => request?.agentId
+      ? page(subRows, { snapshots: [] })
+      : page(rows, { snapshots: [SNAPSHOT] }))
+    getRow.mockResolvedValue({ rowId: 'a:sub1', truncated: false, entries: [] })
+    renderView()
+    fireEvent.click(await screen.findByText('Agent'))
+    fireEvent.click(await screen.findByRole('button', { name: 'View subagent trajectory' }))
+    expect(await screen.findByTestId('trajectory-no-snapshots')).toHaveTextContent(/this subagent/)
+    fireEvent.click(await screen.findByText('Subagent reply'))
+    const panel = await screen.findByTestId('trajectory-detail')
+    expect(within(panel).getByRole('tab', { name: 'Raw request' })).toBeInTheDocument()
+  })
+
+  it('does not flash missing snapshot notice while turn 1 is still starting without an assistant row', async () => {
+    getPage.mockResolvedValue(page([row({ id: 'u:p1', kind: 'user', preview: 'Starting turn' })], { snapshots: [] }))
+    const view = renderView({ running: true })
+    await screen.findByText('Starting turn')
+    expect(screen.queryByTestId('trajectory-no-snapshots')).not.toBeInTheDocument()
+
+    view.rerender(<TrajectoryView sessionId="session-1" visible running={false} activityKey={0} />)
+    expect(await screen.findByTestId('trajectory-no-snapshots')).toBeInTheDocument()
   })
 })

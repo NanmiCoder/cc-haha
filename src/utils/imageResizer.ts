@@ -6,6 +6,7 @@ import {
   API_IMAGE_MAX_BASE64_SIZE,
   IMAGE_MAX_HEIGHT,
   IMAGE_MAX_WIDTH,
+  IMAGE_CONTEXT_TARGET_BYTES,
   IMAGE_TARGET_RAW_SIZE,
 } from '../constants/apiLimits.js'
 import { logEvent } from '../services/analytics/index.js'
@@ -171,6 +172,70 @@ const IMAGE_PROMPT_SOFT_LONG_EDGE = 2048
 const IMAGE_PROMPT_READABLE_LONG_EDGE = 1568
 const READABLE_JPEG_QUALITIES = [85, 75] as const
 const FALLBACK_JPEG_QUALITIES = [65] as const
+
+/**
+ * Optimize the context copy without changing the source file. The byte target
+ * is soft: keep a high-quality, smaller candidate when it cannot be reached.
+ * Hard API validation and its processor-unavailable fallback still apply.
+ */
+export async function optimizeImageForContext(
+  imageBuffer: Buffer,
+  originalSize: number,
+  ext: string,
+  dimensionLimit?: number,
+  maxBytes = IMAGE_CONTEXT_TARGET_BYTES,
+): Promise<ResizeResult> {
+  const validated = await maybeResizeAndDownsampleImageBuffer(
+    imageBuffer, originalSize, ext, dimensionLimit ?? IMAGE_MAX_WIDTH,
+  )
+  if (validated.buffer.length <= maxBytes) return validated
+
+  let best = validated
+  try {
+    // Use the shipped processor's alpha/orientation contract for re-encoding.
+    const sharp = await getImageProcessor({ requireAutoOrient: true })
+    const metadata = await sharp(validated.buffer).metadata()
+    if (!metadata.width || !metadata.height || metadata.format === 'gif' || (metadata.pages ?? 1) > 1) return validated
+    const autoOrient = !!metadata.orientation && metadata.orientation !== 1
+    const swapAxes = autoOrient && metadata.orientation! >= 5
+    const width = swapAxes ? metadata.height : metadata.width
+    const height = swapAxes ? metadata.width : metadata.height
+    const originalWidth = validated.dimensions?.originalWidth ?? width
+    const originalHeight = validated.dimensions?.originalHeight ?? height
+    // Do not create successive lossy generations at the same pixel grid when
+    // a soft target is unattainable. Simple VP8L WebP is known lossless; treat
+    // extended/unknown WebP conservatively, just like an existing JPEG.
+    const alreadyLossy = metadata.format === 'jpeg' ||
+      (metadata.format === 'webp' && validated.buffer.toString('ascii', 12, 16) !== 'VP8L')
+    const readable = constrainDimensions(width, height, IMAGE_PROMPT_READABLE_LONG_EDGE, IMAGE_PROMPT_READABLE_LONG_EDGE)
+    const sizes = [{ width, height }]
+    if (readable.width !== width || readable.height !== height) sizes.push(readable)
+
+    for (const dimensions of sizes) {
+      if (alreadyLossy && dimensions.width === width && dimensions.height === height) continue
+      const pipeline = () => createImagePipeline(sharp, validated.buffer, width, height, dimensions, autoOrient)
+      const encoders: Array<() => SharpInstance> = []
+      if (metadata.format === 'png') encoders.push(() => pipeline().png({ compressionLevel: 9 }))
+      if (metadata.format === 'png' || metadata.format === 'webp') encoders.push(() => pipeline().webp({ lossless: true }))
+      for (const quality of [90, 85]) {
+        // WebP retains alpha; JPEG would silently flatten a transparent image.
+        encoders.push(() => metadata.hasAlpha ? pipeline().webp({ quality }) : pipeline().jpeg({ quality }))
+      }
+      for (const encode of encoders) {
+        const buffer = await encode().toBuffer()
+        if (buffer.length >= best.buffer.length) continue
+        const output = await sharp(buffer).metadata()
+        if (!output.width || !output.height) continue
+        best = createResizeResult(buffer, output.format, originalWidth, originalHeight,
+          { width: output.width, height: output.height })
+        if (buffer.length <= maxBytes) return best
+      }
+    }
+  } catch (error) {
+    logForDebugging(`Context image optimization unavailable: ${errorMessage(error)}`, { level: 'warn' })
+  }
+  return best
+}
 
 /**
  * Extracted from FileReadTool's readImage function

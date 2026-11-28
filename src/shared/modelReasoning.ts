@@ -6,8 +6,22 @@ export const MODEL_REASONING_EFFORTS = [
   'max',
 ] as const
 
+export const SCHEMA_EFFORT_LEVELS = [
+  'low',
+  'medium',
+  'high',
+] as const
+
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
-export type ModelReasoningApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
+export type SchemaEffortLevel = (typeof SCHEMA_EFFORT_LEVELS)[number]
+export type ModelReasoningApiFormat =
+  | 'anthropic'
+  | 'openai_chat'
+  | 'openai_responses'
+  | 'gemini'
+  | 'google_vertex'
+  | 'bedrock_converse'
+  | 'azure_openai'
 export type ModelReasoningProviderKind =
   | 'zhipu_standard_api'
   | 'zhipu_coding_plan'
@@ -72,6 +86,10 @@ const COMPATIBLE_REASONING_API_FORMATS = [
   'anthropic',
   'openai_chat',
   'openai_responses',
+  'gemini',
+  'google_vertex',
+  'bedrock_converse',
+  'azure_openai',
 ] as const
 const GENERIC_REASONING_PROFILE: ModelReasoningProfile = {
   family: 'generic',
@@ -209,6 +227,46 @@ export function getModelReasoningCapabilityOverride(
 
 export function isModelReasoningEffort(value: string): value is ModelReasoningEffort {
   return (MODEL_REASONING_EFFORTS as readonly string[]).includes(value)
+}
+
+export function isSchemaEffortLevel(value: unknown): value is SchemaEffortLevel {
+  return typeof value === 'string' && (SCHEMA_EFFORT_LEVELS as readonly string[]).includes(value)
+}
+
+export function isPersistableSchemaEffortLevel(
+  value: unknown,
+  allowAntMax = false,
+): value is SchemaEffortLevel | 'max' {
+  return isSchemaEffortLevel(value) || (allowAntMax && value === 'max')
+}
+
+/**
+ * Resolve persisted effort deterministically across `effort` and `effortLevel`:
+ * 1. If `effort` is `'xhigh'` or `'max'`, prefer `effort` (official CLI cannot
+ *    persist `'xhigh'` or external `'max'` in `effortLevel`, so an older stale
+ *    `effortLevel` on disk must not shadow Desktop's higher tier).
+ * 2. Otherwise, prefer `effortLevel` when it is a valid schema `effortLevel`
+ *    (`'low' | 'medium' | 'high'`, plus `'max'` when `allowAntMax` is true) so
+ *    official CLI `/effort` updates in `~/.claude/settings.json` win over stale `effort`.
+ * 3. Otherwise, fall back to `effort` when it is a valid `ModelReasoningEffort`.
+ */
+export function resolveConfiguredEffortSetting(
+  settings: { effort?: unknown; effortLevel?: unknown } | null | undefined,
+  options?: { allowAntMaxEffortLevel?: boolean },
+): ModelReasoningEffort | undefined {
+  if (!settings) return undefined
+  const rawEffort = settings.effort
+  if (rawEffort === 'xhigh' || rawEffort === 'max') {
+    return rawEffort
+  }
+  const rawEffortLevel = settings.effortLevel
+  if (isPersistableSchemaEffortLevel(rawEffortLevel, options?.allowAntMaxEffortLevel === true)) {
+    return rawEffortLevel
+  }
+  if (typeof rawEffort === 'string' && isModelReasoningEffort(rawEffort)) {
+    return rawEffort
+  }
+  return undefined
 }
 
 function profileFromCapabilityOverride(

@@ -89,8 +89,11 @@ export function bringItemFromReference(reference: ComposerReference, asSkill = f
 
 const commandText = (name: string) => `/${name.replace(/^\//, '')} `
 
-/** 轻量档位只保留技能和斜杠命令。 */
-export function candidateBringItems(candidates: ComposerCandidate[], options: { lean: boolean }): BringItem[] {
+/** 轻量档位只保留技能和斜杠命令；Antigravity 只保留斜杠命令，隔离 Claude 技能与插件。 */
+export function candidateBringItems(
+  candidates: ComposerCandidate[],
+  options: { lean: boolean; antigravity?: boolean }
+): BringItem[] {
   const items: BringItem[] = []
   const seen = new Set<string>()
   for (const candidate of candidates) {
@@ -105,6 +108,7 @@ export function candidateBringItems(candidates: ComposerCandidate[], options: { 
           insertText: commandText(candidate.name),
         }
     if (seen.has(item.key)) continue
+    if (options.antigravity && item.group !== 'command') continue
     if (options.lean && !(item.group === 'command' || item.reference?.kind === 'skill')) continue
     seen.add(item.key)
     items.push(item)
@@ -271,10 +275,11 @@ export type BringExtrasData = {
 export function assembleBringItems(input: {
   candidates: ComposerCandidate[]
   lean: boolean
+  antigravity?: boolean
   extras: BringExtrasData
 }): BringItem[] {
-  const base = candidateBringItems(input.candidates, { lean: input.lean })
-  if (input.lean) return base
+  const base = candidateBringItems(input.candidates, { lean: input.lean, antigravity: input.antigravity })
+  if (input.lean || input.antigravity) return base
   const { connectors, agents, workflows } = input.extras
   const owned = new Set((connectors ?? []).map((connector) => connector.pluginId).filter(Boolean))
   const plugins = base.map((item) =>

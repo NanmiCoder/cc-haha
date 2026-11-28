@@ -360,7 +360,7 @@ export function PluginDetail() {
               {selectedPlugin.errors.map((error) => (
                 <span
                   key={error}
-                  className="rounded-[var(--radius-md)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] text-[var(--color-text-secondary)]"
+                  className="rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] text-[var(--color-text-secondary)]"
                 >
                   {error}
                 </span>
@@ -469,7 +469,7 @@ export function PluginDetail() {
         </CapabilityPreviewSection>
 
         {otherCapabilityItems.map(({ key, items }) => (
-          <Card key={key} radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+          <Card key={key} radius="lg" surface="none" padding="none" className="v6c-glass-card overflow-hidden">
             <div className="flex h-10 items-center justify-between gap-2 border-b border-[var(--color-border)] px-4">
               <div className="text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t(`settings.plugins.capabilityLabel.${key}`)}
@@ -482,7 +482,7 @@ export function PluginDetail() {
               {items.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {items.map((item) => (
-                    <Badge key={item} size="sm" wrap mono>
+                    <Badge key={item} size="sm" pill={false} wrap mono>
                       {item}
                     </Badge>
                   ))}
@@ -539,7 +539,7 @@ function CapabilityPreviewSection({
   hint?: string
 }) {
   return (
-    <Card as="section" radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+    <Card as="section" radius="lg" surface="none" padding="none" className="v6c-glass-card overflow-hidden">
       <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-4">
         <Icon className="flex-shrink-0 text-[var(--color-text-tertiary)]" size={15} strokeWidth={1.75} aria-hidden="true" />
         <div className="min-w-0 flex-1 text-[13px] font-medium text-[var(--color-text-primary)]">
@@ -597,8 +597,8 @@ function SkillPreviewCard({
       <div className="min-w-0">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{name}</span>
-          {version && <Badge mono>v{version}</Badge>}
-          <Badge variant="outline">{t('settings.skills.slashCommand')}</Badge>
+          {version && <Badge pill={false} mono>v{version}</Badge>}
+          <Badge variant="outline" pill={false}>{t('settings.skills.slashCommand')}</Badge>
         </div>
         <div className="mt-0.5 break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">/{slashName}</div>
         <div className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{description}</div>
@@ -663,7 +663,7 @@ function McpPreviewCard({
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{name}</span>
-          <Badge mono>{transport}</Badge>
+          <Badge pill={false} mono>{transport}</Badge>
         </div>
         <div className="mt-1 break-all font-mono text-[11px] leading-5 text-[var(--color-text-secondary)]">{summary}</div>
       </div>
@@ -688,7 +688,7 @@ function HookPreviewCard({
         {/* `wrap` is what unblocked these two: a hook matcher is a regex and an
             action is a shell command, and a nowrap badge pushed both off the
             card. */}
-        {matcher && <Badge wrap mono>{matcher}</Badge>}
+        {matcher && <Badge pill={false} wrap mono>{matcher}</Badge>}
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {actions.map((action) => (
@@ -712,7 +712,7 @@ function DetailStat({
   icon: LucideIcon
 }) {
   return (
-    <Card radius="lg" surface="lowest" padding="none" className="min-w-0 px-4 py-3">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card min-w-0 px-4 py-3">
       <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
         <Icon className="flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
         <span className="truncate">{label}</span>
@@ -740,5 +740,5 @@ function StatusPill({
       ? t('settings.plugins.status.enabled')
       : t('settings.plugins.status.disabled')
 
-  return <Badge tone={tone}>{label}</Badge>
+  return <Badge tone={tone} pill={false}>{label}</Badge>
 }

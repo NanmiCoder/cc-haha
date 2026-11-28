@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
-import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, replaceRemoteCompatibility, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
 import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
 
 test('remote image settings preserve the protocol while redacting image credentials', () => {
@@ -39,11 +39,33 @@ test('remote provider proxy settings expose the mode without any saved URL or au
   }
 })
 
+test('remote providers never carry an imported usage script or its credentials', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'scripted', presetId: 'custom', name: 'Scripted', apiKey: 'fake-model-key',
+    baseUrl: 'https://relay.example.test', models: { main: 'model', haiku: '', sonnet: '', opus: '' },
+    usageScript: {
+      enabled: true, code: 'fake-usage-script-body', templateType: 'newapi',
+      accessToken: 'fake-usage-token', secretAccessKey: 'fake-signing-secret',
+    },
+  })
+  expect(provider.usageScript?.secretAccessKey).toBe('fake-signing-secret')
+  const projected = projectRemoteProvider(provider)
+  expect(projected).not.toHaveProperty('usageScript')
+  for (const secret of ['fake-usage-script-body', 'fake-usage-token', 'fake-signing-secret']) {
+    expect(JSON.stringify(projected)).not.toContain(secret)
+  }
+})
+
 test('remote settings boundary permits only intended provider routes and General fields', () => {
   const parts = (pathname: string) => pathname.split('/').filter(Boolean)
   expect(remoteProviderRouteAllowed(parts('/api//providers/settings/'), 'GET')).toBe(false)
   expect(remoteProviderRouteAllowed(parts('/api/providers/id/extra'), 'DELETE')).toBe(false)
   expect(remoteProviderRouteAllowed(parts('/api/providers/id/activate'), 'POST')).toBe(true)
+  expect(remoteProviderRouteAllowed(parts('/api/providers/antigravity-acp/discover'), 'POST')).toBe(true)
+  expect(remoteProviderRouteAllowed(parts('/api/providers/antigravity-acp/discover'), 'GET')).toBe(false)
+  expect(remoteProviderRouteAllowed(parts('/api/providers/antigravity-acp/discover/extra'), 'POST')).toBe(false)
+  expect(remoteProviderRouteAllowed(parts('/api/providers/antigravity-acp/activate'), 'POST')).toBe(false)
+  expect(remoteProviderRouteAllowed(parts('/api/providers/antigravity-acp'), 'PUT')).toBe(false)
   expect(remoteSettingsRouteAllowed(parts('/api/settings/user/extra'), 'PUT')).toBe(false)
   expect(validateRemoteSettingsPatch({ hooks: {} })).toBe(false)
   expect(validateRemoteSettingsPatch({ alwaysThinkingEnabled: 'true' })).toBe(false)
@@ -90,4 +112,25 @@ test('remote projections drop nested and unknown fields and tolerate malformed b
   expect(projectRemoteWorkflows({ workflows: [{ name: 'w', filePath: '/p', script: 'code' }] })).toEqual({ workflows: [{ name: 'w' }] })
   expect(projectRemoteWorkflows({ workflows: 'nope' })).toEqual({ workflows: [] })
   expect(projectRemoteAgents({ activeAgents: [{ agentType: 'a', systemPrompt: 's', baseDir: '/b' }] })).toEqual({ activeAgents: [{ agentType: 'a' }], allAgents: [] })
+})
+
+test('remote provider policy preserves and updates requestCompatibility.serviceTier', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'vertex-remote',
+    presetId: 'custom',
+    name: 'Vertex Remote',
+    apiKey: 'fake-key',
+    baseUrl: 'https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1',
+    apiFormat: 'google_vertex',
+    requestCompatibility: { serviceTier: 'priority', maxOutputTokens: 8192 },
+    models: { main: 'gemini-3-pro', haiku: '', sonnet: '', opus: '' },
+  })
+  expect(projectRemoteProvider(provider).requestCompatibility).toEqual({
+    serviceTier: 'priority',
+    maxOutputTokens: 8192,
+  })
+  expect(replaceRemoteCompatibility(
+    { serviceTier: 'priority', maxOutputTokens: 8192 },
+    { serviceTier: 'flex', maxOutputTokens: 8192 },
+  )).toEqual({ serviceTier: 'flex', maxOutputTokens: 8192 })
 })

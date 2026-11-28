@@ -100,4 +100,35 @@ describe('MobileBottomSheet focus', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('uses V6C dialog glass, blurred backdrop, grabber bar, and standardized header chrome', () => {
+    const onClose = vi.fn()
+    render(
+      <MobileBottomSheet open onClose={onClose} title="Settings" closeLabel="Close sheet" testId="v6c-sheet">
+        <p>Body</p>
+      </MobileBottomSheet>,
+    )
+
+    const panel = screen.getByTestId('v6c-sheet')
+    expect(panel).toHaveClass('dialog-glass', 'animate-sheet-rise', 'rounded-t-[var(--radius-3xl)]', 'border-t')
+    expect(panel.className).not.toContain('border-y')
+    expect(panel.className).not.toContain('bg-[var(--color-surface-dialog)]')
+
+    const backdrop = panel.parentElement?.querySelector('[data-sheet-backdrop]') as HTMLElement | null
+    expect(backdrop).not.toBeNull()
+    expect(backdrop).toHaveClass('dialog-backdrop')
+
+    const grabber = panel.querySelector('[data-sheet-grabber]') as HTMLElement | null
+    expect(grabber).not.toBeNull()
+    expect(grabber).toHaveClass('h-1', 'w-9', 'rounded-full', 'bg-[var(--color-outline)]')
+
+    const title = screen.getByText('Settings')
+    expect(title).toHaveClass('text-[15px]', 'font-semibold')
+
+    const closeButton = screen.getByRole('button', { name: 'Close sheet' })
+    expect(closeButton).toHaveClass('rounded-[var(--radius-control)]')
+
+    fireEvent.click(backdrop!)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
 })

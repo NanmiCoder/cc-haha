@@ -9,6 +9,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { withBrowserUseRequest } from '@/lib/browserUseRequest'
 import { COMPUTER_USE_ENABLE_REQUEST } from '@/lib/computerUseEnable'
 import { AGENT_TEAMS_NOTICE_STORAGE_KEY, dismissAgentTeamsNotice } from '@/lib/agentTeamsNotice'
 import { readRecentSkills, RECENT_SKILLS_STORAGE_KEY } from '@/lib/recentSkills'
@@ -56,6 +57,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/workspace/openSideChat', () => ({ openSideChat: mocks.sideOpen }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../../api/sessions', () => ({
   sessionsApi: {
     create: mocks.create,
@@ -63,6 +71,7 @@ vi.mock('../../api/sessions', () => ({
     list: mocks.list,
     getMessages: mocks.getMessages,
     getGitInfo: mocks.getGitInfo,
+    invalidateGitInfo: vi.fn(),
     getSlashCommands: mocks.getSlashCommands,
     getRepositoryContext: mocks.getRepositoryContext,
     createRepositoryBranch: mocks.createRepositoryBranch,
@@ -130,8 +139,8 @@ vi.mock('../controls/PermissionModeSelector', () => ({
   // Surfaces `compact` because that prop is the difference between the labelled
   // pill and the bare icon the real selector renders, and the composer decides
   // it from the column width.
-  PermissionModeSelector: ({ compact, sessionId, trigger, menuAlign }: { compact?: boolean; sessionId?: string; trigger?: string; menuAlign?: string }) => (
-    <button type="button" data-testid="permission-mode-selector" data-session={sessionId} data-compact={compact ? 'true' : 'false'} data-trigger={trigger} data-menu-align={menuAlign}>
+  PermissionModeSelector: ({ compact, sessionId, trigger, menuAlign, allowedModes }: { compact?: boolean; sessionId?: string; trigger?: string; menuAlign?: string; allowedModes?: readonly string[] }) => (
+    <button type="button" data-testid="permission-mode-selector" data-session={sessionId} data-compact={compact ? 'true' : 'false'} data-trigger={trigger} data-menu-align={menuAlign} data-allowed-modes={allowedModes ? allowedModes.join(',') : ''}>
       Permissions
     </button>
   ),
@@ -140,11 +149,11 @@ vi.mock('../controls/PermissionModeSelector', () => ({
 vi.mock('../controls/ModelSelector', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    ModelSelector: React.forwardRef<{ open: () => void }, { fluid?: boolean; runtimeKey?: string }>(({ fluid, runtimeKey }, ref) => {
+    ModelSelector: React.forwardRef<{ open: () => void }, { fluid?: boolean; runtimeKey?: string; lockedProviderId?: string | null }>(({ fluid, runtimeKey, lockedProviderId }, ref) => {
       const [open, setOpen] = React.useState(false)
       React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), [])
       return (
-        <div data-testid="model-selector-shell" data-session={runtimeKey} className={fluid ? 'min-w-0 flex-1' : 'shrink-0'}>
+        <div data-testid="model-selector-shell" data-session={runtimeKey} data-locked-provider-id={lockedProviderId ?? ''} className={fluid ? 'min-w-0 flex-1' : 'shrink-0'}>
           <button type="button">Model</button>
           {open && <div data-testid="model-selector-dropdown">Model selector opened</div>}
         </div>
@@ -154,6 +163,7 @@ vi.mock('../controls/ModelSelector', async () => {
 })
 
 import { ChatInput } from './ChatInput'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { getComposerElement, getComposerText, getComposerView, setComposerSelection, setComposerText } from './composerTestUtils'
 import { useVoiceInputStore } from '../../stores/voiceInputStore'
 import { useChatStore, type RepositoryLaunchDraftState } from '../../stores/chatStore'
@@ -165,14 +175,13 @@ import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextS
 import { useWorkflowStore } from '../../stores/workflowStore'
 import { workflowsApi } from '../../api/workflows'
 import { computerUseApi } from '../../api/computerUse'
+import { browserUseApi } from '../../api/browserUse'
+import { useBrowserUseStore } from '../../stores/browserUseStore'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { settingsApi } from '../../api/settings'
 import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import type { SlashCommandOption } from '../../types/slashCommand'
-import {
-  captureProjectDisplayNameHydrationRevision,
-  hydrateProjectDisplayNames,
-} from '../../stores/projectDisplayNameStore'
+import { hydrateProjectDisplayNames } from '../../stores/projectDisplayNameStore'
 
 /**
  * Opens the run-location pill's menu. Directory, branch and worktree all live
@@ -256,6 +265,7 @@ describe('ChatInput file mentions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     localStorage.removeItem(RECENT_SKILLS_STORAGE_KEY)
     localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
     useSideChatStore.setState({ entries: {} })
@@ -1017,12 +1027,11 @@ describe('ChatInput file mentions', () => {
     expect(modeSheet).toHaveTextContent('Unavailable')
   })
 
-  // On desktop the lean badge and its info button used to share the row with
-  // the project, branch and model, and the row wrapped its trailing group onto a
-  // second line to make room, which left the first line's right half empty.
-  // The lean mode is a chip in the leading group now, so the row never wraps.
-  // jsdom lays nothing out; this pins the pieces that keep that from coming back.
-  it.each([false, true])('keeps the desktop toolbar to one row, the leading group giving way (lean session %s)', (lean) => {
+  // On desktop the run location lives in the bare under-card context strip, so
+  // the leading group stays `shrink-0` (protecting "+" from ever colliding with
+  // trailing controls in narrow split-pane columns) while the trailing group
+  // (`min-w-0 flex-1`) gives up model-name width cleanly without wrapping.
+  it.each([false, true])('keeps the desktop toolbar to one row without crushing the leading controls (lean session %s)', (lean) => {
     stubComposerColumnWidth(640)
     if (lean) useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
     render(<ChatInput compact />)
@@ -1031,8 +1040,8 @@ describe('ChatInput file mentions', () => {
     const trailing = screen.getByTestId('chat-input-toolbar-trailing')
 
     expect(toolbar).not.toHaveClass('flex-wrap')
-    expect(leading).toHaveClass('min-w-0', 'shrink')
-    expect(trailing).toHaveClass('shrink-0')
+    expect(leading).toHaveClass('shrink-0')
+    expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
     expect(trailing).toContainElement(screen.getByTestId('model-selector-shell'))
     expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
@@ -1496,16 +1505,19 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput variant="hero" />)
 
     const panel = screen.getByTestId('chat-input-panel')
-    // The floating card (「素」): `--radius-xl` + the composer step of the
-    // shadow scale, the same shell EmptySession renders.
-    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'glass-panel--composer')
+    // Floating frosted-glass composer shell: `.composer-glass` + `--radius-2xl`.
+    expect(panel).toHaveClass('rounded-[var(--radius-2xl)]', 'composer-glass')
     expect(panel).not.toHaveClass('rounded-b-none')
 
-    // One pill in the toolbar instead of a three-button bar welded to the
-    // panel's bottom edge — which is what used to square off that edge.
+    // Repository launch pill lives in the bare under-card strip cleanly below
+    // the rounded composer card without overlapping its bottom corners.
+    const strip = screen.getByTestId('composer-context-strip')
+    expect(strip).toHaveClass('pt-2')
+    expect(strip).not.toHaveClass('surface-glass')
+    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const pill = await screen.findByRole('button', { name: 'Location: repo / main' })
-    expect(panel).toContainElement(pill)
-    // A 28px toolbar control like its neighbours, not a bordered pill.
+    expect(strip).toContainElement(pill)
+    expect(panel).not.toContainElement(pill)
     expect(pill).toHaveClass('h-7')
     expect(screen.queryByText('Select a project...')).not.toBeInTheDocument()
 
@@ -1516,115 +1528,106 @@ describe('ChatInput file mentions', () => {
     expect(within(menu).getByRole('menuitemradio', { name: /Isolated worktree/ })).toBeInTheDocument()
   })
 
-  // Sending the first message used to move the run location from inside the
-  // panel to a chip below it. It stays in the toolbar now and only loses its
-  // affordances, so nothing shifts under the cursor.
-  //
-  // The variant here is `default` on purpose: ActiveSession renders the hero
-  // composer only while the session is empty, so a live session is always the
-  // default one. Asserting this against `hero` passed while the shipped
-  // composer still dropped the chip below the panel.
-  it('swaps the pill for a read-only chip in the same row once the session has messages', async () => {
+  it('omits the under-card context strip once the session has messages, leaving shell bottom padding', async () => {
     // beforeEach seeds one message, so this is a live session, not a draft.
     render(<ChatInput variant="default" />)
 
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(chip).toHaveTextContent('repo')
-    expect(chip).toHaveTextContent('main')
-
-    expect(screen.getByTestId('chat-input-toolbar')).toContainElement(chip)
-    expect(screen.getByTestId('chat-input-panel')).toContainElement(chip)
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Location/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-shell')).toHaveClass('pb-5')
   })
 
-  it('reactively uses the active session project root display name while retaining the active worktree path in context', async () => {
-    const worktreePath = '/repo/.claude/worktrees/desktop-main-12345678'
-    useSessionStore.setState({
-      sessions: [{
-        id: sessionId,
-        title: 'Project',
-        createdAt: '2026-05-01T00:00:00.000Z',
-        modifiedAt: '2026-05-01T00:00:00.000Z',
-        messageCount: 1,
-        projectPath: '/repo',
-        projectRoot: '/repo',
-        workDir: worktreePath,
-        workDirExists: true,
-      }],
-      activeSessionId: sessionId,
-    })
-    mocks.getGitInfo.mockResolvedValue({
-      branch: 'main',
+  it('keeps compact shell bottom padding when the under-card context strip is omitted', () => {
+    render(<ChatInput compact />)
+
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-shell')).toHaveClass('pb-4')
+  })
+
+  it('refreshes session git info on window focus, visibility return, and focus returning from the terminal', async () => {
+    let currentBranch = 'master'
+    mocks.getGitInfo.mockImplementation(async () => ({
+      branch: currentBranch,
       repoName: 'repo',
-      workDir: worktreePath,
+      workDir: '/repo',
       changedFiles: 0,
-      worktree: {
-        enabled: true,
-        path: worktreePath,
-        plannedPath: null,
-        sourceWorkDir: '/repo',
-        slug: 'desktop-main-12345678',
-        branch: 'main',
-      },
+      worktree: null,
+    }))
+
+    const { rerender } = render(
+      <div>
+        <button data-testid="prior-tab-button" type="button">Tab</button>
+        <textarea data-testid="docked-terminal-input" aria-label="Terminal" />
+        <ChatInput visible />
+      </div>,
+    )
+
+    await waitFor(() => expect(mocks.getGitInfo).toHaveBeenCalledTimes(1))
+    // Programmatic mount auto-focus does not trigger a back-to-back duplicate /git-info fetch.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
     })
+    expect(mocks.getGitInfo).toHaveBeenCalledTimes(1)
 
-    render(<ChatInput />)
-
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(chip).toHaveTextContent('repo')
-
+    currentBranch = 'dev_xxxx'
     act(() => {
-      hydrateProjectDisplayNames(
-        { '/repo': 'Personal repo' },
-        captureProjectDisplayNameHydrationRevision(),
-      )
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(2)
     })
 
-    expect(chip).toHaveTextContent('Personal repo')
+    // Switching branches in the docked bottom terminal and focusing back into the composer refreshes shared git info.
+    const terminalInput = screen.getByTestId('docked-terminal-input')
+    fireEvent.focus(terminalInput)
+    currentBranch = 'feat/from-terminal'
+    fireEvent.focus(getComposerElement(), { relatedTarget: terminalInput })
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(3)
+    })
 
-    // Once the alias takes over the label, the worktree details tooltip is the
-    // only place still naming the real project root and the active worktree
-    // path — the toolbar variant carries no `title` for a worktree.
-    expect(chip).not.toHaveAttribute('title')
-    fireEvent.mouseEnter(screen.getByTestId('worktree-details-trigger'))
-
-    const tooltip = await screen.findByRole('tooltip')
-    // Exact-text lookups: '/repo' is a prefix of the worktree path, so a
-    // substring assertion would pass even if the project root row went missing.
-    expect(within(tooltip).getByText('/repo')).toBeInTheDocument()
-    expect(within(tooltip).getByText(worktreePath)).toBeInTheDocument()
+    // Returning from a hidden state (e.g. Trajectory view) also refreshes live git info once.
+    rerender(
+      <div>
+        <button data-testid="prior-tab-button" type="button">Tab</button>
+        <textarea data-testid="docked-terminal-input" aria-label="Terminal" />
+        <ChatInput visible={false} />
+      </div>,
+    )
+    screen.getByTestId('prior-tab-button').focus()
+    currentBranch = 'hotfix/after-trajectory'
+    const callsBeforeVisibleReturn = mocks.getGitInfo.mock.calls.length
+    rerender(
+      <div>
+        <button data-testid="prior-tab-button" type="button">Tab</button>
+        <textarea data-testid="docked-terminal-input" aria-label="Terminal" />
+        <ChatInput visible />
+      </div>,
+    )
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledTimes(callsBeforeVisibleReturn + 1)
+    })
   })
 
-  // The narrow layouts never adopted the in-toolbar pill: there is no room for
-  // it beside the model selector, so they keep the location on its own line
-  // below the panel.
-  it('keeps the run location below the panel when the composer column is narrow', async () => {
+  it('uses compact permission controls when the composer column is narrow', () => {
     stubComposerColumnWidth(360)
 
     render(<ChatInput compact />)
 
-    const chip = await screen.findByTestId('run-location-outside')
-    expect(chip).toHaveTextContent('repo')
-    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(chip)
-    expect(screen.queryByTestId('run-location-readonly')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'true')
   })
 
   // The bug this replaces: `compact` is wired to "is the workspace panel open",
-  // so opening the panel dropped the location to a second line and shrank the
-  // permission mode to a bare icon even on a column with room to spare — the
-  // panel is resizable and the window is not fixed, so its open state says
-  // nothing about the width the composer actually got.
-  it('keeps the run location in the toolbar when a workspace panel leaves the column wide', async () => {
+  // so opening the panel shrank the permission mode to a bare icon even on a
+  // column with room to spare — the panel is resizable and the window is not
+  // fixed, so its open state says nothing about the width the composer got.
+  it('keeps the labelled permission pill when a workspace panel leaves the column wide', () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    const chip = await screen.findByTestId('run-location-readonly')
-    expect(screen.getByTestId('chat-input-toolbar')).toContainElement(chip)
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
-
-    // The same width buys back the labelled permission pill.
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
   })
 
@@ -1642,7 +1645,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput compact />)
 
     const send = screen.getByRole('button', { name: 'Run' })
-    expect(send).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(send).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
     // Terracotta is the send key's alone.
     expect(send).toHaveClass('bg-[var(--color-brand)]')
     expect(send.querySelector('[data-icon="send"]')).toBeInTheDocument()
@@ -1657,7 +1660,7 @@ describe('ChatInput file mentions', () => {
     })
 
     const stop = screen.getByRole('button', { name: 'Stop' })
-    expect(stop).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(stop).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9')
     // Mid-turn the same circle turns ink with a filled square — a running turn
     // must not read as the error-red danger button.
     expect(stop).toHaveClass('bg-[var(--color-btn-primary-bg)]')
@@ -1793,62 +1796,52 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 
-  // This used to assert that the run button shed its label before the location
-  // moved. The button has no label to shed any more — it is one round icon at
-  // every width — so what needs pinning is that it does *not* change with the
-  // column, leaving the location as the only thing that degrades (next test).
-  it('keeps the send button a fixed circle as the column narrows', async () => {
+  it('keeps the send button a fixed circle as the column narrows', () => {
     const column = stubComposerColumnWidth(700)
 
     render(<ChatInput compact />)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
     const wide = screen.getByRole('button', { name: 'Run' })
     expect(wide).not.toHaveTextContent('Run')
-    expect(wide).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(wide).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
 
     column.resizeTo(580)
 
-    expect(screen.getByTestId('run-location-readonly')).toBeInTheDocument()
     const narrow = screen.getByRole('button', { name: 'Run' })
     expect(narrow).not.toHaveTextContent('Run')
-    expect(narrow).toHaveClass('rounded-full', 'h-8', 'w-8')
+    expect(narrow).toHaveClass('rounded-[var(--radius-key)]', 'h-9', 'w-9', 'v6c-send-btn')
   })
 
-  it('moves the run location out of the toolbar as the column is dragged narrow', async () => {
+  it('switches toolbar controls to compact density as the column is dragged narrow', () => {
     const column = stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
 
     column.resizeTo(360)
 
-    expect(await screen.findByTestId('run-location-outside')).toBeInTheDocument()
-    expect(screen.queryByTestId('run-location-readonly')).not.toBeInTheDocument()
     expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'true')
 
     column.resizeTo(580)
 
-    expect(await screen.findByTestId('run-location-readonly')).toBeInTheDocument()
-    expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'false')
   })
 
   // The card has one geometry at every width: the old narrow-layout band
   // (`-mx-3` cancelling a `p-3` panel) is gone with the divider it drew, so a
   // wide column beside a panel and a full-width column render the same card.
-  it('keeps one card geometry when a wide column sits beside a panel', async () => {
+  it('keeps one card geometry when a wide column sits beside a panel', () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
-    await screen.findByTestId('run-location-readonly')
     expect(screen.getByTestId('chat-input-panel')).toHaveClass('p-2')
     expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('pt-1.5')
     expect(screen.getByTestId('chat-input-toolbar').className).not.toMatch(/-m[xy]-\d/)
   })
 
-  it('uses the persisted message count to keep reopened sessions in context mode while history loads', async () => {
+  it('uses the persisted message count to omit draft launch controls while reopened session history loads', async () => {
     useSessionStore.setState({
       sessions: [{
         id: sessionId,
@@ -1888,8 +1881,7 @@ describe('ChatInput file mentions', () => {
 
     render(<ChatInput variant="hero" />)
 
-    expect(await screen.findByText('repo')).toBeInTheDocument()
-    expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Select branch:/ })).not.toBeInTheDocument()
     expect(screen.queryByText('Current worktree')).not.toBeInTheDocument()
   })
@@ -2345,6 +2337,102 @@ describe('ChatInput file mentions', () => {
       await waitFor(() => {
         expect(useChatStore.getState().sessions[sessionId]?.repositoryLaunchDraft?.branch).toBe(expected)
       })
+    })
+
+    it('replaces the empty session to switch back to an explicitly chosen branch when the checkout moved externally without a focus event', async () => {
+      let liveGitBranch = 'main'
+      mocks.getGitInfo.mockImplementation(async () => ({
+        branch: liveGitBranch,
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      }))
+      mocks.create.mockResolvedValueOnce({ sessionId: 'created-explicit-branch', workDir: '/repo' })
+      seedEmptySession({ workDir: '/repo', branch: 'main', useWorktree: false, branchAutomatic: false })
+      render(<ChatInput variant="hero" />)
+
+      expect(await screen.findByRole('button', { name: 'Location: repo / main' })).toBeInTheDocument()
+
+      // Checkout moves to dev_xxxx while the composer never lost focus (so gitInfo in state is still 'main').
+      liveGitBranch = 'dev_xxxx'
+      setComposerText('edit on main only', 17)
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+
+      await waitFor(() => {
+        expect(mocks.create).toHaveBeenCalledWith({
+          workDir: '/repo',
+          repository: { branch: 'main', worktree: false },
+        })
+      })
+      expect(mocks.wsSend).toHaveBeenCalledWith('created-explicit-branch', {
+        type: 'user_message',
+        content: 'edit on main only',
+        attachments: [],
+      })
+    })
+
+    it('refreshes the empty-session launch branch pill when focus returns from the docked terminal', async () => {
+      let liveBranch = 'main'
+      mocks.getGitInfo.mockImplementation(async () => ({
+        branch: liveBranch,
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      }))
+      seedEmptySession()
+
+      render(
+        <div>
+          <textarea data-testid="docked-terminal-input" aria-label="Terminal" />
+          <ChatInput variant="hero" visible />
+        </div>,
+      )
+
+      expect(await screen.findByRole('button', { name: 'Location: repo / main' })).toBeInTheDocument()
+
+      const terminalInput = screen.getByTestId('docked-terminal-input')
+      fireEvent.focus(terminalInput)
+      liveBranch = 'feature/a'
+      mocks.getRepositoryContext.mockResolvedValue(movedToFeatureA())
+      fireEvent.focus(getComposerElement(), { relatedTarget: terminalInput })
+
+      expect(await screen.findByRole('button', { name: 'Location: repo / feature/a' })).toBeInTheDocument()
+      expect(useChatStore.getState().sessions[sessionId]?.repositoryLaunchDraft).toMatchObject({
+        branch: 'feature/a',
+        branchAutomatic: true,
+      })
+    })
+
+    it('sends directly without replacing the empty session when an automatic branch moved externally on disk', async () => {
+      let liveGitBranch = 'main'
+      mocks.getGitInfo.mockImplementation(async () => ({
+        branch: liveGitBranch,
+        repoName: 'repo',
+        workDir: '/repo',
+        changedFiles: 0,
+        worktree: null,
+      }))
+      seedEmptySession()
+      render(<ChatInput variant="hero" />)
+
+      expect(await screen.findByRole('button', { name: 'Location: repo / main' })).toBeInTheDocument()
+
+      // Checkout moves on disk without a focus event: both repository-context and git-info now report feature/a.
+      liveGitBranch = 'feature/a'
+      mocks.getRepositoryContext.mockResolvedValue(movedToFeatureA())
+      setComposerText('run in current checkout', 23)
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+
+      await waitFor(() => {
+        expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+          type: 'user_message',
+          content: 'run in current checkout',
+          attachments: [],
+        })
+      })
+      expect(mocks.create).not.toHaveBeenCalled()
     })
   })
 
@@ -2960,6 +3048,83 @@ describe('ChatInput file mentions', () => {
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, { type: 'user_message', content: 'Just me', attachments: [] })
   })
 
+  it('sends one message with Browser Use armed, clears the pill from the composer, and keeps global config enabled', async () => {
+    const previousHost = window.desktopHost
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    useBrowserUseStore.getState().reset()
+    let configState = {
+      enabled: false,
+      preferredTarget: 'auto' as 'auto' | 'workspace' | 'chrome',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    }
+    vi.spyOn(browserUseApi, 'getConfig').mockImplementation(async () => ({ ...configState }))
+    const updateConfig = vi.spyOn(browserUseApi, 'updateConfig').mockImplementation(async (patch) => {
+      configState = { ...configState, ...patch }
+      return { ...configState }
+    })
+
+    try {
+      render(<ChatInput compact />)
+      setComposerText('Open modeldial.com', 18)
+
+      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      const row = await screen.findByRole('option', { name: /Browser Use/ })
+      await waitFor(() => expect(row.querySelector('input[type="checkbox"]')).not.toBeNull())
+      fireEvent.click(row.querySelector('input[type="checkbox"]')!)
+
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable Browser Use' }))
+
+      const pill = await screen.findByTestId('browser-use-target-pill')
+      expect(pill).toHaveTextContent('Browser')
+      expect(pill).toHaveTextContent('Auto')
+
+      // Switch target from Auto -> Workspace on the composer pill before sending.
+      fireEvent.click(within(pill).getByRole('button', { name: /Browser target: Auto/i }))
+      await waitFor(() => expect(screen.getByTestId('browser-use-target-pill')).toHaveTextContent('Workspace'))
+
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+      expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+        type: 'user_message',
+        content: withBrowserUseRequest('Open modeldial.com', 'workspace'),
+        attachments: [],
+      })
+      const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+      expect(messages[messages.length - 1]).toMatchObject({
+        type: 'user_text',
+        content: 'Open modeldial.com',
+        modelContent: withBrowserUseRequest('Open modeldial.com', 'workspace'),
+      })
+      // Pill follows the sent message out and leaves the composer clean.
+      expect(screen.queryByTestId('browser-use-target-pill')).not.toBeInTheDocument()
+      // Global config stays enabled so the running browser turn can call Browser* tools.
+      expect(useBrowserUseStore.getState().config?.enabled).toBe(true)
+
+      // Next message goes out plain unless Browser Use is armed again.
+      act(() => {
+        useChatStore.setState(state => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'idle' } } }))
+      })
+      setComposerText('Follow-up', 9)
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+      expect(mocks.wsSend).toHaveBeenLastCalledWith(sessionId, { type: 'user_message', content: 'Follow-up', attachments: [] })
+
+      // Re-arming now skips the consent dialog and clicking remove disarms without disabling global config.
+      updateConfig.mockClear()
+      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      const rowAgain = await screen.findByRole('option', { name: /Browser Use/ })
+      fireEvent.click(rowAgain.querySelector('input[type="checkbox"]')!)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      fireEvent.click(within(await screen.findByTestId('browser-use-target-pill')).getByRole('button', { name: 'Remove Browser Use' }))
+      expect(screen.queryByTestId('browser-use-target-pill')).not.toBeInTheDocument()
+      expect(updateConfig).not.toHaveBeenCalled()
+    } finally {
+      window.desktopHost = previousHost
+      useBrowserUseStore.getState().reset()
+    }
+  })
+
   it('lists a skill under Recently used after it was sent', async () => {
     const design = {
       kind: 'skill' as const, id: 'design', name: 'design', displayName: 'Design',
@@ -3431,15 +3596,12 @@ describe('ChatInput file mentions', () => {
     expect(panel).not.toHaveClass('overflow-hidden')
   })
 
-  it.each([320, 400, 529, 530, 640])('keeps the toolbar actions at their width and lets the leading group give way in a %ipx desktop column', (width) => {
+  it.each([320, 400, 529, 530, 640])('protects leading "+" and lets trailing controls flex cleanly in a %ipx desktop column', (width) => {
     stubComposerColumnWidth(width)
     render(<ChatInput compact />)
-    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('min-w-0', 'shrink')
-    if (width >= 530) {
-      expect(screen.getByTestId('chat-input-toolbar-location')).toHaveClass('min-w-0', 'flex-1')
-    }
-    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('shrink-0', 'justify-end')
-    expect(screen.getByTestId('model-selector-shell')).toHaveClass('shrink-0')
+    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0')
+    expect(screen.queryByTestId('composer-context-strip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('shrink-0')
   })
 
@@ -3471,8 +3633,8 @@ describe('ChatInput file mentions', () => {
     // The phone branch used to swap it for a `shadow-[…]` utility, which loses
     // to `.glass-panel`'s own `box-shadow` on stylesheet order — so the phone
     // composer silently rendered the floating-overlay shadow instead.
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('glass-panel--composer')
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-xl)]')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('composer-glass')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-2xl)]')
     expect(screen.getByTestId('chat-input-panel')).not.toHaveClass('rounded-b-none')
     expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0', 'gap-1')
     expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end', 'gap-1')
@@ -4369,6 +4531,269 @@ describe('ChatInput file mentions', () => {
       rerender(<ChatInput sessionId={sessionId} visible={false} />)
 
       expect(activeRecording.cancel).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('docks queued messages as a top seam banner and morphs the circular CTA when drafting mid-turn', async () => {
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          chatState: 'streaming',
+        },
+      },
+    })
+
+    render(<ChatInput />)
+
+    // Empty draft while streaming: single Stop key.
+    const stopOnly = screen.getByRole('button', { name: 'Stop' })
+    expect(stopOnly).toHaveClass('control-bevel-cta', 'h-9', 'w-9', 'rounded-[var(--radius-key)]')
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
+
+    // Typing mid-turn exposes the Queue/Send key beside Stop.
+    setComposerText('follow-up steer', 15)
+    const queueBtn = screen.getByRole('button', { name: 'Run' })
+    expect(queueBtn).toHaveClass('control-bevel-cta', 'v6c-send-btn', 'h-9', 'w-9', 'rounded-[var(--radius-key)]')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    // Clicking Queue docks the message into the top `.composer-seam-above` banner outside the panel.
+    fireEvent.click(queueBtn)
+    const banner = await screen.findByTestId('pending-user-message-list')
+    expect(banner).toHaveClass('surface-glass', 'composer-seam-above', 'rounded-t-[var(--radius-2xl)]')
+    expect(screen.getByTestId('chat-input-panel')).not.toContainElement(banner)
+    expect(banner).toHaveTextContent('follow-up steer')
+  })
+
+  it('locks ModelSelector to Antigravity, limits permission modes, and uses authoritative slashCommands on Antigravity sessions', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Session',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          slashCommands: [
+            { name: 'plan', description: 'Plan mode' },
+            { name: 'swarm', description: 'Run swarm' },
+          ],
+        },
+      },
+    })
+
+    render(<ChatInput sessionId={sessionId} />)
+
+    expect(screen.getByTestId('model-selector-shell')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan,bypassPermissions')
+
+    setComposerText('/', 1)
+    await waitFor(() => {
+      expect(screen.getByText('/swarm')).toBeInTheDocument()
+      expect(screen.getByText('/plan')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('/btw')).not.toBeInTheDocument()
+    expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+  })
+
+  it('merges Antigravity built-in commands with cold-start AGY skills and inserts plain /skill text instead of Claude mentions', async () => {
+    mocks.listReferences.mockResolvedValue({
+      skills: [{
+        kind: 'skill',
+        id: 'skill-vetter',
+        name: 'skill-vetter',
+        displayName: 'Skill Vetter',
+        description: 'Claude mention version',
+        source: 'user',
+        modelText: 'Use the Skill tool with skill: "skill-vetter" for this request.',
+      }],
+      plugins: [],
+    })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Cold Start',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          slashCommands: [
+            { name: 'skill-vetter', description: 'Vet skills for AGY', kind: 'skill', source: 'user' },
+          ],
+        },
+      },
+    })
+
+    render(<ChatInput sessionId={sessionId} />)
+
+    setComposerText('/skill', 6)
+    const option = await screen.findByRole('option', { name: 'skill-vetter' })
+    expect(option).toBeInTheDocument()
+    fireEvent.click(option)
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('/skill-vetter ')
+    })
+    expect(document.querySelector('.composer-mention')).toBeNull()
+  })
+
+  it('passes modelId and effortLevel from sessionRuntimeStore to createSession when replacing an empty Antigravity session', async () => {
+    installElectronFileHost()
+    mocks.dialogOpen.mockResolvedValueOnce('/other')
+    mocks.create.mockResolvedValueOnce({ sessionId: 'session-ag-project-switch', workDir: '/other' })
+    mocks.getRepositoryContext.mockImplementation(async (workDir: string) => ({
+      ...okRepositoryContext(),
+      workDir,
+      repoRoot: workDir,
+      repoName: workDir.split('/').filter(Boolean).pop() ?? 'repo',
+    }))
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'AG Project',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        permissionMode: 'bypassPermissions',
+      }],
+      activeSessionId: sessionId,
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+        },
+      },
+    })
+
+    render(<ChatInput variant="hero" />)
+
+    await openLocationMenu()
+    fireEvent.click(screen.getAllByTitle('/repo')[0]!)
+    fireEvent.click(await screen.findByRole('button', { name: /Choose a different folder/ }))
+
+    await waitFor(() => {
+      expect(mocks.create).toHaveBeenCalledWith({
+        workDir: '/other',
+        permissionMode: 'bypassPermissions',
+        launchProviderId: 'antigravity-acp',
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-pro',
+        effortLevel: 'high',
+      })
+    })
+    await waitFor(() => {
+      expect(useTabStore.getState().activeTabId).toBe('session-ag-project-switch')
+    })
+    expect(useSessionRuntimeStore.getState().selections['session-ag-project-switch']).toEqual({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+  })
+
+  it('arms Agent Teams from the + menu in an Antigravity session and sends /swarm idempotently', async () => {
+    dismissAgentTeamsNotice()
+    useSettingsStore.setState({ agentTeamsEnabled: false })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Antigravity Swarm Session',
+        createdAt: '2026-11-26T00:00:00.000Z',
+        modifiedAt: '2026-11-26T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+      activeSessionId: sessionId,
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+
+    render(<ChatInput sessionId={sessionId} compact />)
+    setComposerText('Audit security and performance', 30)
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    expect(await screen.findByTestId('agent-team-chip')).toBeInTheDocument()
+
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: '/swarm Audit security and performance',
+      attachments: [],
+    })
+    const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+    expect(messages[messages.length - 1]).toMatchObject({
+      type: 'user_text',
+      content: 'Audit security and performance',
+      modelContent: '/swarm Audit security and performance',
+    })
+    expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+
+    // Arming Agent Teams AND typing /swarm explicitly must not double-prefix.
+    act(() => {
+      useChatStore.setState(state => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'idle' } } }))
+    })
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    setComposerText('/swarm Already prefixed', 23)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenLastCalledWith(sessionId, {
+      type: 'user_message',
+      content: '/swarm Already prefixed',
+      attachments: [],
     })
   })
 

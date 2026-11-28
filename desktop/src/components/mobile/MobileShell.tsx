@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from '../../i18n'
 import { StatusDot } from '@/components/ui/Badge'
 import type { DesktopUiPreferencesResponse } from '../../api/desktopUiPreferences'
@@ -9,6 +9,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { EmptySession } from '../../pages/EmptySession'
+import { H5SettingsShellContext, type H5SettingsSubpage } from '../../pages/settings/H5Settings'
 import { ContentRouter } from '../layout/ContentRouter'
 import { getSessionWorkspaceLabel } from '../layout/sidebarTaskGroups'
 import { ToastContainer } from '../layout/Toast'
@@ -53,12 +54,28 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
   const route = resolveMobileRoute(tabs, activeTabId)
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
   const [newTask, setNewTask] = useState<NewTaskRequest | null>(null)
+  const [settingsSubpage, setSettingsSubpage] = useState<H5SettingsSubpage>(null)
   const sheetOpen = layout === 'phone' && newTask !== null
+  const inSettingsSubpage = route.kind === 'settings' && settingsSubpage !== null
   const goUp = useCallback(() => {
     if (sheetOpen) setNewTask(null)
+    else if (inSettingsSubpage) setSettingsSubpage(null)
     else navigateMobileUp()
-  }, [sheetOpen])
-  const goBack = useMobileHistoryGuard(mobileRouteDepth(route) + (sheetOpen ? 1 : 0), true, goUp)
+  }, [inSettingsSubpage, sheetOpen])
+  const goBack = useMobileHistoryGuard(
+    mobileRouteDepth(route) + (sheetOpen ? 1 : 0) + (inSettingsSubpage ? 1 : 0),
+    true,
+    goUp,
+  )
+
+  useEffect(() => {
+    if (route.kind !== 'settings') setSettingsSubpage(null)
+  }, [route.kind])
+
+  const settingsShellBridge = useMemo(
+    () => ({ subpage: settingsSubpage, setSubpage: setSettingsSubpage }),
+    [settingsSubpage],
+  )
 
   const nextNewTaskId = useRef(0)
   const startNewTask = useCallback((workDir: string) => {
@@ -89,12 +106,12 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
     <div
       data-testid="mobile-shell"
       data-layout={layout}
-      className="app-shell app-shell-viewport app-shell--mobile flex overflow-hidden bg-[var(--color-surface)]"
+      className="app-shell app-shell-viewport app-shell--mobile v6c-ambient-shell flex overflow-hidden"
     >
       {layout === 'tablet' ? (
         <aside
           data-testid="mobile-tablet-pane"
-          className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-border)]"
+          className="v6c-sidebar-glass flex w-[340px] shrink-0 flex-col border-r border-[var(--color-border)]"
         >
           <MobileSessionBrowser
             variant="pane"
@@ -106,18 +123,20 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
       ) : null}
       <main
         id="content-area"
-        className="app-shell-main--mobile flex min-w-0 flex-1 flex-col overflow-hidden"
+        className="app-shell-main--mobile v6c-main-canvas flex min-w-0 flex-1 flex-col overflow-hidden"
       >
         {route.kind !== 'home' ? (
-          <MobileRouteBar route={route} onBack={showBack ? goBack : undefined} />
+          <MobileRouteBar route={route} settingsSubpage={settingsSubpage} onBack={showBack ? goBack : undefined} />
         ) : null}
         <WorkspaceHeaderProvider>
-          <ContentRouter
-            homePage={layout === 'phone'
-              ? <MobileSessionBrowser variant="home" preferencesRequest={preferencesRequest} onNewTask={startNewTask} />
-              // Keyed so each New task starts clean, in the folder it asked for.
-              : <EmptySession key={newTask?.id ?? 0} initialWorkDir={newTask?.workDir} />}
-          />
+          <H5SettingsShellContext.Provider value={settingsShellBridge}>
+            <ContentRouter
+              homePage={layout === 'phone'
+                ? <MobileSessionBrowser variant="home" preferencesRequest={preferencesRequest} onNewTask={startNewTask} />
+                // Keyed so each New task starts clean, in the folder it asked for.
+                : <EmptySession key={newTask?.id ?? 0} initialWorkDir={newTask?.workDir} />}
+            />
+          </H5SettingsShellContext.Provider>
         </WorkspaceHeaderProvider>
       </main>
       {sheetOpen ? <MobileNewTaskSheet key={newTask.id} workDir={newTask.workDir} onCancel={goBack} /> : null}
@@ -127,11 +146,25 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
   )
 }
 
-function MobileRouteBar({ route, onBack }: { route: Exclude<MobileRoute, { kind: 'home' }>; onBack?: () => void }) {
+function MobileRouteBar({
+  route,
+  settingsSubpage,
+  onBack,
+}: {
+  route: Exclude<MobileRoute, { kind: 'home' }>
+  settingsSubpage: H5SettingsSubpage
+  onBack?: () => void
+}) {
   const t = useTranslation()
   const tab = useTabStore((state) => state.tabs.find((candidate) => candidate.sessionId === route.tabId))
 
   if (route.kind === 'settings') {
+    if (settingsSubpage === 'providers') {
+      return <MobileTopBar title={t('settings.tab.providers')} onBack={onBack} backLabel={t('h5Settings.allSettings')} />
+    }
+    if (settingsSubpage === 'activity') {
+      return <MobileTopBar title={t('settings.tab.activity')} onBack={onBack} backLabel={t('h5Settings.allSettings')} />
+    }
     return <MobileTopBar title={t('sidebar.settings')} onBack={onBack} backLabel={t('mobile.nav.backToSessions')} />
   }
   if (route.kind === 'detail') {
@@ -167,7 +200,7 @@ function MobileSessionBar({
     )
   } else if (running) {
     subtitle = (
-      <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
+      <span className="flex items-center gap-1.5 font-medium text-[var(--color-on-info-container)]">
         <StatusDot tone="info" pulse />
         {t('mobile.session.running')}
       </span>

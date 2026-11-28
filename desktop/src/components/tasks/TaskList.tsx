@@ -34,9 +34,9 @@ export function TaskList({ tasks }: Props) {
           inside the card's edge without a clipping context. */}
       <Card
         radius="lg"
-        surface="lowest"
+        surface="none"
         padding="none"
-        className="mt-4 divide-y divide-[var(--color-border)] [&>*:first-child>*:first-child]:rounded-t-[var(--radius-lg)] [&>*:last-child>*:last-child]:rounded-b-[var(--radius-lg)]"
+        className="v6c-glass-card mt-4 divide-y divide-[var(--color-border)] [&>*:first-child>*:first-child]:rounded-t-[var(--radius-lg)] [&>*:last-child>*:last-child]:rounded-b-[var(--radius-lg)]"
       >
         {tasks.map((task) => (
           <TaskRow
@@ -54,7 +54,7 @@ export function TaskList({ tasks }: Props) {
 /** Label above, figure below: the figure is what the eye lands on. */
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <Card radius="lg" surface="lowest" padding="none" className="flex flex-col gap-1 px-4 py-3.5">
+    <Card radius="lg" surface="none" padding="none" className="v6c-glass-card flex flex-col gap-1 px-4 py-3.5">
       <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
       <div className="text-[22px] font-semibold leading-[1.2] tabular-nums text-[var(--color-text-primary)]">
         {value}

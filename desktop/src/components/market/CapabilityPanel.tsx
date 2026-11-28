@@ -73,7 +73,7 @@ export function CapabilityPanel({
     <section
       aria-labelledby="market-capabilities-title"
       data-testid="market-capability-panel"
-      className="flex-shrink-0 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
+      className="v6c-glass-card flex-shrink-0 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]"
     >
       <header className="flex min-h-10 items-center gap-2 border-b border-[var(--color-border)] py-1 pl-4 pr-2">
         <TriangleAlert className="flex-shrink-0 text-[var(--color-warning)]" size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -104,7 +104,7 @@ export function CapabilityPanel({
                   {text.detail}
                 </span>
               </span>
-              <Badge tone={CAPABILITY_LEVEL_TONES[capability.level]} size="xs" className="mt-0.5">
+              <Badge tone={CAPABILITY_LEVEL_TONES[capability.level]} size="xs" pill={false} className="mt-0.5">
                 {t(`market.cap.level.${capability.level}`)}
               </Badge>
             </li>

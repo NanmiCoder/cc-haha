@@ -28,7 +28,7 @@ describe('WorkspaceChangesFallback', () => {
     expect(within(region).queryByRole('button', { name: 'Open current content of src/retained.ts' })).not.toBeInTheDocument()
     fireEvent.click(disclosure)
     const opener = within(region).getByRole('button', { name: 'Open current content of src/retained.ts' })
-    expect(opener).toHaveClass('focus-visible:ring-2')
+    expect(opener).toHaveClass('focus-visible:ring-2', 'rounded-[var(--radius-card-inner)]')
     fireEvent.click(opener)
     expect(workspaceOpen.file).toHaveBeenCalledWith('long-session', 'src/retained.ts')
     expect(workspaceOpen.review).not.toHaveBeenCalled()
@@ -75,8 +75,19 @@ describe('WorkspaceChangesFallback', () => {
   })
 
   it('announces unavailable evidence without rendering files or rollback actions', () => {
-    render(<WorkspaceChangesFallback sessionId="long-session" files={null} />)
+    render(<WorkspaceChangesFallback sessionId="long-session" files={null} truncated />)
     expect(screen.getByRole('alert')).toHaveTextContent('Current workspace changes could not be verified')
+    expect(screen.queryByText(/the workspace scan was limited/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('flags partial scans without showing a misleading total count', () => {
+    const files: WorkspaceChangedFile[] = [
+      { path: 'src/partial.ts', status: 'modified', additions: 1, deletions: 0 },
+    ]
+    render(<WorkspaceChangesFallback sessionId="long-session" files={files} truncated />)
+    expect(screen.queryByText('Current workspace changes (1)')).not.toBeInTheDocument()
+    expect(screen.getByText(/the workspace scan was limited/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show 1 changed files' })).toBeInTheDocument()
   })
 })

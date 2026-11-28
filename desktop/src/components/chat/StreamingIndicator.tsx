@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LoaderCircle, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { Badge } from '@/components/ui/Badge'
 import { useChatStore } from '../../stores/chatStore'
@@ -44,6 +44,8 @@ function formatRetrySeconds(ms: number): number {
 }
 
 const HUMAN_READABLE_RETRY_THRESHOLD_MS = 60_000
+const ESCALATED_RETRY_DELAY_MS = 30_000
+const ESCALATED_RETRY_ATTEMPT = 3
 
 function formatErrorType(errorType: string | undefined): string | null {
   if (!errorType || errorType === 'unknown') return null
@@ -103,21 +105,55 @@ export function StreamingIndicator() {
           })
         : t('chat.retry.waiting', { seconds: formatRetrySeconds(remainingMs) })
 
+    const isEscalatedRetry =
+      apiRetry.errorType === 'rate_limit' ||
+      apiRetry.attempt >= ESCALATED_RETRY_ATTEMPT ||
+      apiRetry.retryDelayMs >= ESCALATED_RETRY_DELAY_MS
+
+    if (!isEscalatedRetry) {
+      // Early short transient retry: calm muted inline status instead of a loud
+      // warning banner, while keeping full diagnostics one click away.
+      return (
+        <div
+          data-testid="api-retry-indicator"
+          data-retry-tone="quiet"
+          role="status"
+          aria-live="polite"
+          className="mb-1 flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-0.5 text-[13px] text-[var(--color-text-tertiary)]"
+        >
+          <span className="codex-shimmer-text font-medium">{t('chat.retry.title')}</span>
+          <span className="font-mono text-[11px] tabular-nums">
+            {t('chat.retry.attempt', { attempt: apiRetry.attempt, max: apiRetry.maxRetries })}
+          </span>
+          <span className="font-mono text-[11px] tabular-nums">{statusText}</span>
+          <span className="text-[12px] tabular-nums">{waitText}</span>
+          <details className="w-full min-w-0 text-xs">
+            <summary className="cursor-pointer rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
+              {t('chat.retry.details')}
+            </summary>
+            <pre className="scrollbar-autohide mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--color-text-secondary)]">{diagnostics}</pre>
+            <p className="mt-2 text-[var(--color-text-tertiary)]">{t('chat.retry.historyHint')}</p>
+            <CopyButton
+              text={diagnostics}
+              label={t('chat.retry.copyDiagnostics')}
+              copiedLabel={t('common.copied')}
+              className="mt-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            />
+          </details>
+        </div>
+      )
+    }
+
     return (
       <div
         data-testid="api-retry-indicator"
+        data-retry-tone="escalated"
         role="status"
         aria-live="polite"
-        className="mb-2 flex w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)]"
+        className="mb-2 flex w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)]"
       >
         <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin" aria-hidden="true" />
         <span className="font-medium">{t('chat.retry.title')}</span>
-        {/*
-          Neutral rather than `tone="warning"`: these chips sit on the warning
-          container itself, so a warning-tinted chip would disappear into it,
-          and the warning accent as foreground on that fill measures 2.66:1 in
-          the light theme (see components/AGENTS.md §3.2).
-        */}
         <Badge mono pill={false} bordered className="leading-none">
           {t('chat.retry.attempt', { attempt: apiRetry.attempt, max: apiRetry.maxRetries })}
         </Badge>
@@ -129,7 +165,7 @@ export function StreamingIndicator() {
           <summary className="cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
             {t('chat.retry.details')}
           </summary>
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">{diagnostics}</pre>
+          <pre className="scrollbar-autohide mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px]">{diagnostics}</pre>
           <p className="mt-2">{t('chat.retry.historyHint')}</p>
           <CopyButton
             text={diagnostics}
@@ -144,16 +180,14 @@ export function StreamingIndicator() {
 
   if (streamingFallback) {
     // 预期内的降级等待（非错误）：非流式响应一次性返回，期间无增量输出。
-    // 用中性样式的轻提示 + 回合计时，与 api_retry 的警示横幅区分开。
     return (
       <div
         data-testid="streaming-fallback-indicator"
         role="status"
         aria-live="polite"
-        className="flex min-h-7 w-fit max-w-full flex-wrap items-center gap-x-2 text-[13px] text-[var(--color-text-secondary)]"
+        className="flex min-h-6 w-fit max-w-full flex-wrap items-center gap-x-1.5 py-0.5 text-[13px] text-[var(--color-text-secondary)]"
       >
-        <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
-        <span className="font-medium text-[var(--color-text-primary)]">
+        <span className="codex-shimmer-text font-medium">
           {t('chat.fallback.title')}
         </span>
         <span className="text-xs text-[var(--color-text-tertiary)]">
@@ -171,68 +205,27 @@ export function StreamingIndicator() {
   const verb = resolveTurnStatusVerb(t, chatState, statusVerb)
 
   return (
-    <>
-      <style>{TURN_STATUS_STYLES}</style>
-      <div
-        data-testid="turn-status-indicator"
-        role="status"
-        aria-live="polite"
-        // Bare line, not a pill: it sits at the end of the live turn, and a
-        // bordered chip here would read as a second, competing status object.
-        className="flex h-7 w-fit max-w-full items-center gap-2 text-[13px] text-[var(--color-text-secondary)]"
-      >
-        {/* The ring a running tool row spins, in the running colour: the
-            turn is working, and it says so the way the rest of the timeline
-            does rather than with a decorative "AI" glyph. */}
-        <LoaderCircle
-          size={15}
-          strokeWidth={1.75}
-          aria-hidden="true"
-          className="turn-status-spinner shrink-0 text-[var(--color-info)] motion-safe:animate-spin"
-        />
-        <span className="turn-status-shimmer min-w-0 truncate font-medium">{verb}...</span>
-        {elapsedSeconds > 0 && (
-          <span className={STATUS_META_CLASS}>{formatDurationSeconds(elapsedSeconds, t)}</span>
-        )}
-        {streamingTokens > 0 && (
-          <>
-            <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
-            <span className={STATUS_META_CLASS}>
-              ↓ {t('common.tokens', { count: formatTokenCount(streamingTokens) })}
-            </span>
-          </>
-        )}
-      </div>
-    </>
+    <div
+      data-testid="turn-status-indicator"
+      role="status"
+      aria-live="polite"
+      className="flex min-h-6 w-fit max-w-full items-center gap-1.5 py-0.5 text-[13px] text-[var(--color-text-tertiary)]"
+    >
+      <span className="codex-shimmer-text min-w-0 truncate font-medium">{verb}...</span>
+      {elapsedSeconds > 0 && (
+        <span className={STATUS_META_CLASS}>{formatDurationSeconds(elapsedSeconds, t)}</span>
+      )}
+      {streamingTokens > 0 && (
+        <>
+          <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
+          <span className={STATUS_META_CLASS}>
+            ↓ {t('common.tokens', { count: formatTokenCount(streamingTokens) })}
+          </span>
+        </>
+      )}
+    </div>
   )
 }
 
 /** Elapsed time and token count: small, monospaced, steady-width digits. */
 const STATUS_META_CLASS = 'shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]'
-
-/**
- * The verb reads as live through a light sweeping across it, and the ring
- * spins; neither moves the layout. Reduced motion keeps both still and leaves
- * the text in its plain secondary colour.
- */
-const TURN_STATUS_STYLES = `
-@keyframes turn-status-sweep {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-.turn-status-shimmer {
-  background: linear-gradient(90deg, var(--color-text-tertiary) 0%, var(--color-text-tertiary) 40%, var(--color-text-primary) 50%, var(--color-text-tertiary) 60%, var(--color-text-tertiary) 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: turn-status-sweep 2.2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .turn-status-shimmer {
-    animation: none;
-    background: none;
-    color: var(--color-text-secondary);
-  }
-}
-`

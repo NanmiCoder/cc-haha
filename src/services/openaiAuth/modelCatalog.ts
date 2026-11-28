@@ -112,6 +112,16 @@ export type OpenAIModelCatalogTokens = {
   email?: string | null
 }
 
+function modelCatalogAccountKey(tokens: OpenAIModelCatalogTokens | null) {
+  return tokens
+    ? createHash('sha256').update(JSON.stringify([tokens.accessToken, tokens.accountId ?? null])).digest('hex')
+    : 'logged-out'
+}
+
+export function readCachedOpenAICodexModelCatalog(tokens: OpenAIModelCatalogTokens | null) {
+  return catalogCache.peek(modelCatalogAccountKey(tokens)) ?? OPENAI_CODEX_MODEL_CATALOG
+}
+
 export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
   suppliedTokens?: OpenAIModelCatalogTokens | null,
@@ -166,17 +176,15 @@ export async function fetchOpenAICodexModelCatalog(
 export async function getOpenAICodexModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  waitForInitial?: boolean
   throwOnError?: boolean
   resolveProxyUrl?: () => Promise<string | null | undefined>
   /** Explicit desktop credentials; null must never fall through to CLI storage. */
   tokens?: OpenAIModelCatalogTokens | null
 }): Promise<OpenAIModelCatalogEntry[]> {
   const tokens = options?.tokens === undefined ? getOpenAIOAuthTokens() : options.tokens
-  const accountKey = tokens
-    ? createHash('sha256').update(tokens.accessToken).digest('hex')
-    : 'logged-out'
   return catalogCache.resolve({
-    accountKey,
+    accountKey: modelCatalogAccountKey(tokens),
     fetchCatalog: async () => {
       const models = await fetchOpenAICodexModelCatalog(
         options?.fetchOverride, options?.tokens, await options?.resolveProxyUrl?.(),
@@ -189,6 +197,7 @@ export async function getOpenAICodexModelCatalog(options?: {
     },
     fallback: OPENAI_CODEX_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(tokens && options?.waitForInitial ? { waitForInitial: true } : {}),
     ...(options?.throwOnError ? { throwOnError: true } : {}),
   })
 }

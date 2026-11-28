@@ -127,21 +127,49 @@ describe('ToolCallBlock · timeline row', () => {
     expect(screen.getByText(t('tool.exitCode', { code: 0 })).className).toContain('--color-success-container')
   })
 
-  it('colours the node by state: running blue, waiting amber, failed red', () => {
+  it('keeps running/recovered nodes calm monochrome and reserves color for waiting and blocking failures', () => {
     const { container, rerender } = render(
       <ToolCallBlock chrome="row" toolName="Bash" input={{ command: 'sleep 1' }} running />,
     )
     const node = () => container.querySelector<HTMLElement>('[data-tool-node]')!
     expect(node().getAttribute('data-tool-node')).toBe('running')
-    expect(node().className).toContain('--color-info')
+    expect(node().className).toContain('--color-text-tertiary')
 
     rerender(<ToolCallBlock chrome="row" toolName="Bash" input={{ command: 'sleep 1' }} awaitingApproval />)
     expect(node().getAttribute('data-tool-node')).toBe('waiting')
     expect(node().className).toContain('--color-warning')
     expect(container.textContent).toContain(t('permission.awaitingApproval'))
 
-    rerender(<ToolCallBlock chrome="row" toolName="Bash" input={{ command: 'sleep 1' }} result={{ content: 'boom', isError: true }} />)
+    // Self-recovered intermediate error: completely monochrome, zero red chrome.
+    rerender(
+      <ToolCallBlock
+        chrome="row"
+        toolName="Bash"
+        input={{ command: 'sleep 1' }}
+        result={{ content: 'boom\nExit code 1', isError: true }}
+        errorSeverity="recovered"
+      />,
+    )
+    expect(node().getAttribute('data-tool-node')).toBe('recovered')
+    expect(node().className).not.toContain('--color-error')
+    expect(container.querySelector('[data-tool-status="recovered"]')?.className).not.toContain('v6c-ring-error')
+    openRow(container)
+    const recoveredExit = container.querySelector('[data-shell-exit="1"]')
+    expect(recoveredExit).toBeTruthy()
+    expect(recoveredExit?.className).not.toContain('--color-error')
+
+    // Blocking unrecovered failure: restrained error ink, no red container box.
+    rerender(
+      <ToolCallBlock
+        chrome="row"
+        toolName="Bash"
+        input={{ command: 'sleep 1' }}
+        result={{ content: 'boom\nExit code 1', isError: true }}
+        errorSeverity="blocking"
+      />,
+    )
     expect(node().getAttribute('data-tool-node')).toBe('error')
-    expect(node().className).toContain('--color-error-container')
+    expect(node().className).toContain('--color-error')
+    expect(node().className).not.toContain('--color-error-container')
   })
 })

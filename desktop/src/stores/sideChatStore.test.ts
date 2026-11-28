@@ -4,7 +4,7 @@ import { useSideChatStore } from './sideChatStore'
 import { isSideChatSession } from '@/lib/sideChatSessions'
 import { useWorkspaceChatContextStore } from './workspaceChatContextStore'
 const mocks = vi.hoisted(() => ({
-  chat: { sessions: {} as Record<string, { chatState: string }>, connectToSession: vi.fn(), disconnectSession: vi.fn(), stopGeneration: vi.fn(), sendMessage: vi.fn(), queueUserMessage: vi.fn(), queueComposerInsertion: vi.fn(), queueComposerPrefill: vi.fn() },
+  chat: { sessions: {} as Record<string, { chatState: string }>, connectToSession: vi.fn(), disconnectSession: vi.fn(), markSessionCompletionRead: vi.fn(), stopGeneration: vi.fn(), sendMessage: vi.fn(), queueUserMessage: vi.fn(), queueComposerInsertion: vi.fn(), queueComposerPrefill: vi.fn() },
   runtime: { selections: { parent: { providerId: 'provider-a', modelId: 'model-a' } }, setSelection: vi.fn(), clearSelection: vi.fn() },
 }))
 vi.mock('@/api/sideChats', () => ({ sideChatsApi: { create: vi.fn(), discard: vi.fn() } }))
@@ -60,6 +60,7 @@ it('close stops, disconnects and discards only the temporary child', async () =>
   await useSideChatStore.getState().close('side-child')
   expect(mocks.chat.stopGeneration).not.toHaveBeenCalled()
   expect(mocks.chat.disconnectSession).toHaveBeenCalledWith('side-child')
+  expect(mocks.chat.markSessionCompletionRead).toHaveBeenCalledWith('side-child')
   expect(sideChatsApi.discard).toHaveBeenCalledWith('parent', 'side-child')
   expect(mocks.runtime.clearSelection).toHaveBeenCalledWith('side-child')
   expect(useSideChatStore.getState().entries['side-child']).toBeUndefined()
@@ -71,6 +72,7 @@ it('retains a failed deletion for reopening and retry without losing the live ch
   await expect(useSideChatStore.getState().close(child)).rejects.toThrow('offline')
   expect(useSideChatStore.getState().entries[child]).toBeDefined()
   expect(mocks.chat.disconnectSession).not.toHaveBeenCalled()
+  expect(mocks.chat.markSessionCompletionRead).not.toHaveBeenCalled()
   expect(mocks.runtime.clearSelection).not.toHaveBeenCalled()
   expect(await useSideChatStore.getState().open('parent')).toBe(child)
   expect(sideChatsApi.create).toHaveBeenCalledTimes(1)

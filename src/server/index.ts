@@ -3,6 +3,8 @@ import { configureSessionCollaborationHost, getSessionCollaborationService } fro
 import { authenticateCollaborationCaller, collaborationToolAction } from './sessionCollaborationAuth.js'
 import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
 import { handleScheduledTaskToolsApi } from './api/scheduledTaskTools.js'
+import { browserUseToolAction, handleBrowserUseToolApi } from './api/browser-use.js'
+import { configureBrowserUseHost, getBrowserUseService } from './services/browserUseService.js'
 /**
  * Claude Code Desktop App — HTTP + WebSocket Server
  *
@@ -56,9 +58,11 @@ import { refreshDisconnectGraceMs } from './ws/disconnectGraceConfig.js'
 import {
   hasConfiguredLocalAccessToken,
   hasConfiguredPetAccessToken,
+  hasConfiguredUsageWidgetAccessToken,
   isLocalAccessAuthorized,
   isP2PEndpointAuthorized,
   isPetAccessAuthorized,
+  isUsageWidgetAccessAuthorized,
 } from './localAccessAuth.js'
 import {
   getPetScopedSessionId,
@@ -66,8 +70,10 @@ import {
   isPetSessionInProjection,
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
+import { isUsageWidgetHttpRequestAllowed } from './usageWidgetAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
 import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './services/remoteAccessConnectivity.js'
+import { configureMcpHostProxy } from './services/networkSettings.js'
 import { getMobilePushService, stopMobilePushServices } from './services/mobilePushRuntime.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
@@ -413,6 +419,12 @@ export function startServer(port = PORT, host = HOST) {
           if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
           return handleSessionCollaborationApi(req, collaborationAction, caller, await getSessionCollaborationService())
         }
+        const browserUseAction = browserUseToolAction(url.pathname)
+        if (browserUseAction) {
+          const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
+          if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
+          return handleBrowserUseToolApi(req, browserUseAction, caller, getBrowserUseService())
+        }
         const origin = req.headers.get('Origin')
         const clientAddress = server.requestIP(req)?.address ?? null
         const localTokenOverride = url.searchParams.get('localToken') ?? url.searchParams.get('token')
@@ -427,6 +439,16 @@ export function startServer(port = PORT, host = HOST) {
             {
               error: 'Forbidden',
               message: 'The pet token cannot access this capability.',
+            },
+            { status: 403 },
+          )
+        }
+        const usageWidgetAccessAuthorized = isUsageWidgetAccessAuthorized(req)
+        if (usageWidgetAccessAuthorized && !isUsageWidgetHttpRequestAllowed(req, url)) {
+          return Response.json(
+            {
+              error: 'Forbidden',
+              message: 'The usage widget token cannot access this capability.',
             },
             { status: 403 },
           )
@@ -457,9 +479,13 @@ export function startServer(port = PORT, host = HOST) {
           clientAddress,
           trustedRendererOrigin,
           localAccessTokenConfigured:
-            hasConfiguredLocalAccessToken() || hasConfiguredPetAccessToken(),
+            hasConfiguredLocalAccessToken() ||
+            hasConfiguredPetAccessToken() ||
+            hasConfiguredUsageWidgetAccessToken(),
           localAccessAuthorized:
-            isLocalAccessAuthorized(req, localTokenOverride) || petAccessAuthorized,
+            isLocalAccessAuthorized(req, localTokenOverride) ||
+            petAccessAuthorized ||
+            usageWidgetAccessAuthorized,
           internalSdkAuthorized: Boolean(
             sdkSessionId && sdkToken && conversationService.authorizeSdkConnection(sdkSessionId, sdkToken),
           ),
@@ -740,11 +766,15 @@ export function startServer(port = PORT, host = HOST) {
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
     const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
+    const disposeBrowserUseHost = configureBrowserUseHost(localConnectHost, server.port)
+    const disposeMcpHostProxy = configureMcpHostProxy()
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
       disposeScheduledTaskHost()
+      disposeBrowserUseHost()
+      disposeMcpHostProxy()
       publicAccess.disable()
       broker.closeAll()
       publicAccessServers.delete(publicAccess)

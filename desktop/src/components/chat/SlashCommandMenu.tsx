@@ -6,6 +6,7 @@ import {
   CircleDollarSign,
   CircleGauge,
   Command as CommandIcon,
+  Cpu,
   Eraser,
   GitCommitHorizontal,
   GitPullRequest,
@@ -28,11 +29,12 @@ import type { SlashCommandGroups } from './composerUtils'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { safeMentionIcon } from '@/lib/composerMentions'
 import { publicAssetPath } from '@/lib/publicAsset'
+import { Kbd } from '@/components/ui/Kbd'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
-import { COMPOSER_KBD, COMPOSER_MENU_SECTION } from './composerMenuStyles'
+import { COMPOSER_MENU_SECTION } from './composerMenuStyles'
 
-/** One menu row: icon, then the name over its description (the 「素」 menu item). */
-const ROW = 'flex min-h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+/** One menu row: compact icon, name, and muted description. */
+const ROW = 'flex min-h-7 w-full cursor-default items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   agent: Bot,
@@ -55,7 +57,7 @@ const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   config: Settings,
   login: LogIn,
   logout: LogOut,
-  model: Bot,
+  model: Cpu,
   permissions: ShieldCheck,
   'terminal-setup': Terminal,
   vim: CommandIcon,
@@ -124,20 +126,20 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           onMouseEnter={() => onHighlight(index)}
           className={`${ROW} ${
             index === selectedIndex
-              ? 'bg-[var(--color-surface-hover)]'
+              ? 'v6c-row-highlight'
               : 'hover:bg-[var(--color-surface-hover)]'
           }`}
         >
           <Icon
             aria-hidden="true"
-            className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]"
+            className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]"
             strokeWidth={1.75}
           />
-          <span className="grid min-w-0 flex-1 gap-px">
-            <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+          <span className="grid min-w-0 flex-1">
+            <span id={`${id}-label-${index}`} className="truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">
               /{command.name}
             </span>
-            <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">
+            <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">
               {command.description}
             </span>
           </span>
@@ -155,7 +157,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         ref={setMenuRef}
         onMouseDown={event => event.preventDefault()}
         style={{ maxHeight: room }}
-        className={`absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 right-0 z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]`}
+        className={`dropdown-glass popover-motion absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 right-0 z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-xl)]`}
       >
         {isSearching ? <div className={`${COMPOSER_MENU_SECTION} px-3 pt-2.5`}>
           {t('chat.slashSearchResults')}
@@ -164,7 +166,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           id={id}
           role="listbox"
           aria-label={t('chat.slashCommands')}
-          className="min-h-0 max-h-[min(360px,45vh)] overflow-y-auto p-1"
+          className="scrollbar-autohide min-h-0 max-h-[min(360px,45vh)] overflow-y-auto p-[5px]"
         >
           {groups.system.length > 0 ? <div role="group" aria-label={t(isSearching ? 'chat.slashCommands' : 'chat.slashFrequent')}>
             {!isSearching ? <div className={COMPOSER_MENU_SECTION}>{t('chat.slashFrequent')}</div> : null}
@@ -189,26 +191,26 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                   title={[candidate?.displayName || command.name, command.argumentHint, command.description].filter(Boolean).join(' — ')}
                   ref={element => { itemRefs.current[index] = element }}
                   onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
-                  className={`${ROW} ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
-                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-4 w-4 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
-                  <span className="grid min-w-0 flex-1 gap-px">
-                    <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
-                    <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">{command.description}</span>
+                  className={`${ROW} ${index === selectedIndex ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'}`}>
+                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
+                  <span className="grid min-w-0 flex-1">
+                    <span id={`${id}-label-${index}`} className="truncate text-[12px] font-medium leading-[17px] text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                    <span id={`${id}-description-${index}`} className="truncate text-[11px] leading-[15px] text-[var(--color-text-tertiary)]">{command.description}</span>
                   </span>
-                  {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
+                  {sourceLabel ? <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
                 </div>
               })}
             </div>
           ) : null)}
         </div>
-        {!isSearching ? <div className="px-3 pb-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
+        {!isSearching ? <div className="px-2.5 pb-1.5 text-[11px] text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
         {showKeyboardHints ? (
-          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
-            <kbd className={COMPOSER_KBD}>↑↓</kbd>
+          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-2.5 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+            <Kbd size="xs">↑↓</Kbd>
             <span>{t('chat.navigate')}</span>
-            <kbd className={`${COMPOSER_KBD} ml-2`}>Enter</kbd>
+            <Kbd size="xs" className="ml-2">Enter</Kbd>
             <span>{t('chat.select')}</span>
-            <kbd className={`${COMPOSER_KBD} ml-2`}>Esc</kbd>
+            <Kbd size="xs" className="ml-2">Esc</Kbd>
             <span>{t('chat.dismiss')}</span>
           </div>
         ) : null}

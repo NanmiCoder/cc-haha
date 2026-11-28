@@ -21,7 +21,11 @@ vi.mock('../../pages/ScheduledTasks', () => ({
 }))
 
 vi.mock('../../pages/Settings', () => ({
-  Settings: () => <div data-testid="settings-page" />,
+  Settings: () => (
+    <div data-testid="settings-page">
+      <button type="button" data-testid="settings-inner-last">Settings action</button>
+    </div>
+  ),
 }))
 
 vi.mock('../../pages/Market', () => ({
@@ -48,6 +52,10 @@ vi.mock('../../pages/SubagentRunPage', () => ({
 import { ContentRouter } from './ContentRouter'
 import { MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { browserHost } from '../../lib/desktopHost/browserHost'
+import type { WorkspaceBrowserEvent } from '../../lib/desktopHost/types'
+import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
 
 describe('ContentRouter tab surfaces', () => {
   afterEach(() => {
@@ -358,10 +366,113 @@ describe('ContentRouter tab surfaces', () => {
     expect(screen.getByTestId('active-session')).toBe(conversation)
     expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
   })
+
+  it('renders Settings inline in the main pane on desktop instead of a floating modal dialog', () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: 'session-1',
+    })
+
+    const { container } = render(<ContentRouter />)
+    const conversation = screen.getByTestId('active-session')
+
+    act(() => useTabStore.getState().setActiveTab(SETTINGS_TAB_ID))
+    const settingsPage = screen.getByTestId('settings-page')
+    expect(container).toContainElement(settingsPage)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-route-modal')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-tab-panel')).toHaveClass('opacity-0')
+    expect(screen.getByTestId('session-tab-panel')).toHaveAttribute('inert')
+    expect(conversation).toBeInTheDocument()
+
+    act(() => useTabStore.getState().setActiveTab('session-1'))
+    expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-tab-panel')).toHaveClass('opacity-100')
+    expect(screen.getByTestId('session-tab-panel')).not.toHaveAttribute('inert')
+  })
+
+  it('keeps Settings inline on mobile H5 shells and touch-H5 documents', () => {
+    useTabStore.setState({
+      tabs: [{ sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' }],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    const { container, unmount } = render(<ContentRouter homePage={<div data-testid="mobile-home" />} />)
+    expect(container).toContainElement(screen.getByTestId('settings-page'))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    unmount()
+
+    document.documentElement.setAttribute('data-touch-h5', '')
+    try {
+      const rendered = render(<ContentRouter />)
+      expect(rendered.container).toContainElement(screen.getByTestId('settings-page'))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
+  })
 })
 
 it('routes the independent connectors tab', () => {
   useTabStore.setState({ tabs: [{ sessionId: '__connectors__', title: 'Connectors', type: 'connectors', status: 'idle' }], activeTabId: '__connectors__' })
   render(<ContentRouter />)
   expect(screen.getByTestId('extension-market-page')).toBeInTheDocument()
+})
+
+it('keeps applying workspace browser state events while Settings is active', async () => {
+  let handler: ((event: WorkspaceBrowserEvent) => void) | null = null
+  window.desktopHost = {
+    ...browserHost,
+    kind: 'electron',
+    isDesktop: true,
+    capabilities: { ...browserHost.capabilities, workspaceBrowser: true },
+    browser: {
+      ...browserHost.browser,
+      onEvent: async (listener) => {
+        handler = listener
+        return () => { handler = null }
+      },
+    },
+  }
+  try {
+    useWorkspaceStore.setState({ bySession: {} })
+    const tabId = useWorkspaceStore.getState().openTarget('session-1', { kind: 'browser' })!
+    const browserTabId = (useWorkspaceStore.getState().getTab('session-1', tabId) as WorkspaceBrowserTab).browserTabId
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    render(<ContentRouter />)
+    await act(async () => { await Promise.resolve() })
+    expect(handler).not.toBeNull()
+
+    act(() => {
+      handler!({
+        type: 'state',
+        tabId: browserTabId,
+        url: 'https://modeldial.com/subscriptions',
+        title: 'ModelDial',
+        canGoBack: false,
+        canGoForward: false,
+        loading: false,
+        navigationId: 1,
+        navigationOutcome: 'succeeded',
+      })
+    })
+
+    expect(useWorkspaceStore.getState().getTab('session-1', tabId)).toMatchObject({
+      url: 'https://modeldial.com/subscriptions',
+      title: 'ModelDial',
+    })
+  } finally {
+    useWorkspaceStore.setState({ bySession: {} })
+    Reflect.deleteProperty(window, 'desktopHost')
+  }
 })

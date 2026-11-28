@@ -4,6 +4,7 @@ import { CircleCheck, Copy, FileCode } from 'lucide-react'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
+import { isDarkTheme } from '../../types/settings'
 import { countDiffLines } from './toolCallPresentation'
 
 type Props = {
@@ -166,8 +167,8 @@ export function DiffViewer({ filePath, oldString, newString }: Props) {
           text={`--- ${filePath}\n+++ ${filePath}`}
           label={t('chat.copyPath')}
           copiedLabel={t('common.copied')}
-          displayLabel={<><Copy size={12} strokeWidth={2} aria-hidden="true" />{t('chat.copyPath')}</>}
-          displayCopiedLabel={<><CircleCheck size={12} strokeWidth={2} aria-hidden="true" />{t('common.copied')}</>}
+          displayLabel={<><Copy size={12} strokeWidth={1.75} aria-hidden="true" />{t('chat.copyPath')}</>}
+          displayCopiedLabel={<><CircleCheck size={12} strokeWidth={1.75} aria-hidden="true" />{t('common.copied')}</>}
           className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         />
       </div>
@@ -182,7 +183,7 @@ export function DiffViewer({ filePath, oldString, newString }: Props) {
           hideLineNumbers={false}
           hideSummary
           styles={diffStyles}
-          useDarkTheme={theme === 'dark'}
+          useDarkTheme={isDarkTheme(theme)}
         />
       </div>
     </div>

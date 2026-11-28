@@ -140,7 +140,11 @@ export function useAnchoredPosition({
 
   useLayoutEffect(() => {
     if (!open) {
-      setState((previous) => (previous.ready ? { ...previous, ready: false } : previous))
+      setState((previous) => (
+        previous.ready || previous.maxHeight !== null
+          ? { ...previous, maxHeight: null, ready: false }
+          : previous
+      ))
       return
     }
     measure()
@@ -151,7 +155,7 @@ export function useAnchoredPosition({
       position: 'fixed',
       top: state.top,
       left: state.left,
-      ...(state.maxHeight == null ? {} : { maxHeight: state.maxHeight }),
+      ...(state.ready && state.maxHeight != null ? { maxHeight: state.maxHeight } : {}),
       visibility: state.ready ? 'visible' : 'hidden',
     },
     placement: state.placement,

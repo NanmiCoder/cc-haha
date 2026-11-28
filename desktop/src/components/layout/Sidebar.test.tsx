@@ -32,17 +32,21 @@ const sessionsApiMock = vi.hoisted(() => ({
   create: vi.fn(),
   list: vi.fn(),
   listProjectHistory: vi.fn(),
+  getFullHistory: vi.fn(),
   getGitInfo: vi.fn(),
   getRepositoryContext: vi.fn(),
   getRecentProjects: vi.fn(),
   createRepositoryBranch: vi.fn(),
 }))
 
+const clipboardMock = vi.hoisted(() => ({ copyTextToClipboard: vi.fn() }))
+
 const repositoryContextMock = sessionsApiMock.getRepositoryContext
 
 vi.mock('../../api/sessions', () => ({
   sessionsApi: sessionsApiMock,
 }))
+vi.mock('@/lib/clipboard', () => clipboardMock)
 
 const agentsApiMock = vi.hoisted(() => ({
   list: vi.fn(),
@@ -80,6 +84,17 @@ vi.mock('../../i18n', () => ({
       'sidebar.sessionListFailed': 'Session list failed',
       'sidebar.refreshSessions': 'Refresh sessions',
       'search.global.trigger': 'Search chats',
+      'search.global.placeholder': 'Search projects and chats…',
+      'search.global.recentTitle': 'Recent chats',
+      'search.global.projectsTitle': 'Projects',
+      'search.global.chatsTitle': 'Chats',
+      'search.global.projectSessionCountOne': '1 chat',
+      'search.global.projectSessionCount': '{count} chats',
+      'search.global.projectArchivedOnly': 'Archived',
+      'search.global.noResults': 'No matches found',
+      'search.global.loading': 'Searching…',
+      'search.global.error': 'Search failed',
+      'search.global.close': 'Close',
       'sidebar.projects': 'Projects',
       'sidebar.projectMenu': 'Project menu',
       'sidebar.newProject': 'New project',
@@ -153,6 +168,13 @@ vi.mock('../../i18n', () => ({
       'sidebar.expand': 'Expand sidebar',
       'session.lastUpdated': 'last updated {time}',
       'sidebar.sessionStatus.attention': 'Needs you',
+      'sidebar.copyMarkdown': 'Copy Markdown',
+      'sidebar.exportMarkdown': 'Export Markdown',
+      'sidebar.markdownCopied': 'Markdown copied.',
+      'sidebar.markdownExported': 'Markdown exported.',
+      'sidebar.markdownCopyFailed': 'Could not copy Markdown.',
+      'sidebar.markdownExportFailed': 'Could not export Markdown.',
+      'sidebar.markdownHistoryIncomplete': 'The session history is incomplete, so Markdown was not created.',
       'session.timeJustNow': 'just now',
       'session.timeMinutes': '{n}m ago',
       'session.timeHours': '{n}h ago',
@@ -179,7 +201,7 @@ vi.mock('./ProjectEditorModal', () => ({
     error?: string | null
     onClose: () => void
     onSourceFolderChange?: (path: string) => void
-    onSubmit: (submission: { name: string; sourceFolder: string; logicalRoot: string }) => void | Promise<void>
+    onSubmit: (submission: { name: string; sourceFolder: string; logicalRoot: string; additionalDirectories: string[] }) => void | Promise<void>
     onRestoreFolderName?: () => void | Promise<void>
     onRemoveFromSidebar?: () => void | Promise<void>
   }) => {
@@ -211,7 +233,7 @@ vi.mock('./ProjectEditorModal', () => ({
         )}
         <button
           type="button"
-          onClick={() => void props.onSubmit({ name, sourceFolder, logicalRoot })}
+          onClick={() => void props.onSubmit({ name, sourceFolder, logicalRoot, additionalDirectories: [] })}
         >
           Submit {props.mode} project
         </button>
@@ -222,6 +244,7 @@ vi.mock('./ProjectEditorModal', () => ({
               name: props.suggestedName!.trim().replace(/\s+/g, ' '),
               sourceFolder,
               logicalRoot,
+              additionalDirectories: [],
             })}
           >
             Submit folder project name
@@ -439,6 +462,7 @@ describe('Sidebar', () => {
     setSessionsArchived.mockReset()
     setSessionsArchived.mockResolvedValue({ successes: [], failures: [] })
     addToast.mockReset()
+    clipboardMock.copyTextToClipboard.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
     desktopUiPreferencesApiMock.getProjectDirectories.mockReset()
     desktopUiPreferencesApiMock.updateProjectDirectories.mockReset()
@@ -455,6 +479,8 @@ describe('Sidebar', () => {
     sessionsApiMock.create.mockReset()
     sessionsApiMock.list.mockReset()
     sessionsApiMock.listProjectHistory.mockReset()
+    sessionsApiMock.getFullHistory.mockReset()
+    sessionsApiMock.getFullHistory.mockResolvedValue({ messages: [], page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 } })
     sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [], nextCursor: null })
     sessionsApiMock.getGitInfo.mockReset()
     sessionsApiMock.getRecentProjects.mockReset()
@@ -622,7 +648,7 @@ describe('Sidebar', () => {
     fireEvent.contextMenu(screen.getByText('Archive target'))
     const menu = screen.getByRole('menu')
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Rename', 'sidebar.archiveSession', 'Delete',
+      'Rename', 'Copy Markdown', 'Export Markdown', 'sidebar.archiveSession', 'Delete',
     ])
     expect(within(menu).getByRole('separator')).toBeInTheDocument()
 
@@ -638,6 +664,51 @@ describe('Sidebar', () => {
 
     await act(async () => addToast.mock.calls[0]![0].action.onClick())
     expect(setSessionsArchived).toHaveBeenCalledWith(['archive-target'], false)
+  })
+
+  it('copies and exports complete Markdown and reports incomplete ordinary history', async () => {
+    const originalCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    const createObjectURL = vi.fn(() => 'blob:sidebar-markdown')
+    const revokeObjectURL = vi.fn()
+    const downloads: Array<{ href: string; download: string }> = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push({ href: this.href, download: this.download })
+    })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('markdown-target', 'Markdown target', '/workspace/alpha', '2026-01-01')] })
+      sessionsApiMock.getFullHistory.mockResolvedValue({
+        messages: [{ id: 'm1', type: 'user', content: 'Prompt body', timestamp: '2026-01-01T00:00:00.000Z' }],
+        page: { historyComplete: true, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      clipboardMock.copyTextToClipboard.mockResolvedValue(true)
+      render(<Sidebar />)
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(clipboardMock.copyTextToClipboard).toHaveBeenCalledWith(expect.stringContaining('Prompt body')))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown copied.' })
+
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Export Markdown' }))
+      await waitFor(() => expect(downloads).toEqual([{ href: 'blob:sidebar-markdown', download: 'Markdown target.md' }]))
+      expect(addToast).toHaveBeenCalledWith({ type: 'success', message: 'Markdown exported.' })
+
+      sessionsApiMock.getFullHistory.mockResolvedValueOnce({
+        messages: [], page: { historyComplete: false, contentTruncated: false, omittedOversizedEntries: 0 },
+      })
+      fireEvent.contextMenu(screen.getByText('Markdown target'))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Markdown' }))
+      await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'The session history is incomplete, so Markdown was not created.' }))
+    } finally {
+      clickSpy.mockRestore()
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', originalCreateObjectURL)
+      else Reflect.deleteProperty(URL, 'createObjectURL')
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', originalRevokeObjectURL)
+      else Reflect.deleteProperty(URL, 'revokeObjectURL')
+    }
   })
 
   it('leaves a rejected session usable and without an undo', async () => {
@@ -662,6 +733,132 @@ describe('Sidebar', () => {
     const archive = screen.getByRole('menuitem', { name: 'sidebar.archiveSession' })
     expect(archive).toBeDisabled()
     expect(archive).toHaveAttribute('title', 'sidebar.archiveBusy')
+  })
+
+  it('flips the session context menu upward when opened near the bottom of the window', () => {
+    // Regression anchor (#1976): placing the menu directly at (clientX, clientY)
+    // pushed the lower actions (Archive, Delete) past the window bottom when
+    // right-clicking a session near the bottom of the sidebar.
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 1024
+    window.innerHeight = 768
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('bottom-session', 'Bottom session', '/workspace/alpha', '2026-01-01')] })
+      render(<Sidebar />)
+
+      const clientX = 120
+      const clientY = window.innerHeight - 20
+      fireEvent.contextMenu(screen.getByText('Bottom session'), { clientX, clientY })
+
+      const menu = screen.getByRole('menu')
+      const left = Number.parseFloat(menu.style.left)
+      const top = Number.parseFloat(menu.style.top)
+      expect(menu.parentElement).toBe(document.body)
+      expect(menu.style.position).toBe('fixed')
+      expect(left).toBe(clientX)
+      expect(top).toBe(clientY - height)
+      expect(top).toBeGreaterThanOrEqual(8)
+      expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8)
+      expect(menu.style.visibility).toBe('visible')
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
+  })
+
+  it('clamps the session context menu inside a short viewport and dismisses only on sidebar scroll or window resize', () => {
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 400
+    window.innerHeight = 260
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('short-viewport-session', 'Short viewport session', '/workspace/alpha', '2026-01-01')] })
+      render(
+        <div>
+          <Sidebar />
+          <div data-testid="unrelated-chat-scroll" />
+        </div>,
+      )
+
+      // Neither opening downward (140 + 180 = 320 > 252) nor flipping upward
+      // (140 - 180 = -40 < 8) fits, and clientX is near the right edge.
+      fireEvent.contextMenu(screen.getByText('Short viewport session'), { clientX: 390, clientY: 140 })
+
+      const menu = screen.getByRole('menu')
+      const left = Number.parseFloat(menu.style.left)
+      const top = Number.parseFloat(menu.style.top)
+      expect(left).toBeGreaterThanOrEqual(8)
+      expect(left + width).toBeLessThanOrEqual(window.innerWidth - 8)
+      expect(top).toBeGreaterThanOrEqual(8)
+      expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8)
+      expect(menu.style.visibility).toBe('visible')
+
+      // Streaming chat auto-scroll outside the sidebar must not dismiss sidebar menus.
+      fireEvent.scroll(screen.getByTestId('unrelated-chat-scroll'))
+      expect(screen.getByRole('menu')).toBeInTheDocument()
+
+      // Scrolling the sidebar's own session list dismisses the menu.
+      fireEvent.scroll(screen.getByTestId('sidebar-session-scroll-area'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+      // Window resize also dismisses an open menu.
+      fireEvent.contextMenu(screen.getByText('Short viewport session'), { clientX: 390, clientY: 140 })
+      expect(screen.getByRole('menu')).toBeInTheDocument()
+      fireEvent(window, new Event('resize'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
+  })
+
+  it('caps the session context menu height when the viewport is shorter than the menu', () => {
+    const width = 180
+    const height = 180
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    window.innerWidth = 400
+    window.innerHeight = 160
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+
+    try {
+      useSessionStore.setState({ sessions: [makeSession('tiny-viewport-session', 'Tiny viewport session', '/workspace/alpha', '2026-01-01')] })
+      render(<Sidebar />)
+
+      fireEvent.contextMenu(screen.getByText('Tiny viewport session'), { clientX: 120, clientY: 120 })
+
+      const menu = screen.getByRole('menu')
+      expect(Number.parseFloat(menu.style.top)).toBe(8)
+      expect(Number.parseFloat(menu.style.maxHeight)).toBe(160 - 8 - 8)
+      expect(menu.className).toContain('overflow-y-auto')
+    } finally {
+      measure.mockRestore()
+      window.innerWidth = originalWidth
+      window.innerHeight = originalHeight
+    }
   })
 
   it('archives the batch selection, skips busy sessions, and undoes the archived ones together', async () => {
@@ -1427,69 +1624,46 @@ describe('Sidebar', () => {
     await waitFor(() => expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha'))
   })
 
-  it('creates a named project at its resolved root while launching the selected source folder', async () => {
+  it('creates a nested project at its selected root without renaming the parent repository', async () => {
     repositoryContextMock.mockResolvedValue({ repoRoot: '/workspace/repository' })
     createSession.mockResolvedValue('created-project-session')
 
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
-
-    const editor = screen.getByTestId('project-editor-modal')
-    expect(editor).toHaveAttribute('data-source-folder', '')
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
 
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalledWith('/workspace/repository/packages/app'))
-    await waitFor(() => {
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/repository/packages/app')
-      expect(editor).toHaveAttribute('data-logical-root', '/workspace/repository')
-      expect(editor).toHaveAttribute('data-suggested-name', 'repository')
-    })
-
+    const editor = screen.getByTestId('project-editor-modal')
+    expect(editor).toHaveAttribute('data-logical-root', '/workspace/repository/packages/app')
+    expect(editor).toHaveAttribute('data-suggested-name', 'app')
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
+
     await waitFor(() => {
+      expect(desktopUiPreferencesApiMock.updateProjectDirectories).toHaveBeenCalledWith(
+        '/workspace/repository/packages/app', [], { createProject: true },
+      )
       expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-        '/workspace/repository',
-        'Created project',
+        '/workspace/repository/packages/app', 'Created project',
       )
       expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
       expect(connectToSession).toHaveBeenCalledWith('created-project-session')
     })
-    expect(createSession.mock.invocationCallOrder[0]).toBeLessThan(
-      desktopUiPreferencesApiMock.updateProjectDisplayName.mock.invocationCallOrder[0]!,
+    expect(desktopUiPreferencesApiMock.updateProjectDirectories.mock.invocationCallOrder[0]).toBeLessThan(
+      createSession.mock.invocationCallOrder[0]!,
     )
-    expect(repositoryContextMock).toHaveBeenCalledTimes(1)
+    expect(repositoryContextMock).not.toHaveBeenCalled()
   })
 
-  it('opens the session before repository context resolves and falls back after lookup failure', async () => {
-    const repositoryContext = createDeferred<{ repoRoot: string | null; workDir?: string }>()
-    repositoryContextMock.mockReturnValueOnce(repositoryContext.promise)
+  it('keeps a hidden parent hidden when creating an independent child project', async () => {
+    window.localStorage.setItem(PROJECT_HIDDEN_STORAGE_KEY, JSON.stringify(['/workspace/repository']))
     createSession.mockResolvedValue('created-project-session')
-
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
-
-    await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
-      expect(connectToSession).toHaveBeenCalledWith('created-project-session')
-      expect(screen.queryByTestId('project-editor-modal')).not.toBeInTheDocument()
-    })
-    expect(desktopUiPreferencesApiMock.updateProjectDisplayName).not.toHaveBeenCalled()
-
-    await act(async () => {
-      repositoryContext.reject(new Error('repository context unavailable'))
-      await repositoryContext.promise.catch(() => undefined)
-    })
-
-    await waitFor(() => expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-      '/workspace/repository/packages/app',
-      'Created project',
-    ))
+    await waitFor(() => expect(connectToSession).toHaveBeenCalledWith('created-project-session'))
+    expect(JSON.parse(window.localStorage.getItem(PROJECT_HIDDEN_STORAGE_KEY)!)).toEqual(['/workspace/repository'])
   })
 
   it('resets instead of persisting a redundant alias when creating with the folder name', async () => {
@@ -1506,7 +1680,7 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     await waitFor(() => expect(screen.getByTestId('project-editor-modal')).toHaveAttribute(
       'data-suggested-name',
-      'repository',
+      'app',
     ))
     fireEvent.click(screen.getByRole('button', { name: 'Submit folder project name' }))
 
@@ -1515,7 +1689,7 @@ describe('Sidebar', () => {
       expect(screen.queryByTestId('project-editor-modal')).not.toBeInTheDocument()
     })
     expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-      '/workspace/repository',
+      '/workspace/repository/packages/app',
       null,
     )
   })
@@ -1537,7 +1711,6 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
 
     await waitFor(() => {
@@ -1572,7 +1745,6 @@ describe('Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
 
     await waitFor(() => {
@@ -1583,69 +1755,36 @@ describe('Sidebar', () => {
     expect(connectToSession).not.toHaveBeenCalled()
   })
 
-  it('uses the resolved non-git workDir as the project display-name key', async () => {
-    repositoryContextMock.mockResolvedValue({
-      repoRoot: null,
-      workDir: '/real/workspace/project',
+  it('uses the server-validated project identity for the display name', async () => {
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockResolvedValueOnce({
+      ok: true, projectKey: '/real/workspace/project', mainDirectory: '/real/workspace/project', additionalDirectories: [],
     })
     createSession.mockResolvedValue('created-project-session')
-
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
-
-    await waitFor(() => {
-      const editor = screen.getByTestId('project-editor-modal')
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/repository/packages/app')
-      expect(editor).toHaveAttribute('data-logical-root', '/real/workspace/project')
-      expect(editor).toHaveAttribute('data-suggested-name', 'project')
-    })
-
     fireEvent.click(screen.getByRole('button', { name: 'Submit create project' }))
+
     await waitFor(() => {
       expect(desktopUiPreferencesApiMock.updateProjectDisplayName).toHaveBeenCalledWith(
-        '/real/workspace/project',
-        'Created project',
+        '/real/workspace/project', 'Created project',
       )
       expect(createSession).toHaveBeenCalledWith('/workspace/repository/packages/app')
     })
   })
 
-  it('keeps the latest logical root when an earlier lookup finishes late', async () => {
-    let resolveFirstLookup: (value: { repoRoot: string | null }) => void = () => undefined
-    const firstLookup = new Promise<{ repoRoot: string | null }>((resolve) => {
-      resolveFirstLookup = resolve
-    })
-    repositoryContextMock
-      .mockImplementationOnce(() => firstLookup)
-      .mockResolvedValueOnce({ repoRoot: '/workspace/other' })
-
+  it('keeps the latest selected folder as its independent project root', () => {
     render(<Sidebar />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Use existing folder' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose project source' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose other project source' }))
-
-    await waitFor(() => expect(repositoryContextMock).toHaveBeenNthCalledWith(2, '/workspace/other'))
-    await waitFor(() => {
-      const editor = screen.getByTestId('project-editor-modal')
-      expect(editor).toHaveAttribute('data-source-folder', '/workspace/other')
-      expect(editor).toHaveAttribute('data-logical-root', '/workspace/other')
-      expect(editor).toHaveAttribute('data-suggested-name', 'other')
-    })
-
-    await act(async () => {
-      resolveFirstLookup({ repoRoot: '/workspace/repository' })
-      await Promise.resolve()
-    })
-
     const editor = screen.getByTestId('project-editor-modal')
     expect(editor).toHaveAttribute('data-source-folder', '/workspace/other')
     expect(editor).toHaveAttribute('data-logical-root', '/workspace/other')
     expect(editor).toHaveAttribute('data-suggested-name', 'other')
+    expect(repositoryContextMock).not.toHaveBeenCalled()
   })
 
   it('edits, resets, and removes a project without changing its real path or sessions', async () => {
@@ -1895,7 +2034,7 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('keeps project row actions hidden until project hover or focus', () => {
+  it('keeps project row actions hidden until project hover or Safari 15-safe focus-within', () => {
     useSessionStore.setState({
       sessions: [
         makeSession('alpha-1', 'Alpha Session', '/workspace/alpha', new Date().toISOString()),
@@ -1908,6 +2047,7 @@ describe('Sidebar', () => {
     expect(actionButton.parentElement).toHaveClass('opacity-0')
     expect(actionButton.parentElement).toHaveClass('group-hover/project:opacity-100')
     expect(actionButton.parentElement).toHaveClass('group-focus-within/project:opacity-100')
+    expect(actionButton.parentElement?.className).not.toContain('has-[')
   })
 
   it('shows the project action menu with pin and Finder actions', async () => {
@@ -2557,15 +2697,18 @@ describe('Sidebar', () => {
 
     expect(screen.getByRole('button', { name: /First Session/ }).parentElement).toHaveClass('mb-px')
     expect(screen.getByRole('button', { name: /First Session/ })).toHaveClass('sidebar-session-row--selected')
-    // Both the batch selection and the open session are the white card lifted
-    // off the sidebar ground: paper fill, hairline ring, raised shadow step.
+    // Both the batch selection and the open session use the V6C raised glass row;
+    // the active session also carries the 3px terracotta leading bar.
     for (const name of [/First Session/, /Second Session/]) {
       expect(screen.getByRole('button', { name })).toHaveClass(
-        'bg-[var(--color-sidebar-item-active)]',
-        'shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]',
+        'v6c-raised',
+        'text-[var(--color-text-primary)]',
       )
     }
-    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('bg-[var(--color-sidebar-item-active)]')
+    expect(screen.getByRole('button', { name: /Second Session/ })).toHaveClass('v6c-active-bar')
+    expect(screen.getByRole('button', { name: /First Session/ })).not.toHaveClass('v6c-active-bar')
+    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('v6c-raised')
+    expect(screen.getByRole('button', { name: /Third Session/ })).not.toHaveClass('v6c-active-bar')
     expect(screen.getByRole('button', { name: /Second Session/ })).toHaveClass('sidebar-session-row--active')
     expect(screen.getByRole('button', { name: /Third Session/ })).toHaveClass('sidebar-session-row--idle')
   })
@@ -2614,7 +2757,7 @@ describe('Sidebar', () => {
     render(<Sidebar />)
 
     expect(screen.getByTestId('sidebar-search-controls-section')).toHaveStyle({ overflow: 'visible' })
-    expect(screen.getByTestId('sidebar-search-controls-section')).toHaveClass('relative', 'z-20')
+    expect(screen.getByTestId('sidebar-search-controls-section')).toHaveClass('relative', 'z-[var(--z-sticky)]')
     expect(screen.getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /All projects/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('project-filter')).not.toBeInTheDocument()
@@ -3443,6 +3586,353 @@ describe('Sidebar', () => {
       const bell = screen.getByRole('button', { name: 'Task view' })
       expect(bell).toBeInTheDocument()
       expect(bell).not.toHaveAttribute('tabindex', '-1')
+    })
+
+    it('renders the h-8 sticky action row, top navigation items, ScrollArea edge fades, adaptive thread card metadata, and clean settings dock', () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [
+          makeSession('plain', 'Plain thread', '/workspace/alpha', at),
+          {
+            ...makeSession('wt', 'Worktree thread', '/workspace/alpha', at),
+            workDir: '/workspace/alpha/.claude/worktrees/feat-polish',
+          },
+        ],
+      })
+
+      render(<Sidebar />)
+
+      // Single h-8 sticky action row combining search (+ Kbd), task view toggle, and new session.
+      const controls = screen.getByTestId('sidebar-search-controls-section')
+      expect(within(controls).getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
+      expect(within(controls).getByTestId('sidebar-task-view-toggle')).toBeInTheDocument()
+      expect(within(controls).getByTestId('sidebar-new-session-button')).toBeInTheDocument()
+
+      // Top primary navigation sits below search/actions and above projects/sessions.
+      const primaryNav = screen.getByTestId('sidebar-primary-nav')
+      expect(within(primaryNav).getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
+      expect(within(primaryNav).getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
+      expect(within(primaryNav).queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+
+      // ScrollArea with autohide and top/bottom edge fades.
+      const scrollArea = screen.getByTestId('sidebar-session-scroll-area')
+      expect(scrollArea).toHaveClass('scrollbar-autohide', 'scroll-edge-fade')
+      expect(scrollArea).toHaveAttribute('data-fade-top', 'true')
+      expect(scrollArea).toHaveAttribute('data-fade-bottom', 'true')
+      expect(primaryNav.compareDocumentPosition(scrollArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      // Adaptive thread card shows worktree branch badge when present and collapses when absent.
+      const worktreeRow = screen.getByRole('button', { name: /Worktree thread/ })
+      expect(within(worktreeRow).getByText('feat-polish')).toBeInTheDocument()
+      const plainRow = screen.getByRole('button', { name: /Plain thread/ })
+      expect(within(plainRow).queryByText('worktree')).not.toBeInTheDocument()
+
+      // Bottom dock stays focused on Settings (not crowded with Scheduled or Extension Market).
+      const dock = screen.getByTestId('sidebar-settings-dock')
+      expect(within(dock).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+      expect(within(dock).queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
+      expect(within(dock).queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
+    })
+
+    it('keeps Scheduled, Extension Market, and Phone connection in the top rail when collapsed and Settings in the bottom dock', () => {
+      const previousHost = window.desktopHost
+      window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+      useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      try {
+        render(<Sidebar />)
+        const primaryNav = screen.getByTestId('sidebar-primary-nav')
+        expect(within(primaryNav).getByRole('button', { name: 'Scheduled' })).toBeInTheDocument()
+        expect(within(primaryNav).getByRole('button', { name: 'Phone connection' })).toBeInTheDocument()
+        expect(within(primaryNav).getByRole('button', { name: 'Extension Market' })).toBeInTheDocument()
+
+        const dock = screen.getByTestId('sidebar-settings-dock')
+        expect(within(dock).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Phone connection' })).not.toBeInTheDocument()
+        expect(within(dock).queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
+      } finally {
+        window.desktopHost = previousHost
+      }
+    })
+
+    it('clamps the session action menu inside the viewport when triggered near the bottom edge', () => {
+      const menuWidth = 200
+      const menuHeight = 210
+      const previousInnerWidth = window.innerWidth
+      const previousInnerHeight = window.innerHeight
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 900 })
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
+      const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute('role') === 'menu') {
+          return { x: 0, y: 0, top: 0, left: 0, right: menuWidth, bottom: menuHeight, width: menuWidth, height: menuHeight, toJSON: () => ({}) } as DOMRect
+        }
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect
+      })
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('bottom-1', 'Bottom Session', '/workspace/alpha', new Date().toISOString()),
+        ],
+      })
+
+      try {
+        render(<Sidebar />)
+        const moreButton = screen.getByRole('button', { name: 'tasks.moreActions' })
+        vi.spyOn(moreButton, 'getBoundingClientRect').mockReturnValue({
+          x: 220,
+          y: 560,
+          top: 560,
+          left: 220,
+          right: 244,
+          bottom: 584,
+          width: 24,
+          height: 24,
+          toJSON: () => ({}),
+        } as DOMRect)
+
+        fireEvent.click(moreButton)
+        const menu = screen.getByRole('menu')
+        const top = Number.parseFloat(menu.style.top)
+        const left = Number.parseFloat(menu.style.left)
+        expect(menu.parentElement).toBe(document.body)
+        expect(menu.style.visibility).toBe('visible')
+        expect(top).toBe(560 - 4 - menuHeight)
+        expect(top).toBeGreaterThanOrEqual(8)
+        expect(top + menuHeight).toBeLessThanOrEqual(600 - 8)
+        expect(left).toBeGreaterThanOrEqual(8)
+        expect(left + menuWidth).toBeLessThanOrEqual(900 - 8)
+      } finally {
+        measure.mockRestore()
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousInnerWidth })
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: previousInnerHeight })
+      }
+    })
+
+    it('does not reserve macOS traffic-light padding on Linux desktop runtimes', () => {
+      const previousHost = window.desktopHost
+      const previousPlatform = Object.getOwnPropertyDescriptor(window.navigator, 'platform')
+      const previousUserAgent = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent')
+      window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+
+      try {
+        Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'Linux x86_64' })
+        Object.defineProperty(window.navigator, 'userAgent', {
+          configurable: true,
+          value: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36',
+        })
+
+        useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+        const { rerender } = render(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pl-2.5')
+        expect(screen.getByTestId('sidebar-title-region')).not.toHaveClass('pl-[76px]')
+
+        act(() => {
+          useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pt-3')
+        expect(screen.getByTestId('sidebar-title-region')).not.toHaveClass('pt-[52px]')
+
+        // Contrast with macOS desktop, which reserves traffic-light inset in both states.
+        Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' })
+        Object.defineProperty(window.navigator, 'userAgent', {
+          configurable: true,
+          value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        })
+        act(() => {
+          useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pl-[76px]')
+
+        act(() => {
+          useUIStore.setState({ sidebarOpen: false } as Partial<ReturnType<typeof useUIStore.getState>>)
+        })
+        rerender(<Sidebar />)
+        expect(screen.getByTestId('sidebar-title-region')).toHaveClass('pt-[52px]')
+      } finally {
+        window.desktopHost = previousHost
+        if (previousPlatform) {
+          Object.defineProperty(window.navigator, 'platform', previousPlatform)
+        } else {
+          Reflect.deleteProperty(window.navigator, 'platform')
+        }
+        if (previousUserAgent) {
+          Object.defineProperty(window.navigator, 'userAgent', previousUserAgent)
+        } else {
+          Reflect.deleteProperty(window.navigator, 'userAgent')
+        }
+      }
+    })
+
+    it('locates, expands, and reveals a project in the sidebar when selected from global search', async () => {
+      const scrolledElements: Element[] = []
+      const previousScrollIntoView = Element.prototype.scrollIntoView
+      Element.prototype.scrollIntoView = function scrollIntoViewStub() {
+        scrolledElements.push(this)
+      }
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-alpha', 'Alpha thread', '/workspace/alpha-repo', at),
+          makeSession('s-beta', 'Beta thread', '/workspace/beta-repo', at),
+        ],
+      })
+      useUIStore.setState({ sidebarOpen: true, activeModal: null } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      try {
+        render(<Sidebar />)
+
+        // Collapse beta-repo and switch to task view so locating must restore both.
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse beta-repo' }))
+        expect(screen.queryByText('Beta thread')).not.toBeInTheDocument()
+        fireEvent.click(screen.getByTestId('sidebar-task-view-toggle'))
+        expect(screen.queryByTestId('sidebar-project-group-workspace-beta-repo')).not.toBeInTheDocument()
+
+        // Open global search from the sidebar trigger and search by project name.
+        fireEvent.click(screen.getByRole('button', { name: 'Search chats' }))
+        const input = screen.getByPlaceholderText('Search projects and chats…')
+        fireEvent.change(input, { target: { value: 'beta-repo' } })
+
+        const projectOption = screen.getByRole('option', { name: /beta-repo/i })
+        fireEvent.click(projectOption)
+
+        // Modal closes, project view returns, beta-repo expands and scrolls/focuses its header button.
+        expect(useUIStore.getState().activeModal).toBeNull()
+        const betaGroup = await screen.findByTestId('sidebar-project-group-workspace-beta-repo')
+        expect(within(betaGroup).getByText('Beta thread')).toBeInTheDocument()
+        const betaHeader = within(betaGroup).getByRole('button', { name: 'Collapse beta-repo' })
+        expect(scrolledElements).toContain(betaHeader)
+        expect(betaHeader).toHaveFocus()
+      } finally {
+        Element.prototype.scrollIntoView = previousScrollIntoView
+      }
+    })
+
+    it('merges task-view exit and hidden-project restore into a single sidebar preference write', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      localStorage.setItem('cc-haha-sidebar-project-organization', 'time')
+      localStorage.setItem('cc-haha-sidebar-hidden-projects', JSON.stringify(['/workspace/hidden-repo']))
+      desktopUiPreferencesApiMock.updateSidebarPreferences.mockClear()
+
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-visible', 'Visible thread', '/workspace/visible-repo', at),
+          makeSession('s-hidden', 'Hidden thread', '/workspace/hidden-repo', at),
+        ],
+      })
+      useUIStore.setState({ sidebarOpen: true, activeModal: null } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      render(<Sidebar />)
+      expect(screen.queryByTestId('sidebar-project-group-workspace-hidden-repo')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search chats' }))
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'hidden-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /hidden-repo/i }))
+
+      const hiddenGroup = await screen.findByTestId('sidebar-project-group-workspace-hidden-repo')
+      expect(within(hiddenGroup).getByText('Hidden thread')).toBeInTheDocument()
+
+      expect(desktopUiPreferencesApiMock.updateSidebarPreferences).toHaveBeenCalledTimes(1)
+      expect(desktopUiPreferencesApiMock.updateSidebarPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectOrganization: 'recentProject',
+          hiddenProjects: [],
+        }),
+      )
+      expect(localStorage.getItem('cc-haha-sidebar-project-organization')).toBe('recentProject')
+      expect(localStorage.getItem('cc-haha-sidebar-hidden-projects')).toBe('[]')
+    })
+
+    it('expands a collapsed sidebar when a project is selected from global search', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('s-rail', 'Rail thread', '/workspace/rail-repo', at)],
+      })
+      useUIStore.setState({ sidebarOpen: false, activeModal: 'globalSearch' } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      render(<Sidebar />)
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'rail-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /rail-repo/i }))
+
+      expect(useUIStore.getState().sidebarOpen).toBe(true)
+      const railGroup = await screen.findByTestId('sidebar-project-group-workspace-rail-repo')
+      expect(within(railGroup).getByText('Rail thread')).toBeInTheDocument()
+    })
+
+    it('portals project context, header, and organize submenus to document.body outside the sidebar aside', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [makeSession('s-portal', 'Portal thread', '/workspace/portal-repo', at)],
+      })
+      useUIStore.setState({ sidebarOpen: true } as Partial<ReturnType<typeof useUIStore.getState>>)
+
+      const { container } = render(<Sidebar />)
+      const aside = container.querySelector('aside.sidebar-panel')!
+      expect(aside).toBeInTheDocument()
+      expect(aside).not.toHaveClass('v6c-sidebar-glass')
+
+      // Project header menu + Organize submenu must render outside <aside> so
+      // .sidebar-shell overflow:hidden never clips the right-aligned submenu.
+      fireEvent.click(screen.getByRole('button', { name: 'Project menu' }))
+      const headerMenu = screen.getByRole('menu')
+      expect(aside).not.toContainElement(headerMenu)
+      expect(document.body).toContainElement(headerMenu)
+
+      fireEvent.click(within(headerMenu).getByRole('menuitem', { name: 'Organize sidebar' }))
+      const menus = screen.getAllByRole('menu')
+      expect(menus).toHaveLength(2)
+      for (const menu of menus) {
+        expect(aside).not.toContainElement(menu)
+        expect(document.body).toContainElement(menu)
+      }
+
+      // Close header menus before opening the project context menu.
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+      // Project context menu must also portal to document.body.
+      const actionsBtn = screen.getByRole('button', { name: 'Project actions for portal-repo' })
+      fireEvent.click(actionsBtn)
+      const contextMenu = screen.getByRole('menu')
+      expect(aside).not.toContainElement(contextMenu)
+      expect(document.body).toContainElement(contextMenu)
+    })
+
+    it('uses mutually exclusive padding and primary text color on a highlighted project row', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-alpha', 'Alpha thread', '/workspace/alpha-repo', at),
+          makeSession('s-beta', 'Beta thread', '/workspace/beta-repo', at),
+        ],
+      })
+      useUIStore.setState({
+        sidebarOpen: true,
+        activeModal: 'globalSearch',
+      } as Partial<ReturnType<typeof useUIStore.getState>>)
+      useTabStore.setState({ tabs: [], activeTabId: null })
+
+      render(<Sidebar />)
+
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'alpha-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /alpha-repo/i }))
+
+      const alphaHeader = await screen.findByRole('button', { name: 'Collapse alpha-repo' })
+      expect(alphaHeader).toHaveClass('v6c-raised', 'v6c-active-bar', 'pl-3', 'pr-2', 'text-[var(--color-text-primary)]')
+      expect(alphaHeader).not.toHaveClass('px-2')
+      expect(within(alphaHeader).getByText('alpha-repo')).toHaveClass('text-[var(--color-text-primary)]')
+      expect(within(alphaHeader).getByText('alpha-repo')).not.toHaveClass('text-[var(--color-text-secondary)]')
+
+      const betaHeader = screen.getByRole('button', { name: 'Collapse beta-repo' })
+      expect(betaHeader).toHaveClass('px-2')
+      expect(betaHeader).not.toHaveClass('pl-3', 'pr-2', 'v6c-active-bar')
+      expect(within(betaHeader).getByText('beta-repo')).toHaveClass('text-[var(--color-text-secondary)]')
     })
   })
 })

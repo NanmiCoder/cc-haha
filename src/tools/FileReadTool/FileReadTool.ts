@@ -28,6 +28,7 @@ import {
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
+import { shouldIncludeCyberRiskInstruction } from '../../utils/cyberRiskSettings.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../../utils/envUtils.js'
 import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import { getErrnoCode, isENOENT } from '../../utils/errors.js'
@@ -49,6 +50,7 @@ import {
   type ImageDimensions,
   ImageResizeError,
   maybeResizeAndDownsampleImageBuffer,
+  optimizeImageForContext,
 } from '../../utils/imageResizer.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { logError } from '../../utils/log.js'
@@ -743,6 +745,7 @@ export const CYBER_RISK_MITIGATION_REMINDER =
 const MITIGATION_EXEMPT_MODELS = new Set(['claude-opus-4-7'])
 
 function shouldIncludeFileReadMitigation(): boolean {
+  if (!shouldIncludeCyberRiskInstruction()) return false
   const shortName = getCanonicalName(getMainLoopModel())
   return !MITIGATION_EXEMPT_MODELS.has(shortName)
 }
@@ -1162,7 +1165,7 @@ export async function readImageWithTokenBudget(
   // Try standard resize
   let result: ImageResult
   try {
-    const resized = await maybeResizeAndDownsampleImageBuffer(
+    const resized = await optimizeImageForContext(
       imageBuffer,
       originalSize,
       detectedFormat,

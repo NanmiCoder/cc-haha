@@ -150,6 +150,27 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       onPanelPlacementChanged: handler =>
         subscribe(ELECTRON_EVENT_CHANNELS.petPanelPlacementChanged, handler),
     },
+    usageWidget: {
+      show: options => invoke(ELECTRON_IPC_CHANNELS.usageWidgetShow, options),
+      hide: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetHide),
+      toggle: options => invoke(ELECTRON_IPC_CHANNELS.usageWidgetToggle, options),
+      setCompact: compact => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSetCompact, compact),
+      setAlwaysOnTop: alwaysOnTop => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSetAlwaysOnTop, alwaysOnTop),
+      snapToTop: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSnapToTop),
+      dragWindow: payload => invoke(ELECTRON_IPC_CHANNELS.usageWidgetDragWindow, payload),
+      syncMenuBar: payload => invoke(ELECTRON_IPC_CHANNELS.usageWidgetSyncMenuBar, payload),
+      focusMainWindow: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow),
+      openSettings: tab => invoke(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, tab),
+      notifyPreferencesChanged: () =>
+        invoke(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged),
+      getTheme: () => invoke(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme),
+      onVisibilityChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetVisibilityChanged, handler),
+      onPreferencesChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged, () => handler()),
+      onThemeChanged: handler =>
+        subscribe(ELECTRON_EVENT_CHANNELS.usageWidgetThemeChanged, handler),
+    },
     dialogs: {
       open: options => invoke(ELECTRON_IPC_CHANNELS.dialogOpen, options),
       save: options => invoke(ELECTRON_IPC_CHANNELS.dialogSave, options),
@@ -206,6 +227,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       showMenu: (tabId, options) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserShowMenu, { ...options, tabId }),
       create: (tabId, options) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, {
         tabId,
+        ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
         storageId: options.storageId,
         webContentsId: options.webContentsId,
         ...(options.url === undefined ? {} : { url: options.url }),
@@ -231,6 +253,12 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       printToPdf: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf, { tabId }),
       close: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserClose, { tabId }),
       onEvent: handler => subscribe(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, handler),
+    },
+    browserUse: {
+      reportTabReady: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseTabReady, payload),
+      reportCursorArrived: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseCursorArrived, payload),
+      sendUserAction: payload => invoke(ELECTRON_IPC_CHANNELS.browserUseUserAction, payload),
+      onEvent: handler => subscribe(ELECTRON_EVENT_CHANNELS.browserUseEvent, handler),
     },
     appMode: {
       get: () => invoke(ELECTRON_IPC_CHANNELS.appModeGet),

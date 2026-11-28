@@ -78,7 +78,7 @@ export function withH5Build(
   return {
     ...config,
     experiments: { ...config.experiments, baseUrl: H5_BASE_PATH },
-    web: { ...config.web, lang: 'zh-CN', name: 'cc-haha', themeColor: '#F4F3F0' },
+    web: { ...config.web, lang: 'zh-CN', name: 'cc-haha', themeColor: '#FFFFFF' },
   }
 }
 

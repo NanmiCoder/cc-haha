@@ -104,6 +104,40 @@ function defaultWatchDirectory(
   return watcher
 }
 
+const IGNORED_PROJECT_ARTIFACT_DIRS = new Set(['tool-results', 'memory'])
+const IGNORED_PROJECT_ARTIFACT_EXTENSIONS = [
+  '.meta.json',
+  '.json',
+  '.txt',
+  '.md',
+  '.log',
+  '.tmp',
+  '.lock',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.pdf',
+  '.svg',
+  '.bin',
+]
+
+function isProjectsDirectoryEntry(filename: string): boolean {
+  const normalized = filename.replace(/[\\/]+$/, '')
+  return process.platform === 'win32'
+    ? normalized.toLowerCase() === 'projects'
+    : normalized === 'projects'
+}
+
+function isIgnoredProjectArtifact(eventType: string, relativePath: string): boolean {
+  if (eventType === 'change') return true
+  const segments = relativePath.split(sep)
+  if (segments.some(segment => IGNORED_PROJECT_ARTIFACT_DIRS.has(segment))) return true
+  const leaf = (segments.at(-1) ?? '').toLowerCase()
+  return IGNORED_PROJECT_ARTIFACT_EXTENSIONS.some(ext => leaf.endsWith(ext))
+}
+
 function isExactTranscriptPath(scope: string, candidate: string): boolean {
   const normalizedScope = resolve(scope)
   const normalizedCandidate = resolve(candidate)
@@ -136,7 +170,8 @@ export function createReconciliationWatcher(
     DEFAULT_BATCH_SIZE,
     Math.trunc(options.batchSize ?? DEFAULT_BATCH_SIZE),
   ))
-  const projectsRoot = join(resolve(options.scope), 'projects')
+  const resolvedScope = resolve(options.scope)
+  const projectsRoot = join(resolvedScope, 'projects')
   const isTargetPath = options.isTargetPath ?? isExactTranscriptPath
   const watchDirectory = options.watchDirectory ?? (
     (directory, listener, onError) => defaultWatchDirectory(
@@ -233,19 +268,39 @@ export function createReconciliationWatcher(
       try {
         const handle = watchDirectory(
           directory,
-          (_eventType, filename) => {
+          (eventType, filename) => {
             if (!active || expectedGeneration !== generation) return
+            if (directory === resolvedScope) {
+              // The scope watcher exists only to notice `~/.claude/projects`
+              // appearing or disappearing. Ignore sibling files such as
+              // `history.jsonl` or `settings.json` written on every prompt.
+              if (!filename || isProjectsDirectoryEntry(filename)) {
+                queueFullSweep()
+              }
+              return
+            }
             const isProjectDirectory = dirname(directory) === projectsRoot
             if (!isProjectDirectory || !filename) {
               queueFullSweep()
               return
             }
             const candidate = join(directory, filename)
-            if (!isTargetPath(options.scope, candidate)) {
+            if (isTargetPath(options.scope, candidate)) {
+              queueTranscriptPath(candidate)
+              return
+            }
+            const relativeCandidate = relative(directory, resolve(candidate))
+            if (
+              !relativeCandidate ||
+              relativeCandidate === '..' ||
+              relativeCandidate.startsWith(`..${sep}`)
+            ) {
               queueFullSweep()
               return
             }
-            queueTranscriptPath(candidate)
+            if (!isIgnoredProjectArtifact(eventType, relativeCandidate)) {
+              queueFullSweep()
+            }
           },
           () => {
             if (!active || expectedGeneration !== generation) return

@@ -25,12 +25,16 @@ import { Text } from './Text'
 import { KeyboardViewport } from './KeyboardViewport'
 import { Icon, type IconName } from './icons'
 import { useTheme, type Colors } from './theme'
-import { monoFont, type } from './palette'
+import { lightShadows, monoFont, radius, type, type ShadowSet } from './palette'
 import type { DiffLine } from '../core/operations'
 import { simulatedPhoneChrome } from './webChrome'
 
 export { Icon, type IconName } from './icons'
-export { type } from './palette'
+export { radius, type } from './palette'
+
+export function useShadows(): ShadowSet {
+  return useTheme().shadows ?? lightShadows
+}
 
 export function useColors(): Colors {
   return useTheme().colors
@@ -258,7 +262,7 @@ export function NavBar({
 
 /** 浮动圆钮的投影与描边（NavBar 的 floating 样式、会话页的活动胶囊共用）。 */
 export const floatingShadow = (hair: string) =>
-  `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
+  `0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.08), 0 0 0 1px ${hair}`
 
 /**
  * 44 圆形白底按钮，带轻阴影：浮动导航栏的返回和“…”。可带角标，或用 children 放自定义内容
@@ -282,7 +286,7 @@ export function FloatingButton({
   disabled?: boolean
   children?: React.ReactNode
 }) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   return (
     <Pressable
       accessibilityRole="button"
@@ -295,12 +299,12 @@ export function FloatingButton({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: colors.card,
+        backgroundColor: colors.cardRaised,
         alignItems: 'center',
         justifyContent: 'center',
         boxShadow: active
-          ? `0 0 0 2px ${colors.ink}, 0 4px 14px rgba(28,25,23,0.18)`
-          : floatingShadow(colors.hair),
+          ? `0 0 0 2px ${colors.ink}, ${shadows.floating}`
+          : shadows.floating,
         opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
       })}
     >
@@ -344,7 +348,7 @@ export type ActionMenuItem =
   | 'separator'
 
 /**
- * “…”会话菜单：白底圆角 16、268 宽，一行 48 高，图标在左（X2 画板）。
+ * “…”会话菜单：白底圆角 14、268 宽，一行 48 高，图标在左（X2 画板）。
  * 和 {@link Menu} 的区别只在外观，锚点语义相同（相对整块屏幕）。
  */
 export function ActionMenu({
@@ -363,7 +367,7 @@ export function ActionMenu({
   /** 菜单顶部的小字区（路径、模型 · 上下文用量），下面有一条分隔线。 */
   header?: React.ReactNode
 }) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <Pressable
@@ -383,9 +387,9 @@ export function ActionMenu({
           left: anchor.left,
           width,
           paddingVertical: 6,
-          backgroundColor: colors.card,
-          borderRadius: 16,
-          boxShadow: `0 10px 32px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.06), 0 0 0 1px ${colors.hair}`,
+          backgroundColor: colors.cardRaised,
+          borderRadius: radius.card,
+          boxShadow: shadows.menu,
         }}
       >
         {header ? (
@@ -590,7 +594,13 @@ export function Group({
   return (
     <View
       style={[
-        { backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' },
+        {
+          backgroundColor: colors.card,
+          borderRadius: radius.group,
+          borderWidth: 1,
+          borderColor: colors.hair,
+          overflow: 'hidden',
+        },
         style,
       ]}
     >
@@ -607,7 +617,14 @@ export function Card({
   return (
     <View
       style={[
-        { backgroundColor: colors.card, borderRadius: 18, padding: 14, gap: 10 },
+        {
+          backgroundColor: colors.card,
+          borderRadius: radius.card,
+          borderWidth: 1,
+          borderColor: colors.hair,
+          padding: 14,
+          gap: 10,
+        },
         style,
       ]}
     >
@@ -819,7 +836,7 @@ export function Button({
         {
           height,
           paddingHorizontal: size === 'sm' ? 12 : 18,
-          borderRadius: pill ? height / 2 : size === 'sm' ? 17 : size === 'lg' ? 14 : 12,
+          borderRadius: pill ? height / 2 : size === 'sm' ? radius.control : radius.button,
           backgroundColor:
             variant === 'primary' && inactive ? colors.fill : tone.bg,
           boxShadow: tone.ring ? `inset 0 0 0 1px ${tone.ring}` : undefined,
@@ -951,7 +968,7 @@ export function Chip({
           height: 36,
           maxWidth: '100%',
           paddingHorizontal: 12,
-          borderRadius: 18,
+          borderRadius: radius.sm,
           backgroundColor: bg,
           boxShadow:
             selected || tone === 'run' ? undefined : `inset 0 0 0 1px ${colors.hair}`,
@@ -1018,7 +1035,7 @@ export function Switch({
         width: 51,
         height: 31,
         borderRadius: 16,
-        backgroundColor: value ? colors.ok : colors.switchOff,
+        backgroundColor: value ? colors.brand : colors.switchOff,
         opacity: disabled ? 0.45 : 1,
         padding: 2,
       }}
@@ -1056,7 +1073,7 @@ export function Segmented<T extends string | number>({
   height?: number
   style?: StyleProp<ViewStyle>
 }) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   return (
     <View
       accessibilityRole="radiogroup"
@@ -1064,7 +1081,7 @@ export function Segmented<T extends string | number>({
       style={[
         {
           height,
-          borderRadius: 10,
+          borderRadius: radius.control,
           backgroundColor: colors.fill,
           padding: 2,
           flexDirection: 'row',
@@ -1088,11 +1105,11 @@ export function Segmented<T extends string | number>({
             onPress={() => onChange(option.value)}
             style={{
               flex: 1,
-              borderRadius: 8,
+              borderRadius: radius.md,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: selected ? colors.card : 'transparent',
-              boxShadow: selected ? '0 1px 3px rgba(28,25,23,0.12)' : undefined,
+              backgroundColor: selected ? colors.cardRaised : 'transparent',
+              boxShadow: selected ? shadows.segment : undefined,
               opacity: option.disabled ? 0.4 : 1,
             }}
           >
@@ -1243,7 +1260,7 @@ export function OptionCard({
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
-        borderRadius: 14,
+        borderRadius: radius.card,
         paddingHorizontal: 14,
         paddingVertical: 12,
         flexDirection: 'row',
@@ -1274,7 +1291,7 @@ export function OptionCard({
                 fontWeight: '600',
                 color: colors.attn,
                 backgroundColor: colors.attnSoft,
-                borderRadius: 6,
+                borderRadius: radius.sm,
                 paddingHorizontal: 6,
                 paddingVertical: 1,
                 overflow: 'hidden',
@@ -1343,7 +1360,7 @@ export function Callout({
  * 不挡触摸；读屏会念出来。
  */
 export function Toast({ text, top }: { text: string; top: number }) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   useEffect(() => {
     if (text) AccessibilityInfo.announceForAccessibility(text)
   }, [text])
@@ -1357,12 +1374,12 @@ export function Toast({ text, top }: { text: string; top: number }) {
           paddingLeft: 12,
           paddingRight: 16,
           paddingVertical: 9,
-          borderRadius: 20,
+          borderRadius: radius.sheet,
           backgroundColor: colors.btn,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 8,
-          boxShadow: '0 6px 20px rgba(20,19,17,0.18)',
+          boxShadow: shadows.toast,
         }}
       >
         <Icon name="check" size={16} color={colors.btnInk} strokeWidth={2.6} />
@@ -1630,7 +1647,7 @@ export function FileBadge({ status, size = 22 }: { status: FileStatus; size?: nu
       style={{
         width: size,
         height: size,
-        borderRadius: size * 0.27,
+        borderRadius: radius.sm,
         backgroundColor: scheme.bg,
         alignItems: 'center',
         justifyContent: 'center',
@@ -1774,7 +1791,13 @@ export function DiffView({
 
 /* ───────────── 弹层 ───────────── */
 
-/** 底部弹层：抓手、圆角 28、点遮罩关闭；内容超高时滚动。 */
+/**
+ * 底部弹层：抓手、圆角 20、点遮罩关闭；内容超高时滚动。
+ * 已处于全屏 Modal 内部时传 `inline`，用绝对定位覆盖层代替嵌套原生 Modal，
+ * 避免 iOS 在父子 Modal 同帧关闭或卸载时丢弃父 Modal 的收起、留下黑屏。
+ * 约定：`inline` 必须挂在外层 `<KeyboardViewport>` 与 `<SafeAreaView>` 之外（作为兄弟节点，
+ * 避免双倍键盘避让与遮罩被安全区裁切），并由外层 `<Modal onRequestClose>` 先收起覆盖层（遵守 `dismissable`）。
+ */
 export function Sheet({
   visible,
   onClose,
@@ -1786,6 +1809,7 @@ export function Sheet({
   dismissable = true,
   footer,
   background,
+  inline = false,
 }: React.PropsWithChildren<{
   visible: boolean
   onClose(): void
@@ -1796,67 +1820,101 @@ export function Sheet({
   dismissable?: boolean
   footer?: React.ReactNode
   background?: string
+  inline?: boolean
 }>) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   const insets = useSafeAreaInsets()
   const close = () => {
     if (dismissable) onClose()
   }
+  const latestClose = React.useRef(close)
+  useEffect(() => {
+    latestClose.current = close
+  })
+  useEffect(() => {
+    if (!inline || !visible || Platform.OS !== 'web' || typeof document === 'undefined') return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      latestClose.current()
+    }
+    document.addEventListener('keyup', onKeyUp, true)
+    return () => {
+      document.removeEventListener('keyup', onKeyUp, true)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [inline, visible])
+  const content = (
+    <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="关闭"
+        onPress={close}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
+      />
+      <View
+        accessibilityViewIsModal
+        role="dialog"
+        aria-modal
+        aria-label={title}
+        // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
+        onAccessibilityEscape={close}
+        style={{
+          maxHeight: '92%',
+          flexShrink: 1,
+          backgroundColor: background ?? colors.sheet,
+          borderTopLeftRadius: radius.sheet,
+          borderTopRightRadius: radius.sheet,
+          boxShadow: shadows.sheetUp,
+          paddingBottom: footer ? 0 : Math.max(insets.bottom, 16),
+        }}
+      >
+        <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: title || left || right ? 2 : 8 }}>
+          <View style={{ width: 36, height: 5, borderRadius: 3, backgroundColor: colors.chevron, opacity: 0.6 }} />
+        </View>
+        {(title || left || right) && (
+          <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
+            <View style={{ flex: 1, alignItems: 'flex-start' }}>{left}</View>
+            {title ? (
+              <Text numberOfLines={1} style={[type.nav, { color: colors.ink, flexShrink: 1, textAlign: 'center' }]}>
+                {title}
+              </Text>
+            ) : null}
+            <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
+          </View>
+        )}
+        {scroll ? (
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0, flexShrink: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 12 }}
+          >
+            {children}
+          </ScrollView>
+        ) : (
+          <View style={{ paddingHorizontal: 16, gap: 12, flexShrink: 1, minHeight: 0 }}>{children}</View>
+        )}
+        {footer ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) }}>
+            {footer}
+          </View>
+        ) : null}
+      </View>
+    </KeyboardViewport>
+  )
+  if (inline) {
+    if (!visible) return null
+    return (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
+        {content}
+      </View>
+    )
+  }
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
-      <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="关闭"
-          onPress={close}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
-        />
-        <View
-          accessibilityViewIsModal
-          // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
-          onAccessibilityEscape={close}
-          style={{
-            maxHeight: '92%',
-            flexShrink: 1,
-            backgroundColor: background ?? colors.sheet,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            boxShadow: '0 -8px 30px rgba(0,0,0,0.12)',
-            paddingBottom: footer ? 0 : Math.max(insets.bottom, 16),
-          }}
-        >
-          <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: title || left || right ? 2 : 8 }}>
-            <View style={{ width: 36, height: 5, borderRadius: 3, backgroundColor: colors.chevron, opacity: 0.6 }} />
-          </View>
-          {(title || left || right) && (
-            <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
-              <View style={{ flex: 1, alignItems: 'flex-start' }}>{left}</View>
-              {title ? (
-                <Text numberOfLines={1} style={[type.nav, { color: colors.ink, flexShrink: 1, textAlign: 'center' }]}>
-                  {title}
-                </Text>
-              ) : null}
-              <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
-            </View>
-          )}
-          {scroll ? (
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              style={{ flexGrow: 0, flexShrink: 1 }}
-              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 12 }}
-            >
-              {children}
-            </ScrollView>
-          ) : (
-            <View style={{ paddingHorizontal: 16, gap: 12, flexShrink: 1, minHeight: 0 }}>{children}</View>
-          )}
-          {footer ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) }}>
-              {footer}
-            </View>
-          ) : null}
-        </View>
-      </KeyboardViewport>
+      {content}
     </Modal>
   )
 }
@@ -1901,6 +1959,9 @@ export function PageSheet({
   right,
   children,
   background,
+  overlay,
+  overlayOpen = false,
+  onOverlayClose,
 }: React.PropsWithChildren<{
   visible: boolean
   onClose(): void
@@ -1908,31 +1969,48 @@ export function PageSheet({
   left?: React.ReactNode
   right?: React.ReactNode
   background?: string
+  /** 叠在本页之上的内联子弹层（`<Sheet inline>`），避免嵌套原生 Modal。 */
+  overlay?: React.ReactNode
+  overlayOpen?: boolean
+  onOverlayClose?(): void
 }>) {
   const colors = useColors()
+  const surface = background ?? colors.bg
+  const webInert = (Platform.OS === 'web' && overlayOpen ? { inert: true } : {}) as object
   return (
     <Modal
       visible={visible}
       animationType="slide"
+      backdropColor={surface}
       presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (overlayOpen && onOverlayClose) onOverlayClose()
+        else onClose()
+      }}
     >
-      <SafeAreaView
-        edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
-        style={[
-          { flex: 1, backgroundColor: background ?? colors.bg },
-          simulatedPhoneChrome && { paddingTop: 54 },
-        ]}
-      >
-        <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
-          <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="取消" onPress={onClose} />}</View>
-          <Text numberOfLines={1} style={[type.nav, { color: colors.ink }]}>
-            {title}
-          </Text>
-          <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
-        </View>
-        {children}
-      </SafeAreaView>
+      <View style={{ flex: 1, backgroundColor: surface }}>
+        <SafeAreaView
+          edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
+          accessibilityElementsHidden={overlayOpen}
+          importantForAccessibility={overlayOpen ? 'no-hide-descendants' : 'auto'}
+          aria-hidden={overlayOpen}
+          {...webInert}
+          style={[
+            { flex: 1, backgroundColor: surface },
+            simulatedPhoneChrome && { paddingTop: 54 },
+          ]}
+        >
+          <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
+            <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="取消" onPress={onClose} />}</View>
+            <Text numberOfLines={1} style={[type.nav, { color: colors.ink }]}>
+              {title}
+            </Text>
+            <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
+          </View>
+          {children}
+        </SafeAreaView>
+        {overlay}
+      </View>
     </Modal>
   )
 }
@@ -1969,14 +2047,14 @@ export function Menu({
   width?: number
   scrim?: boolean
 }) {
-  const colors = useColors()
+  const { colors, shadows = lightShadows } = useTheme()
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="关闭菜单"
         onPress={onClose}
-        style={{ flex: 1, backgroundColor: scrim ? 'rgba(20,19,17,0.12)' : 'transparent' }}
+        style={{ flex: 1, backgroundColor: scrim ? 'rgba(0,0,0,0.14)' : 'transparent' }}
       />
       <View
         accessibilityRole="menu"
@@ -1988,10 +2066,10 @@ export function Menu({
           right: anchor.left === undefined ? (anchor.right ?? 12) : undefined,
           left: anchor.left,
           width,
-          backgroundColor: colors.sheet,
-          borderRadius: 14,
+          backgroundColor: colors.cardRaised,
+          borderRadius: radius.card,
           overflow: 'hidden',
-          boxShadow: `0 12px 40px rgba(28,25,23,0.2), 0 0 0 0.5px ${colors.hair}`,
+          boxShadow: shadows.menu,
         }}
       >
         {header ? (
@@ -2146,7 +2224,7 @@ export function EmptyState({
   return (
     <View style={{ alignItems: 'center', paddingVertical: 40, paddingHorizontal: 24, gap: 10 }}>
       {icon ? (
-        <View style={{ width: 52, height: 52, borderRadius: 16, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+        <View style={{ width: 52, height: 52, borderRadius: radius.card, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
           <Icon name={icon} size={24} color={colors.ink2} />
         </View>
       ) : null}

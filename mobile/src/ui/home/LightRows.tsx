@@ -4,6 +4,8 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../Text'
 import { Icon, IconButton, Mono, StatusGlyph, useColors, type StatusKind } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { relativeLabel, type DashboardRow } from '../../core/dashboard'
 import { pendingWhileOffline } from './homeModel'
 import {
@@ -17,9 +19,6 @@ import {
   type RowState,
 } from './homeList'
 import { Elapsed, TimeLabel, useNow } from './parts'
-
-const floatShadow = (hair: string) =>
-  `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
 
 const glyphOf: Record<RowState, StatusKind> = {
   waiting: 'attention',
@@ -53,14 +52,16 @@ export function FloatButton({
   label,
   onPress,
   disabled,
+  dotColor,
   children,
 }: {
   label: string
   onPress(): void
   disabled?: boolean
+  dotColor?: string
   children: ReactNode
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   return (
     <Pressable
       accessibilityRole="button"
@@ -72,14 +73,29 @@ export function FloatButton({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: colors.card,
-        boxShadow: floatShadow(colors.hair),
+        backgroundColor: colors.cardRaised,
+        boxShadow: shadows.floating,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
       })}
     >
       {children}
+      {dotColor ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 7,
+            right: 7,
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: dotColor,
+            boxShadow: `0 0 0 2px ${colors.bg}`,
+          }}
+        />
+      ) : null}
     </Pressable>
   )
 }
@@ -115,7 +131,7 @@ export function FilterPills<T extends string>({
             style={({ pressed }) => ({
               height: 40,
               paddingHorizontal: 14,
-              borderRadius: 20,
+              borderRadius: radius.control,
               flexDirection: 'row',
               alignItems: 'center',
               gap: 6,
@@ -421,7 +437,7 @@ export function FloatingComposer({
   disabled?: boolean
   onPress(): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   return (
     <View
@@ -442,9 +458,9 @@ export function FloatingComposer({
         onPress={onPress}
         style={({ pressed }) => ({
           minHeight: 56,
-          borderRadius: 22,
-          backgroundColor: colors.card,
-          boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.10), 0 0 0 1px ${colors.hair}`,
+          borderRadius: radius.composer,
+          backgroundColor: colors.cardRaised,
+          boxShadow: shadows.composer,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 8,
@@ -460,7 +476,7 @@ export function FloatingComposer({
           style={{
             width: 36,
             height: 36,
-            borderRadius: 18,
+            borderRadius: radius.key,
             backgroundColor: colors.btn,
             alignItems: 'center',
             justifyContent: 'center',

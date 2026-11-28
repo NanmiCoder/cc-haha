@@ -2,7 +2,7 @@
 @plugin "@tailwindcss/typography";
 
 /* ─── Dark variant binding ────────────────────────────────────────
-   The app has six themes switched via `<html data-theme>`. Following the OS
+   The app switches themes via `<html data-theme>`. Following the OS
    is resolved in JS (src/theme/systemAppearance.ts) and lands on that same
    attribute, so `data-theme` stays the single source of truth here. Without
    this binding, Tailwind's default `dark:` compiles to
@@ -10,10 +10,9 @@
    accident for someone following the system, plainly wrong for anyone on a
    fixed palette.
 
-   Two of the six sit on a dark ground — `dark` and `ink-blue` — so both are
-   listed. Binding only `dark` is how a `dark:` utility would silently render
-   its light branch on ink-blue. */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="ink-blue"], [data-theme="ink-blue"] *));
+   Every dark ground is listed. Binding only the theme literally named `dark`
+   would silently render the light branch on the other dark palettes. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ─── Self-hosted fonts (no Google CDN dependency) ────────────── */
 
@@ -83,11 +82,10 @@
 }
 
 /* Noto Serif SC – variable weight 600-900, latin only.
-   The serif headings of 「纸 · 墨 · 印」 are the "墨" half of the identity, but
-   the CJK cuts of this family run ~6MB per weight. Only the latin subset is
-   self-hosted (43KB for all three weights); Chinese glyphs fall through to the
-   platform serif named in `--font-headline`, which is what the handoff
-   prototype itself falls back to. */
+   Retained for serif/editorial typography accents (`--font-serif`); the CJK
+   cuts of this family run ~6MB per weight, so only the latin subset is
+   self-hosted (43KB for all three weights) and CJK glyphs fall through to
+   the platform serif stack. */
 @font-face {
   font-family: 'Noto Serif SC';
   font-style: normal;
@@ -262,10 +260,9 @@
   --settings-zoom-thumb-shadow: var(--shadow-raised);
 }
 
-/* On the two ink grounds a light thumb on a light track disappears; the brand
+/* On dark grounds a light thumb on a light track disappears; the brand
    rim keeps it legible. */
-[data-theme="dark"] .settings-zoom-control,
-[data-theme="ink-blue"] .settings-zoom-control {
+[data-theme="dark"] .settings-zoom-control {
   --settings-zoom-track-empty: var(--color-surface-container-highest);
   --settings-zoom-thumb-bg: var(--color-surface-bright);
   --settings-zoom-thumb-border: var(--color-brand);
@@ -290,7 +287,7 @@
   transform: translateX(-50%) scale(var(--settings-zoom-preview-scale));
   transform-origin: 50% 100%;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface-container-lowest);
   padding: 2px 8px;
   color: var(--color-text-primary);
@@ -592,41 +589,40 @@
    ANSI foregrounds use separate light and dark ramps. Black/white retain
    ANSI semantics for programs that explicitly paint their own backgrounds. */
 :root {
-  --color-terminal-ansi-black: #242424;
-  --color-terminal-ansi-red: #B42318;
-  --color-terminal-ansi-green: #226C3C;
-  --color-terminal-ansi-yellow: #795500;
-  --color-terminal-ansi-blue: #155DB5;
-  --color-terminal-ansi-magenta: #8642A0;
-  --color-terminal-ansi-cyan: #176A72;
-  --color-terminal-ansi-white: #D7D2D0;
-  --color-terminal-ansi-bright-black: #696158;
-  --color-terminal-ansi-bright-red: #A82018;
-  --color-terminal-ansi-bright-green: #1D6735;
-  --color-terminal-ansi-bright-yellow: #755000;
-  --color-terminal-ansi-bright-blue: #1258AB;
-  --color-terminal-ansi-bright-magenta: #7E3698;
-  --color-terminal-ansi-bright-cyan: #12656D;
+  --color-terminal-ansi-black: #1A1C1F;
+  --color-terminal-ansi-red: #C82D30;
+  --color-terminal-ansi-green: #007A08;
+  --color-terminal-ansi-yellow: #8A5200;
+  --color-terminal-ansi-blue: #0062CC;
+  --color-terminal-ansi-magenta: #751ED9;
+  --color-terminal-ansi-cyan: #006E7A;
+  --color-terminal-ansi-white: #DFDFDF;
+  --color-terminal-ansi-bright-black: #666666;
+  --color-terminal-ansi-bright-red: #BA2623;
+  --color-terminal-ansi-bright-green: #006E07;
+  --color-terminal-ansi-bright-yellow: #7D4A00;
+  --color-terminal-ansi-bright-blue: #0055B3;
+  --color-terminal-ansi-bright-magenta: #6819C4;
+  --color-terminal-ansi-bright-cyan: #00626E;
   --color-terminal-ansi-bright-white: #FFFFFF;
 }
 
-[data-theme="dark"],
-[data-theme="ink-blue"] {
-  --color-terminal-ansi-black: #1F1F1F;
-  --color-terminal-ansi-red: #FF6D67;
-  --color-terminal-ansi-green: #7EF18A;
-  --color-terminal-ansi-yellow: #F8C55F;
-  --color-terminal-ansi-blue: #77A8FF;
-  --color-terminal-ansi-magenta: #D699FF;
-  --color-terminal-ansi-cyan: #61D6D6;
-  --color-terminal-ansi-white: #D7D2D0;
-  --color-terminal-ansi-bright-black: #8F8683;
-  --color-terminal-ansi-bright-red: #FF8A85;
-  --color-terminal-ansi-bright-green: #9FF7A7;
-  --color-terminal-ansi-bright-yellow: #FFDD7A;
-  --color-terminal-ansi-bright-blue: #A6C5FF;
-  --color-terminal-ansi-bright-magenta: #E3B8FF;
-  --color-terminal-ansi-bright-cyan: #8CEEEE;
+[data-theme="dark"] {
+  --color-terminal-ansi-black: #181818;
+  --color-terminal-ansi-red: #F67576;
+  --color-terminal-ansi-green: #85DF7B;
+  --color-terminal-ansi-yellow: #F2B84B;
+  --color-terminal-ansi-blue: #6DCBF4;
+  --color-terminal-ansi-magenta: #C18CFF;
+  --color-terminal-ansi-cyan: #67D4D4;
+  --color-terminal-ansi-white: #DFDFDF;
+  --color-terminal-ansi-bright-black: #969696;
+  --color-terminal-ansi-bright-red: #FF8A8B;
+  --color-terminal-ansi-bright-green: #9CE893;
+  --color-terminal-ansi-bright-yellow: #FFD06B;
+  --color-terminal-ansi-bright-blue: #8FD8FA;
+  --color-terminal-ansi-bright-magenta: #D1A6FF;
+  --color-terminal-ansi-bright-cyan: #8AE3E3;
   --color-terminal-ansi-bright-white: #FFFFFF;
 }
 
@@ -668,155 +664,164 @@
    the `:root` semantic layer below re-points every one of them at a
    `--cc-*` source variable, which is what actually varies per theme. */
 @theme {
-  --color-primary: #A24A2E;
-  --color-primary-container: #8C3F26;
-  --color-primary-fixed: #F6ECE7;
-  --color-primary-fixed-dim: #E8CFC3;
+  --color-primary: #0169CC;
+  --color-primary-container: #0055A6;
+  --color-primary-fixed: #EBF5FF;
+  --color-primary-fixed-dim: #B3D7FF;
 
   --color-on-primary: #FFFFFF;
   --color-on-primary-container: #FFFFFF;
-  --color-on-surface: #1F1E1C;
-  --color-on-surface-variant: #55524D;
+  --color-on-surface: #1A1C1F;
+  --color-on-surface-variant: #4E4E4E;
 
   --color-surface: #FFFFFF;
   --color-surface-bright: #FFFFFF;
-  --color-surface-dim: #F1F0EE;
-  --color-surface-container: #F5F5F3;
-  --color-surface-container-low: #F7F7F6;
-  --color-surface-container-high: #F1F0EE;
-  --color-surface-container-highest: #E9E8E5;
+  --color-surface-dim: #EFEFEF;
+  --color-surface-container: #FAFAFA;
+  --color-surface-container-low: #F6F6F6;
+  --color-surface-container-high: #EFEFEF;
+  --color-surface-container-highest: #E8E8E8;
   --color-surface-container-lowest: #FFFFFF;
-  --color-surface-variant: #F7F7F6;
+  --color-surface-variant: #F6F6F6;
 
   --color-background: #FFFFFF;
 
-  --color-outline: #D9D7D3;
-  --color-outline-variant: #E9E8E5;
+  --color-outline: #D4D4D4;
+  --color-outline-variant: #E8E8E8;
 
-  --color-secondary: #2C66C9;
-  --color-secondary-container: #E9F0FB;
-  --color-tertiary: #3B7068;
-  --color-tertiary-container: #F1F5F4;
+  --color-secondary: #0169CC;
+  --color-secondary-container: #EBF5FF;
+  --color-tertiary: #1F6F68;
+  --color-tertiary-container: #EEF6F5;
 
-  --color-error: #C42B3C;
+  --color-error: #BA2623;
   --color-on-error: #FFFFFF;
-  --color-error-container: #FBE9EC;
-  --color-on-error-container: #B12636;
+  --color-error-container: #FDF0F0;
+  --color-on-error-container: #911E1B;
 
-  --color-inverse-surface: #1F1E1C;
+  --color-inverse-surface: #1A1C1F;
   --color-inverse-on-surface: #FFFFFF;
-  --color-inverse-primary: #E8CFC3;
+  --color-inverse-primary: #B3D7FF;
 
-  --color-success: #2E7D4F;
-  --color-success-container: #E7F3EB;
-  --color-on-success-container: #2A7148;
-  --color-info: #2C66C9;
-  --color-info-container: #E9F0FB;
-  --color-on-info-container: #2459B3;
-  --color-warning: #A5650F;
-  --color-warning-container: #FBF0DC;
-  --color-on-warning-container: #8A540C;
+  --color-success: #008A36;
+  --color-success-container: #EBF7F0;
+  --color-on-success-container: #00692A;
+  --color-info: #0169CC;
+  --color-info-container: #EBF5FF;
+  --color-on-info-container: #0157AD;
+  --color-warning: #B8470B;
+  --color-warning-container: #FDF2EB;
+  --color-on-warning-container: #923B0F;
 
-  /* Software chrome shares one sans-serif family. Keep the editorial serif
-     explicit for content that requests it, instead of inheriting it in tools. */
+  /* Software chrome shares a crisp modern geometric sans-serif family. */
   /* Latin runs in the self-hosted Inter (400–600); CJK falls through to the
      platform face. Weights above 600 are not shipped, so the UI tops out at
      semibold instead of letting the browser synthesize a smeared bold. */
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-headline: var(--font-body);
-  --font-serif: 'Noto Serif SC', 'Songti SC', Georgia, serif;
+  --font-headline: "Plus Jakarta Sans", "Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --font-serif: 'Songti SC', Georgia, serif;
   --font-label: var(--font-body);
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 
-  /* Corner scale (「素」): 4 chips / 6 rows and small controls / 8 controls and
-     inner blocks / 12 cards / 16 composer and large panels / 20 dialogs. */
+  /* V6C concentric low-radius scale: 4 kbd and tiny tags / 6 chips, badges,
+     inline code / 8 inputs, code blocks / 9 controls, tabs, menu rows /
+     10 nested inner cards / 12 cards and capsules / 14 popovers and groups /
+     16 composer, sheets, dialogs. `full` is reserved for switches, status
+     dots and avatars. */
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
+  --radius-control: 9px;
+  --radius-card-inner: 10px;
+  /* The square send key (36px) — between the 10px inner card and 12px card. */
+  --radius-key: 11px;
   --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-xl: 14px;
   --radius-2xl: 16px;
-  --radius-3xl: 20px;
+  --radius-3xl: 16px;
   --radius-full: 9999px;
 }
 
 /* ─── Theme sources ───────────────────────────────────────────────
-   Six palettes from the 「纸 · 墨 · 印」 handoff. Each block carries only
-   raw color values; the semantic layer below turns them into the
-   `--color-*` tokens the components consume. Generated values
-   (`*-ink`, the heat ramp, the `*-rgb` triplets) are derived from these
-   sources — see the header comment on the semantic layer. */
+   Codex-aligned Pure Neutral 2-theme system: Light (`white`) and Dark
+   (`dark`). Pure achromatic neutral grounds (zero blue cast, zero warm/cool
+   mismatch), monochrome ink/white primary CTA, single focused Codex blue
+   interactive accent, and restrained semantic tones. Each block carries only
+   raw color values; the semantic layer below turns them into the `--color-*`
+   tokens the components consume.
 
-/* 纯白 pure-white — 默认 */
+   `--cc-bg` and `--cc-paper` stay unified in both light (`#FFFFFF`) and dark
+   (`#181818`), matching `THEME_BACKGROUNDS` in Electron and `index.html` so
+   launch shows zero flash and zero color temperature shift. */
+
+/* Light — Codex Pure Neutral */
 :root,
 [data-theme="white"] {
   color-scheme: light;
 
-  /* 「素 Porcelain」(2026-10 visual direction). One warm-neutral ramp that
-     climbs in a single direction — page → sidebar (s0) → card lining (s2) →
-     hover/selected (s1) — and every shadow below uses the same warm hue, so
-     the surfaces no longer mix cool greys with brown shadows. Terracotta is
-     kept for the brand, the send key and selection only; info is a separate
-     blue and error a crimson, so status never reads as brand. */
   --cc-bg: #FFFFFF;
-  --cc-s0: #F7F7F6;
-  --cc-s1: #F1F0EE;
-  --cc-s2: #F5F5F3;
-  --cc-bd: #E9E8E5;
-  --cc-bd2: #D9D7D3;
+  --cc-paper: #FFFFFF;
+  --cc-s0: #F6F6F6;
+  --cc-s1: #EFEFEF;
+  --cc-s2: #FAFAFA;
+  --cc-user-msg: #F4F4F4;
+  --cc-bd: #E8E8E8;
+  --cc-bd2: #D4D4D4;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #8C8984;
+  --cc-bd-strong: #737373;
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D7D5D1;
-  --cc-tab-sep: #E6E4E1;
-  /* Reading tiers keep the warm neutral hue while leaving small descriptions
-     enough contrast on hover and raised control fills as well as the page. */
-  --cc-t1: #1A1917;
-  --cc-t2: #494640;
-  --cc-t3: #625E58;
+  --cc-tab-edge: #CFCFCF;
+  --cc-tab-sep: #DFDFDF;
+  /* Reading tiers calibrated for WCAG AAA on reading grounds and AA on
+     every control surface. */
+  --cc-t1: #1A1C1F;
+  --cc-t2: #4E4E4E;
+  --cc-t3: #666666;
 
-  --cc-ac: #A24A2E;
-  --cc-ac2: #8C3F26;
-  --cc-ac-soft: #F6ECE7;
-  --cc-ac-soft-hover: #F0DFD6;
-  --cc-ac-border: #E8CFC3;
-  --cc-ac-ink: #93432A;
+  /* Focused Codex blue interactive accent */
+  --cc-ac: #0169CC;
+  --cc-ac2: #0055A6;
+  --cc-ac-soft: #EBF5FF;
+  --cc-ac-soft-hover: #D9ECFF;
+  --cc-ac-border: #B3D7FF;
+  --cc-ac-ink: #0157AD;
   --cc-on-ac: #FFFFFF;
 
-  --cc-ok: #2E7D4F;
-  --cc-ok-soft: #E7F3EB;
-  --cc-ok-ink: #2A7148;
-  --cc-wn: #A5650F;
-  --cc-wn-soft: #FBF0DC;
-  --cc-wn-ink: #8A540C;
-  --cc-er: #C42B3C;
-  --cc-er-soft: #FBE9EC;
-  --cc-er-soft-hover: #F6D6DB;
-  --cc-er-ink: #B12636;
-  --cc-info: #2C66C9;
-  --cc-info-soft: #E9F0FB;
-  --cc-info-ink: #2459B3;
+  --cc-ok: #008A36;
+  --cc-ok-soft: #EBF7F0;
+  --cc-ok-ink: #00692A;
+  --cc-wn: #B8470B;
+  --cc-wn-soft: #FDF2EB;
+  --cc-wn-ink: #923B0F;
+  --cc-er: #BA2623;
+  --cc-er-soft: #FDF0F0;
+  --cc-er-soft-hover: #F9DADA;
+  --cc-er-ink: #911E1B;
+  /* Running / informational state — aligned with Codex blue. */
+  --cc-info: #0169CC;
+  --cc-info-soft: #EBF5FF;
+  --cc-info-ink: #0157AD;
 
-  --cc-teal: #3B7068;
-  --cc-teal-soft: #F1F5F4;
-  --cc-teal-border: #C0D1CF;
-  --cc-teal-icon: #EBF1F0;
+  --cc-teal: #1F6F68;
+  --cc-teal-soft: #EEF6F5;
+  --cc-teal-border: #C2DAD7;
+  --cc-teal-icon: #E5F1EF;
 
-  --cc-diff-add: #EAF5ED;
-  --cc-diff-add-gutter: #DCEEE2;
-  --cc-diff-add-word: #CFE8D6;
-  --cc-diff-del: #FCEFEE;
-  --cc-diff-del-gutter: #F8E1DE;
-  --cc-diff-del-word: #F2CDC8;
-  --cc-diff-mark: #F7F0E4;
-  --cc-diff-mark-gutter: #EFE3CF;
-  --cc-code: #F7F6F4;
+  --cc-diff-add: #ECF8F0;
+  --cc-diff-add-gutter: #DDF3E4;
+  --cc-diff-add-word: #C6EAD1;
+  --cc-diff-del: #FDF0F0;
+  --cc-diff-del-gutter: #FADEDE;
+  --cc-diff-del-word: #F6C8C8;
+  --cc-diff-mark: #FAF4E6;
+  --cc-diff-mark-gutter: #F3E7CC;
+  --cc-code: #F3F3F3;
 
-  --cc-heat-0: #F0EFE9;
-  --cc-heat-1: #E8D6D0;
-  --cc-heat-2: #D1ADA2;
-  --cc-heat-3: #B8806F;
-  --cc-heat-4: #9C4F38;
+  --cc-heat-0: #EDEDED;
+  --cc-heat-1: #D6EBFF;
+  --cc-heat-2: #99CCFF;
+  --cc-heat-3: #4DA6FF;
+  --cc-heat-4: #0169CC;
   /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
      Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
      neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
@@ -824,339 +829,90 @@
   --cc-series-2: #86412C;
   --cc-series-3: #5066A3;
   --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
+  --cc-series-5: #A6A6A6;
 
-  --cc-shadow-card: 0 1px 2px rgba(28, 25, 23, 0.05), 0 6px 20px rgba(28, 25, 23, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(28, 25, 23, 0.04), 0 8px 28px rgba(28, 25, 23, 0.07);
-  --cc-shadow-overlay: 0 2px 6px rgba(28, 25, 23, 0.05), 0 16px 40px rgba(28, 25, 23, 0.12);
+  /* Crisp neutral black elevation: whisper-light contact hairline + calm ambient depth. */
+  --cc-shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03), 0 4px 12px -4px rgba(0, 0, 0, 0.05);
+  --cc-shadow-composer: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04), 0 8px 20px -10px rgba(0, 0, 0, 0.07);
+  --cc-shadow-overlay: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04), 0 10px 24px -8px rgba(0, 0, 0, 0.09);
 
   --cc-bg-rgb: 255, 255, 255;
-  --cc-s1-rgb: 241, 240, 238;
-  --cc-t1-rgb: 26, 25, 23;
-  --cc-t2-rgb: 73, 70, 64;
-  --cc-bd2-rgb: 217, 215, 211;
-  --cc-ac-rgb: 162, 74, 46;
-  --cc-er-rgb: 196, 43, 60;
-  --cc-scrim-rgb: 24, 22, 20;
+  --cc-paper-rgb: 255, 255, 255;
+  --cc-s1-rgb: 239, 239, 239;
+  --cc-t1-rgb: 26, 28, 31;
+  --cc-t2-rgb: 78, 78, 78;
+  --cc-bd2-rgb: 212, 212, 212;
+  --cc-ac-rgb: 1, 105, 204;
+  --cc-er-rgb: 186, 38, 35;
+  --cc-scrim-rgb: 13, 13, 13;
 }
 
-/* 纸墨 paper */
-[data-theme="paper"] {
-  color-scheme: light;
-
-  --cc-bg: #FBF9F4;
-  --cc-s0: #F3EFE5;
-  --cc-s1: #ECE6D8;
-  --cc-s2: #F7F4EC;
-  --cc-bd: #E7E0CF;
-  --cc-bd2: #D5C9B0;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #938A76;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #DBCFB5;
-  --cc-tab-sep: #E5D9BE;
-  --cc-t1: #231D12;
-  --cc-t2: #6E6350;
-  --cc-t3: #796E5B;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F3E6DA;
-  --cc-ac-soft-hover: #EBD8C8;
-  --cc-ac-border: #E2C7B3;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #477C52;
-  --cc-ok-soft: #E8EFE1;
-  --cc-ok-ink: #43754D;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F6EED9;
-  --cc-wn-ink: #8E631A;
-  --cc-er: #C24532;
-  --cc-er-soft: #F7E7DF;
-  --cc-er-soft-hover: #F2D7CE;
-  --cc-er-ink: #B6412F;
-  --cc-info: #96442B;
-  --cc-info-soft: #F1E7E0;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #3B7068;
-  --cc-teal-soft: #EEEFEA;
-  --cc-teal-border: #BECDC7;
-  --cc-teal-icon: #E8EBE6;
-
-  --cc-diff-add: #E9EFDC;
-  --cc-diff-add-gutter: #DCE7C9;
-  --cc-diff-add-word: #E0E9CF;
-  --cc-diff-del: #F6E9E3;
-  --cc-diff-del-gutter: #F2DCD5;
-  --cc-diff-del-word: #ECCAC2;
-  --cc-diff-mark: #F0E8D8;
-  --cc-diff-mark-gutter: #E9DCC5;
-  --cc-code: #F5F1E4;
-
-  --cc-heat-0: #ECE6D8;
-  --cc-heat-1: #E5D1C8;
-  --cc-heat-2: #CFA99C;
-  --cc-heat-3: #B67E6B;
-  --cc-heat-4: #9C4F37;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
-  --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
-  --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
-
-  --cc-bg-rgb: 251, 249, 244;
-  --cc-s1-rgb: 236, 230, 216;
-  --cc-t1-rgb: 35, 29, 18;
-  --cc-t2-rgb: 110, 99, 80;
-  --cc-bd2-rgb: 213, 201, 176;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 194, 69, 50;
-  --cc-scrim-rgb: 21, 17, 11;
-}
-
-/* 经典暖色 warm-classic */
-[data-theme="warm-classic"] {
-  color-scheme: light;
-
-  --cc-bg: #F6F0E1;
-  --cc-s0: #EDE5D1;
-  --cc-s1: #E5DBC3;
-  --cc-s2: #F1EBDA;
-  --cc-bd: #DED2B8;
-  --cc-bd2: #C8B897;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #908369;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #D6C5A2;
-  --cc-tab-sep: #E2CFAA;
-  --cc-t1: #251E11;
-  --cc-t2: #6E6146;
-  --cc-t3: #746951;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F0E1D0;
-  --cc-ac-soft-hover: #E8D2BE;
-  --cc-ac-border: #DFC0A8;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #3E8153;
-  --cc-ok-soft: #E8F2E9;
-  --cc-ok-ink: #3A784D;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F8F0DC;
-  --cc-wn-ink: #90641B;
-  --cc-er: #C74436;
-  --cc-er-soft: #FAECE8;
-  --cc-er-soft-hover: #F5DBD6;
-  --cc-er-ink: #BD4133;
-  --cc-info: #96442B;
-  --cc-info-soft: #ECDFCF;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #3E6B58;
-  --cc-teal-soft: #E9E7D7;
-  --cc-teal-border: #BBC5B5;
-  --cc-teal-icon: #E4E3D3;
-
-  --cc-diff-add: #E6ECD3;
-  --cc-diff-add-gutter: #D8E2BF;
-  --cc-diff-add-word: #DCE5C5;
-  --cc-diff-del: #F2E1D2;
-  --cc-diff-del-gutter: #EED4C6;
-  --cc-diff-del-word: #EAC3B5;
-  --cc-diff-mark: #ECE0C8;
-  --cc-diff-mark-gutter: #E5D5B6;
-  --cc-code: #EFE8D3;
-
-  --cc-heat-0: #E5DBC3;
-  --cc-heat-1: #E1CAB9;
-  --cc-heat-2: #CCA491;
-  --cc-heat-3: #B57B65;
-  --cc-heat-4: #9C4E36;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
-  --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
-  --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
-
-  --cc-bg-rgb: 246, 240, 225;
-  --cc-s1-rgb: 229, 219, 195;
-  --cc-t1-rgb: 37, 30, 17;
-  --cc-t2-rgb: 110, 97, 70;
-  --cc-bd2-rgb: 200, 184, 151;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 199, 68, 54;
-  --cc-scrim-rgb: 22, 18, 10;
-}
-
-/* 青瓷 celadon */
-[data-theme="celadon"] {
-  color-scheme: light;
-
-  --cc-bg: #F5F8F5;
-  --cc-s0: #EAF0EB;
-  --cc-s1: #E0E9E2;
-  --cc-s2: #F0F4F0;
-  --cc-bd: #DCE5DE;
-  --cc-bd2: #C6D4C9;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #818D84;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
-  --cc-tab-edge: #C5D3C8;
-  --cc-tab-sep: #CEDCD1;
-  --cc-t1: #1C231D;
-  --cc-t2: #5D6B60;
-  --cc-t3: #667268;
-
-  --cc-ac: #96442B;
-  --cc-ac2: #7C3620;
-  --cc-ac-soft: #F0E7DC;
-  --cc-ac-soft-hover: #E8DACB;
-  --cc-ac-border: #DFC9B6;
-  --cc-ac-ink: #96442B;
-  --cc-on-ac: #FBF6EC;
-
-  --cc-ok: #3E8153;
-  --cc-ok-soft: #E3EFE5;
-  --cc-ok-ink: #39764C;
-  --cc-wn: #A8751F;
-  --cc-wn-soft: #F8F0DC;
-  --cc-wn-ink: #90641B;
-  --cc-er: #C74436;
-  --cc-er-soft: #FAECE8;
-  --cc-er-soft-hover: #F5DBD6;
-  --cc-er-ink: #BD4133;
-  --cc-info: #96442B;
-  --cc-info-soft: #ECE6E1;
-  --cc-info-ink: #96442B;
-
-  --cc-teal: #2F6E63;
-  --cc-teal-soft: #E7EEEB;
-  --cc-teal-border: #B6CCC6;
-  --cc-teal-icon: #E1EAE6;
-
-  --cc-diff-add: #E4F0E5;
-  --cc-diff-add-gutter: #D4E6D7;
-  --cc-diff-add-word: #D9E9DB;
-  --cc-diff-del: #F1E8E4;
-  --cc-diff-del-gutter: #EEDBD6;
-  --cc-diff-del-word: #E9C9C3;
-  --cc-diff-mark: #EBE7D9;
-  --cc-diff-mark-gutter: #E4DBC6;
-  --cc-code: #EFF4F0;
-
-  --cc-heat-0: #E0E9E2;
-  --cc-heat-1: #E0D0C9;
-  --cc-heat-2: #CBA99C;
-  --cc-heat-3: #B47E6C;
-  --cc-heat-4: #9C4F37;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #058D85;
-  --cc-series-2: #86412C;
-  --cc-series-3: #5066A3;
-  --cc-series-4: #99732B;
-  --cc-series-5: #A8A49C;
-
-  --cc-shadow-card: 0 1px 3px rgba(28, 42, 32, 0.05), 0 6px 24px rgba(28, 42, 32, 0.06);
-  --cc-shadow-composer: 0 1px 2px rgba(28, 42, 32, 0.05), 0 14px 44px rgba(28, 42, 32, 0.08);
-  --cc-shadow-overlay: 0 8px 24px rgba(28, 42, 32, 0.10), 0 24px 64px rgba(28, 42, 32, 0.15);
-
-  --cc-bg-rgb: 245, 248, 245;
-  --cc-s1-rgb: 224, 233, 226;
-  --cc-t1-rgb: 28, 35, 29;
-  --cc-t2-rgb: 93, 107, 96;
-  --cc-bd2-rgb: 198, 212, 201;
-  --cc-ac-rgb: 150, 68, 43;
-  --cc-er-rgb: 199, 68, 54;
-  --cc-scrim-rgb: 17, 21, 17;
-}
-
-/* 墨夜 dark */
+/* Dark — Codex Pure Neutral */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --cc-bg: #201D17;
-  --cc-s0: #1A1813;
-  --cc-s1: #2B271F;
-  --cc-s2: #252119;
-  --cc-bd: #383226;
-  --cc-bd2: #4C4433;
+  --cc-bg: #181818;
+  --cc-paper: #181818;
+  --cc-s0: #131313;
+  --cc-s1: #282828;
+  --cc-s2: #212121;
+  --cc-user-msg: #242424;
+  --cc-bd: #2B2B2B;
+  --cc-bd2: #3D3D3D;
   /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #756D5C;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. Both go
-     *lighter* than the trough here: an ink theme's paper is already so dark
-     that pure black is only 1.26:1 against it, so there is no room downward. */
-  --cc-tab-edge: #353024;
-  --cc-tab-sep: #2D281F;
-  /* Lift all reading tiers, including the small descriptions that previously
-     fell below 4.5:1 on the raised hover/dialog ground. */
-  --cc-t1: #F2EEE6;
-  --cc-t2: #C4BBA9;
-  --cc-t3: #AAA08E;
+  --cc-bd-strong: #7E7E7E;
+  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
+  --cc-tab-edge: #353535;
+  --cc-tab-sep: #282828;
+  /* Reading tiers calibrated for WCAG AAA on reading grounds and AA on
+     every control surface. */
+  --cc-t1: #DFDFDF;
+  --cc-t2: #B4B4B4;
+  --cc-t3: #969696;
 
-  --cc-ac: #D07B52;
-  --cc-ac2: #DE8F66;
-  --cc-ac-soft: #3B2A1E;
-  --cc-ac-soft-hover: #493424;
-  --cc-ac-border: #59402C;
-  --cc-ac-ink: #D2815B;
-  --cc-on-ac: #201D17;
+  /* Focused Codex blue interactive accent */
+  --cc-ac: #339CFF;
+  --cc-ac2: #66B5FF;
+  --cc-ac-soft: #16273A;
+  --cc-ac-soft-hover: #1E344D;
+  --cc-ac-border: #2B4E73;
+  --cc-ac-ink: #83C3FF;
+  --cc-on-ac: #141414;
 
-  --cc-ok: #84B383;
-  --cc-ok-soft: #28301D;
-  --cc-ok-ink: #84B383;
-  --cc-wn: #D3A34C;
-  --cc-wn-soft: #332916;
-  --cc-wn-ink: #D3A34C;
-  --cc-er: #E06B52;
-  --cc-er-soft: #3A241B;
-  --cc-er-soft-hover: #552F24;
-  --cc-er-ink: #E17058;
-  --cc-info: #D07B52;
-  --cc-info-soft: #3C2C20;
-  --cc-info-ink: #D3845E;
+  --cc-ok: #40C977;
+  --cc-ok-soft: #16291E;
+  --cc-ok-ink: #5DD68D;
+  --cc-wn: #FF8549;
+  --cc-wn-soft: #2E1F16;
+  --cc-wn-ink: #FFA06E;
+  --cc-er: #FA423E;
+  --cc-er-soft: #2F1919;
+  --cc-er-soft-hover: #422222;
+  --cc-er-ink: #FF807D;
+  --cc-info: #66B5FF;
+  --cc-info-soft: #16273A;
+  --cc-info-ink: #83C3FF;
 
-  --cc-teal: #7DD3C7;
-  --cc-teal-soft: #2B332C;
-  --cc-teal-border: #3C544C;
-  --cc-teal-icon: #313E37;
+  --cc-teal: #6BCAC0;
+  --cc-teal-soft: #172625;
+  --cc-teal-border: #2D4D4A;
+  --cc-teal-icon: #1E3331;
 
-  --cc-diff-add: #2B331E;
-  --cc-diff-add-gutter: #354026;
-  --cc-diff-add-word: #323C24;
-  --cc-diff-del: #3B281F;
-  --cc-diff-del-gutter: #462D23;
-  --cc-diff-del-word: #563328;
-  --cc-diff-mark: #39301E;
-  --cc-diff-mark-gutter: #443822;
-  --cc-code: #1A1813;
+  --cc-diff-add: #16271D;
+  --cc-diff-add-gutter: #1C3325;
+  --cc-diff-add-word: #23422F;
+  --cc-diff-del: #2D1919;
+  --cc-diff-del-gutter: #3B2020;
+  --cc-diff-del-word: #4C2828;
+  --cc-diff-mark: #2A2316;
+  --cc-diff-mark-gutter: #362D1C;
+  --cc-code: #222222;
 
-  --cc-heat-0: #2B271F;
-  --cc-heat-1: #473224;
-  --cc-heat-2: #6D4631;
-  --cc-heat-3: #985D3F;
-  --cc-heat-4: #C5754E;
+  --cc-heat-0: #282828;
+  --cc-heat-1: #162A40;
+  --cc-heat-2: #1E446B;
+  --cc-heat-3: #286EB5;
+  --cc-heat-4: #339CFF;
   /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
      Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
      neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
@@ -1164,106 +920,21 @@
   --cc-series-2: #AD644E;
   --cc-series-3: #6177B6;
   --cc-series-4: #99732B;
-  --cc-series-5: #B4B0A6;
+  --cc-series-5: #ADADAD;
 
-  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
-  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
-  --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
+  --cc-shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 12px -4px rgba(0, 0, 0, 0.30);
+  --cc-shadow-composer: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.26), 0 10px 24px -10px rgba(0, 0, 0, 0.38);
+  --cc-shadow-overlay: 0 0 0 0.5px rgba(255, 255, 255, 0.10), 0 2px 8px rgba(0, 0, 0, 0.28), 0 12px 28px -8px rgba(0, 0, 0, 0.44);
 
-  --cc-bg-rgb: 32, 29, 23;
-  --cc-s1-rgb: 43, 39, 31;
-  --cc-t1-rgb: 242, 238, 230;
-  --cc-t2-rgb: 196, 187, 169;
-  --cc-bd2-rgb: 76, 68, 51;
-  --cc-ac-rgb: 208, 123, 82;
-  --cc-er-rgb: 224, 107, 82;
-  --cc-scrim-rgb: 6, 6, 6;
-}
-
-/* 墨夜蓝 ink-blue */
-[data-theme="ink-blue"] {
-  color-scheme: dark;
-
-  --cc-bg: #1A1D24;
-  --cc-s0: #15181E;
-  --cc-s1: #252A35;
-  --cc-s2: #20242D;
-  --cc-bd: #2F3441;
-  --cc-bd2: #434A5B;
-  /* Control boundary — clears WCAG 1.4.11's 3:1 on the card lining. */
-  --cc-bd-strong: #6A707E;
-  /* Tab strip. Trough stays --cc-s0, so these two carry the shape. Both go
-     *lighter* than the trough here: an ink theme's paper is already so dark
-     that pure black is only 1.25:1 against it, so there is no room downward. */
-  --cc-tab-edge: #2C303C;
-  --cc-tab-sep: #252833;
-  --cc-t1: #E8EAF0;
-  --cc-t2: #9AA1B2;
-  --cc-t3: #858B97;
-
-  --cc-ac: #D07B52;
-  --cc-ac2: #DE8F66;
-  --cc-ac-soft: #37281F;
-  --cc-ac-soft-hover: #453326;
-  --cc-ac-border: #57402F;
-  --cc-ac-ink: #D17E56;
-  --cc-on-ac: #1A1D24;
-
-  --cc-ok: #6FB58C;
-  --cc-ok-soft: #213026;
-  --cc-ok-ink: #6FB58C;
-  --cc-wn: #D3A34C;
-  --cc-wn-soft: #2F2917;
-  --cc-wn-ink: #D3A34C;
-  --cc-er: #E0685E;
-  --cc-er-soft: #37211D;
-  --cc-er-soft-hover: #522C27;
-  --cc-er-ink: #E06A60;
-  --cc-info: #8FA8E8;
-  --cc-info-soft: #2D3343;
-  --cc-info-ink: #8FA8E8;
-
-  --cc-teal: #7DD3C7;
-  --cc-teal-soft: #263338;
-  --cc-teal-border: #385455;
-  --cc-teal-icon: #2C3E41;
-
-  --cc-diff-add: #233028;
-  --cc-diff-add-gutter: #2C3B31;
-  --cc-diff-add-word: #29382E;
-  --cc-diff-del: #36282C;
-  --cc-diff-del-gutter: #422C30;
-  --cc-diff-del-word: #513234;
-  --cc-diff-mark: #34302A;
-  --cc-diff-mark-gutter: #3F382C;
-  --cc-code: #15181E;
-
-  --cc-heat-0: #252A35;
-  --cc-heat-1: #42322E;
-  --cc-heat-2: #6A4638;
-  --cc-heat-3: #965D43;
-  --cc-heat-4: #C5754F;
-  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
-     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
-     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
-  --cc-series-1: #35A69D;
-  --cc-series-2: #AD644E;
-  --cc-series-3: #6177B6;
-  --cc-series-4: #99732B;
-  --cc-series-5: #B4B0A6;
-
-  --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
-  --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
-  --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
-
-  --cc-bg-rgb: 26, 29, 36;
-  --cc-s1-rgb: 37, 42, 53;
-  --cc-t1-rgb: 232, 234, 240;
-  --cc-t2-rgb: 154, 161, 178;
-  --cc-bd2-rgb: 67, 74, 91;
-  --cc-ac-rgb: 208, 123, 82;
-  --cc-er-rgb: 224, 104, 94;
-  --cc-scrim-rgb: 6, 6, 6;
+  --cc-bg-rgb: 24, 24, 24;
+  --cc-paper-rgb: 24, 24, 24;
+  --cc-s1-rgb: 40, 40, 40;
+  --cc-t1-rgb: 223, 223, 223;
+  --cc-t2-rgb: 180, 180, 180;
+  --cc-bd2-rgb: 61, 61, 61;
+  --cc-ac-rgb: 51, 156, 255;
+  --cc-er-rgb: 250, 66, 62;
+  --cc-scrim-rgb: 0, 0, 0;
 }
 
 /* ─── Semantic layer ──────────────────────────────────────────────
@@ -1281,13 +952,76 @@
   --titlebar-height: 52px;
   --motion-sidebar-duration: 280ms;
   --motion-sidebar-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* Surfaces. The handoff has four grounds: page (--bg), sidebar and
-     secondary panels (--s0), hover/selected (--s1), card lining (--s2). */
+  /* Tactile bevel tokens (Safari 15 safe, zero color-mix). Surface grain removed for crisp studio surfaces. */
+  --surface-grain: none;
+  --surface-grain-size: auto;
+  --bevel-surface-rest: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 1px 0 rgba(0, 0, 0, 0.03);
+  --bevel-surface-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  /* Neutral CTA rim: zero tinted glow. */
+  --bevel-cta-rest: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --bevel-cta-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.16);
+
+  /* ─── Codex Neutral Chrome ────────────────────────────────────────
+     Pure achromatic neutral surfaces, zero blue radial glare, zero warm cast.
+     Precomputed literal hex/rgba() so Safari 15 WebViews parse everything
+     cleanly (zero color-mix, zero relative color syntax). */
+  --v6c-wall: #F6F6F6;
+  --v6c-wall-base: #F6F6F6;
+  /* Flat clean reading canvas; its foot matches `--color-surface` for `.composer-fade`. */
+  --v6c-canvas-top-light: linear-gradient(180deg, rgba(var(--cc-paper-rgb), 0) 0%, rgba(var(--cc-paper-rgb), 0) 96px);
+  /* Subtle top specular rim — crisp, never milky. */
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --glass-edge: rgba(255, 255, 255, 0.85);
+  /* Raised control fill (buttons, selected tab/segment/sidebar row). */
+  --v6c-raised-fill: #FFFFFF;
+  --v6c-raised-fill-hover: #FAFAFA;
+  /* Recessed fields (search, inputs, segmented tracks). */
+  --v6c-field-fill: #F6F6F6;
+  --v6c-field-ring: inset 0 0 0 0.5px rgba(0, 0, 0, 0.10);
+  --v6c-track-fill: #EFEFEF;
+  /* Selected menu row and pressed control — distinct neutral tint on both white popovers and #F6F6F6 rails. */
+  --v6c-row-highlight: #ECECEC;
+  --v6c-row-highlight-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  /* Codex monochrome primary submit key: crisp ink on light, white on dark. */
+  --v6c-send-fill: #1A1C1F;
+  --v6c-send-fill-hover: #2E3033;
+  --v6c-send-fill-pressed: #0D0D0D;
+  --v6c-send-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --v6c-send-shadow-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.20), 0 0 0 0.5px rgba(0, 0, 0, 0.10);
+  --v6c-send-fg: #FFFFFF;
+  /* Status rings: restrained 1.5px inset outlines; calm muted alpha so cards
+     never shout with neon borders. */
+  --v6c-ring-running: inset 0 0 0 1.5px rgba(1, 105, 204, 0.34);
+  --v6c-ring-waiting: inset 0 0 0 1.5px rgba(184, 71, 11, 0.36);
+  --v6c-ring-success: inset 0 0 0 1.5px rgba(0, 138, 54, 0.30);
+  --v6c-ring-error: inset 0 0 0 1.5px rgba(186, 38, 35, 0.38);
+  /* Motion */
+  --v6c-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --v6c-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --v6c-press-scale: 0.97;
+  /* Switch: a recessed neutral track and lit thumb; checked uses Codex blue. */
+  --v6c-switch-track-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --v6c-switch-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --v6c-switch-checked-fill: var(--cc-ac);
+  --v6c-seal-wash: rgba(0, 0, 0, 0.04);
+
+  /* Scrollbars & scroll-edge masks */
+  --app-scrollbar-width: 6px;
+  --app-scrollbar-thumb: rgba(0, 0, 0, 0.14);
+  --app-scrollbar-thumb-hover: rgba(0, 0, 0, 0.26);
+  --workspace-titlebar-scroll-fade-height: 24px;
+  --scroll-edge-fade-size: 24px;
+  --composer-seam-shade: rgba(var(--cc-t1-rgb), 0.05);
+  --composer-seam-wash: rgba(var(--cc-t1-rgb), 0.012);
+
+  /* Surfaces. Four pure-neutral grounds plus a dedicated flat user-bubble fill:
+     page (--bg/--paper), sidebar (--s0), hover/selected (--s1), card (--s2). */
   --color-background: var(--cc-bg);
-  --color-surface: var(--cc-bg);
-  --color-surface-bright: var(--cc-bg);
-  --color-surface-container-lowest: var(--cc-bg);
+  --color-surface: var(--cc-paper);
+  --color-surface-bright: var(--cc-paper);
+  --color-surface-container-lowest: var(--cc-paper);
   --color-surface-container: var(--cc-s2);
   --color-surface-container-low: var(--cc-s0);
   --color-surface-container-high: var(--cc-s1);
@@ -1298,7 +1032,7 @@
   --color-surface-hover: var(--cc-s1);
   --color-surface-selected: var(--cc-s1);
   --color-surface-info: var(--cc-s0);
-  --color-surface-user-msg: var(--cc-s1);
+  --color-surface-user-msg: var(--cc-user-msg);
 
   /* Borders */
   --color-outline: var(--cc-bd2);
@@ -1309,12 +1043,12 @@
      delineate an interactive control. */
   --color-border-strong: var(--cc-bd-strong);
   --color-border-separator: var(--cc-bd);
-  /* Neutral on purpose: a terracotta ring sat one hue step from the error red
-     and read as "this field is invalid". */
+  /* Neutral on purpose: keeps focus edges calm without competing with
+     semantic status colors. */
   --color-border-focus: var(--cc-t3);
   /* Tab strip outlines. The strip's trough deliberately stays the sidebar's
      own ground, so the selected tab's fill is only 1.05–1.10:1 against it in
-     all six themes — far too little for a rounded corner to be *visible*, and
+     both themes — far too little for a rounded corner to be *visible*, and
      a curve nobody can see is not a curve. These two carry the shape instead:
      `tab-edge` traces the selected tab at ~1.35:1 against the trough,
      `tab-separator` is the hairline between two neighbouring idle tabs at
@@ -1333,7 +1067,7 @@
   --color-text-tertiary: var(--cc-t3);
   --color-text-accent: var(--cc-info);
 
-  /* Terracotta seal — the brand accent */
+  /* Focused Codex blue — the interactive brand accent */
   --color-primary: var(--cc-ac);
   --color-primary-container: var(--cc-ac2);
   --color-primary-fixed: var(--cc-ac-soft);
@@ -1346,13 +1080,13 @@
      Safari 15 WebViews cannot parse (guarded in vite-config.test.ts). */
   --color-brand-soft: var(--cc-ac-soft);
   --color-brand-soft-hover: var(--cc-ac-soft-hover);
-  /* Text sitting ON `--color-brand-soft`. Not the same as `--color-brand`:
-     the two ink palettes' terracotta lands at 4.3–4.5:1 on their own soft
-     fill, so a terracotta chip label has to use this darkened pair instead. */
+  /* Text sitting ON `--color-brand-soft`. Kept separate from `--color-brand`
+     so accented chip labels always clear WCAG AA contrast on their soft fill
+     in both light and dark themes. */
   --color-on-brand-soft: var(--cc-ac-ink);
   /* Inner rule engraved on the large seal — the accent's own foreground at
      40%, so it stays a highlight rather than a hard white line. */
-  --color-brand-seal-rule: rgba(251, 246, 236, 0.4);
+  --color-brand-seal-rule: rgba(255, 255, 255, 0.35);
   --color-inverse-surface: var(--cc-t1);
   --color-inverse-on-surface: var(--cc-bg);
   --color-inverse-primary: var(--cc-ac-border);
@@ -1413,9 +1147,9 @@
      too — the same value would vanish into the composer. */
   --color-btn-soft-bg: var(--cc-s1);
   --color-btn-soft-hover: var(--cc-bd);
-  /* Flat ink, not a gradient: the handoff's primary action is a solid ink
-     block that turns terracotta on hover. Kept as gradient-shaped tokens so
-     existing call sites keep resolving. */
+  /* Flat monochrome fill, not a gradient: primary actions stay neutral ink on
+     light and crisp white on dark, softening slightly on hover. Kept as
+     gradient-shaped tokens so existing call sites keep resolving. */
   --gradient-btn-primary: linear-gradient(var(--cc-t1), var(--cc-t1));
   --gradient-btn-primary-hover: linear-gradient(var(--color-btn-primary-hover), var(--color-btn-primary-hover));
 
@@ -1426,7 +1160,7 @@
   --color-sidebar-search-bg: var(--cc-bg);
   --color-sidebar-search-border: var(--cc-bd);
   --color-sidebar-item-hover: var(--cc-s1);
-  --color-sidebar-item-active: var(--cc-bg);
+  --color-sidebar-item-active: var(--cc-paper);
   --color-sidebar-item-active-border: var(--cc-bd);
   --sidebar-panel-bg-image: none;
 
@@ -1452,7 +1186,7 @@
 
   /* Trace inspector: the handoff renders it with the ordinary panel palette
      rather than a private one, so these now alias straight through. */
-  --color-inspector-surface: var(--cc-bg);
+  --color-inspector-surface: var(--cc-paper);
   --color-inspector-panel: var(--cc-s0);
   --color-inspector-chip: var(--cc-s1);
   --color-inspector-border: var(--cc-bd);
@@ -1475,12 +1209,22 @@
   /* `--color-overlay-scrim` dims for non-modal layers (the mobile sidebar
      drawer); `--color-modal-scrim` is the heavier one true modals sit on. */
   --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.42);
-  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.5);
-  /* Dialogs are opaque: see `.dialog-panel`. Light themes put the paper at the
-     top of the ramp, so the lifted surface is the background value itself. */
+  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.52);
+  /* `--color-surface-dialog` stays opaque as the `@supports` fallback when
+     `backdrop-filter` is unavailable and as the ground measured by contrast
+     tests. Light themes put the paper at the top of the ramp. */
   --color-surface-dialog: var(--cc-bg);
-  --color-surface-glass: rgba(var(--cc-bg-rgb), 0.92);
-  --color-surface-glass-border: rgba(var(--cc-bd2-rgb), 0.4);
+  --glass-blur: 18px;
+  --glass-saturation: 1.15;
+  /* High-opacity crisp neutral surfaces: dense enough that text behind never competes. */
+  --color-surface-glass: rgba(255, 255, 255, 0.98);
+  --color-surface-dialog-glass: rgba(255, 255, 255, 0.96);
+  --color-surface-composer-glass: rgba(255, 255, 255, 0.98);
+  --color-sidebar-glass: rgba(246, 246, 246, 0.92);
+  --color-surface-glass-border: rgba(0, 0, 0, 0.08);
+  --glass-top-rim: inset 0 1px 0 rgba(255, 255, 255, 0.80);
+  --shadow-dialog-glass: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04), 0 16px 36px -12px rgba(0, 0, 0, 0.10);
+  --shadow-dropdown-glass: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04), 0 10px 24px -8px rgba(0, 0, 0, 0.09);
 
   /* Shadows: card / composer / floating overlay */
   --shadow-card: var(--cc-shadow-card);
@@ -1489,13 +1233,13 @@
   --shadow-dropdown: var(--cc-shadow-overlay);
   --shadow-inspector: var(--cc-shadow-overlay);
   --shadow-sidebar-filter: none;
-  --shadow-focus-ring: 0 0 0 3px rgba(var(--cc-t1-rgb), 0.10);
-  --shadow-error-ring: 0 0 0 1px rgba(var(--cc-er-rgb), 0.26);
-  --shadow-button-primary: 0 1px 2px rgba(var(--cc-t1-rgb), 0.16);
+  --shadow-focus-ring: 0 0 0 2px rgba(var(--cc-ac-rgb), 0.28);
+  --shadow-error-ring: 0 0 0 1px rgba(var(--cc-er-rgb), 0.28);
+  --shadow-button-primary: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.08);
   /* A row or chip lifted one hair off its ground (the selected sidebar row). */
-  --shadow-raised: 0 1px 2px rgba(var(--cc-t1-rgb), 0.06);
+  --shadow-raised: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
   /* The selected segment of a segmented control: lifted one hair off its track. */
-  --shadow-segment: 0 1px 2px rgba(var(--cc-t1-rgb), 0.10), 0 0 0 0.5px rgba(var(--cc-t1-rgb), 0.06);
+  --shadow-segment: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 
   /* Code + diff */
   --color-code-bg: var(--cc-code);
@@ -1514,32 +1258,31 @@
   --color-diff-title-color: var(--cc-t3);
   --color-diff-title-border: var(--cc-bd);
 
-  /* Syntax highlighting. One ramp for the four paper themes; the two ink
-     themes override it below. */
-  --color-code-comment: #8F8A82;
-  --color-code-string: #3F7A2A;
-  --color-code-keyword: #A2442B;
-  --color-code-function: #2A5EA8;
-  --color-code-number: #A2602A;
-  --color-code-property: #7A3E20;
-  --color-code-type: #7A4FB0;
-  --color-code-parameter: #5C3D2E;
-  --color-code-punctuation: #5C504A;
+  /* Syntax highlighting — Codex light palette (6 pure hues + neutral comments). */
+  --color-code-comment: #666666;
+  --color-code-string: #008809;
+  --color-code-keyword: #D53538;
+  --color-code-function: #751ED9;
+  --color-code-number: #0071EA;
+  --color-code-property: #BD5800;
+  --color-code-type: #751ED9;
+  --color-code-parameter: #666666;
+  --color-code-punctuation: #666666;
   --color-code-inserted: var(--cc-ok-ink);
   --color-code-deleted: var(--cc-er-ink);
 
   --color-diff-syntax-foreground: var(--cc-t1);
-  --color-diff-syntax-comment: #8F8A82;
-  --color-diff-syntax-string: #3F7A2A;
-  --color-diff-syntax-number: #A2602A;
-  --color-diff-syntax-regexp: #2A5EA8;
-  --color-diff-syntax-keyword: #A2442B;
-  --color-diff-syntax-variable: #7A3E20;
-  --color-diff-syntax-parameter: #5C504A;
-  --color-diff-syntax-property: #7A3E20;
-  --color-diff-syntax-function: #2A5EA8;
-  --color-diff-syntax-type: #7A4FB0;
-  --color-diff-syntax-punctuation: #5C504A;
+  --color-diff-syntax-comment: #666666;
+  --color-diff-syntax-string: #008809;
+  --color-diff-syntax-number: #0071EA;
+  --color-diff-syntax-regexp: #001BCB;
+  --color-diff-syntax-keyword: #D53538;
+  --color-diff-syntax-variable: #BD5800;
+  --color-diff-syntax-parameter: #666666;
+  --color-diff-syntax-property: #BD5800;
+  --color-diff-syntax-function: #751ED9;
+  --color-diff-syntax-type: #751ED9;
+  --color-diff-syntax-punctuation: #666666;
 
   /* The terminal belongs to the current workspace theme. */
   --color-terminal-header: var(--cc-bg);
@@ -1555,15 +1298,15 @@
   --color-terminal-scrollbar: var(--cc-bd2);
   --color-terminal-scrollbar-hover: var(--cc-t3);
 
-  /* Image viewing keeps a dark neutral surround independently of terminals. */
-  --color-media-bg: #191713;
-  --color-media-header: #221F19;
-  --color-media-border: #4C4433;
-  --color-media-fg: #E4DCCA;
-  --color-media-muted: #B5AA96;
-  --color-media-selection: #4C4433;
-  --color-media-cursor: #D07B52;
-  --color-media-danger: #E06B52;
+  /* Image viewing keeps a pure dark neutral surround independently of terminals. */
+  --color-media-bg: #141414;
+  --color-media-header: #1C1C1C;
+  --color-media-border: #333333;
+  --color-media-fg: #DFDFDF;
+  --color-media-muted: #9E9E9E;
+  --color-media-selection: #333333;
+  --color-media-cursor: #339CFF;
+  --color-media-danger: #FA423E;
   --color-lightbox-scrim: rgba(0, 0, 0, 0.82);
   --color-lightbox-control-bg: #FAFAFA;
   --color-lightbox-control-fg: #242628;
@@ -1572,7 +1315,7 @@
   /* Find-in-page highlights. These paint over arbitrary page content, not
      over a brand-soft panel, so they get their own pair instead of borrowing
      the brand chip tokens: an amber wash for matches (browser convention),
-     full-strength terracotta for the active one. */
+     full-strength brand accent for the active one. */
   --color-search-highlight: var(--cc-diff-mark);
   --color-on-search-highlight: var(--cc-t1);
   --color-search-highlight-active: var(--cc-ac);
@@ -1608,55 +1351,105 @@
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
+  --radius-control: 9px;
+  --radius-card-inner: 10px;
+  /* The square send key (36px) — between the 10px inner card and 12px card. */
+  --radius-key: 11px;
   --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-xl: 14px;
   --radius-2xl: 16px;
-  --radius-3xl: 20px;
+  --radius-3xl: 16px;
   --radius-full: 9999px;
 }
 
-/* Ink themes: lift the syntax ramp off the paper values. */
-[data-theme="dark"],
-[data-theme="ink-blue"] {
+/* Dark theme: Codex syntax ramp & crisp neutral elevation. */
+[data-theme="dark"] {
   --color-file-typescript-container: #203B55;
   --color-on-file-typescript-container: #92CAF7;
   --color-file-javascript-container: #BFA453;
   --color-on-file-javascript-container: #221C0C;
 
-  --color-code-comment: #8F8683;
-  --color-code-string: #A8CE8C;
-  --color-code-keyword: #E9926B;
-  --color-code-function: #7FC7E8;
-  --color-code-number: #86D0C4;
-  --color-code-property: #E8BBA1;
-  --color-code-type: #D9BE8A;
+  --color-code-comment: #999999;
+  --color-code-string: #85DF7B;
+  --color-code-keyword: #F67576;
+  --color-code-function: #B06DFF;
+  --color-code-number: #6DCBF4;
+  --color-code-property: #FA994C;
+  --color-code-type: #B06DFF;
   --color-code-parameter: var(--cc-t1);
-  --color-code-punctuation: #9B908C;
+  --color-code-punctuation: #999999;
 
-  --color-diff-syntax-comment: #8F8683;
-  --color-diff-syntax-string: #A8CE8C;
-  --color-diff-syntax-number: #86D0C4;
-  --color-diff-syntax-regexp: #7FC7E8;
-  --color-diff-syntax-keyword: #E9926B;
-  --color-diff-syntax-variable: #E8BBA1;
-  --color-diff-syntax-parameter: #9B908C;
-  --color-diff-syntax-property: #E8BBA1;
-  --color-diff-syntax-function: #7FC7E8;
-  --color-diff-syntax-type: #D9BE8A;
-  --color-diff-syntax-punctuation: #9B908C;
+  --color-diff-syntax-comment: #999999;
+  --color-diff-syntax-string: #85DF7B;
+  --color-diff-syntax-number: #6DCBF4;
+  --color-diff-syntax-regexp: #6DCBF4;
+  --color-diff-syntax-keyword: #F67576;
+  --color-diff-syntax-variable: #FA994C;
+  --color-diff-syntax-parameter: #999999;
+  --color-diff-syntax-property: #FA994C;
+  --color-diff-syntax-function: #B06DFF;
+  --color-diff-syntax-type: #B06DFF;
+  --color-diff-syntax-punctuation: #999999;
 
   --color-selection-fg: var(--cc-t1);
-  /* Ink themes run the background at the bottom of the ramp, so a lifted
-     surface has to climb it — `--cc-s1`, not the light themes' `--cc-bg`. */
+  /* Dark mode runs the background at the bottom of the ramp, so a lifted
+     surface climbs to `--cc-s1` (#282828), not `--cc-bg` (#181818). */
   --color-surface-dialog: var(--cc-s1);
+  /* Lit neutral thumb on dark tracks so unchecked switches stay legible. */
+  --color-switch-thumb: var(--cc-t1);
   --color-btn-soft-bg: var(--cc-bd);
   --color-btn-soft-hover: var(--cc-bd2);
-  --color-surface-glass: rgba(var(--cc-bg-rgb), 0.93);
-  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.66);
-  --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.56);
-  --shadow-button-primary: 0 2px 10px rgba(0, 0, 0, 0.4);
-  --shadow-segment: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --glass-blur: 18px;
+  --glass-saturation: 1.1;
+  --color-surface-glass: rgba(33, 33, 33, 0.98);
+  --color-surface-dialog-glass: rgba(40, 40, 40, 0.96);
+  --color-surface-composer-glass: rgba(38, 38, 38, 0.98);
+  --color-sidebar-glass: rgba(19, 19, 19, 0.92);
+  --color-surface-glass-border: rgba(255, 255, 255, 0.09);
+  --glass-top-rim: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --glass-edge: rgba(255, 255, 255, 0.10);
+  --shadow-dialog-glass: 0 0 0 0.5px rgba(255, 255, 255, 0.10), 0 4px 12px rgba(0, 0, 0, 0.28), 0 18px 40px -14px rgba(0, 0, 0, 0.48);
+  --shadow-dropdown-glass: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 2px 8px rgba(0, 0, 0, 0.28), 0 12px 28px -8px rgba(0, 0, 0, 0.44);
+  --bevel-surface-rest: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 0 rgba(0, 0, 0, 0.16);
+  --bevel-surface-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+  --bevel-cta-rest: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.22), 0 1px 2px rgba(0, 0, 0, 0.26);
+  --bevel-cta-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.26);
+  --v6c-wall: #131313;
+  --v6c-wall-base: #131313;
+  --v6c-seal-wash: rgba(255, 255, 255, 0.04);
+  --v6c-switch-track-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.32), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --v6c-switch-thumb-shadow: 0 1px 3px rgba(0, 0, 0, 0.30);
+  --v6c-switch-checked-fill: var(--cc-ac);
+  --v6c-canvas-top-light: linear-gradient(180deg, rgba(var(--cc-paper-rgb), 0) 0%, rgba(var(--cc-paper-rgb), 0) 96px);
+  --v6c-raised-fill: #282828;
+  --v6c-raised-fill-hover: #303030;
+  --v6c-field-fill: #1F1F1F;
+  --v6c-field-ring: inset 0 0 0 0.5px rgba(255, 255, 255, 0.09);
+  --v6c-track-fill: #141414;
+  --v6c-row-highlight: #333333;
+  --v6c-row-highlight-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+  /* Codex monochrome primary submit key on dark ground: crisp white button + dark icon. */
+  --v6c-send-fill: #FFFFFF;
+  --v6c-send-fill-hover: #E8E8E8;
+  --v6c-send-fill-pressed: #D4D4D4;
+  --v6c-send-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.14), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --v6c-send-shadow-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+  --v6c-send-fg: #141414;
+  --v6c-ring-running: inset 0 0 0 1.5px rgba(102, 181, 255, 0.36);
+  --v6c-ring-waiting: inset 0 0 0 1.5px rgba(255, 133, 73, 0.38);
+  --v6c-ring-success: inset 0 0 0 1.5px rgba(64, 201, 119, 0.34);
+  --v6c-ring-error: inset 0 0 0 1.5px rgba(250, 66, 62, 0.42);
+  --app-scrollbar-thumb: rgba(255, 255, 255, 0.16);
+  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+  --composer-seam-shade: rgba(0, 0, 0, 0.22);
+  --composer-seam-wash: rgba(255, 255, 255, 0.012);
+  --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.64);
+  --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.52);
+  --shadow-button-primary: 0 0 0 0.5px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.26);
+  --shadow-segment: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-raised: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.26);
+  --shadow-focus-ring: 0 0 0 2px rgba(var(--cc-ac-rgb), 0.34);
   --color-activity-tooltip-border: rgba(var(--cc-bg-rgb), 0.28);
 }
 
@@ -1674,6 +1467,92 @@ html, body, #root {
   background-color: var(--color-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Surface grain removed for Direction C crisp studio surfaces. */
+.surface-grain {
+  background-image: none;
+}
+
+/* Soften default 2px Lucide strokes to 1.75px for crisp dense chrome while
+   staying overridable by explicit strokeWidth or Tailwind stroke-* utilities. */
+:where(svg.lucide[stroke-width="2"]) {
+  stroke-width: 1.75;
+}
+
+/* 3D hairline bevel & top specular rim for interactive controls (Safari 15 safe).
+   Declared inside `@layer components` so Tailwind positioning utilities
+   (`absolute`, `fixed`, `sticky`) cleanly override the default `position: relative`. */
+@layer components {
+  .control-bevel {
+    position: relative;
+    background-clip: padding-box;
+    transition:
+      transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 140ms ease,
+      background-color 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  .control-bevel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow: var(--bevel-surface-rest);
+    transition: box-shadow 120ms ease;
+  }
+
+  .control-bevel:active:not(:disabled):not([aria-haspopup])::before,
+  .control-bevel[data-pressed="true"]::before {
+    box-shadow: var(--bevel-surface-pressed);
+  }
+
+  .control-bevel:active:not(:disabled):not([aria-haspopup]) {
+    transform: scale(0.97);
+  }
+
+  .control-bevel-cta {
+    position: relative;
+    background-clip: padding-box;
+    box-shadow: var(--bevel-cta-rest);
+    transition:
+      transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  .control-bevel-cta:not(.v6c-send-btn)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    transition: box-shadow 120ms ease;
+  }
+
+  .control-bevel-cta:active:not(:disabled):not([aria-haspopup]) {
+    transform: scale(0.97);
+    box-shadow: var(--bevel-cta-pressed);
+  }
+
+  .control-bevel-cta:not(.v6c-send-btn):active:not(:disabled):not([aria-haspopup])::before {
+    box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.08);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .control-bevel,
+    .control-bevel-cta {
+      transition: none;
+    }
+
+    .control-bevel:active:not(:disabled):not([aria-haspopup]),
+    .control-bevel-cta:active:not(:disabled):not([aria-haspopup]) {
+      transform: none;
+    }
+  }
 }
 
 /* Code reads as code: JetBrains Mono's ligatures turned `===` into a single
@@ -1741,59 +1620,101 @@ body > :not(#root, [role="tooltip"]) * {
   -webkit-app-region: no-drag;
 }
 
-/* 「素」 popover shell: a near-opaque white sheet, the same hairline every card
-   uses, and the dropdown step of the shadow scale. The old translucent border
-   (`--color-surface-glass-border`) vanished against white pages, so menus read
-   as floating shadows with no edge. */
-.glass-panel {
-  background: var(--color-surface-glass);
-  border: 1px solid var(--color-border);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  box-shadow: var(--shadow-dropdown);
+/* Frosted modal surface with dark top specular rim (`inset 0 1px rgba(255,255,255,0.05)`)
+   and deep ambient shadow (`0 24px 72px -20px rgba(0,0,0,0.88)`). Falls back to opaque
+   `--color-surface-dialog` via `@supports` when backdrop-filter is unavailable. */
+.dialog-glass {
+  background: var(--color-surface-dialog-glass);
+  border: 1px solid var(--color-surface-glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  box-shadow: var(--glass-top-rim), var(--shadow-dialog-glass);
 }
 
-/* The fill above is translucent on the assumption that the blur will scramble
-   whatever shows through. Where `backdrop-filter` is unavailable that
-   assumption fails silently — no fallback fires, the blur is simply skipped,
-   and page text stays legible straight through every dropdown and popover.
-   Going opaque costs the glass look only on engines that never rendered it. */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-panel {
-    background: rgb(var(--cc-bg-rgb));
-  }
+.dialog-panel {
+  background: var(--color-surface-dialog-glass);
+  border: 1px solid var(--color-surface-glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  box-shadow: var(--glass-top-rim), var(--shadow-dialog-glass);
 }
 
-/* Focus inside a popover is shown on the focused control itself; ringing the
-   whole sheet as well doubled the indicator. The edge darkens one step instead. */
-.glass-panel:focus-within {
+.dialog-backdrop {
+  background: var(--color-modal-scrim);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+/* No `backdrop-filter` directly on `.composer-glass`: in Chromium, an ancestor
+   with `backdrop-filter` creates a Backdrop Root that disables `backdrop-filter`
+   on every descendant `.dropdown-glass` popover (SlashCommandMenu,
+   PermissionModeSelector, ComposerCapabilityMenu), letting sharp text bleed
+   through menus. The composer already sits on the opaque `.composer-fade` /
+   canvas ground, so high-opacity glass fill + `--glass-rim` keeps the exact
+   material feel without trapping child popovers. */
+.composer-glass {
+  background: var(--color-surface-composer-glass);
+  border: 1px solid var(--color-surface-glass-border);
+  box-shadow: var(--glass-rim), var(--shadow-composer);
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.composer-glass:focus-within {
   border-color: var(--color-outline);
 }
 
-/* Modals are read-and-fill surfaces, not glances: an 860px provider form that
-   scrolls needs the page behind it gone, not softened. `.glass-panel` couples
-   its fill to `backdrop-filter`, and a dialog this large cannot take the bet
-   that the blur is live — when it is not, the page reads through the form.
-   No `:focus-within` ring: a dialog holds focus essentially always, so the
-   glass variant's ring would burn permanently rather than signal anything. */
-.dialog-panel {
-  background: var(--color-surface-dialog);
-  border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-overlay);
+/* Where `backdrop-filter` is unavailable, drop every translucent glass surface
+   to its opaque ground so background page text never bleeds through. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-panel,
+  .surface-glass,
+  .dropdown-glass {
+    background: rgb(var(--cc-bg-rgb));
+  }
+
+  .dialog-glass,
+  .dialog-panel,
+  .composer-glass,
+  .v6c-glass-card {
+    background: var(--color-surface-dialog);
+  }
+
+  .v6c-sidebar-glass {
+    background: var(--color-surface-sidebar);
+  }
 }
 
-/* The composer is a floating card (「素」): an opaque lifted sheet — white on
-   the light themes, one step up the ramp on the ink ones — with the card
-   hairline and the composer step of the shadow scale. No blur: it sits over
-   the transcript's fade, not over content that has to stay legible behind it.
-   Declared as a class rather than utilities because `.glass-panel` also sets
-   the fill, border and shadow, and which of two would win would come down to
-   stylesheet order. */
+/* Composer seam fades for attached banners/context strips above or below the card. */
+.composer-seam-below {
+  background-image:
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 1rem,
+      var(--composer-seam-shade) 1rem,
+      transparent calc(1rem + 10px)
+    ),
+    linear-gradient(var(--composer-seam-wash), var(--composer-seam-wash));
+}
+
+.composer-seam-above {
+  background-image:
+    linear-gradient(
+      to top,
+      transparent 0,
+      transparent var(--composer-seam-overlap, 1rem),
+      var(--composer-seam-shade) var(--composer-seam-overlap, 1rem),
+      transparent calc(var(--composer-seam-overlap, 1rem) + 10px)
+    );
+}
+
+/* The composer is a floating card: lifted sheet with hairline border,
+   top specular rim, and composer shadow step. */
 .glass-panel--composer {
   background: var(--color-surface-dialog);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  box-shadow: var(--shadow-composer);
+  box-shadow: var(--glass-top-rim), var(--shadow-composer);
   transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
 }
 
@@ -1801,13 +1722,21 @@ body > :not(#root, [role="tooltip"]) * {
    time anyone types, and a permanent halo stops meaning anything. */
 .glass-panel--composer:focus-within {
   border-color: var(--color-outline);
-  box-shadow: var(--shadow-composer);
+  box-shadow: var(--glass-top-rim), var(--shadow-composer);
 }
 
 /* The 28px fade above the docked composer, so the transcript dissolves into
    the composer's ground instead of being cut by a hard edge. */
 .composer-fade {
   position: relative;
+}
+
+/* The shield is opaque at its foot and owns its own backing, so a transcript
+   scrolled under the floating composer never shows through it. The clear end
+   is the paper's own rgb at zero alpha rather than `transparent`: Safari 15
+   interpolates `transparent` through black and the fade turns grey. */
+.composer-fade {
+  background-color: var(--color-surface);
 }
 
 .composer-fade::before {
@@ -1817,13 +1746,263 @@ body > :not(#root, [role="tooltip"]) * {
   right: 0;
   bottom: 100%;
   height: 28px;
-  background: linear-gradient(to bottom, transparent, var(--color-surface));
+  background: linear-gradient(to bottom, rgba(var(--cc-paper-rgb), 0) 0%, rgba(var(--cc-paper-rgb), 0.86) 62%, var(--color-surface) 100%);
   pointer-events: none;
 }
 
-/* Radial wash behind the empty-state seal. */
+/* Subtle neutral wash behind the empty-state seal — no colored bloom. */
 .brand-seal-glow {
-  background: radial-gradient(460px 300px at 50% 44%, var(--color-brand-soft) 0%, transparent 72%);
+  background: radial-gradient(460px 300px at 50% 44%, var(--v6c-seal-wash) 0%, rgba(var(--cc-paper-rgb), 0) 72%);
+}
+
+/* Inside `@layer components` so a caller's Tailwind utilities (a one-off
+   `bg-…` or `shadow-…`) still win, exactly like `.control-bevel`. */
+@layer components {
+  /* ─── V6C Pure Neutral surface utilities ─────────────────────────────
+     Shared surfaces for the shell and feature slices. Radii stay with the
+     caller (`rounded-[var(--radius-*)]`); these own fill, rim and elevation. */
+
+  /* The window's neutral shell wall. */
+  .v6c-ambient-shell {
+    background: var(--v6c-wall);
+    background-color: var(--v6c-wall-base);
+  }
+
+  /* The main reading canvas. Opaque paper with a hair of top light; the foot
+     is exactly `--color-surface`, which `.composer-fade` blends into. */
+  .v6c-main-canvas {
+    background: var(--v6c-canvas-top-light), var(--color-surface);
+  }
+
+  /* The frosted sidebar over the wall. */
+  .v6c-sidebar-glass {
+    background: var(--color-sidebar-glass);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  /* A content card (tool capsule, activity stack, settings group). Dense
+     enough to need no blur, which keeps the glass layer budget small. */
+  .v6c-glass-card {
+    background: var(--color-surface-glass);
+    box-shadow: var(--shadow-card), var(--glass-rim);
+  }
+
+  /* A raised control: the selected tab, segment or sidebar row, a secondary
+     button. */
+  .v6c-raised {
+    background: var(--v6c-raised-fill);
+    box-shadow: var(--shadow-raised), var(--glass-rim);
+  }
+
+  /* A recessed field: search boxes, inputs. */
+  .v6c-field {
+    background: var(--v6c-field-fill);
+    box-shadow: var(--glass-rim), var(--v6c-field-ring);
+  }
+
+  /* The track a segmented control or switch group sits in. */
+  .v6c-track {
+    background: var(--v6c-track-fill);
+    box-shadow: var(--v6c-field-ring);
+  }
+
+  /* The keyboard-highlighted row of a menu. */
+  .v6c-row-highlight {
+    background: var(--v6c-row-highlight);
+    box-shadow: var(--glass-rim), var(--v6c-row-highlight-shadow);
+  }
+
+  /* The selected item's 3px accent bar on its leading edge (sidebar
+     rows, settings navigation). Apply only to the selected element. */
+  .v6c-active-bar {
+    position: relative;
+  }
+
+  .v6c-active-bar::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--color-brand);
+    pointer-events: none;
+  }
+
+  /* Status rings: crisp 1.5px inset outlines layered with card elevation and
+     glass rim so overflow-hidden or tight cards never clip the edges. */
+  .v6c-ring-running { box-shadow: var(--v6c-ring-running), var(--shadow-card), var(--glass-rim); }
+  .v6c-ring-waiting { box-shadow: var(--v6c-ring-waiting), var(--shadow-card), var(--glass-rim); }
+  .v6c-ring-success { box-shadow: var(--v6c-ring-success), var(--shadow-card), var(--glass-rim); }
+  .v6c-ring-error { box-shadow: var(--v6c-ring-error), var(--shadow-card), var(--glass-rim); }
+
+  /* Tactile press feedback for any control that is not a `control-bevel`. */
+  .v6c-pressable {
+    transition: transform 160ms var(--v6c-ease-spring);
+  }
+
+  .v6c-pressable:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(var(--v6c-press-scale));
+  }
+
+  /* Codex monochrome send key. Painted with a flat `linear-gradient(...)` so
+     `@layer components` `background-image` stays visible over `Button`'s
+     `@layer utilities` `bg-[var(--color-brand)]`. */
+  .v6c-send-btn {
+    background-color: var(--v6c-send-fill);
+    background-image: linear-gradient(var(--v6c-send-fill), var(--v6c-send-fill));
+    color: var(--v6c-send-fg);
+    box-shadow: var(--v6c-send-shadow);
+    transition:
+      transform 180ms var(--v6c-ease-spring),
+      box-shadow 140ms ease,
+      filter 140ms ease;
+  }
+
+  .v6c-send-btn:hover:not(:disabled) {
+    background-color: var(--v6c-send-fill-hover);
+    background-image: linear-gradient(var(--v6c-send-fill-hover), var(--v6c-send-fill-hover));
+  }
+
+  .v6c-send-btn:active:not(:disabled):not([aria-haspopup]) {
+    background-color: var(--v6c-send-fill-pressed);
+    background-image: linear-gradient(var(--v6c-send-fill-pressed), var(--v6c-send-fill-pressed));
+    box-shadow: var(--v6c-send-shadow-pressed);
+    transform: scale(0.94);
+  }
+
+  .v6c-send-btn:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+  }
+
+  .v6c-send-btn:disabled {
+    background-color: var(--color-surface-container-high);
+    background-image: linear-gradient(var(--color-surface-container-high), var(--color-surface-container-high));
+    color: var(--color-text-tertiary);
+    box-shadow: var(--glass-rim);
+    transform: none;
+  }
+
+  /* Layered frosted glass surfaces (Safari 15 safe: precomputed rgba() per theme,
+     1px specular top rim, and @supports opaque fallback when backdrop-filter is absent).
+     Declared inside `@layer components` after `.control-bevel` / `.v6c-raised` so
+     floating buttons using `.dropdown-glass` keep `@layer utilities` hover and
+     `focus-visible:ring-2` styles intact. */
+  .surface-glass {
+    background: var(--color-surface-glass);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  .glass-panel,
+  .dropdown-glass {
+    background: var(--color-surface-glass);
+    border: 1px solid var(--color-surface-glass-border);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    box-shadow: var(--glass-rim), var(--shadow-dropdown-glass);
+  }
+
+  /* Preserve inset status rings when layered onto `.dropdown-glass` overlays. */
+  .dropdown-glass.v6c-ring-running { box-shadow: var(--v6c-ring-running), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-waiting { box-shadow: var(--v6c-ring-waiting), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-success { box-shadow: var(--v6c-ring-success), var(--shadow-dropdown-glass), var(--glass-rim); }
+  .dropdown-glass.v6c-ring-error { box-shadow: var(--v6c-ring-error), var(--shadow-dropdown-glass), var(--glass-rim); }
+
+  /* Focus inside a popover is shown on the focused control itself; ringing the
+     whole sheet as well doubled the indicator. The edge sharpens one step instead. */
+  .glass-panel:focus-within,
+  .dropdown-glass:focus-within {
+    border-color: var(--color-outline);
+  }
+
+  /* Quiet borderless inline disclosure row for Codex-style collapsed activity,
+     "Worked for Xs" summaries, and thinking headers. */
+  .codex-work-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 2px 0;
+    color: var(--color-text-tertiary);
+    font-size: 13px;
+    line-height: 1.45;
+    text-align: left;
+    transition: color 150ms ease;
+  }
+
+  .codex-work-row:hover {
+    color: var(--color-text-primary);
+  }
+
+  .codex-work-row:focus-visible {
+    outline: none;
+    border-radius: var(--radius-xs);
+    box-shadow: var(--shadow-focus-ring);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .v6c-pressable,
+    .v6c-send-btn,
+    .codex-work-row {
+      transition: none;
+    }
+
+    .v6c-pressable:active:not(:disabled):not([aria-disabled="true"]),
+    .v6c-send-btn:active:not(:disabled):not([aria-haspopup]) {
+      transform: none;
+    }
+  }
+}
+
+/* Reduced transparency (the OS setting, or the app's own
+   `html[data-reduced-transparency="true"]` switch): every glass surface
+   becomes its opaque ground and drops its blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-panel,
+  .surface-glass,
+  .dropdown-glass,
+  .dialog-glass,
+  .dialog-panel,
+  .composer-glass,
+  .v6c-glass-card {
+    background: var(--color-surface-dialog);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .v6c-sidebar-glass {
+    background: var(--color-surface-sidebar);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .dialog-backdrop {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+html[data-reduced-transparency="true"] :is(.glass-panel, .surface-glass, .dropdown-glass, .dialog-glass, .dialog-panel, .composer-glass, .v6c-glass-card) {
+  background: var(--color-surface-dialog);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-reduced-transparency="true"] .v6c-sidebar-glass {
+  background: var(--color-surface-sidebar);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-reduced-transparency="true"] .dialog-backdrop {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .composer-drop-target-active,
@@ -2324,19 +2503,122 @@ body.sidebar-resizing * {
   color: inherit;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbar: 6px thin pill thumb (>= 3:1 contrast on OLED dark). */
+::-webkit-scrollbar { width: var(--app-scrollbar-width); height: var(--app-scrollbar-width); }
 ::-webkit-scrollbar-track { background: transparent; }
-/* `opacity` is ignored on scrollbar parts, so the hover step is a darker ink. */
-::-webkit-scrollbar-thumb { background: var(--color-outline); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); }
+/* `opacity` is ignored on scrollbar parts, so the hover step uses a brighter/darker thumb. */
+::-webkit-scrollbar-thumb { background: var(--app-scrollbar-thumb); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--app-scrollbar-thumb-hover); }
+
+/* Auto-hiding thin scrollbar utility for scrollable lists and panes. */
+.scrollbar-autohide {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-autohide:hover,
+.scrollbar-autohide:focus-within {
+  scrollbar-color: var(--app-scrollbar-thumb) transparent;
+}
+.scrollbar-autohide::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.scrollbar-autohide:hover::-webkit-scrollbar-thumb,
+.scrollbar-autohide:focus-within::-webkit-scrollbar-thumb {
+  background: var(--app-scrollbar-thumb);
+}
+.scrollbar-autohide::-webkit-scrollbar-thumb:hover {
+  background: var(--app-scrollbar-thumb-hover);
+}
+
+/* 7-stop top scroll fade mask leaving the 6px scrollbar lane unmasked. */
+.topbar-scroll-fade {
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      rgba(0, 0, 0, 0.10) 10%,
+      rgba(0, 0, 0, 0.30) 24%,
+      rgba(0, 0, 0, 0.58) 42%,
+      rgba(0, 0, 0, 0.82) 62%,
+      rgba(0, 0, 0, 0.96) 82%,
+      #000000 100%
+    ),
+    linear-gradient(#000000, #000000),
+    linear-gradient(#000000, #000000);
+  -webkit-mask-position: top, bottom, right;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size:
+    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
+    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
+    var(--app-scrollbar-width) 100%;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      rgba(0, 0, 0, 0.10) 10%,
+      rgba(0, 0, 0, 0.30) 24%,
+      rgba(0, 0, 0, 0.58) 42%,
+      rgba(0, 0, 0, 0.82) 62%,
+      rgba(0, 0, 0, 0.96) 82%,
+      #000000 100%
+    ),
+    linear-gradient(#000000, #000000),
+    linear-gradient(#000000, #000000);
+  mask-position: top, bottom, right;
+  mask-repeat: no-repeat;
+  mask-size:
+    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
+    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
+    var(--app-scrollbar-width) 100%;
+}
+
+/* Soft top/bottom scroll-edge mask leaving the 6px scrollbar lane unmasked. */
+.scroll-edge-fade {
+  --scroll-edge-fade-top: var(--scroll-edge-fade-size);
+  --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
+  -webkit-mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      #000000 var(--scroll-edge-fade-top),
+      #000000 calc(100% - var(--scroll-edge-fade-bottom)),
+      transparent 100%
+    ),
+    linear-gradient(#000000, #000000);
+  -webkit-mask-position: left, right;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size:
+    calc(100% - var(--app-scrollbar-width)) 100%,
+    var(--app-scrollbar-width) 100%;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      #000000 var(--scroll-edge-fade-top),
+      #000000 calc(100% - var(--scroll-edge-fade-bottom)),
+      transparent 100%
+    ),
+    linear-gradient(#000000, #000000);
+  mask-position: left, right;
+  mask-repeat: no-repeat;
+  mask-size:
+    calc(100% - var(--app-scrollbar-width)) 100%,
+    var(--app-scrollbar-width) 100%;
+}
+
+.scroll-edge-fade[data-fade-top="false"] {
+  --scroll-edge-fade-top: 0px;
+}
+
+.scroll-edge-fade[data-fade-bottom="false"] {
+  --scroll-edge-fade-bottom: 0px;
+}
 
 /* Clears the settings dock (8px inset + 30px row + 8px + hairline) with a
-   row's breathing room, so the last session never sits under it. */
+   row's breathing room, so the last session never sits under it. Scrollbar
+   presentation is owned by `<ScrollArea autohide>` (`.scrollbar-autohide`). */
 .sidebar-scroll-area {
   padding-bottom: 60px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-outline-a72) transparent;
 }
 
 .sidebar-settings-dock {
@@ -2345,23 +2627,6 @@ body.sidebar-resizing * {
   background-image: var(--sidebar-panel-bg-image);
   background-repeat: no-repeat;
   background-position: left bottom;
-}
-
-.sidebar-scroll-area::-webkit-scrollbar {
-  width: 4px;
-}
-
-.sidebar-scroll-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar-scroll-area::-webkit-scrollbar-thumb {
-  background: var(--color-outline-a78);
-  border-radius: 9999px;
-}
-
-.sidebar-scroll-area::-webkit-scrollbar-thumb:hover {
-  background: var(--color-outline-a92);
 }
 
 /* Token usage page. The page is one container so its display numerals scale
@@ -2454,14 +2719,168 @@ body.sidebar-resizing * {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: none; }
 }
+/* Low-GPU duty-cycled stepped animations: discrete frames instead of every 120Hz vsync. */
+@keyframes stepped-pulse {
+  0%, 30% {
+    opacity: 1;
+    animation-timing-function: steps(4);
+  }
+  50%, 88% {
+    opacity: 0.45;
+    animation-timing-function: steps(4);
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes stepped-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes codex-activity-shimmer {
+  0% { background-position: -100% 0; }
+  40%, 100% { background-position: 250% 0; }
+}
+@keyframes thinking-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes thinking-dots {
+  0%, 20% { content: ''; }
+  40% { content: '.'; }
+  60% { content: '..'; }
+  80%, 100% { content: '...'; }
+}
+@keyframes popover-enter {
+  from { opacity: 0; transform: scale(0.98) translateY(-2px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
 
 .animate-shimmer { animation: shimmer 1.5s ease-in-out infinite; }
 .animate-spin { animation: spin 0.9s linear infinite; }
 .animate-pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
 .animate-screen-pop { animation: screen-pop 250ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.animate-stepped-pulse { animation: stepped-pulse 2s infinite; }
+.animate-stepped-shimmer { animation: stepped-shimmer 2.2s steps(8) infinite; }
+.popover-motion { animation: popover-enter 140ms var(--ease-drawer) backwards; }
+
+/* Codex single-element subtle ink shimmer for active "Thinking" / "Running..." labels.
+   `background-color: var(--shimmer-base)` keeps every glyph 100% legible at all times
+   while the 50% highlight band glides across via `background-image`. */
+.codex-shimmer-text {
+  --shimmer-base: var(--color-text-tertiary);
+  --shimmer-highlight: var(--color-text-primary);
+  background-color: var(--shimmer-base);
+  background-image: linear-gradient(
+    90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-highlight) 42%,
+    var(--shimmer-highlight) 58%,
+    var(--shimmer-base) 100%
+  );
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  background-position: -100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: codex-activity-shimmer 2s linear infinite;
+}
+
+/* Soft 1rem top & bottom edge-fade mask for scrollable thinking/activity viewports. */
+.codex-edge-fade {
+  --edge-fade-distance: 1rem;
+  --edge-fade-top: var(--edge-fade-distance);
+  --edge-fade-bottom: var(--edge-fade-distance);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000000 var(--edge-fade-top),
+    #000000 calc(100% - var(--edge-fade-bottom)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000000 var(--edge-fade-top),
+    #000000 calc(100% - var(--edge-fade-bottom)),
+    transparent 100%
+  );
+}
+
+.codex-edge-fade[data-fade-top="false"] {
+  --edge-fade-top: 0px;
+}
+
+.codex-edge-fade[data-fade-bottom="false"] {
+  --edge-fade-bottom: 0px;
+}
+
+/* Hoisted thinking & turn-status rules (avoids per-instance inline <style> tags). */
+.thinking-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--color-text-tertiary);
+  vertical-align: middle;
+  margin-left: 1px;
+  animation: thinking-cursor-blink 1s step-end infinite;
+}
+
+.thinking-dots::after {
+  content: '';
+  animation: thinking-dots 1.4s step-end infinite;
+}
+
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.thinking-markdown-live > :first-child > :first-child,
+.thinking-markdown-live > :first-child > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.thinking-markdown-live > :last-child > :last-child,
+.thinking-markdown-live > :last-child > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.turn-status-shimmer {
+  background: linear-gradient(90deg, var(--color-text-tertiary) 0%, var(--color-text-tertiary) 40%, var(--color-text-primary) 50%, var(--color-text-tertiary) 60%, var(--color-text-tertiary) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-screen-pop { animation: overlay-fade-in 1ms linear; }
+  .animate-screen-pop,
+  .popover-motion { animation: overlay-fade-in 1ms linear; }
+  .animate-stepped-shimmer { animation: none; }
+  .codex-shimmer-text {
+    animation: none;
+    background-color: transparent;
+    background-image: none;
+    color: var(--color-text-tertiary);
+    -webkit-text-fill-color: currentColor;
+  }
+  .turn-status-shimmer {
+    animation: none;
+    background: none;
+    color: var(--color-text-secondary);
+  }
+  .thinking-cursor,
+  .thinking-dots::after {
+    animation: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2470,7 +2889,8 @@ body.sidebar-resizing * {
      rotation is the whole signal the component carries. */
   .animate-spin { animation-duration: 2.4s; }
   .animate-shimmer,
-  .animate-pulse-dot { animation-duration: 3s; }
+  .animate-pulse-dot,
+  .animate-stepped-pulse { animation-duration: 3s; }
 }
 
 /* Overlay entrances.
@@ -2734,10 +3154,15 @@ html[data-touch-h5][data-touch-h5-keyboard] .app-shell-viewport {
   padding-bottom: 0px;
 }
 
-/* Agent list rows reveal their edit / delete / override buttons on hover, which
-   never fires on a touchscreen — the controls would be unreachable there. */
+/* Agent list rows and composer attachment remove buttons reveal on hover,
+   which never fires on a touchscreen — keep them reachable while leaving
+   desktop-only hover bars like MessageActionBar unaffected. */
 .app-shell--mobile [data-agent-row-actions],
-html[data-touch-h5] [data-agent-row-actions] {
+html[data-touch-h5] [data-agent-row-actions],
+.app-shell--mobile [data-touch-reveal],
+html[data-touch-h5] [data-touch-reveal],
+.app-shell--mobile [data-testid="composer-attachment-tray"] .group > button.opacity-0,
+html[data-touch-h5] [data-testid="composer-attachment-tray"] .group > button.opacity-0 {
   opacity: 1;
   pointer-events: auto;
 }
@@ -2760,7 +3185,10 @@ html[data-touch-h5] body {
 
 html[data-window-kind='pet'],
 html[data-window-kind='pet'] body,
-html[data-window-kind='pet'] #root {
+html[data-window-kind='pet'] #root,
+html[data-window-kind='usage-widget'],
+html[data-window-kind='usage-widget'] body,
+html[data-window-kind='usage-widget'] #root {
   background: transparent !important;
   overflow: hidden;
 }
@@ -2879,12 +3307,14 @@ html[data-window-kind='pet'] #root {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  background: #f1ad3b;
-  color: #352408;
+  border-color: var(--color-warning);
+  background: var(--color-warning-container);
+  color: var(--color-on-warning-container);
 }
 
 .pet-permission-badge:hover {
-  background: #f6bd5d;
+  background: var(--color-warning-container);
+  filter: brightness(0.96);
 }
 
 .pet-mascot-button[data-dragging='true'] {
@@ -3008,10 +3438,9 @@ html[data-window-kind='pet'] #root {
   margin-bottom: 0;
 }
 
-html[data-theme='dark'] .pet-activity-card,
-html[data-theme='ink-blue'] .pet-activity-card {
+html[data-theme='dark'] .pet-activity-card {
   border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(24, 23, 30, 0.78);
+  background: rgba(24, 24, 24, 0.84);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 30px rgba(0, 0, 0, 0.24);
@@ -3050,8 +3479,7 @@ html[data-theme='ink-blue'] .pet-activity-card {
   transform: translateY(-4px);
 }
 
-html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'],
-html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listitem'] {
+html[data-theme='dark'] .pet-session-list > [role='listitem'] + [role='listitem'] {
   border-top-color: rgba(255, 255, 255, 0.07);
 }
 
@@ -3115,8 +3543,7 @@ html[data-theme='ink-blue'] .pet-session-list > [role='listitem'] + [role='listi
   outline-offset: -2px;
 }
 
-html[data-theme='dark'] .pet-session-row:hover,
-html[data-theme='ink-blue'] .pet-session-row:hover {
+html[data-theme='dark'] .pet-session-row:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -3188,15 +3615,13 @@ html[data-theme='ink-blue'] .pet-session-row:hover {
   transform: translateX(50%) scale(0.94);
 }
 
-html[data-theme='dark'] .pet-panel-toggle,
-html[data-theme='ink-blue'] .pet-panel-toggle {
+html[data-theme='dark'] .pet-panel-toggle {
   border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(36, 39, 45, 0.82);
-  color: rgba(239, 235, 246, 0.62);
+  background: rgba(36, 36, 36, 0.86);
+  color: rgba(235, 235, 235, 0.62);
 }
 
-html[data-theme='dark'] .pet-panel-toggle:hover,
-html[data-theme='ink-blue'] .pet-panel-toggle:hover {
+html[data-theme='dark'] .pet-panel-toggle:hover {
   background: rgba(255, 255, 255, 0.09);
   color: rgba(255, 255, 255, 1);
 }

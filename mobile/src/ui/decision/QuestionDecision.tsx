@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal, Platform, Pressable, ScrollView, TextInput, View } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import type { PermissionRequest } from '../../core/types'
-import { Button, HaloDot, Icon, Sheet, Spinner, TextButton, useColors } from '../kit'
+import type { ChatState, PermissionRequest } from '../../core/types'
+import { Button, HaloDot, Icon, InlineError, Sheet, Spinner, TextButton, useColors } from '../kit'
+import { radius } from '../palette'
+import { useTheme } from '../theme'
 import { Text } from '../Text'
 import { KeyboardViewport } from '../KeyboardViewport'
 import {
+  permissionSubagentName,
+  questionAllowsFreeText,
   questionClock,
   questionOptionPresentation,
   readQuestions,
@@ -45,26 +49,29 @@ export function QuestionPrompt({
   onOpen,
   sent,
   clock,
+  subagentName,
 }: {
   count: number
   onOpen(): void
   sent?: boolean
   clock?: QuestionClock | null
+  subagentName?: string
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const label = questionPromptLabel(count)
+  const displayLabel = subagentName ? `${subagentName}：${label}` : label
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={sent ? `${label}，已提交` : label}
+      accessibilityLabel={sent ? `${displayLabel}，已提交` : displayLabel}
       accessibilityHint="打开回答页"
       disabled={sent}
       onPress={onOpen}
       style={({ pressed }) => ({
         minHeight: 52,
-        borderRadius: 16,
-        backgroundColor: colors.card,
-        boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.08), 0 0 0 1px ${colors.hair}`,
+        borderRadius: radius.card,
+        backgroundColor: colors.cardRaised,
+        boxShadow: shadows.composer,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -74,7 +81,7 @@ export function QuestionPrompt({
     >
       {sent ? <Spinner size={16} /> : <HaloDot size={9} />}
       <Text numberOfLines={1} style={{ flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink }}>
-        {sent ? '已提交，正在等待电脑确认。' : label}
+        {sent ? '已提交，正在等待电脑确认。' : displayLabel}
       </Text>
       {!sent && clock?.state === 'counting' ? (
         <Text style={{ fontSize: 13, color: colors.attn }}>{clock.label} 后 AI 代答</Text>
@@ -238,14 +245,19 @@ function OptionRow({
   )
 }
 
+const NOT_SENT = '操作尚未发出。请等待会话同步完成，或核对当前任务状态。'
+
 export type QuestionPageProps = {
   visible: boolean
   /** 收起分步页（作答进度保留，再点入口行接着答）。 */
   onClose(): void
+  /** iOS 原生 Modal 收起动画结束后触发，用于避免收起未完成时抢跑重开。 */
+  onDismiss?(): void
   request: PermissionRequest
   input: Record<string, unknown>
   ready: boolean
   sent: boolean
+  serverError?: ChatState['error']
   /** 发出 ask_user_question_activity；返回是否已发出。 */
   signalActivity(): boolean
   submit(answers: Record<string, string>): boolean
@@ -263,9 +275,12 @@ export type QuestionPageProps = {
 export function QuestionPage({
   visible,
   onClose,
+  onDismiss,
+  request,
   input,
   ready,
   sent,
+  serverError,
   signalActivity,
   submit,
   discuss,
@@ -274,59 +289,105 @@ export function QuestionPage({
 }: QuestionPageProps) {
   const colors = useColors()
   const questions = readQuestions(input)
+  const allowFreeText = questionAllowsFreeText(input)
+  const subagentName = permissionSubagentName(request, input)
   const [flow, setFlow] = useState(initialQuestionFlow)
   const change = (action: Parameters<typeof changeQuestionFlow>[2]) =>
-    setFlow((current) => changeQuestionFlow(current, questions, action))
+    setFlow((current) => changeQuestionFlow(current, questions, action, allowFreeText))
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({})
   const [discussOpen, setDiscussOpen] = useState(false)
   const [note, setNote] = useState('')
-  const model = questionPageModel(flow, questions, { ready, sent })
+  const [notSent, setNotSent] = useState(false)
+  const [initialError] = useState(serverError)
+  const [wasVisible, setWasVisible] = useState(visible)
+  if (visible !== wasVisible) {
+    setWasVisible(visible)
+    if (!visible) {
+      if (discussOpen) setDiscussOpen(false)
+      if (notSent) setNotSent(false)
+    }
+  }
+  const discussShowing = allowFreeText && visible && discussOpen
+  const pageError = notSent
+    ? NOT_SENT
+    : serverError && serverError !== initialError
+      ? serverError.message
+      : undefined
+  const pageState = { ready, sent, allowFreeText }
+  const model = questionPageModel(flow, questions, pageState)
   const { current } = model
   const locked = !ready || sent
   const activity = () => {
     if (signalActivity()) onInteract?.()
   }
+  const closePage = () => {
+    setDiscussOpen(false)
+    setNotSent(false)
+    onClose()
+  }
   const choose = (label: string) => {
     if (!current) return
+    setNotSent(false)
     activity()
     setCustomOpen((value) => ({ ...value, [current.question]: false }))
     change({ type: 'choose', label })
   }
   const back = () => {
-    const step = backQuestionStep(flow, questions, { ready, sent })
+    const step = backQuestionStep(flow, questions, pageState)
     if (!step) return
+    setNotSent(false)
     activity()
     change(step)
   }
   const primary = () => {
-    const step = primaryQuestionStep(flow, questions, { ready, sent })
+    const step = primaryQuestionStep(flow, questions, pageState)
     if (!step) return
     activity()
-    if (step.type === 'open') change(step)
-    else if (submit(step.answers)) onClose()
+    if (step.type === 'open') {
+      setNotSent(false)
+      change(step)
+    } else if (submit(step.answers)) {
+      setNotSent(false)
+      closePage()
+    } else {
+      setNotSent(true)
+    }
   }
-  const customText = current ? (flow.custom[current.question] ?? '') : ''
-  const showCustom = Boolean(current && customOpen[current.question])
+  const customText = allowFreeText && current ? (flow.custom[current.question] ?? '') : ''
+  const showCustom = Boolean(allowFreeText && current && customOpen[current.question])
+  const webInert = (Platform.OS === 'web' && discussShowing ? { inert: true } : {}) as object
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle={Platform.OS === 'ios' ? 'fullScreen' : undefined}
-      onRequestClose={onClose}
+      backdropColor={colors.bg}
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onDismiss={onDismiss}
+      onRequestClose={() => {
+        if (discussShowing) {
+          setDiscussOpen(false)
+          setNotSent(false)
+        } else closePage()
+      }}
     >
-      <SafeAreaView
-        edges={['top', 'left', 'right']}
-        style={[{ flex: 1, backgroundColor: colors.bg }, simulatedPhoneChrome && { paddingTop: 54 }]}
-      >
-        <KeyboardViewport style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <SafeAreaView
+          edges={['top', 'left', 'right']}
+          accessibilityElementsHidden={discussShowing}
+          importantForAccessibility={discussShowing ? 'no-hide-descendants' : 'auto'}
+          aria-hidden={discussShowing}
+          {...webInert}
+          style={[{ flex: 1, backgroundColor: colors.bg }, simulatedPhoneChrome && { paddingTop: 54 }]}
+        >
+          <KeyboardViewport style={{ flex: 1 }}>
           <View accessibilityViewIsModal role="dialog" aria-label="回答提问" style={{ flex: 1 }}>
             <View style={{ height: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 }}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="收起"
                 accessibilityHint="稍后再答，进度保留"
-                onPress={onClose}
+                onPress={closePage}
                 style={({ pressed }) => ({
                   width: 44,
                   height: 44,
@@ -379,7 +440,9 @@ export function QuestionPage({
               {current ? (
                 <>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 }}>
-                    <Text style={{ fontSize: 13, color: colors.ink3 }}>{model.kind}</Text>
+                    <Text style={{ fontSize: 13, color: colors.ink3 }}>
+                      {subagentName ? `${model.kind} · 来自 ${subagentName}` : model.kind}
+                    </Text>
                     <View style={{ flex: 1 }} />
                     {clock ? (
                       <CountdownPill
@@ -414,7 +477,7 @@ export function QuestionPage({
                         onInspect={activity}
                       />
                     ))}
-                    {showCustom ? (
+                    {!allowFreeText ? null : showCustom ? (
                       <View
                         style={{
                           borderRadius: 16,
@@ -439,6 +502,7 @@ export function QuestionPage({
                           editable={!locked}
                           onFocus={activity}
                           onChangeText={(value) => {
+                            setNotSent(false)
                             activity()
                             change({ type: 'custom', text: value })
                           }}
@@ -496,8 +560,10 @@ export function QuestionPage({
                 backgroundColor: colors.bg,
                 paddingHorizontal: 16,
                 paddingTop: 12,
+                gap: 8,
               }}
             >
+              {!discussShowing ? <InlineError text={pageError} /> : null}
               {sent ? (
                 <SubmittedRow />
               ) : (
@@ -548,34 +614,53 @@ export function QuestionPage({
                   </Pressable>
                 </View>
               )}
-              <View style={{ minHeight: 56, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="先讨论一下"
-                  accessibilityState={{ disabled: !model.discussEnabled }}
-                  disabled={!model.discussEnabled}
-                  onPress={() => {
-                    activity()
-                    setDiscussOpen(true)
-                  }}
-                  style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 16,
-                    justifyContent: 'center',
-                    opacity: !model.discussEnabled ? 0.4 : pressed ? 0.6 : 1,
-                  })}
-                >
-                  <Text style={{ fontSize: 15, color: colors.ink2 }}>先讨论一下</Text>
-                </Pressable>
-              </View>
+              {allowFreeText ? (
+                <View style={{ minHeight: 56, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="先讨论一下"
+                    accessibilityState={{ disabled: !model.discussEnabled }}
+                    disabled={!model.discussEnabled}
+                    onPress={() => {
+                      setNotSent(false)
+                      activity()
+                      setDiscussOpen(true)
+                    }}
+                    style={({ pressed }) => ({
+                      height: 44,
+                      paddingHorizontal: 16,
+                      justifyContent: 'center',
+                      opacity: !model.discussEnabled ? 0.4 : pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Text style={{ fontSize: 15, color: colors.ink2 }}>先讨论一下</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={{ height: 18 }} />
+              )}
             </View>
           </View>
-        </KeyboardViewport>
+          </KeyboardViewport>
+        </SafeAreaView>
+        {/* 复用外层 Modal 的原生视图，不再叠第二层 Modal，避免 iOS 同帧关闭/卸载时黑屏。 */}
         <Sheet
-          visible={discussOpen}
-          onClose={() => setDiscussOpen(false)}
+          inline
+          visible={discussShowing}
+          onClose={() => {
+            setDiscussOpen(false)
+            setNotSent(false)
+          }}
           title="先讨论一下"
-          left={<TextButton title="取消" onPress={() => setDiscussOpen(false)} />}
+          left={
+            <TextButton
+              title="取消"
+              onPress={() => {
+                setDiscussOpen(false)
+                setNotSent(false)
+              }}
+            />
+          }
           footer={
             <Button
               title="发送说明"
@@ -583,8 +668,10 @@ export function QuestionPage({
               disabled={!ready || sent || !note.trim()}
               onPress={() => {
                 if (discuss(note)) {
-                  setDiscussOpen(false)
-                  onClose()
+                  setNotSent(false)
+                  closePage()
+                } else {
+                  setNotSent(true)
                 }
               }}
             />
@@ -598,12 +685,16 @@ export function QuestionPage({
             placeholder="告诉它还需要澄清什么"
             autoFocus
             value={note}
-            onChangeText={setNote}
+            onChangeText={(value) => {
+              setNotSent(false)
+              setNote(value)
+            }}
             editable={!sent}
             style={{ backgroundColor: colors.card }}
           />
+          {discussShowing ? <InlineError text={pageError} /> : null}
         </Sheet>
-      </SafeAreaView>
+      </View>
     </Modal>
   )
 }
@@ -612,22 +703,49 @@ export function QuestionPage({
  * 入口行 + 分步页的现成组合（Approval 里直接用）。需要把入口放进输入框位置时，
  * 单独用 {@link QuestionPrompt} 和 {@link QuestionPage}，时钟用 {@link useQuestionClock}。
  */
-export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onClose' | 'clock' | 'onInteract'>) {
+export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onClose' | 'onDismiss' | 'clock' | 'onInteract'>) {
   const [open, setOpen] = useState(false)
+  // iOS 原生 Modal 滑出动画进行中（~350ms）若立即重开，UIKit 会拒绝新 present 且旧 onDismiss 会把 Modal 卸载；
+  // 记录待重开意图，等 onDismiss 完成后再打开。
+  const dismissing = useRef(false)
+  const reopenPending = useRef(false)
   const colors = useColors()
   const insets = useSafeAreaInsets()
   const bottom = simulatedPhoneChrome ? 34 : Math.max(insets.bottom, 12)
   const { clock, interact } = useQuestionClock(props.request)
   const count = readQuestions(props.input).length
+  const subagentName = permissionSubagentName(props.request, props.input)
+  const openPage = () => {
+    if (Platform.OS === 'ios' && dismissing.current) {
+      reopenPending.current = true
+      return
+    }
+    setOpen(true)
+  }
+  const closePage = () => {
+    if (Platform.OS === 'ios' && open) dismissing.current = true
+    reopenPending.current = false
+    setOpen(false)
+  }
+  const handleDismiss = () => {
+    dismissing.current = false
+    if (reopenPending.current && !props.sent) {
+      reopenPending.current = false
+      setOpen(true)
+    } else {
+      reopenPending.current = false
+    }
+  }
   return (
     <>
       <View style={{ backgroundColor: colors.bg, paddingHorizontal: 12, paddingTop: 8, paddingBottom: bottom }}>
-        <QuestionPrompt count={count} sent={props.sent} clock={clock} onOpen={() => setOpen(true)} />
+        <QuestionPrompt count={count} sent={props.sent} clock={clock} subagentName={subagentName} onOpen={openPage} />
       </View>
       <QuestionPage
         {...props}
         visible={open}
-        onClose={() => setOpen(false)}
+        onClose={closePage}
+        onDismiss={handleDismiss}
         clock={clock}
         onInteract={interact}
       />

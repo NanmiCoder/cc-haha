@@ -124,6 +124,9 @@ export function anthropicToOpenaiResponses(
   if (compatibility.parallelToolCalls !== undefined && result.tools?.length) {
     result.parallel_tool_calls = compatibility.parallelToolCalls
   }
+  if (compatibility.serviceTier) {
+    result.service_tier = compatibility.serviceTier
+  }
   if (compatibility.structuredOutput) {
     result.text = { format: compatibility.structuredOutput }
   }

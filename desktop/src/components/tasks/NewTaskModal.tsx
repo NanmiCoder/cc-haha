@@ -396,7 +396,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
             19 across the app that varied in size, accent token and how the
             label was associated; `Checkbox` also carries the disabled styling
             the channel rows were spelling out by hand. */}
-        <Card radius="lg" surface="lowest" padding="none" className="flex flex-col gap-3 px-4 py-3.5">
+        <Card radius="lg" surface="none" padding="none" className="v6c-glass-card flex flex-col gap-3 px-4 py-3.5">
           <Checkbox
             label={t('newTask.notifyOnComplete')}
             description={t('newTask.notifyHint')}
@@ -432,7 +432,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   label={
                     <span className="inline-flex items-center gap-1.5">
                       {t('settings.adapters.feishu')}
-                      {!isFeishuConfigured && <Badge tone="warning">{t('newTask.notConfigured')}</Badge>}
+                      {!isFeishuConfigured && <Badge tone="warning" pill={false}>{t('newTask.notConfigured')}</Badge>}
                     </span>
                   }
                   checked={notifyChannels.includes('feishu')}
@@ -448,7 +448,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   label={
                     <span className="inline-flex items-center gap-1.5">
                       {t('settings.adapters.telegram')}
-                      {!isTelegramConfigured && <Badge tone="warning">{t('newTask.notConfigured')}</Badge>}
+                      {!isTelegramConfigured && <Badge tone="warning" pill={false}>{t('newTask.notConfigured')}</Badge>}
                     </span>
                   }
                   checked={notifyChannels.includes('telegram')}
@@ -467,7 +467,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   wrap
                   pill={false}
                   role="alert"
-                  icon={<TriangleAlert size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />}
+                  icon={<TriangleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />}
                 >
                   {t('newTask.noChannelSelected')}
                 </Badge>

@@ -624,4 +624,23 @@ describe('AppShell boot flow', () => {
     expect(screen.getByTestId('sidebar-resize-handle')).toBeInTheDocument()
     expect(screen.queryByTestId('mobile-shell-stub')).not.toBeInTheDocument()
   })
+
+  it('frames the desktop workspace with the V6C ambient wall and calm reading canvas without grain', async () => {
+    mocks.layout = 'desktop'
+
+    const { container } = render(<AppShell />)
+
+    await screen.findByText('content loaded')
+    const shell = container.querySelector('.app-shell')
+    const main = screen.getByRole('main')
+    expect(shell).toHaveClass('v6c-ambient-shell')
+    expect(shell).not.toHaveClass('surface-grain')
+    expect(main).toHaveAttribute('data-canvas-inset', 'false')
+    expect(main).toHaveClass(
+      'v6c-main-canvas',
+      'border-l',
+      'border-[var(--color-border)]',
+    )
+    expect(main).not.toHaveClass('surface-grain', 'md:m-1.5', 'md:rounded-[var(--radius-lg)]')
+  })
 })

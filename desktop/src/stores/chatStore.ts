@@ -20,11 +20,16 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
+import { useUIStore } from './uiStore'
+import { useBrowserUseStore } from './browserUseStore'
+import { ASK_USER_QUESTION_CLARIFY_MESSAGE } from '../../../src/constants/messages'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import { ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
+import { createUnreadCompletion, recoveredUnreadCompletion, type UnreadCompletion } from '../lib/unreadCompletion'
 import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
 import { formatBytes } from '../lib/formatBytes'
@@ -40,6 +45,7 @@ import type { ComposerAttachment } from '../lib/composerAttachments'
 import type { ComposerMention } from '../lib/composerMentions'
 import type { MessageEntry } from '../types/session'
 import { stripAgentTeamRequest } from '../lib/agentTeamRequest'
+import { stripBrowserUseRequest } from '../lib/browserUseRequest'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import type {
@@ -149,6 +155,14 @@ export type PendingPermission = {
   input: unknown
   description?: string
   displayName?: string
+  antigravityToolName?: string
+  subagentName?: string
+  supportsAllowAlways?: boolean
+  planRuntimeSubmission?: {
+    previousSelection?: RuntimeSelection
+    stagedSelection?: RuntimeSelection
+  }
+  planRuntimeError?: string
 }
 
 type PendingPermissions = Record<string, PendingPermission>
@@ -204,6 +218,14 @@ export type PerSessionState = {
   /** Currently displayed Computer Use request; remaining requests stay queued. */
   pendingComputerUsePermission: PendingComputerUsePermission | null
   pendingComputerUsePermissions?: PendingComputerUsePermissions
+  /**
+   * True when `permission_pending` was entered from `idle` solely for
+   * delegated team-worker permission prompt(s) (carrying `displayName`) while
+   * this lead session had no active foreground turn. Resolving or cancelling
+   * the last prompt restores `'idle'` instead of sticking in `'tool_executing'`
+   * or `'thinking'`.
+   */
+  restoreIdleAfterPermissions?: boolean
   tokenUsage: TokenUsage
   /**
    * Bumped each time a compact boundary arrives. The context usage indicator
@@ -234,6 +256,13 @@ export type PerSessionState = {
   stoppingBackgroundTaskIds?: Record<string, boolean>
   pendingBackgroundTaskStopFailures?: Record<string, string>
   stopAllSubagentsRequested?: boolean
+  /**
+   * Client-side stopping fence (#1917): set when the user clicks Stop so dense
+   * in-flight DeepSeek `thinking` / `content_delta` / `status: thinking` frames
+   * already queued on the WebSocket cannot flip `chatState` back to running
+   * before the server's terminal `{ type: 'status', state: 'idle' }` arrives.
+   */
+  awaitingStopIdle?: boolean
   awaitingReconnectSync?: boolean
   /**
    * Background tasks that ended since the model last started an attempt and
@@ -290,6 +319,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   pendingPermissions: {},
   pendingComputerUsePermission: null,
   pendingComputerUsePermissions: {},
+  restoreIdleAfterPermissions: false,
   tokenUsage: { input_tokens: 0, output_tokens: 0 },
   compactCount: 0,
   runtimeConfigReadyCount: 0,
@@ -304,6 +334,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   stoppingBackgroundTaskIds: {},
   pendingBackgroundTaskStopFailures: {},
   stopAllSubagentsRequested: false,
+  awaitingStopIdle: false,
   awaitingReconnectSync: false,
   preHydrationSocketGapPending: false,
   historyBootstrapDisabled: false,
@@ -368,12 +399,56 @@ function hasPendingPermissionRequests(session: PerSessionState): boolean {
     Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
 }
 
+function isDelegatedPermissionRequest(
+  permission: Pick<PendingPermission, 'displayName' | 'antigravityToolName' | 'subagentName'>,
+): boolean {
+  if (permission.subagentName?.trim()) return true
+  const displayName = permission.displayName?.trim()
+  if (!displayName) return false
+  if (displayName === 'Antigravity') return false
+  return true
+}
+
+function hasOnlyDelegatedPendingPermissions(
+  session: Pick<
+    PerSessionState,
+    'pendingPermission' | 'pendingPermissions' | 'pendingComputerUsePermission' | 'pendingComputerUsePermissions'
+  >,
+): boolean {
+  const pendingPermissions = Object.values(getPendingPermissionRecord(session))
+  const pendingComputerUsePermissions = Object.values(getPendingComputerUsePermissionRecord(session))
+  return pendingPermissions.length > 0 &&
+    pendingComputerUsePermissions.length === 0 &&
+    pendingPermissions.every(isDelegatedPermissionRequest)
+}
+
+function isDelegatedIdlePending(session: PerSessionState): boolean {
+  return session.chatState === 'permission_pending' &&
+    session.restoreIdleAfterPermissions === true &&
+    hasOnlyDelegatedPendingPermissions(session)
+}
+
+function syncIdleTabStatus(
+  sessionId: string,
+  backgroundAgentTasks: PerSessionState['backgroundAgentTasks'],
+): void {
+  const tabStore = useTabStore.getState()
+  if (hasRunningBackgroundTasks(backgroundAgentTasks)) {
+    tabStore.updateTabStatus(sessionId, 'running')
+    return
+  }
+  const currentTab = tabStore.tabs.find((tab) => tab.sessionId === sessionId)
+  if (currentTab?.status === 'error') return
+  tabStore.updateTabStatus(sessionId, 'idle')
+}
+
 function getChatStateAfterPermissionResolution(
   session: PerSessionState,
   hasRemainingPermissions: boolean,
   allowed: boolean | undefined,
 ): ChatState {
   if (hasRemainingPermissions) return 'permission_pending'
+  if (session.restoreIdleAfterPermissions) return 'idle'
   if (allowed === true) return 'tool_executing'
   if (allowed === false) return 'idle'
   return session.chatState === 'permission_pending' ? 'thinking' : session.chatState
@@ -423,20 +498,41 @@ export type AskUserQuestionDraft = {
   activeTab: number
   selections: Record<number, string[]>
   freeTexts: Record<number, string>
+  images?: Record<number, ComposerAttachment[]>
   /**
    * Terminal states only this renderer knows about. The server records neither,
    * so without them a remount would resurrect an answerable form — and let the
-   * same answer be delivered twice.
+   * same answer be delivered twice. `submitted` bridges the brief window while
+   * async server-side image materialization runs before `tool_result` arrives.
    */
+  submitted?: boolean
   sentAsMessage?: boolean
   handedOff?: boolean
 }
+
+// Rollback stash for in-flight permission responses carrying attachments. If
+// server-side image materialization fails, the pending permission is restored
+// so the user can retry without losing their AskUserQuestion draft.
+const pendingAttachmentPermissionStash = new Map<
+  string,
+  { permission: PendingPermission; restoreIdleAfterPermissions: boolean }
+>()
+
+// Rollback stash for optimistically appended mid-turn guided messages so a
+// non-fatal busy/unsupported rejection does not orphan bubbles or kill the turn.
+const pendingGuidedMessageStash = new Map<
+  string,
+  Array<{ messageId: string; queued: QueuedUserMessage }>
+>()
 
 type ChatStore = {
   applyBoundedUpdate: (update: (state: ChatStore) => Partial<ChatStore>) => void
   /** Test-only: register fixture rows as durable so eviction can exercise them. */
   markHistoryRowsDurable: (sessionId: string, rows: UIMessage[]) => void
   sessions: Record<string, PerSessionState>
+  /** Kept independently of transcripts so releasing a background socket keeps its unread reply. */
+  unreadCompletions: ReadonlyMap<string, UnreadCompletion>
+  markSessionCompletionRead: (sessionId: string, expected?: UnreadCompletion) => void
   /** sessionId → toolUseId → draft. In-memory, like `composerDraft`. */
   askUserQuestionDrafts: Record<string, Record<string, AskUserQuestionDraft>>
 
@@ -479,11 +575,12 @@ type ChatStore = {
       rule?: string
       updatedInput?: Record<string, unknown>
       denyMessage?: string
+      attachments?: AttachmentRef[]
       permissionUpdates?: PermissionUpdate[]
       /** Execution-model switch applied together with an ExitPlanMode approval. */
       runtimeOverride?: RuntimeSelection
     },
-  ) => void
+  ) => boolean
   recordAskUserQuestionActivity: (sessionId: string, requestId: string) => void
   respondToComputerUsePermission: (
     sessionId: string,
@@ -1131,12 +1228,54 @@ function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
   return changed ? stoppedMessages : messages
 }
 
-// Streaming throttle for content_delta. Buffers must be per-session because
-// multiple desktop tabs can stream at the same time.
+// Streaming throttle for content_delta and thinking deltas. Buffers must be
+// per-session because multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
 const flushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
 const pendingToolInputDeltaBySession = new Map<string, string>()
 const toolInputFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
+const pendingThinkingDeltaBySession = new Map<string, string>()
+const thinkingFlushTimerBySession = new Map<string, ReturnType<typeof setTimeout>>()
+
+function consumePendingThinkingDelta(sessionId: string): string {
+  const flushTimer = thinkingFlushTimerBySession.get(sessionId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    thinkingFlushTimerBySession.delete(sessionId)
+  }
+  const text = pendingThinkingDeltaBySession.get(sessionId) ?? ''
+  pendingThinkingDeltaBySession.delete(sessionId)
+  return text
+}
+
+function appendPendingThinkingDelta(sessionId: string, text: string): void {
+  pendingThinkingDeltaBySession.set(
+    sessionId,
+    `${pendingThinkingDeltaBySession.get(sessionId) ?? ''}${text}`,
+  )
+}
+
+function clearPendingThinkingDelta(sessionId: string): void {
+  const flushTimer = thinkingFlushTimerBySession.get(sessionId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    thinkingFlushTimerBySession.delete(sessionId)
+  }
+  pendingThinkingDeltaBySession.delete(sessionId)
+}
+
+function applyPendingThinkingDeltaToMessages(messages: UIMessage[], text: string): UIMessage[] {
+  if (!text) return messages
+  const lastIndex = findStreamMergeTargetIndex(messages)
+  const last = lastIndex >= 0 ? messages[lastIndex] : undefined
+  if (!last || last.type !== 'thinking') return messages
+  const updated = [...messages]
+  updated[lastIndex] = {
+    ...last,
+    content: joinThinkingContent(last.content, text, false),
+  }
+  return updated
+}
 
 function consumePendingDelta(sessionId: string): string {
   const flushTimer = flushTimerBySession.get(sessionId)
@@ -2037,6 +2176,7 @@ function overlayLiveHistoryMessage(
     }
   }
   if (restoredMessage.type === 'tool_result' && liveMessage.type === 'tool_result') {
+    const durationMs = restoredMessage.durationMs ?? liveMessage.durationMs
     return {
       ...restoredMessage,
       toolUseId: nonEmptyHistoryIdentityPart(liveMessage.toolUseId)
@@ -2049,6 +2189,7 @@ function overlayLiveHistoryMessage(
         ? restoredMessage.content
         : liveMessage.content,
       isError: liveMessage.isError,
+      ...(durationMs !== undefined ? { durationMs } : {}),
       id: restoredMessage.id,
       timestamp: restoredMessage.timestamp,
     }
@@ -2416,6 +2557,7 @@ function normalizeSlashCommand(command: unknown): SlashCommandState | null {
     argumentHint?: unknown
     kind?: unknown
     source?: unknown
+    leanCompatible?: unknown
   }
   if (typeof candidate.name !== 'string' || !candidate.name) return null
   const kind: SlashCommandKind | undefined =
@@ -2434,6 +2576,7 @@ function normalizeSlashCommand(command: unknown): SlashCommandState | null {
       : {}),
     ...(kind ? { kind } : {}),
     ...(source ? { source } : {}),
+    ...(candidate.leanCompatible === false ? { leanCompatible: false } : {}),
   }
 }
 
@@ -2680,6 +2823,7 @@ type HistoryLoadInFlight = {
 }
 
 type TerminalReconnectHistoryBoundary = {
+  pendingCompletionMessages?: readonly UIMessage[]
   lifecycleGeneration: number
   preHydrationGap: boolean
   activated: boolean
@@ -2705,6 +2849,12 @@ type TerminalReconnectHistoryBoundary = {
 }
 
 const historyLoadsInFlight = new Map<string, HistoryLoadInFlight>()
+/** A closed tab still needs the terminal REST result to learn what finished during its socket gap. */
+export function isRecoveringSessionCompletion(sessionId: string): boolean {
+  return !!terminalReconnectHistoryBoundaries.get(sessionId)?.pendingCompletionMessages && (
+    useChatStore.getState().sessions[sessionId]?.awaitingReconnectSync === true || historyLoadsInFlight.has(sessionId)
+  )
+}
 const historyRecoveryControllers = new Map<string, AbortController>()
 const historyPageControllers = new Map<string, AbortController>()
 // Rows produced by the most recent durable history load, per session. Idle-tab
@@ -2752,6 +2902,22 @@ function advanceHistoryLifecycle(sessionId: string): number {
 
 function isCurrentHistoryLifecycle(sessionId: string, generation: number): boolean {
   return currentHistoryLifecycle(sessionId) === generation
+}
+
+const slashCommandGenerations = new Map<string, number>()
+
+function currentSlashCommandGeneration(sessionId: string): number {
+  return slashCommandGenerations.get(sessionId) ?? 0
+}
+
+function advanceSlashCommandGeneration(sessionId: string): number {
+  const nextGeneration = currentSlashCommandGeneration(sessionId) + 1
+  slashCommandGenerations.set(sessionId, nextGeneration)
+  return nextGeneration
+}
+
+function isCurrentSlashCommandGeneration(sessionId: string, generation: number): boolean {
+  return currentSlashCommandGeneration(sessionId) === generation
 }
 
 function isReconnectDiscardableForegroundMessage(message: UIMessage): boolean {
@@ -2896,6 +3062,10 @@ function ensureTerminalReconnectHistoryBoundary(
 
   const taskStore = useCLITaskStore.getState()
   const boundary: TerminalReconnectHistoryBoundary = {
+    // The permission snapshot can already say idle by the time sync_state
+    // arrives. Capture the active turn at disconnect, while it is still known.
+    pendingCompletionMessages: options?.activated === false && session.chatState !== 'idle' &&
+      !session.awaitingStopIdle && !isScheduledTaskTurn(session) ? session.messages : undefined,
     lifecycleGeneration,
     preHydrationGap: options?.preHydrationGap ?? false,
     activated: options?.activated ?? true,
@@ -3228,6 +3398,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   applyBoundedUpdate: set,
   markHistoryRowsDurable,
   sessions: {},
+  unreadCompletions: new Map(),
+  markSessionCompletionRead: (sessionId, expected) => {
+    const current = get().unreadCompletions
+    if (!current.has(sessionId) || (expected && current.get(sessionId) !== expected)) return
+    const unreadCompletions = new Map(current)
+    unreadCompletions.delete(sessionId)
+    set({ unreadCompletions })
+  },
   askUserQuestionDrafts: {},
 
   setAskUserQuestionDraft: (sessionId, toolUseId, draft) => {
@@ -3235,8 +3413,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const forSession = { ...(state.askUserQuestionDrafts[sessionId] ?? {}) }
       // The card writes on every mount, so an unfinished card must not leave an
       // entry behind for every question the user never touched.
+      const hasImages = Boolean(
+        draft.images && Object.values(draft.images).some((items) => items.length > 0),
+      )
       const isEmpty = Object.keys(draft.selections).length === 0 &&
         Object.keys(draft.freeTexts).length === 0 &&
+        !hasImages &&
+        !draft.submitted &&
         !draft.sentAsMessage &&
         !draft.handedOff
       if (isEmpty) {
@@ -3319,6 +3502,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           preHydrationSocketGapPending: false,
           historyBootstrapDisabled: options?.minimalBootstrap === true,
           activeGoal: existing?.activeGoal ?? null,
+          slashCommands: existing?.slashCommands ?? [],
           composerDraft: existing?.composerDraft ?? null,
           composerPrefill: existing?.composerPrefill ?? null,
           repositoryLaunchDraft: existing?.repositoryLaunchDraft ?? null,
@@ -3373,6 +3557,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const taskStoreAtReconnect = useCLITaskStore.getState()
           terminalReconnectHistoryBoundaries.set(sessionId, {
             ...pendingTerminalBoundary,
+            pendingCompletionMessages: currentSession.chatState !== 'idle' && !currentSession.awaitingStopIdle &&
+              !isScheduledTaskTurn(currentSession) ? currentSession.messages : pendingTerminalBoundary.pendingCompletionMessages,
             lifecycleGeneration: nextLifecycleGeneration,
             latestTerminalBoundaryCaptured: false,
             // Foreground transcript rows produced since an earlier failed
@@ -3429,6 +3615,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         // normal cold REST remains useful even while the socket is unavailable.
         clearPendingDelta(sessionId)
         clearPendingToolInputDelta(sessionId)
+        clearPendingThinkingDelta(sessionId)
         clearPendingTaskToolUseIds(sessionId)
         clearPendingToolParentUseIds(sessionId)
       }
@@ -3493,16 +3680,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
     if (!options?.minimalBootstrap || isSideChatSession(sessionId)) {
       if (!options?.minimalBootstrap) get().loadHistory(sessionId)
+      const slashGeneration = advanceSlashCommandGeneration(sessionId)
       sessionsApi.getSlashCommands(sessionId)
         .then(({ commands }) => {
+          if (!isCurrentSlashCommandGeneration(sessionId, slashGeneration)) return
           if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: commands })) }))
+            set((s) => ({
+              sessions: updateSessionIn(s.sessions, sessionId, () => ({
+                slashCommands: normalizeSlashCommandList(commands),
+              })),
+            }))
           }
         })
         .catch(() => {
-          if (get().sessions[sessionId]) {
-            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ slashCommands: [] })) }))
-          }
+          // Keep existing slashCommands when initial discovery fails.
         })
     }
   },
@@ -3514,10 +3705,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const text = consumePendingDelta(sessionId)
       set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({ streamingText: sess.streamingText + text })) }))
     }
+    if (pendingThinkingDeltaBySession.has(sessionId)) {
+      const thinkingText = consumePendingThinkingDelta(sessionId)
+      if (thinkingText) {
+        set((s) => ({
+          sessions: updateSessionIn(s.sessions, sessionId, (sess) => ({
+            messages: applyPendingThinkingDeltaToMessages(sess.messages, thinkingText),
+            streamingResponseChars: sess.streamingResponseChars + thinkingText.length,
+          })),
+        }))
+      }
+    }
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     advanceHistoryLifecycle(sessionId)
+    advanceSlashCommandGeneration(sessionId)
     wsManager.disconnect(sessionId)
     if (options?.keepTranscript) {
       // connectToSession reopens a disconnected session on top of this cache.
@@ -3605,13 +3808,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     historyPageControllers.delete(sessionId)
     set((s) => {
       const session = s.sessions[sessionId] ?? createDefaultSessionState()
+      const bufferedThinking = consumePendingThinkingDelta(sessionId)
       const bufferedDelta = consumePendingDelta(sessionId)
       const pendingAssistantText = `${session.streamingText}${bufferedDelta}`
       const now = Date.now()
 
+      const baseMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
       const newMessages = pendingAssistantText.trim()
-        ? appendAssistantTextMessage(session.messages, pendingAssistantText, now)
-        : [...session.messages]
+        ? appendAssistantTextMessage(baseMessages, pendingAssistantText, now)
+        : [...baseMessages]
       if (!isDirectAgentSession && allTasksDone) {
         newMessages.push({
           id: nextId(),
@@ -3648,6 +3853,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             scheduledTaskTurn: false,
             historyPageLoading: false,
             chatState: 'thinking',
+            awaitingStopIdle: false,
+            restoreIdleAfterPermissions: false,
             pendingBackgroundContinue: [],
             backgroundContinueNoticeId: undefined,
             isPreparingTurn: false,
@@ -3733,17 +3940,38 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       const reconciled = reconcileProviderRuntimeSelection(sessionId, selection)
       if (reconciled !== selection) get().setSessionRuntime(sessionId, selection)
     } else {
-      const providers = useProviderStore.getState()
-      const settings = useSettingsStore.getState()
-      const configuredDefault = resolveActiveProviderRuntimeSelection(
-        providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id,
-      )
-      if (configuredDefault) {
-        const defaultSelection = reconcileProviderRuntimeSelection(sessionId, {
-          ...configuredDefault, effortLevel: settings.effortLevel,
+      const knownSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
+      if (knownSession?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+        const antigravity = useProviderStore.getState().antigravity
+        const modelId = knownSession.runtimeModelId
+          ?? antigravity?.currentModelId
+          ?? antigravity?.models[0]?.id
+          ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+        const matchedModel = antigravity?.models.find((model) => model.id === modelId)
+        const supportedEfforts = matchedModel?.supportedReasoningEfforts
+        const rawEffort = knownSession.effortLevel ?? antigravity?.currentEffortLevel
+        const effortLevel = Array.isArray(supportedEfforts)
+          ? (rawEffort && supportedEfforts.includes(rawEffort) ? rawEffort : matchedModel?.defaultReasoningEffort)
+          : rawEffort
+        const antigravitySelection = reconcileProviderRuntimeSelection(sessionId, {
+          providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+          modelId,
+          ...(effortLevel ? { effortLevel } : {}),
         })
-        useSessionRuntimeStore.getState().setSelection(sessionId, defaultSelection)
-        get().setSessionRuntime(sessionId, defaultSelection)
+        useSessionRuntimeStore.getState().setSelection(sessionId, antigravitySelection)
+      } else {
+        const providers = useProviderStore.getState()
+        const settings = useSettingsStore.getState()
+        const configuredDefault = resolveActiveProviderRuntimeSelection(
+          providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id,
+        )
+        if (configuredDefault) {
+          const defaultSelection = reconcileProviderRuntimeSelection(sessionId, {
+            ...configuredDefault, effortLevel: settings.effortLevel,
+          })
+          useSessionRuntimeStore.getState().setSelection(sessionId, defaultSelection)
+          get().setSessionRuntime(sessionId, defaultSelection)
+        }
       }
     }
     wsManager.send(sessionId, outgoing)
@@ -3751,32 +3979,78 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
-    wsManager.send(sessionId, {
+    const initialSession = get().sessions[sessionId]
+    const pending = getPendingPermission(initialSession, requestId)
+    if (pending?.planRuntimeSubmission) return false
+    const payload: ClientMessage = {
       type: 'permission_response',
       requestId,
       allowed,
       ...(options?.rule ? { rule: options.rule } : {}),
       ...(options?.updatedInput ? { updatedInput: options.updatedInput } : {}),
       ...(options?.denyMessage ? { denyMessage: options.denyMessage } : {}),
+      ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
       ...(options?.permissionUpdates?.length ? { permissionUpdates: options.permissionUpdates } : {}),
       ...(options?.runtimeOverride ? { runtimeOverride: options.runtimeOverride } : {}),
-    })
+    }
+    if (options?.attachments?.length && rejectOversizedMessage(sessionId, payload)) return false
+    if (options?.attachments?.length && pending) {
+      pendingAttachmentPermissionStash.set(`${sessionId}:${requestId}`, {
+        permission: pending,
+        restoreIdleAfterPermissions: initialSession?.restoreIdleAfterPermissions === true,
+      })
+    }
+    const submittingPlanRuntime = pending?.toolName === 'ExitPlanMode' && options?.runtimeOverride
+    if (submittingPlanRuntime) {
+      const runtime = useSessionRuntimeStore.getState()
+      const previousSelection = runtime.selections[sessionId]
+      runtime.setSelection(sessionId, submittingPlanRuntime)
+      const stagedSelection = useSessionRuntimeStore.getState().selections[sessionId]
+      const submitted = { ...pending, planRuntimeSubmission: { previousSelection, stagedSelection }, planRuntimeError: undefined }
+      set((s) => ({
+        sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+          pendingPermissions: { ...getPendingPermissionRecord(session), [requestId]: submitted },
+          pendingPermission: session.pendingPermission?.requestId === requestId ? submitted : session.pendingPermission,
+        })),
+      }))
+    }
+    wsManager.send(sessionId, payload)
+    if (submittingPlanRuntime) return true
+    let shouldSyncIdleTabStatus = false
+    let clearedElapsedTimer: ReturnType<typeof setInterval> | null = null
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, (session) => {
         const pendingPermissions = getPendingPermissionRecord(session)
         delete pendingPermissions[requestId]
         const remainingPermissions = Object.values(pendingPermissions)
+        const hasRemainingPermissions = remainingPermissions.length > 0 ||
+          Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+        const returningDelegatedIdle = !hasRemainingPermissions && session.restoreIdleAfterPermissions === true
+        if (returningDelegatedIdle) {
+          shouldSyncIdleTabStatus = true
+          if (session.elapsedTimer) clearedElapsedTimer = session.elapsedTimer
+        }
 
         return {
           pendingPermissions,
           pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
-          chatState: remainingPermissions.length > 0 ||
-            Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+          awaitingStopIdle: false,
+          chatState: hasRemainingPermissions
             ? 'permission_pending'
-            : allowed ? 'tool_executing' : 'idle',
+            : returningDelegatedIdle
+              ? 'idle'
+              : allowed ? 'tool_executing' : 'idle',
+          ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
+          ...(clearedElapsedTimer ? { elapsedTimer: null } : {}),
         }
       }),
     }))
+    if (clearedElapsedTimer) clearInterval(clearedElapsedTimer)
+    if (shouldSyncIdleTabStatus) {
+      const currentSession = get().sessions[sessionId]
+      syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+    }
+    return true
   },
 
   recordAskUserQuestionActivity: (sessionId, requestId) => {
@@ -3794,6 +4068,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const pendingComputerUsePermissions = getPendingComputerUsePermissionRecord(session)
         delete pendingComputerUsePermissions[requestId]
         const remainingPermissions = Object.values(pendingComputerUsePermissions)
+        const hasRemainingPermissions = Object.keys(getPendingPermissionRecord(session)).length > 0 ||
+          remainingPermissions.length > 0
 
         return {
           pendingComputerUsePermissions,
@@ -3801,10 +4077,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingComputerUsePermissions,
             session.pendingComputerUsePermission,
           ),
-          chatState: Object.keys(getPendingPermissionRecord(session)).length > 0 ||
-            remainingPermissions.length > 0
+          awaitingStopIdle: false,
+          chatState: hasRemainingPermissions
             ? 'permission_pending'
             : response.userConsented === false ? 'idle' : 'tool_executing',
+          ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
         }
       }),
     }))
@@ -3829,7 +4106,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   stopGeneration: (sessionId) => {
+    const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+    if (boundary) delete boundary.pendingCompletionMessages
     wsManager.send(sessionId, { type: 'stop_generation' })
+    if (
+      !isSideChatSession(sessionId) &&
+      !sessionId.startsWith('__') &&
+      (wsManager as { isConnected?: (id: string) => boolean }).isConnected?.(sessionId) === false
+    ) {
+      void (sessionsApi as { stopChat?: (id: string) => Promise<unknown> }).stopChat?.(sessionId)?.catch(() => {})
+    }
+    const bufferedThinking = consumePendingThinkingDelta(sessionId)
     const bufferedText = consumePendingDelta(sessionId)
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
@@ -3846,10 +4133,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           stoppingBackgroundTaskIds[task.taskId] = true
         }
       }
+      const messagesWithThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
       const pendingAssistantText = `${session.streamingText}${bufferedText}`
       const messagesWithFlushedText = pendingAssistantText.trim()
-        ? appendAssistantTextMessage(session.messages, pendingAssistantText, Date.now())
-        : session.messages
+        ? appendAssistantTextMessage(messagesWithThinking, pendingAssistantText, Date.now())
+        : messagesWithThinking
       const stoppedMessages = pendingAssistantText.trim()
         ? [...messagesWithFlushedText, {
             id: nextId(),
@@ -3866,6 +4154,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ...session,
             messages: markPendingToolUseMessagesStopped(stoppedMessages),
             chatState: 'idle',
+            awaitingStopIdle: true,
             promptSuggestion: null,
             activeToolUseId: null,
             activeToolName: null,
@@ -3877,6 +4166,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             apiRetry: null,
             streamingFallback: null,
             stoppingBackgroundTaskIds,
@@ -4028,6 +4318,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         )
         durableHistoryRows.set(sessionId, new WeakSet(uiMessages))
         let historyApplied = false
+        let recoveredCompletion: UnreadCompletion | undefined
         set((state) => {
           if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration)) return state
           const session = state.sessions[sessionId]
@@ -4075,6 +4366,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? { input_tokens: 0, output_tokens: 0 }
             : tokenUsage
           historyApplied = true
+          const before = terminalReconnectBoundary?.pendingCompletionMessages
+          if (before && discardBaselineMessages && session.chatState === 'idle') {
+            const previousIds = new Set(before.map(row => row.id))
+            const hasNewTurn = session.messages.some(row => !previousIds.has(row.id) &&
+              (row.type === 'user_text' || row.type === 'error' || (row.type === 'system' && row.generationStopped)))
+            if (!hasNewTurn) recoveredCompletion = recoveredUnreadCompletion(before, uiMessages)
+          }
           if (session.messages.length > 0) {
             return { sessions: updateSessionIn(state.sessions, sessionId, (s) => {
               const currentBackgroundAgentTasks = reconcileBackgroundActivityAtApply &&
@@ -4286,6 +4584,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }) }
         })
         if (!historyApplied) return
+        if (recoveredCompletion) {
+          const unreadCompletions = new Map(get().unreadCompletions).set(sessionId, recoveredCompletion)
+          set({ unreadCompletions })
+        }
         if (!historyComplete && page) void recoverSessionHistory(sessionId, page.sourceVersion)
         if (
           terminalReconnectBoundary &&
@@ -4450,9 +4752,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       if (guard) {
         const current = get().sessions[sessionId]
+        const isIdleOrDelegatedIdle = Boolean(
+          current && (current.chatState === 'idle' || isDelegatedIdlePending(current)),
+        )
         if (
           !current ||
-          current.chatState !== 'idle' ||
+          !isIdleOrDelegatedIdle ||
           (current.historyMutationEpoch ?? 0) !== requestedMutationEpoch
         ) {
           return skipReload()
@@ -4520,6 +4825,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications,
           },
         )
+        const preserveDelegatedPermissions =
+          session.restoreIdleAfterPermissions === true &&
+          hasOnlyDelegatedPendingPermissions(session)
         historyApplied = true
         return {
           sessions: updateSessionIn(state.sessions, sessionId, () => ({
@@ -4535,16 +4843,21 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications,
             backgroundAgentTasks,
             tokenUsage: nextTokenUsage,
-            chatState: 'idle',
+            chatState: preserveDelegatedPermissions ? 'permission_pending' : 'idle',
             activeThinkingId: null,
             activeToolUseId: null,
             activeToolName: null,
             streamingText: '',
             streamingToolInput: '',
-            pendingPermission: null,
-            pendingPermissions: {},
-            pendingComputerUsePermission: null,
-            pendingComputerUsePermissions: {},
+            ...(preserveDelegatedPermissions
+              ? { restoreIdleAfterPermissions: true }
+              : {
+                  pendingPermission: null,
+                  pendingPermissions: {},
+                  pendingComputerUsePermission: null,
+                  pendingComputerUsePermissions: {},
+                  restoreIdleAfterPermissions: false,
+                }),
             elapsedTimer: null,
             statusVerb: '',
             apiRetry: null,
@@ -4595,12 +4908,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
       const reloadedSession = get().sessions[sessionId]
       if (reloadedSession) {
-        const isRunning = reloadedSession.chatState !== 'idle' ||
-          hasRunningBackgroundTasks(reloadedSession.backgroundAgentTasks)
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          isRunning ? 'running' : 'idle',
-        )
+        const isForegroundRunning = reloadedSession.chatState !== 'idle' &&
+          !isDelegatedIdlePending(reloadedSession)
+        if (isForegroundRunning) {
+          useTabStore.getState().updateTabStatus(sessionId, 'running')
+        } else {
+          syncIdleTabStatus(sessionId, reloadedSession.backgroundAgentTasks)
+        }
       }
 
       const currentTaskStore = useCLITaskStore.getState()
@@ -4856,40 +5170,60 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     if (rejectOversizedMessage(sessionId, outgoing)) return
 
     const now = Date.now()
+    const optimisticMessageId = nextId()
+    let appendedOptimistic = false
     set((state) => ({
       sessions: updateSessionIn(state.sessions, sessionId, (currentSession) => {
         const pendingText = `${currentSession.streamingText}${consumePendingDelta(sessionId)}`
         const baseMessages = pendingText.trim()
           ? appendAssistantTextMessage(currentSession.messages, pendingText, now)
           : currentSession.messages
+        const nextMessages = appendOptimisticQueuedUserMessage(
+          baseMessages,
+          queuedMessage,
+          now,
+          optimisticMessageId,
+        )
+        appendedOptimistic = nextMessages.length > baseMessages.length
         return {
-          messages: appendOptimisticQueuedUserMessage(baseMessages, queuedMessage, now),
+          messages: nextMessages,
           queuedUserMessages: (currentSession.queuedUserMessages ?? [])
             .filter((message) => message.id !== messageId),
           ...(pendingText.trim() ? { streamingText: '' } : {}),
+          awaitingStopIdle: false,
           replaceHistoryOnCompletion: false,
         }
       }),
     }))
+    if (appendedOptimistic) {
+      const stash = pendingGuidedMessageStash.get(sessionId) ?? []
+      stash.push({ messageId: optimisticMessageId, queued: queuedMessage })
+      pendingGuidedMessageStash.set(sessionId, stash)
+    }
 
     wsManager.send(sessionId, outgoing)
   },
 
   clearMessages: (sessionId) => {
+    get().markSessionCompletionRead(sessionId)
     advanceHistoryLifecycle(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
     clearPendingToolInputDelta(sessionId)
+    clearPendingThinkingDelta(sessionId)
     pendingOwnedTaskEvents.delete(sessionId)
     pendingAgentRunEvents.delete(sessionId)
     activeAgentStreamIdBySession.delete(sessionId)
     retiredAgentStreamIdsBySession.delete(sessionId)
+    pendingGuidedMessageStash.delete(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
       scheduledTaskTurn: undefined,
       activeGoal: null,
       streamingText: '',
       chatState: 'idle',
+      awaitingStopIdle: false,
+      restoreIdleAfterPermissions: false,
       historyStatus: 'ready',
       historyHydrated: true,
       historyError: null,
@@ -5043,12 +5377,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
 
         if (msg.turnState === 'running') {
+          const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+          if (boundary) delete boundary.pendingCompletionMessages
           // Raw deltas are not replayable across a socket gap. Discard the
           // uncommitted attempt instead of appending new deltas (or a missed
           // stream_retry attempt) to stale text/tool JSON. Persisted completed
           // messages are merged back below while the turn remains running.
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
+          clearPendingThinkingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
           clearPendingToolParentUseIds(sessionId)
           update((current) => {
@@ -5068,6 +5405,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                   !(message.type === 'tool_use' && message.isPending)),
               ],
               chatState: 'thinking',
+              awaitingStopIdle: false,
+              restoreIdleAfterPermissions: false,
               streamingText: '',
               streamingToolInput: '',
               activeThinkingId: null,
@@ -5093,13 +5432,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
 
-        if (session.chatState === 'idle') {
-          if (reconciledBackgroundTaskSnapshot) {
-            useTabStore.getState().updateTabStatus(
-              sessionId,
-              hasRunningBackgroundTasks(session.backgroundAgentTasks) ? 'running' : 'idle',
-            )
+        const preserveDelegatedPermissions = hasOnlyDelegatedPendingPermissions(session)
+
+        if (session.chatState === 'idle' && !preserveDelegatedPermissions) {
+          if (session.awaitingStopIdle || session.restoreIdleAfterPermissions) {
+            update(() => ({
+              ...(session.awaitingStopIdle ? { awaitingStopIdle: false } : {}),
+              ...(session.restoreIdleAfterPermissions ? { restoreIdleAfterPermissions: false } : {}),
+            }))
           }
+          clearElapsedTimer()
+          syncIdleTabStatus(sessionId, session.backgroundAgentTasks)
           if (automaticReconnectSnapshot) {
             // An idle reconnect snapshot is authoritative for everything that
             // predates it. Preserve only rows that arrive after the REST
@@ -5132,22 +5475,30 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
 
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
         clearPendingToolInputDelta(sessionId)
         clearPendingTaskToolUseIds(sessionId)
         clearPendingToolParentUseIds(sessionId)
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        const messagesWithThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
         const messagesWithText = text.trim()
-          ? appendAssistantTextMessage(session.messages, text, Date.now())
-          : session.messages
+          ? appendAssistantTextMessage(messagesWithThinking, text, Date.now())
+          : messagesWithThinking
         update(() => ({
           messages: markPendingToolUseMessagesStopped(messagesWithText),
-          chatState: 'idle',
+          chatState: preserveDelegatedPermissions ? 'permission_pending' : 'idle',
+          awaitingStopIdle: false,
           activeThinkingId: null,
           activeToolUseId: null,
           activeToolName: null,
-          pendingPermission: null,
-          pendingComputerUsePermission: null,
+          ...(preserveDelegatedPermissions
+            ? { restoreIdleAfterPermissions: true }
+            : {
+                pendingPermission: null,
+                pendingComputerUsePermission: null,
+                restoreIdleAfterPermissions: false,
+              }),
           elapsedTimer: null,
           statusVerb: '',
           apiRetry: null,
@@ -5156,13 +5507,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           streamingToolInput: '',
         }))
         const reconciledSession = get().sessions[sessionId]
-        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(
-          reconciledSession?.backgroundAgentTasks,
-        )
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          hasRunningBackgroundAgents ? 'running' : 'idle',
-        )
+        syncIdleTabStatus(sessionId, reconciledSession?.backgroundAgentTasks)
         // The terminal event may have arrived while this renderer was offline.
         // Drop the stale baseline for the completed foreground turn, then merge
         // durable history with only rows that arrive after this request starts.
@@ -5182,10 +5527,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'status':
+        if (msg.state !== 'idle' && get().sessions[sessionId]?.awaitingStopIdle) {
+          break
+        }
         // A new attempt only starts once the previous one committed or was
         // retried, so its task bar change is no longer undoable.
         if (msg.attemptStart) taskBarBeforeAttemptBySession.delete(sessionId)
         update((session) => {
+          const bufferedThinking = (msg.state === 'idle' || msg.state === 'compacting')
+            ? consumePendingThinkingDelta(sessionId)
+            : ''
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           const hasPendingStreamText =
             session.chatState === 'streaming' && pendingText.trim().length > 0
@@ -5195,7 +5546,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // across separate bubbles.
           const preserveStreamingTurn = hasPendingStreamText && msg.state !== 'idle' && msg.state !== 'compacting'
           const shouldFlush = hasPendingStreamText && (msg.state === 'idle' || msg.state === 'compacting')
-          let nextMessages = session.messages
+          let nextMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
           if (shouldFlush) {
             nextMessages = appendAssistantTextMessage(nextMessages, pendingText, Date.now())
           }
@@ -5215,16 +5566,23 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? buildBackgroundContinueMessage(continueTasks, Date.now())
             : null
           if (notice) nextMessages = [...nextMessages, notice]
+          const preserveDelegatedPermissions = msg.state === 'idle' &&
+            hasOnlyDelegatedPendingPermissions(session)
           return {
             ...(continueTasks.length > 0 ? { pendingBackgroundContinue: [] } : {}),
             ...(notice ? { backgroundContinueNoticeId: notice.id } : {}),
-            chatState: preserveStreamingTurn ? 'streaming' : msg.state,
+            chatState: preserveStreamingTurn
+              ? 'streaming'
+              : preserveDelegatedPermissions
+                ? 'permission_pending'
+                : msg.state,
+            restoreIdleAfterPermissions: preserveDelegatedPermissions,
             statusVerb: msg.state === 'idle'
               ? ''
               : msg.verb && msg.verb !== 'Thinking'
                 ? msg.verb
                 : '',
-            ...(msg.state === 'idle' ? { activeThinkingId: null } : {}),
+            ...(msg.state === 'idle' ? { activeThinkingId: null, awaitingStopIdle: false } : {}),
             ...(msg.state === 'idle' ? { apiRetry: null, streamingFallback: null } : {}),
             // Any new model activity makes the previous turn's prediction stale.
             ...(msg.state !== 'idle' && session.promptSuggestion ? { promptSuggestion: null } : {}),
@@ -5238,17 +5596,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             } : pendingText !== session.streamingText ? { streamingText: pendingText } : {}),
           }
         })
-        if (msg.state !== 'idle') ensureElapsedTimer()
-        if (msg.state === 'idle') {
+        if (msg.state !== 'idle') {
+          ensureElapsedTimer()
+          useTabStore.getState().updateTabStatus(sessionId, 'running')
+        } else {
           clearElapsedTimer()
+          syncIdleTabStatus(sessionId, get().sessions[sessionId]?.backgroundAgentTasks)
         }
-        // Sync tab status
-        useTabStore.getState().updateTabStatus(
-          sessionId,
-          msg.state === 'idle' && !hasRunningBackgroundTasks(get().sessions[sessionId]?.backgroundAgentTasks)
-            ? 'idle'
-            : 'running',
-        )
         break
 
       case 'runtime_config_applied': {
@@ -5292,7 +5646,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'content_start': {
         const session = get().sessions[sessionId]
-        if (!session) break
+        if (!session || session.awaitingStopIdle) break
         // The server keeps a stopped-turn fence until it attributes a replay
         // (or a pure local command's first output) to the replacement turn.
         // Mirror that boundary instead of clearing the SubAgent stop latch on
@@ -5300,17 +5654,26 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (session.stopAllSubagentsRequested) {
           update(() => ({ stopAllSubagentsRequested: false }))
         }
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
-        if (msg.blockType !== 'text' && pendingText.trim()) {
-          update((s) => ({
-            messages: appendAssistantTextMessage(s.messages, pendingText, Date.now()),
-            streamingText: '',
-          }))
+        if (bufferedThinking || (msg.blockType !== 'text' && pendingText.trim())) {
+          update((s) => {
+            const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
+            const nextMessages = msg.blockType !== 'text' && pendingText.trim()
+              ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+              : withThinking
+            return {
+              messages: nextMessages,
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+              ...(msg.blockType !== 'text' && pendingText.trim() ? { streamingText: '' } : {}),
+            }
+          })
         }
         if (msg.blockType === 'text') {
           update((s) => ({
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
             chatState: 'streaming',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5341,6 +5704,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeToolName: toolName,
             streamingToolInput: '',
             chatState: 'tool_executing',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5351,6 +5715,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'api_retry': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         const attempt = Math.max(1, Math.trunc(msg.attempt))
         const maxRetries = Math.max(attempt, Math.trunc(msg.maxRetries))
         const retryDelayMs = Math.max(0, Math.trunc(msg.retryDelayMs))
@@ -5366,6 +5731,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             receivedAt: Date.now(),
           },
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
+          restoreIdleAfterPermissions: false,
           activeThinkingId: null,
           statusVerb: '',
         }))
@@ -5375,10 +5741,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'streaming_fallback': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         if (msg.cause === 'stream_retry') {
           const taskBarBeforeAttempt = taskBarBeforeAttemptBySession.get(sessionId)
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
+          clearPendingThinkingDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
           clearPendingToolParentUseIds(sessionId)
           update((session) => {
@@ -5420,6 +5788,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               streamingFallback: null,
               apiRetry: null,
               chatState: 'thinking',
+              restoreIdleAfterPermissions: false,
               statusVerb: '',
             }
           })
@@ -5438,6 +5807,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           },
           apiRetry: null,
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
+          restoreIdleAfterPermissions: false,
           activeThinkingId: null,
           statusVerb: '',
         }))
@@ -5447,6 +5817,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'content_delta':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         let receivedLiveDelta = false
         if (msg.text !== undefined) {
           if (!get().sessions[sessionId]) break
@@ -5507,14 +5878,56 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'thinking': {
+        const currentSession = get().sessions[sessionId]
+        if (!currentSession || currentSession.awaitingStopIdle) break
+        // Coalesce rapid streaming thinking deltas on a 50ms timer (mirroring
+        // `content_delta`) once the thinking block is already open. The opening
+        // chunk and `complete: true` blocks still commit synchronously so the
+        // live thinking indicator appears on the first token with zero latency.
+        if (
+          msg.complete !== true &&
+          currentSession.activeThinkingId &&
+          !currentSession.streamingText.trim() &&
+          !(pendingDeltaBySession.get(sessionId) ?? '').trim()
+        ) {
+          const lastIndex = findStreamMergeTargetIndex(currentSession.messages)
+          const last = lastIndex >= 0 ? currentSession.messages[lastIndex] : undefined
+          if (
+            last &&
+            last.type === 'thinking' &&
+            last.id === currentSession.activeThinkingId &&
+            !currentSession.messages.some((message) => message.type === 'thinking' && message.content === msg.text)
+          ) {
+            appendPendingThinkingDelta(sessionId, msg.text)
+            if (!thinkingFlushTimerBySession.has(sessionId)) {
+              const timer = setTimeout(() => {
+                const text = consumePendingThinkingDelta(sessionId)
+                if (!text) return
+                update((s) => {
+                  const updatedMessages = applyPendingThinkingDeltaToMessages(s.messages, text)
+                  if (updatedMessages === s.messages) return {}
+                  return {
+                    messages: updatedMessages,
+                    streamingResponseChars: s.streamingResponseChars + text.length,
+                  }
+                })
+              }, 50)
+              thinkingFlushTimerBySession.set(sessionId, timer)
+            }
+            ensureElapsedTimer()
+            break
+          }
+        }
         // 重放/空块都不该冒出一个新的「已思考」气泡，也不该把会话拖回 thinking 态
         // 或者启动计时器 —— 那正是"打开一个早就结束的会话，它自己开始输出"的观感。
         let skippedThinkingBlock = false
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
+          const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           const base = pendingText.trim()
-            ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
-            : s.messages
+            ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+            : withThinking
           const lastIndex = findStreamMergeTargetIndex(base)
           const last = lastIndex >= 0 ? base[lastIndex] : undefined
           // 服务端两个 thinking 发射点都做了非空过滤，但 `&& delta.thinking` 是真值
@@ -5523,7 +5936,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // 增量是正文的一部分，丢掉它会让实时内容和 transcript 对不上（#1476）。
           if (!msg.text.trim() && (msg.complete === true || last?.type !== 'thinking')) {
             skippedThinkingBlock = true
-            return { messages: base, streamingText: '' }
+            return {
+              messages: base,
+              streamingText: '',
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+            }
           }
           // 真正的重放源已在服务端按 uuid 挡掉（conversationService.isReplayedSdkMessage）。
           // 这里再兜一道：thinking 没有 transcriptMessageId 之类的身份，任何漏网的
@@ -5531,7 +5948,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // 不会命中；命中的必然是被整块重发的同一段思考。
           if (base.some((message) => message.type === 'thinking' && message.content === msg.text)) {
             skippedThinkingBlock = true
-            return { messages: base, streamingText: '' }
+            return {
+              messages: base,
+              streamingText: '',
+              ...(bufferedThinking ? { streamingResponseChars: s.streamingResponseChars + bufferedThinking.length } : {}),
+            }
           }
           if (last && last.type === 'thinking') {
             const updated = [...base]
@@ -5542,18 +5963,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             return {
               messages: updated,
               chatState: 'thinking',
+              restoreIdleAfterPermissions: false,
               activeThinkingId: last.id,
               streamingText: '',
-              streamingResponseChars: s.streamingResponseChars + msg.text.length,
+              streamingResponseChars: s.streamingResponseChars + bufferedThinking.length + msg.text.length,
             }
           }
           const id = nextId()
           return {
             messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
             chatState: 'thinking',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: id,
             streamingText: '',
-            streamingResponseChars: s.streamingResponseChars + msg.text.length,
+            streamingResponseChars: s.streamingResponseChars + bufferedThinking.length + msg.text.length,
           }
         })
         if (!skippedThinkingBlock) ensureElapsedTimer()
@@ -5561,6 +5984,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_use_complete': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         clearPendingToolInputDelta(sessionId)
         const session = get().sessions[sessionId]
         const toolName = msg.toolName || session?.activeToolName || 'unknown'
@@ -5568,14 +5992,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const parentToolUseId = msg.parentToolUseId ?? getPendingToolParentUseId(sessionId, toolUseId)
         rememberPendingToolParentUseId(sessionId, toolUseId, parentToolUseId)
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           // 流式路径上，工具块的 content_start 已经把待定正文冲刷成一条消息了
           // （见 case 'content_start' 里 blockType !== 'text' 的分支）。但整块兜底
           // 路径只发 tool_use_complete、不发 content_start —— 不在这里补一次冲刷，
           // 工具调用前后的两段正文就会跨消息粘成一条。
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
+          const withThinking = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           const base = pendingText.trim()
-            ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
-            : s.messages
+            ? appendAssistantTextMessage(withThinking, pendingText, Date.now())
+            : withThinking
           return {
             messages: toolUseId
               ? upsertToolUseMessage(base, toolUseId, (existing) => ({
@@ -5611,6 +6037,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_result': {
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         const scheduledResult = parseScheduledTaskResult(findToolUseMessage(get().sessions[sessionId]?.messages ?? [], msg.toolUseId)?.toolName ?? '', msg.content, msg.isError)
         if (scheduledResult?.kind === 'scheduled_task') {
           useTaskStore.getState().applyToolResult(scheduledResult)
@@ -5619,11 +6046,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const now = Date.now()
         const pendingParentToolUseId = consumePendingToolParentUseId(sessionId, msg.toolUseId)
         const parentToolUseId = msg.parentToolUseId ?? pendingParentToolUseId
+        const toolDurationMs =
+          typeof msg.durationMs === 'number' && Number.isFinite(msg.durationMs) && msg.durationMs >= 0
+            ? msg.durationMs
+            : undefined
         update((s) => {
           let messages: UIMessage[] = [...s.messages, {
             id: nextId(), type: 'tool_result', toolUseId: msg.toolUseId,
             originalToolUseId: msg.originalToolUseId,
             content: msg.content, isError: msg.isError, timestamp: now, parentToolUseId,
+            ...(toolDurationMs !== undefined ? { durationMs: toolDurationMs } : {}),
           }]
           let backgroundAgentTasks = s.backgroundAgentTasks ?? {}
           const stoppedTask = msg.isError
@@ -5658,6 +6090,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'permission_request':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         notifyDesktop({
           dedupeKey: `permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
@@ -5678,6 +6111,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             input: msg.input,
             description: msg.description,
             ...(msg.displayName ? { displayName: msg.displayName } : {}),
+            ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+            ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+            ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
           }
           const pendingPermissions = {
             ...getPendingPermissionRecord(s),
@@ -5686,11 +6122,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const hasPermissionMessage = s.messages.some((message) =>
             message.type === 'permission_request' && message.requestId === msg.requestId)
           const isAskUserQuestion = msg.toolName === 'AskUserQuestion'
+          const allDelegated = hasOnlyDelegatedPendingPermissions({
+            pendingPermission,
+            pendingPermissions,
+            pendingComputerUsePermission: s.pendingComputerUsePermission,
+            pendingComputerUsePermissions: s.pendingComputerUsePermissions,
+          })
+          const restoreIdleAfterPermissions = allDelegated && (
+            s.chatState === 'idle' ||
+            (s.chatState === 'permission_pending' && s.restoreIdleAfterPermissions === true)
+          )
 
           return {
             pendingPermission,
             pendingPermissions,
             chatState: 'permission_pending',
+            restoreIdleAfterPermissions,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5719,6 +6166,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     input: msg.input,
                     description: msg.description,
                     ...(msg.displayName ? { displayName: msg.displayName } : {}),
+                    ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
+                    ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
+                    ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
                     timestamp: Date.now(),
                   }],
           }
@@ -5726,12 +6176,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'computer_use_permission_request':
+        if (get().sessions[sessionId]?.awaitingStopIdle) break
         notifyDesktop({
           dedupeKey: `computer-use-permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
           requestAttention: true,
           title: 'Claude Code Haha 需要你的确认',
-          body: msg.request.reason || 'Computer Use 正在等待允许。',
+          body: msg.request.reason || '操作电脑正在等待允许。',
           target: { type: 'session', sessionId },
         })
         update((session) => {
@@ -5750,6 +6201,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ),
             pendingComputerUsePermissions,
             chatState: 'permission_pending',
+            restoreIdleAfterPermissions: false,
             activeThinkingId: null,
             apiRetry: null,
             streamingFallback: null,
@@ -5757,13 +6209,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         })
         break
 
-      case 'permission_resolved':
+      case 'permission_resolved': {
+        pendingAttachmentPermissionStash.delete(`${sessionId}:${msg.requestId}`)
+        let shouldSyncIdleTabStatus = false
         update((session) => {
           if (msg.permissionType === 'computer_use') {
             const pendingComputerUsePermissions = getPendingComputerUsePermissionRecord(session)
             if (!pendingComputerUsePermissions[msg.requestId]) return {}
             delete pendingComputerUsePermissions[msg.requestId]
             const remainingPermissions = Object.values(pendingComputerUsePermissions)
+            const hasRemainingPermissions = Object.keys(getPendingPermissionRecord(session)).length > 0 ||
+              remainingPermissions.length > 0
+            if (!hasRemainingPermissions && session.restoreIdleAfterPermissions) {
+              shouldSyncIdleTabStatus = true
+            }
 
             return {
               pendingComputerUsePermissions,
@@ -5773,10 +6232,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               ),
               chatState: getChatStateAfterPermissionResolution(
                 session,
-                Object.keys(getPendingPermissionRecord(session)).length > 0 ||
-                  remainingPermissions.length > 0,
+                hasRemainingPermissions,
                 msg.allowed,
               ),
+              ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
             }
           }
 
@@ -5784,21 +6243,48 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           if (!pendingPermissions[msg.requestId]) return {}
           delete pendingPermissions[msg.requestId]
           const remainingPermissions = Object.values(pendingPermissions)
+          const hasRemainingPermissions = remainingPermissions.length > 0 ||
+            Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0
+          if (!hasRemainingPermissions && session.restoreIdleAfterPermissions) {
+            shouldSyncIdleTabStatus = true
+          }
           return {
             pendingPermissions,
             pendingPermission: remainingPermissions[remainingPermissions.length - 1] ?? null,
             chatState: getChatStateAfterPermissionResolution(
               session,
-              remainingPermissions.length > 0 ||
-                Object.keys(getPendingComputerUsePermissionRecord(session)).length > 0,
+              hasRemainingPermissions,
               msg.allowed,
             ),
+            ...(!hasRemainingPermissions ? { restoreIdleAfterPermissions: false } : {}),
           }
         })
+        if (shouldSyncIdleTabStatus) {
+          clearElapsedTimer()
+          const currentSession = get().sessions[sessionId]
+          syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+        }
         break
+      }
 
-      case 'permission_requests_snapshot':
+      case 'permission_requests_snapshot': {
+        let shouldSyncIdleTabStatus = false
         update((session) => {
+          if (session.awaitingStopIdle) {
+            if (!msg.turnActive) {
+              shouldSyncIdleTabStatus = true
+            }
+            return {
+              connectionSnapshotReady: true,
+              pendingPermissions: {},
+              pendingPermission: null,
+              pendingComputerUsePermissions: {},
+              pendingComputerUsePermission: null,
+              chatState: 'idle',
+              restoreIdleAfterPermissions: false,
+              ...(!msg.turnActive ? { awaitingStopIdle: false } : {}),
+            }
+          }
           const toolRequestIds = new Set(msg.toolRequestIds)
           const pendingPermissions = Object.fromEntries(
             Object.entries(getPendingPermissionRecord(session))
@@ -5813,6 +6299,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const remainingComputerUsePermissions = Object.values(pendingComputerUsePermissions)
           const hasRemainingPermissions = remainingPermissions.length > 0 ||
             remainingComputerUsePermissions.length > 0
+          const allRemainingAreDelegated = remainingPermissions.length > 0 &&
+            remainingComputerUsePermissions.length === 0 &&
+            remainingPermissions.every(isDelegatedPermissionRequest)
+          if ((!hasRemainingPermissions && !msg.turnActive) || (allRemainingAreDelegated && !msg.turnActive)) {
+            shouldSyncIdleTabStatus = true
+          }
 
           return {
             connectionSnapshotReady: true,
@@ -5830,9 +6322,18 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 : session.chatState === 'idle' || session.chatState === 'permission_pending'
                   ? 'thinking'
                   : session.chatState,
+            restoreIdleAfterPermissions: hasRemainingPermissions
+              ? (msg.turnActive ? false : Boolean(session.restoreIdleAfterPermissions || allRemainingAreDelegated))
+              : false,
           }
         })
+        if (shouldSyncIdleTabStatus) {
+          clearElapsedTimer()
+          const currentSession = get().sessions[sessionId]
+          syncIdleTabStatus(sessionId, currentSession?.backgroundAgentTasks)
+        }
         break
+      }
 
       case 'message_complete': {
         const session = get().sessions[sessionId]
@@ -5846,42 +6347,58 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const completedAt = Date.now()
         const wasAgentRunning = session.chatState !== 'idle'
         const wasScheduledTaskTurn = validScheduledTaskTrigger(msg.scheduledTask) || isScheduledTaskTurn(session)
+        const bufferedThinking = consumePendingThinkingDelta(sessionId)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
-        let completionMessages = session.messages
+        let completionMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
         if (text.trim()) {
-          completionMessages = appendAssistantTextMessage(session.messages, text, completedAt)
+          completionMessages = appendAssistantTextMessage(completionMessages, text, completedAt)
           update(() => ({
             messages: completionMessages,
             streamingText: '',
           }))
-        } else if (text !== session.streamingText) {
-          update(() => ({ streamingText: text }))
+        } else if (completionMessages !== session.messages || text !== session.streamingText) {
+          update(() => ({
+            ...(completionMessages !== session.messages ? { messages: completionMessages } : {}),
+            streamingText: text,
+          }))
         }
         const appendedCompletionMessage = completionMessages !== session.messages
         const finalMessages = markPendingToolUseMessagesStopped(completionMessages)
-        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
-        if (session.elapsedTimer) clearInterval(session.elapsedTimer)
-        update((current) => ({
-          messages: finalMessages,
-          scheduledTaskTurn: false,
-          tokenUsage: msg.usage,
-          chatState: 'idle',
-          activeThinkingId: null,
-          pendingPermission: null,
-          pendingPermissions: {},
-          pendingComputerUsePermission: null,
-          pendingComputerUsePermissions: {},
-          elapsedTimer: null,
-          apiRetry: null,
-          streamingFallback: null,
-          replaceHistoryOnCompletion: false,
-          backgroundContinueNoticeId: undefined,
-          historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
-        }))
-        useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
-        const notification = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
+        const completedReply = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
+          ? completionMessages[findStreamMergeTargetIndex(completionMessages)]
+          : undefined
+        const marker = completedReply?.type === 'assistant_text' ? createUnreadCompletion(completionMessages, completedReply) : undefined
+        const boundary = terminalReconnectHistoryBoundaries.get(sessionId)
+        if (marker && boundary) delete boundary.pendingCompletionMessages
+        const notification = marker
           ? buildAgentCompletionNotification(sessionId, finalMessages, text)
           : null
+        const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
+        if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        pendingGuidedMessageStash.delete(sessionId)
+        set(state => ({
+          unreadCompletions: marker ? new Map(state.unreadCompletions).set(sessionId, marker) : state.unreadCompletions,
+          sessions: updateSessionIn(state.sessions, sessionId, current => ({
+            messages: finalMessages,
+            scheduledTaskTurn: false,
+            tokenUsage: msg.usage,
+            chatState: 'idle',
+            awaitingStopIdle: false,
+            activeThinkingId: null,
+            pendingPermission: null,
+            pendingPermissions: {},
+            pendingComputerUsePermission: null,
+            pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
+            elapsedTimer: null,
+            apiRetry: null,
+            streamingFallback: null,
+            replaceHistoryOnCompletion: false,
+            backgroundContinueNoticeId: undefined,
+            historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
+          })),
+        }))
+        useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
         if (notification) {
           void notifyDesktop({
             dedupeKey: notification.dedupeKey,
@@ -5904,19 +6421,33 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'user_message_replay': {
         update((session) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           // Another client's prompt reaches this one only as the CLI's attempt
           // and then this replay, so a notice shown for that attempt was wrong.
+          const withThinking = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
           const withoutNotice = session.backgroundContinueNoticeId
-            ? session.messages.filter((message) => message.id !== session.backgroundContinueNoticeId)
-            : session.messages
+            ? withThinking.filter((message) => message.id !== session.backgroundContinueNoticeId)
+            : withThinking
           const baseMessages = pendingText.trim()
             ? appendAssistantTextMessage(withoutNotice, pendingText, Date.now())
             : withoutNotice
+          const nextMessages = appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask)
+          const stash = pendingGuidedMessageStash.get(sessionId)
+          if (stash?.length) {
+            const stillOptimisticIds = new Set(
+              nextMessages
+                .filter((message) => message.type === 'user_text' && message.optimisticQueued)
+                .map((message) => message.id),
+            )
+            const remaining = stash.filter((entry) => stillOptimisticIds.has(entry.messageId))
+            if (remaining.length > 0) pendingGuidedMessageStash.set(sessionId, remaining)
+            else pendingGuidedMessageStash.delete(sessionId)
+          }
           return {
             pendingBackgroundContinue: [],
             backgroundContinueNoticeId: undefined,
-            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask),
+            messages: nextMessages,
             // A consumed human guide belongs to the existing scheduled turn;
             // only a new ordinary turn restores ordinary reply notifications.
             scheduledTaskTurn: validScheduledTaskTrigger(msg.scheduledTask) ||
@@ -5925,6 +6456,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
             stopAllSubagentsRequested: false,
+            awaitingStopIdle: false,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
             // Another client (phone, IM, a second window) started a turn: only
             // its own socket gets the thinking status, so drop the stale
@@ -5936,6 +6468,81 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'error': {
+        const session = get().sessions[sessionId]
+        if (session && (msg.permissionRequestId || msg.code === 'RUNTIME_CONFIG_INVALID' || msg.code === 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE')) {
+          const pendingPermissions = getPendingPermissionRecord(session)
+          // Older servers did not correlate runtime rejections with the plan
+          // review. A review awaiting a model change can still retry them.
+          const request = msg.permissionRequestId
+            ? pendingPermissions[msg.permissionRequestId]
+            : Object.values(pendingPermissions).find((pending) => pending.planRuntimeSubmission)
+          if (request?.planRuntimeSubmission) {
+            const runtime = useSessionRuntimeStore.getState()
+            const { previousSelection, stagedSelection } = request.planRuntimeSubmission
+            if (runtime.selections[sessionId] === stagedSelection) {
+              if (previousSelection) {
+                runtime.setSelection(sessionId, previousSelection)
+                runtime.settleSelection(sessionId)
+              } else {
+                runtime.clearSelection(sessionId)
+              }
+            }
+            const rejected = { ...request, planRuntimeSubmission: undefined, planRuntimeError: msg.message }
+            update((current) => ({
+              pendingPermissions: { ...getPendingPermissionRecord(current), [request.requestId]: rejected },
+              pendingPermission: current.pendingPermission?.requestId === request.requestId ? rejected : current.pendingPermission,
+              chatState: 'permission_pending',
+            }))
+            break
+          }
+          if (msg.code === 'ATTACHMENT_PROCESSING_FAILED' && msg.permissionRequestId) {
+            const stashKey = `${sessionId}:${msg.permissionRequestId}`
+            const stashedEntry = pendingAttachmentPermissionStash.get(stashKey)
+            pendingAttachmentPermissionStash.delete(stashKey)
+            if (stashedEntry) {
+              const { permission: stashed, restoreIdleAfterPermissions: stashedRestoreIdle } = stashedEntry
+              update((current) => {
+                const pendingPermissions = { ...getPendingPermissionRecord(current), [stashed.requestId]: stashed }
+                const allDelegated = hasOnlyDelegatedPendingPermissions({
+                  pendingPermission: stashed,
+                  pendingPermissions,
+                  pendingComputerUsePermission: current.pendingComputerUsePermission,
+                  pendingComputerUsePermissions: current.pendingComputerUsePermissions,
+                })
+                const restoreIdleAfterPermissions = allDelegated && (
+                  current.chatState === 'idle' ||
+                  (current.chatState === 'permission_pending' && (
+                    current.restoreIdleAfterPermissions === true || stashedRestoreIdle
+                  ))
+                )
+                return {
+                  pendingPermissions,
+                  pendingPermission: stashed,
+                  chatState: 'permission_pending',
+                  restoreIdleAfterPermissions,
+                }
+              })
+              if (stashed.toolUseId) {
+                const toolUseId = stashed.toolUseId
+                set((state) => {
+                  let changed = false
+                  const nextDrafts = { ...state.askUserQuestionDrafts }
+                  for (const [draftSessionId, byTool] of Object.entries(nextDrafts)) {
+                    const draft = byTool[toolUseId]
+                    if (!draft || (!draft.submitted && !draft.handedOff)) continue
+                    const { submitted: _s, handedOff: _h, ...rest } = draft
+                    nextDrafts[draftSessionId] = { ...byTool, [toolUseId]: rest }
+                    changed = true
+                  }
+                  return changed ? { askUserQuestionDrafts: nextDrafts } : {}
+                })
+              }
+            }
+            useUIStore?.getState().addToast({ type: 'error', message: msg.message })
+            break
+          }
+          if (msg.permissionRequestId) break
+        }
         if (msg.code === 'RUNTIME_CONFIG_INVALID' || msg.code === 'CLI_RESTART_FAILED') {
           // Let a fresh server snapshot reconcile a rejected optimistic choice.
           useSessionRuntimeStore.getState().settleSelection(sessionId)
@@ -5955,9 +6562,37 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           update((s) => ({ messages: [...s.messages, errorMessage] }))
           break
         }
+        const guidedStash = pendingGuidedMessageStash.get(sessionId)
+        const isNonFatalMidTurnGuideRejection =
+          (msg.code === 'ANTIGRAVITY_TURN_BUSY' && session && session.chatState !== 'idle') ||
+          (msg.code === 'ANTIGRAVITY_UNSUPPORTED' && Boolean(guidedStash?.length) && session && session.chatState !== 'idle')
+        if (isNonFatalMidTurnGuideRejection) {
+          const rejectedGuide = guidedStash?.shift()
+          if (guidedStash && guidedStash.length === 0) {
+            pendingGuidedMessageStash.delete(sessionId)
+          }
+          if (rejectedGuide) {
+            update((s) => {
+              const filteredMessages = s.messages.filter((message) => message.id !== rejectedGuide.messageId)
+              const existingQueue = s.queuedUserMessages ?? []
+              const shouldRequeue =
+                msg.code === 'ANTIGRAVITY_TURN_BUSY' &&
+                !existingQueue.some((entry) => entry.id === rejectedGuide.queued.id)
+              return {
+                messages: filteredMessages,
+                ...(shouldRequeue ? { queuedUserMessages: [rejectedGuide.queued, ...existingQueue] } : {}),
+              }
+            })
+            useUIStore?.getState().addToast({ type: 'error', message: msg.message })
+          } else {
+            update((s) => ({ messages: [...s.messages, errorMessage] }))
+          }
+          break
+        }
         update((s) => {
+          const bufferedThinking = consumePendingThinkingDelta(sessionId)
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
-          let newMessages = s.messages
+          let newMessages = applyPendingThinkingDeltaToMessages(s.messages, bufferedThinking)
           if (pendingText.trim()) {
             newMessages = appendAssistantTextMessage(newMessages, pendingText, Date.now())
           }
@@ -5966,6 +6601,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           return {
             messages: newMessages,
             chatState: 'idle',
+            awaitingStopIdle: false,
             activeThinkingId: null,
             streamingText: '',
             statusVerb: '',
@@ -5973,6 +6609,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             apiRetry: null,
             streamingFallback: null,
             historyMutationEpoch: (s.historyMutationEpoch ?? 0) + 1,
@@ -6064,11 +6701,35 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         update(() => ({ promptSuggestion: msg.suggestion }))
         break
       }
+      case 'browser_use_activity':
+        useBrowserUseStore.getState().applyActivityEvent(sessionId, msg.activity)
+        break
+      case 'browser_use_takeover':
+        useBrowserUseStore.getState().applyTakeoverEvent(sessionId, msg.takeover)
+        break
       case 'session_title_updated':
         useSessionStore.getState().updateSessionTitle(msg.sessionId, msg.title)
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
       case 'system_notification':
+        if (msg.subtype === 'init') {
+          const cwd = (msg.data as { cwd?: unknown } | undefined)?.cwd
+          if (typeof cwd === 'string' && cwd.trim()) {
+            useSessionStore.getState().updateSessionWorkDir(sessionId, cwd)
+          }
+        }
+        if (msg.subtype === 'fast_mode_status') {
+          const data = msg.data as { fastModeState?: unknown; reason?: unknown } | undefined
+          if (data?.reason === 'org_disabled' || data?.reason === 'overage_rejected') {
+            useSettingsStore.setState({ fastMode: false })
+            if (typeof msg.message === 'string' && msg.message.trim()) {
+              useUIStore.getState().addToast({ type: 'warning', message: msg.message })
+            }
+          } else if (data?.fastModeState === 'cooldown' && typeof msg.message === 'string' && msg.message.trim()) {
+            useUIStore.getState().addToast({ type: 'info', message: msg.message })
+          }
+          break
+        }
         if (msg.subtype === 'scheduled_tasks_changed') {
           void useTaskStore.getState().fetchTasks()
           break
@@ -6099,12 +6760,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
         }
         if (msg.subtype === 'slash_commands' && Array.isArray(msg.data)) {
+          const slashGeneration = advanceSlashCommandGeneration(sessionId)
           const incomingCommands = normalizeSlashCommandList(msg.data)
           update((session) => ({
             slashCommands: mergeSlashCommandUpdates(session.slashCommands, incomingCommands),
           }))
           void sessionsApi.getSlashCommands(sessionId)
             .then(({ commands }) => {
+              if (!isCurrentSlashCommandGeneration(sessionId, slashGeneration)) return
               if (!get().sessions[sessionId]) return
               set((s) => ({
                 sessions: updateSessionIn(s.sessions, sessionId, () => ({
@@ -6117,8 +6780,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             })
         }
         if (msg.subtype === 'session_cleared') {
+          get().markSessionCompletionRead(sessionId)
           pendingOwnedTaskEvents.delete(sessionId)
           advanceHistoryLifecycle(sessionId)
+          advanceSlashCommandGeneration(sessionId)
           const session = get().sessions[sessionId]
           if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
           update(() => ({
@@ -6132,6 +6797,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             pendingPermissions: {},
             pendingComputerUsePermission: null,
             pendingComputerUsePermissions: {},
+            restoreIdleAfterPermissions: false,
             chatState: 'idle',
             elapsedTimer: null,
             elapsedSeconds: 0,
@@ -6147,6 +6813,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             agentTaskNotifications: {},
             pendingBackgroundTaskStopFailures: {},
             stopAllSubagentsRequested: false,
+            awaitingStopIdle: false,
             awaitingReconnectSync: false,
             preHydrationSocketGapPending: false,
             queuedUserMessages: [],
@@ -6230,7 +6897,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               activeGoalRevision: (session.activeGoalRevision ?? 0) +
                 (goalEvent.action === 'message' ? 0 : 1),
               historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
-              stopAllSubagentsRequested: false,
+              // A Goal cleared event can arrive inside an active Stop boundary
+              // (from CLI interrupt). Keep stop fences intact until status:idle
+              // or a new authoritative turn clears them.
+              ...(goalEvent.action === 'cleared'
+                ? {}
+                : {
+                    stopAllSubagentsRequested: false,
+                    awaitingStopIdle: false,
+                  }),
               messages: [
                 ...session.messages,
                 {
@@ -6789,12 +7464,29 @@ function normalizeHistoryToolResultContent(content: unknown, toolUseResult: unkn
   const result = readRecord(toolUseResult)
   if (parseScheduledTaskResult('ScheduledTask', result)) return result
   const answers = readRecord(result?.answers)
-  if (!result || !answers || !Array.isArray(result.questions)) return content
-  return {
-    questions: result.questions,
-    answers,
-    ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+  if (result && answers && Array.isArray(result.questions)) {
+    const annotations = readRecord(result.annotations)
+    return {
+      questions: result.questions,
+      answers,
+      ...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {}),
+      ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
+    }
   }
+  if (typeof content === 'string' && content.startsWith(ASK_USER_QUESTION_CLARIFY_MESSAGE)) {
+    return {
+      handedOff: true,
+      message: content,
+    }
+  }
+  return content
+}
+
+function isStructuredAskUserQuestionResult(value: unknown): value is Record<string, unknown> {
+  const record = readRecord(value)
+  if (!record) return false
+  if (Array.isArray(record.questions) && readRecord(record.answers)) return true
+  return record.handedOff === true
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
@@ -7875,10 +8567,14 @@ type RestoredUserDisplay = {
 }
 
 export function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
-  // The Agent Team switch prefixes an instruction block the user never typed.
+  // The Agent Team and Browser Use switches prefix instruction blocks the user never typed.
   const teamRequest = stripAgentTeamRequest(text)
   if (teamRequest.requested) {
     return { ...extractRestoredUserDisplay(teamRequest.content), modelContent: text }
+  }
+  const browserRequest = stripBrowserUseRequest(text)
+  if (browserRequest.requested) {
+    return { ...extractRestoredUserDisplay(browserRequest.content), modelContent: text }
   }
   const referenceContext = splitSessionReferenceContext(text)
   if (referenceContext.sessionReferences.length) {
@@ -8059,6 +8755,7 @@ function appendOptimisticQueuedUserMessage(
   messages: UIMessage[],
   message: QueuedUserMessage,
   timestamp: number,
+  id = nextId(),
 ): UIMessage[] {
   const displayContent = message.displayContent.trim()
   const modelContent = message.content.trim()
@@ -8068,7 +8765,7 @@ function appendOptimisticQueuedUserMessage(
   return [
     ...messages,
     {
-      id: nextId(),
+      id,
       type: 'user_text',
       content: displayContent,
       ...(message.sessionReferences?.length ? { sessionReferences: message.sessionReferences } : {}),
@@ -8453,8 +9150,21 @@ export function mapHistoryMessagesToUiMessages(
       const attachments: UIAttachment[] = []
       const imageSourcePaths: string[] = []
       let teammateSender: string | undefined
-      const hasImageBlock = (msg.content as UserHistoryBlock[]).some((block) => block.type === 'image')
-      for (const [blockIndex, block] of (msg.content as UserHistoryBlock[]).entries()) {
+      const userBlocks = msg.content as UserHistoryBlock[]
+      const hasImageBlock = userBlocks.some((block) => block.type === 'image')
+      const toolResultCount = userBlocks.filter((block) => block.type === 'tool_result').length
+      const hasAskQuestionToolResult = toolResultCount === 1 && userBlocks.some((block) =>
+        block.type === 'tool_result' &&
+        isStructuredAskUserQuestionResult(normalizeHistoryToolResultContent(block.content, msg.toolUseResult)),
+      )
+      const entryDurationMs =
+        toolResultCount === 1 &&
+        typeof msg.durationMs === 'number' &&
+        Number.isFinite(msg.durationMs) &&
+        msg.durationMs >= 0
+          ? msg.durationMs
+          : undefined
+      for (const [blockIndex, block] of userBlocks.entries()) {
         if (block.type === 'text' && block.text && isTeammateMessage(block.text)) {
           modelTextParts.push(block.text)
           if (!includeTeammateMessages) continue
@@ -8463,11 +9173,12 @@ export function mapHistoryMessagesToUiMessages(
           visibleTextParts.push(...teammateMessages.map((message) => message.content))
         } else if (block.type === 'text' && block.text) {
           modelTextParts.push(block.text)
-          const imageSourcePath = hasImageBlock ? extractImageMetadataSourcePath(block.text) : undefined
+          const canCarryImageMetadata = hasImageBlock || hasAskQuestionToolResult
+          const imageSourcePath = canCarryImageMetadata ? extractImageMetadataSourcePath(block.text) : undefined
           if (imageSourcePath) {
             imageSourcePaths.push(imageSourcePath)
           }
-          if (!hasImageBlock || !isGeneratedImageMetadataText(block.text)) {
+          if (!canCarryImageMetadata || !isGeneratedImageMetadataText(block.text)) {
             visibleTextParts.push(block.text)
           }
         }
@@ -8482,10 +9193,32 @@ export function mapHistoryMessagesToUiMessages(
           isError: !!block.is_error,
           timestamp,
           parentToolUseId: msg.parentToolUseId,
+          ...(entryDurationMs !== undefined ? { durationMs: entryDurationMs } : {}),
         })
       }
       applyImageMetadataSourcePaths(attachments, imageSourcePaths)
-      if (visibleTextParts.length > 0 || attachments.length > 0) {
+      if (hasAskQuestionToolResult && imageSourcePaths.length > attachments.length) {
+        for (let i = attachments.length; i < imageSourcePaths.length; i++) {
+          const sourcePath = imageSourcePaths[i]!
+          attachments.push({
+            type: 'image',
+            name: getReferenceName(sourcePath),
+            path: sourcePath,
+          })
+        }
+      }
+      let consumedAskQuestionAttachments = false
+      if (toolResultCount === 1 && visibleTextParts.length === 0 && attachments.length > 0) {
+        const lastMessage = uiMessages[uiMessages.length - 1]
+        if (lastMessage?.type === 'tool_result' && isStructuredAskUserQuestionResult(lastMessage.content)) {
+          lastMessage.content = {
+            ...lastMessage.content,
+            attachments,
+          }
+          consumedAskQuestionAttachments = true
+        }
+      }
+      if (!consumedAskQuestionAttachments && (visibleTextParts.length > 0 || attachments.length > 0)) {
         const visibleText = visibleTextParts.join('\n')
         const modelText = modelTextParts.join('\n')
         const visualSelectionDisplay =

@@ -5,10 +5,11 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflowRunDetail, projectRemoteWorkflowRuns, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 import { parseResumeRequest } from './ws/resumableStreams.js'
 import type { TunnelGateway } from './p2p/mux.js'
+import { remoteAccessDiagnosticContext, type RemoteAccessDiagnosticContext } from './services/remoteAccessConnectivity.js'
 
 const PREFIX = '/api/public-access'
 const COOKIE = '__Host-haha-remote'
@@ -72,9 +73,18 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       [...url.searchParams.keys()].every(key => key === 'path')
   }
   // Read-only catalogs for the phone's "+" sheet. Connector detail and every
-  // connector action (authenticate, prepare, remove…) and every workflow
-  // mutation or run detail remain desktop-only.
-  if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
+  // connector action (authenticate, prepare, remove…) remain desktop-only.
+  if (parts[1] === 'connectors') return parts.length === 2 && method === 'GET'
+  // Read-only workflow catalog and run history/details for paired phones.
+  // Saved workflow definitions with scripts (`/api/workflows/:name`) and all
+  // mutations (`/save`, `/validate`, DELETE) remain desktop-only.
+  if (parts[1] === 'workflows') {
+    if (method !== 'GET') return false
+    if (parts.length === 2) return true
+    if (parts[2] === 'session-runs') return parts.length === 4
+    if (parts[2] === 'runs') return parts.length === 3 || parts.length === 5
+    return false
+  }
   if (parts[1] === 'voice') {
     // Phones reuse the host's prepared recognizer. Download, deletion and
     // shared preference changes stay on the desktop's settings surface.
@@ -96,6 +106,24 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       (parts[2] === 'open-permission-card' && method === 'POST')
   }
   if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || ((parts[3] === 'test' || parts[3] === 'pull') && method === 'POST'))
+  if (parts[1] === 'mobile-update') {
+    if (url.pathname === '/api/mobile-update/android/latest') {
+      return method === 'GET' && [...url.searchParams.keys()].every(key =>
+        key === 'refresh' && url.searchParams.getAll(key).length === 1 && url.searchParams.get(key) === '1',
+      )
+    }
+    if (url.pathname === '/api/mobile-update/android/prepare') {
+      return (method === 'GET' || method === 'POST') && [...url.searchParams.keys()].every(key =>
+        key === 'sha256' && url.searchParams.getAll(key).length === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get(key) ?? ''),
+      )
+    }
+    if (url.pathname === '/api/mobile-update/android/apk') {
+      return method === 'GET' && [...url.searchParams.keys()].every(key =>
+        key === 'sha256' && url.searchParams.getAll(key).length === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get(key) ?? ''),
+      )
+    }
+    return false
+  }
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {
@@ -165,8 +193,8 @@ type Dependencies = {
   serverPort: () => number
   storePath?: string
   now?: () => number
-  resolveProxy?: () => Promise<{ proxyUrl: string | null }>
-  verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean>
+  resolveProxy?: (context?: RemoteAccessDiagnosticContext) => Promise<{ proxyUrl: string | null }>
+  verifyGateway?: (origin: string, gatewayId: string, context?: RemoteAccessDiagnosticContext) => Promise<boolean>
   /**
    * The public address differs from the one phones were last given (a Quick
    * Tunnel restarted). `sign` proves the address to one paired device.
@@ -441,7 +469,7 @@ export class PublicAccessServer {
       if (route === 'network' && request.method === 'GET') {
         try {
           if (!this.deps.resolveProxy) throw new Error('Network settings unavailable')
-          return json(await this.deps.resolveProxy())
+          return json(await this.deps.resolveProxy(remoteAccessDiagnosticContext(request)))
         } catch { return json({ error: 'Network proxy unavailable', code: 'proxy' }, 503) }
       }
       const input = request.method === 'GET' ? {} : await this.readInput(request)
@@ -453,7 +481,7 @@ export class PublicAccessServer {
       if (route === 'origin' && request.method === 'PUT') { this.setOrigin(input.publicUrl); return json(this.status()) }
       if (route === 'verify' && request.method === 'POST') {
         if (!this.server || !this.publicUrl || !this.gatewayId || !this.deps.verifyGateway) return json({ ok: false })
-        return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId) })
+        return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId, remoteAccessDiagnosticContext(request)) })
       }
       if (route === 'disable' && request.method === 'POST') return json(this.disable({ restart: input.reason === 'restart' }))
       if (route === 'pairing' && request.method === 'POST') {
@@ -599,6 +627,10 @@ export class PublicAccessServer {
         }
         if (route === 'api/connectors' && request.method === 'GET' && response.ok) return json(projectRemoteConnectors(await response.json() as Record<string, unknown>))
         if (route === 'api/workflows' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflows(await response.json() as Record<string, unknown>))
+        if (route === 'api/workflows/runs' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflowRuns(await response.json() as Record<string, unknown>))
+        if (request.method === 'GET' && response.ok && /^api\/workflows\/runs\/[^/]+\/[^/]+$/.test(route)) {
+          return json(projectRemoteWorkflowRunDetail(await response.json() as Record<string, unknown>))
+        }
         // Native apps authenticate with a bearer; browsers use the cookie and keep the full agent view.
         if (request.headers.get('Authorization') !== null && request.method === 'GET' && response.ok &&
           /^api\/agents(\/|$)/.test(route)) {

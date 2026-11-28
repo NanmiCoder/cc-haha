@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.7.8",
+  "version": "0.9.0",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/NanmiCoder/cc-haha",
   "author": {
@@ -67,7 +67,10 @@
       "target": "nsis",
       "icon": "src-tauri/icons/icon.ico",
       "extraResources": [
-        { "from": "src-tauri/icons/icon.ico", "to": "app-icon.ico" }
+        {
+          "from": "src-tauri/icons/icon.ico",
+          "to": "app-icon.ico"
+        }
       ]
     },
     "nsis": {
@@ -99,7 +102,7 @@
     "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build && bun run build:h5-mobile",
     "build:h5-mobile": "bun ../mobile/scripts/export-h5.ts ./dist/m",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
-    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron && bun build ./electron/p2p/hostPage.ts --outfile ./electron-dist/p2p-host.js --target browser --format iife",
+    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/usage-widget-preload.ts --outfile ./electron-dist/usage-widget-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron && bun build ./electron/p2p/hostPage.ts --outfile ./electron-dist/p2p-host.js --target browser --format iife",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
     "prepare:ripgrep": "bun run ./scripts/prepare-ripgrep.ts",
     "prepare:cloudflared": "bun run ./scripts/prepare-cloudflared.ts",
@@ -111,7 +114,7 @@
     "test:windows-storage-recovery": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./build/recover-legacy-install-data.ps1 -SelfTest",
     "build:linux-x64": "bash ./scripts/build-linux.sh",
     "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
-    "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",
+    "electron:dev": "bun run build:preview-agent && bun run build:electron && bun run ./scripts/electron-dev.ts",
     "electron:build": "bun run build:sidecars && bun run build && bun run build:electron",
     "electron:package": "bun run prepare:cloudflared && bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
     "electron:package:dir": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",
@@ -125,6 +128,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@lobehub/icons-static-svg": "^1.106.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/dompurify": "^3.2.0",
     "@xterm/addon-fit": "^0.11.0",

@@ -347,7 +347,7 @@ function VocabularyRowMenu({ term, busy, onEdit, onRemove }: {
   const triggerRef = useRef<HTMLButtonElement>(null)
   useDismissable({ open, refs: [menuRef], triggerRef, onDismiss: () => setOpen(false) })
 
-  const item = 'flex w-full items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+  const item = 'flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
   return (
     <div className="relative flex justify-end">
       <IconButton
@@ -366,7 +366,7 @@ function VocabularyRowMenu({ term, busy, onEdit, onRemove }: {
           ref={menuRef}
           role="menu"
           aria-label={t('voice.settings.vocabulary.rowActions', { term })}
-          className="glass-panel absolute right-0 top-full z-[var(--z-dropdown)] mt-1 w-32 rounded-[var(--radius-lg)] p-1"
+          className="dropdown-glass absolute right-0 top-full z-[var(--z-dropdown)] mt-1 w-32 rounded-[var(--radius-xl)] p-1.5"
         >
           <button
             type="button"

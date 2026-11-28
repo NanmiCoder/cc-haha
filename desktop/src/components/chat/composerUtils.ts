@@ -33,6 +33,7 @@ const SLASH_CMD_DESCRIPTION_KEYS: Record<string, TranslationKey> = {
   login: 'slashCmd.login.description',
   logout: 'slashCmd.logout.description',
   btw: 'sideQuestion.commandDescription',
+  fast: 'slashCmd.fast.description',
   model: 'slashCmd.model.description',
   permissions: 'slashCmd.permissions.description',
   'terminal-setup': 'slashCmd.terminal-setup.description',
@@ -73,6 +74,7 @@ const DESKTOP_SLASH_COMMAND_NAMES: readonly string[] = [
   ...PANEL_SLASH_COMMANDS.map(command => command.name),
   ...SETTINGS_SLASH_COMMANDS.map(command => command.name),
   ...SLASH_COMMAND_ALIASES.map(command => command.name),
+  'fast',
   'model',
 ]
 
@@ -100,7 +102,7 @@ export function isTeamMemberSlashCommand(name: string): boolean {
 }
 
 /** Commands the server refuses to run in a member's CLI (see memberCommand.ts). */
-const TEAM_MEMBER_REFUSED_COMMAND = /^\/(clear|reset|new|model)(?:\s|$)/i
+const TEAM_MEMBER_REFUSED_COMMAND = /^\/(clear|reset|new|model|fast)(?:\s|$)/i
 
 /** Typed input the member's CLI would never get to run; the composer says why instead of sending it. */
 export function isRefusedTeamMemberCommand(text: string): boolean {
@@ -152,6 +154,7 @@ export const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'btw', description: 'Ask a side question without interrupting this task', argumentHint: '[question]' },
   { name: 'init', description: 'Initialize project CLAUDE.md' },
   { name: 'config', description: 'Open configuration' },
+  { name: 'fast', description: 'Toggle fast mode for supported Claude models', argumentHint: '[on|off]' },
   { name: 'model', description: 'Switch AI model' },
 ]
 
@@ -276,8 +279,22 @@ export type SlashUiAction =
   | {
       type: 'model'
     }
+  | {
+      type: 'fast'
+      mode: 'toggle' | 'on' | 'off' | 'invalid'
+    }
 
 export function resolveSlashUiAction(value: string): SlashUiAction | null {
+  const trimmed = value.trim()
+  const fastMatch = /^fast(?:\s+(.*))?$/i.exec(trimmed)
+  if (fastMatch) {
+    const arg = (fastMatch[1] ?? '').trim().toLowerCase()
+    if (arg === '') return { type: 'fast', mode: 'toggle' }
+    if (arg === 'on') return { type: 'fast', mode: 'on' }
+    if (arg === 'off') return { type: 'fast', mode: 'off' }
+    return { type: 'fast', mode: 'invalid' }
+  }
+
   const normalizedValue = SLASH_COMMAND_ALIASES.find((alias) => alias.name === value)?.target ?? value
   const panelCommand = PANEL_SLASH_COMMANDS.find((command) => command.name === normalizedValue)
   if (panelCommand) {
@@ -314,10 +331,14 @@ export function mergeSlashCommands(
     // description so users see translated text instead of the CLI's English.
     const useLocalDescription =
       BUILT_IN_COMMAND_NAMES.has(command.name) && Boolean(localized?.description)
+    const rawDescription =
+      typeof command.description === 'string' ? command.description.trim() : ''
     const description = useLocalDescription
       ? localized!.description
-      : command.description?.trim() || localized?.description || ''
-    const argumentHint = command.argumentHint?.trim() || localized?.argumentHint
+      : rawDescription || localized?.description || ''
+    const rawArgumentHint =
+      typeof command.argumentHint === 'string' ? command.argumentHint.trim() : ''
+    const argumentHint = rawArgumentHint || localized?.argumentHint
     merged.set(command.name, {
       name: command.name,
       description,
@@ -343,8 +364,10 @@ export function mergeSlashCommands(
 
 function getSlashCommandMatchRank(command: SlashCommandOption, filter: string): number {
   const name = command.name.toLowerCase()
-  const description = command.description.toLowerCase()
-  const argumentHint = command.argumentHint?.toLowerCase() ?? ''
+  const description =
+    typeof command.description === 'string' ? command.description.toLowerCase() : ''
+  const argumentHint =
+    typeof command.argumentHint === 'string' ? command.argumentHint.toLowerCase() : ''
   const nameParts = name.split(/[:/._-]+/).filter(Boolean)
 
   if (name === filter) return 0
@@ -359,9 +382,13 @@ function getSlashCommandMatchRank(command: SlashCommandOption, filter: string): 
 export function filterSlashCommands(
   commands: ReadonlyArray<SlashCommandOption>,
   filter: string,
+  options?: { showAllWhenEmpty?: boolean },
 ): SlashCommandOption[] {
   const normalized = filter.trim().toLowerCase()
   if (!normalized.trim()) {
+    if (options?.showAllWhenEmpty) {
+      return [...commands]
+    }
     return [
       ...FREQUENT_SLASH_COMMAND_NAMES.flatMap(name => commands.filter(command =>
         command.name.trim().toLowerCase() === name && (!command.kind || command.kind === 'command'),

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getMessages: vi.fn(),
   getSlashCommands: vi.fn(),
   listSkills: vi.fn(),
+  listSkillCommands: vi.fn(),
   listAgents: vi.fn(),
   listReferences: vi.fn(),
   search: vi.fn(),
@@ -47,6 +48,13 @@ vi.mock('../api/client', async (importOriginal) => ({
   rawRecordDiagnosticEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
+vi.mock('@/api/promptHistory', () => ({
+  promptHistoryApi: {
+    list: vi.fn(async () => ({ entries: [] })),
+    append: vi.fn(async () => ({ ok: true })),
+  },
+}))
+
 vi.mock('../api/sessions', () => ({
   sessionsApi: {
     create: mocks.createSession,
@@ -78,6 +86,7 @@ vi.mock('@/features/voiceInput/recorder', async (importOriginal) => ({
 vi.mock('../api/skills', () => ({
   skillsApi: {
     list: mocks.listSkills,
+    commands: mocks.listSkillCommands,
   },
 }))
 
@@ -163,12 +172,13 @@ vi.mock('@/components/layout/ProjectEditorModal', () => ({
 }))
 
 vi.mock('../components/controls/PermissionModeSelector', () => ({
-  PermissionModeSelector: ({ compact, value, onChange, menuAlign }: { compact?: boolean; value?: string; onChange?: (mode: string) => void; menuAlign?: string }) => (
+  PermissionModeSelector: ({ compact, value, onChange, menuAlign, allowedModes }: { compact?: boolean; value?: string; onChange?: (mode: string) => void; menuAlign?: string; allowedModes?: readonly string[] }) => (
     <button
       type="button"
       data-testid="permission-mode-selector"
       data-compact={compact ? 'true' : 'false'}
       data-menu-align={menuAlign}
+      data-allowed-modes={allowedModes ? allowedModes.join(',') : ''}
       aria-label={`Permission mode: ${value ?? 'default'}`}
       onClick={() => onChange?.('auto')}
     >
@@ -180,12 +190,18 @@ vi.mock('../components/controls/PermissionModeSelector', () => ({
 vi.mock('../components/controls/ModelSelector', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean; fluid?: boolean }>(({ compact, fluid }, ref) => {
+    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean; fluid?: boolean; lockedProviderId?: string | null }>(({ compact, fluid, lockedProviderId }, ref) => {
       const [open, setOpen] = React.useState(false)
       React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), [])
       return (
         <>
-          <button type="button" data-testid="model-selector" data-compact={compact ? 'true' : 'false'} data-fluid={fluid ? 'true' : 'false'}>
+          <button
+            type="button"
+            data-testid="model-selector"
+            data-compact={compact ? 'true' : 'false'}
+            data-fluid={fluid ? 'true' : 'false'}
+            data-locked-provider-id={lockedProviderId ?? ''}
+          >
             Model
           </button>
           {open && <div data-testid="model-selector-dropdown">Model selector opened</div>}
@@ -196,10 +212,11 @@ vi.mock('../components/controls/ModelSelector', async () => {
 })
 
 import { EmptySession } from './EmptySession'
+import { clearComposerPromptHistoryCacheForTesting } from '@/hooks/useComposerPromptHistory'
 import { ApiError } from '../api/client'
 import { useChatStore } from '../stores/chatStore'
 import { useProviderStore } from '../stores/providerStore'
-import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
+import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
@@ -296,6 +313,7 @@ describe('EmptySession', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearComposerPromptHistoryCacheForTesting()
     // ProseMirror selection scrolling needs geometry APIs absent in jsdom.
     Object.defineProperties(Range.prototype, {
       getClientRects: { configurable: true, value: () => [] },
@@ -338,6 +356,22 @@ describe('EmptySession', () => {
     mocks.getMessages.mockResolvedValue({ messages: [] })
     mocks.getSlashCommands.mockResolvedValue({ commands: [] })
     mocks.listSkills.mockResolvedValue({ skills: [] })
+    mocks.listSkillCommands.mockImplementation(async (cwd?: string) => {
+      const { skills } = await mocks.listSkills(cwd)
+      return {
+        commands: (skills ?? [])
+          .filter((skill: { userInvocable?: boolean }) => skill.userInvocable !== false)
+          .map((skill: { name: string; description: string; source?: string; leanCompatible?: boolean }) => ({
+            name: skill.name,
+            description: skill.description,
+            kind: 'skill' as const,
+            ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
+              ? { source: skill.source }
+              : {}),
+            ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
+          })),
+      }
+    })
     mocks.listAgents.mockResolvedValue({ activeAgents: [], allAgents: [] })
     mocks.listReferences.mockResolvedValue({ plugins: [], skills: [] })
     mocks.search.mockResolvedValue({
@@ -456,7 +490,7 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('model-selector')).toHaveAttribute('data-compact', 'true')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('h-11', 'w-11')
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('px-3')
-    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('rounded-[var(--radius-xl)]')
+    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('composer-glass', 'rounded-[var(--radius-2xl)]')
   })
 
   it.each(['@', '/', '/empty', '+'] as const)('hides withdrawn bundled capabilities in %s while keeping personal skills and other plugins', async (entry) => {
@@ -755,6 +789,127 @@ describe('EmptySession', () => {
     expect(getComposerText()).toBe('/agent debugger ')
   })
 
+  it('lists plugin manifest slash commands on /nk before the first message and inserts /plugin:cmd instead of @ mention', async () => {
+    mocks.listSkillCommands.mockResolvedValueOnce({
+      commands: [
+        {
+          name: 'nexuskit:nk-build',
+          description: 'Build NexusKit target',
+          argumentHint: '<target>',
+          kind: 'command',
+          source: 'plugin',
+        },
+        {
+          name: 'idea-refine',
+          description: 'Refine ideas with nk workflow notes',
+          kind: 'skill',
+          source: 'user',
+        },
+      ],
+    })
+    mocks.listReferences.mockResolvedValue({
+      plugins: [
+        {
+          kind: 'plugin',
+          id: 'nexuskit@nexuskit-skills',
+          name: 'nexuskit',
+          displayName: 'nexuskit',
+          description: 'NexusKit plugin',
+          source: 'nexuskit@nexuskit-skills',
+          modelText: 'Use nexuskit plugin.',
+        },
+      ],
+      skills: [
+        {
+          kind: 'skill',
+          id: 'idea-refine',
+          name: 'idea-refine',
+          displayName: 'idea-refine',
+          description: 'Refine ideas with nk workflow notes',
+          source: 'user',
+          modelText: 'Use idea-refine.',
+        },
+      ],
+    })
+
+    render(<EmptySession />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith(undefined)
+    })
+
+    setComposerText('/nk', 3)
+
+    const buildOption = await screen.findByRole('option', { name: '/nexuskit:nk-build' })
+    expect(buildOption).toBeInTheDocument()
+    // Name-part match on nk-build outranks unrelated description-only skill matches.
+    expect(screen.queryByRole('option', { name: 'idea-refine' })).not.toBeInTheDocument()
+
+    fireEvent.click(buildOption)
+
+    await waitFor(() => {
+      expect(getComposerText()).toBe('/nexuskit:nk-build ')
+    })
+    expect(document.querySelector('.composer-mention')).not.toBeInTheDocument()
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+  })
+
+  it('does not crash when skillsApi.commands returns non-string argumentHint payloads', async () => {
+    mocks.listSkillCommands.mockResolvedValueOnce({
+      commands: [
+        {
+          name: 'nexuskit:nk-port',
+          description: 'Configure port',
+          argumentHint: 8080 as unknown as string,
+          kind: 'command',
+          source: 'plugin',
+        },
+        {
+          name: 'nexuskit:nk-flag',
+          description: 'Toggle flag',
+          argumentHint: ['--force'] as unknown as string,
+          kind: 'command',
+          source: 'plugin',
+        },
+      ],
+    })
+
+    render(<EmptySession />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith(undefined)
+    })
+
+    setComposerText('/nk', 3)
+
+    expect(await screen.findByRole('option', { name: '/nexuskit:nk-port' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '/nexuskit:nk-flag' })).toBeInTheDocument()
+  })
+
+  it('falls back to skillsApi.list when draft command discovery returns 400 for a missing workDir', async () => {
+    mocks.listSkillCommands.mockRejectedValueOnce(new ApiError(400, 'cwd must be an existing directory'))
+    mocks.listSkills.mockResolvedValueOnce({
+      skills: [
+        {
+          name: 'fallback-user-skill',
+          description: 'Available even when draft cwd is missing',
+          source: 'user',
+          userInvocable: true,
+        },
+      ],
+    })
+
+    render(<EmptySession initialWorkDir="/missing/project" />)
+
+    await waitFor(() => {
+      expect(mocks.listSkillCommands).toHaveBeenCalledWith('/missing/project')
+    })
+
+    setComposerText('/fallback', 9)
+    expect(await screen.findByText('fallback-user-skill')).toBeInTheDocument()
+  })
+
   it('opens the draft model selector for /model without creating or sending a session', async () => {
     useSettingsStore.setState({
       chatSendBehavior: 'enter',
@@ -835,29 +990,25 @@ describe('EmptySession', () => {
     expect(mocks.wsSend).not.toHaveBeenCalled()
   })
 
-  // The launch controls used to be a bar welded under the composer, which is
-  // what forced the panel's squared bottom edge and the third divider line.
-  // They are one pill in the toolbar now, so the panel is fully rounded and
-  // the row the pill sits in is the same one holding "+" and the model.
-  it('puts the run-location pill in the composer toolbar, not on a bar of its own', async () => {
+  // The floating frosted-glass composer stays uncluttered: repository launch
+  // controls tuck cleanly underneath in a bare `.surface-glass` seam strip.
+  it('renders the floating frosted-glass composer with a bare under-card context strip', async () => {
     render(<EmptySession />)
 
     const panel = screen.getByTestId('empty-session-composer-panel')
-    // 16px corner and the composer shadow step — the same floating card as
-    // ChatInput's. The repository controls live inside this panel, so it
-    // must stay a single rounded block rather than a split top/bottom pair.
-    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'p-2', 'glass-panel--composer')
+    expect(panel).toHaveClass('composer-glass', 'rounded-[var(--radius-2xl)]', 'p-2')
     expect(panel).not.toHaveClass('rounded-b-none')
+    expect(screen.getByTestId('empty-session-hero')).toBeInTheDocument()
 
     await pickProject()
 
+    const strip = screen.getByTestId('composer-context-strip')
+    expect(strip).toHaveClass('pt-2', 'overflow-x-clip')
+    expect(strip).not.toHaveClass('composer-seam-below', '-mt-4')
     const pill = await screen.findByRole('button', { name: 'Location: project / main' })
-    expect(panel).toContainElement(pill)
+    expect(strip).toContainElement(pill)
+    expect(panel).not.toContainElement(pill)
     expect(pill).toHaveClass('h-7')
-
-    // Same toolbar row as Run — that row is the whole point of the change.
-    const toolbarRow = pill.closest('.justify-between')
-    expect(toolbarRow).toContainElement(screen.getByRole('button', { name: /Run/i }))
   })
 
   it('creates a session with the selected project and branch when submitted', async () => {
@@ -1898,8 +2049,8 @@ describe('EmptySession', () => {
     const leading = screen.getByTestId('empty-session-toolbar-leading')
     const trailing = screen.getByTestId('empty-session-toolbar-trailing')
     expect(toolbar).not.toHaveClass('flex-wrap')
-    expect(leading).toHaveClass('min-w-0', 'shrink')
-    expect(trailing).toHaveClass('shrink-0')
+    expect(leading).toHaveClass('shrink-0')
+    expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
     // The permission glyph leads the trailing group; the usage ring is not on a draft.
     expect(trailing.firstElementChild).toContainElement(screen.getByRole('button', { name: /^Permission mode/ }))
@@ -2922,6 +3073,358 @@ describe('EmptySession', () => {
       unmount()
 
       expect(activeRecording.cancel).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('Antigravity dual-engine switcher', () => {
+    const readyAntigravity = {
+      id: 'antigravity-acp' as const,
+      kind: 'acp' as const,
+      status: 'ready' as const,
+      models: [
+        { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'] as ('low' | 'medium' | 'high' | 'xhigh')[], defaultReasoningEffort: 'high' as const },
+      ],
+      currentModelId: 'gemini-3.8-pro',
+      currentEffortLevel: 'high' as const,
+      version: '1.5.17',
+    }
+
+    beforeEach(() => {
+      window.localStorage.removeItem('cc-haha-composer-engine')
+      window.localStorage.removeItem('cc-haha-antigravity-last-selection')
+      window.localStorage.removeItem('cc-haha-antigravity-enabled')
+    })
+
+    it('hides the engine switcher when Antigravity is not installed or disabled', () => {
+      useProviderStore.setState({
+        antigravity: { id: 'antigravity-acp', kind: 'acp', status: 'not_installed', models: [] },
+        antigravityEnabled: true,
+      })
+      const { rerender } = render(<EmptySession />)
+      expect(screen.queryByRole('radiogroup', { name: 'Agent engine' })).not.toBeInTheDocument()
+
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: false,
+      })
+      rerender(<EmptySession />)
+      expect(screen.queryByRole('radiogroup', { name: 'Agent engine' })).not.toBeInTheDocument()
+    })
+
+    it('switches to Antigravity on desktop, isolates model/permission/slash controls, hides worktree, and launches with antigravity-acp', async () => {
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.createSession.mockResolvedValue({
+        id: 'ag-session-1',
+        title: 'Build with AG',
+        workDir: '/workspace/project',
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: true, source: 'antigravity-acp', antigravityStatus: 'ready' })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      expect(window.localStorage.getItem('cc-haha-composer-engine')).toBe('antigravity')
+      expect(screen.getByTestId('model-selector')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
+      expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan,bypassPermissions')
+
+      // Slash menu filters to Antigravity commands (no Claude-only /btw or /doctor)
+      setComposerText('/', 1)
+      await waitFor(() => {
+        expect(screen.getByText('/swarm')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('/btw')).not.toBeInTheDocument()
+      expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+
+      // Location menu keeps Branch while hiding Worktree radio cards
+      await openLaunchMenu()
+      const locMenu = await screen.findByRole('menu', { name: 'Location' })
+      expect(await within(locMenu).findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
+      expect(within(locMenu).queryAllByRole('menuitemradio')).toHaveLength(0)
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      // Submitting launches session with Antigravity provider & model
+      setComposerText('Audit the ACP bridge', 20)
+      const runButton = screen.getByRole('button', { name: 'Run' })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+          launchProviderId: 'antigravity-acp',
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-pro',
+          effortLevel: 'high',
+          permissionMode: 'default',
+          repository: { branch: 'main', worktree: false },
+        }))
+      })
+    })
+
+    it('renders the engine switcher in the mobile H5 launch strip when enabled', () => {
+      mocks.isMobile = true
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+
+      render(<EmptySession />)
+      const mobileLaunch = screen.getByTestId('empty-session-mobile-launch')
+      expect(within(mobileLaunch).getByRole('radiogroup', { name: 'Agent engine' })).toBeInTheDocument()
+    })
+
+    it('upgrades placeholder agent-default draft selection when Antigravity transitions unchecked -> ready without overwriting explicit model choices', async () => {
+      useProviderStore.setState({
+        antigravity: {
+          id: 'antigravity-acp',
+          kind: 'acp',
+          status: 'unchecked',
+          models: [],
+        },
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+        discoverAntigravity: vi.fn().mockResolvedValue(undefined),
+      })
+
+      render(<EmptySession />)
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      await waitFor(() => {
+        expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+          providerId: 'antigravity-acp',
+          modelId: 'agent-default',
+          effortLevel: 'medium',
+        })
+      })
+
+      act(() => {
+        useProviderStore.setState({
+          antigravity: {
+            id: 'antigravity-acp',
+            kind: 'acp',
+            status: 'ready',
+            models: [
+              { id: 'gemini-3.8-pro', name: 'Gemini 3.8 Pro', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+              { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+            ],
+            currentModelId: 'gemini-3.8-pro',
+            currentEffortLevel: 'low',
+            version: '1.5.17',
+          },
+        })
+      })
+
+      await waitFor(() => {
+        expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-pro',
+          effortLevel: 'low',
+        })
+      })
+
+      // Once user has a concrete model selected, further Antigravity store refreshes must not overwrite it.
+      act(() => {
+        useSessionRuntimeStore.getState().setSelection(DRAFT_RUNTIME_SELECTION_KEY, {
+          providerId: 'antigravity-acp',
+          modelId: 'gemini-3.8-flash',
+          effortLevel: 'high',
+        })
+        useProviderStore.setState({
+          antigravity: {
+            ...readyAntigravity,
+            currentModelId: 'gemini-3.8-pro',
+            currentEffortLevel: 'high',
+          },
+        })
+      })
+
+      expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'high',
+      })
+    })
+
+    it('arms Agent Teams from the + menu in Antigravity mode and sends /swarm without double-prefixing', async () => {
+      window.localStorage.setItem(AGENT_TEAMS_NOTICE_STORAGE_KEY, JSON.stringify({ version: 1, dismissed: true }))
+      useSettingsStore.setState({ agentTeamsEnabled: false })
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.createSession.mockResolvedValue({
+        sessionId: 'ag-swarm-session-1',
+        workDir: '/workspace/project',
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: true, source: 'antigravity-acp', antigravityStatus: 'ready' })
+
+      try {
+        render(<EmptySession />)
+        await pickProject()
+
+        const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+        fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+        fireEvent.click(screen.getByLabelText('Open composer tools'))
+        fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+        expect(await screen.findByTestId('agent-team-chip')).toBeInTheDocument()
+
+        setComposerText('Parallel code audit', 19)
+        const runButton = screen.getByRole('button', { name: 'Run' })
+        await waitFor(() => expect(runButton).not.toBeDisabled())
+        fireEvent.click(runButton)
+
+        await waitFor(() => {
+          expect(mocks.wsSend).toHaveBeenCalledWith('ag-swarm-session-1', {
+            type: 'user_message',
+            content: '/swarm Parallel code audit',
+            attachments: [],
+          })
+        })
+        const messages = useChatStore.getState().sessions['ag-swarm-session-1']?.messages ?? []
+        expect(messages[messages.length - 1]).toMatchObject({
+          type: 'user_text',
+          content: 'Parallel code audit',
+          modelContent: '/swarm Parallel code audit',
+        })
+      } finally {
+        window.localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
+      }
+    })
+
+    it('discovers Antigravity on demand when auth-status is unchecked and omits effortLevel for 0-effort models', async () => {
+      const zeroEffortAntigravity = {
+        id: 'antigravity-acp' as const,
+        kind: 'acp' as const,
+        status: 'ready' as const,
+        currentModelId: 'orchestrator-neon',
+        currentEffortLevel: 'high' as const,
+        models: [
+          {
+            id: 'orchestrator-neon',
+            name: 'Orchestrator (Neon)',
+            supportedReasoningEfforts: [],
+          },
+        ],
+      }
+      const discoverAntigravity = vi.fn().mockResolvedValue(zeroEffortAntigravity)
+      useProviderStore.setState({
+        antigravity: {
+          ...zeroEffortAntigravity,
+          status: 'unchecked',
+        },
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+        discoverAntigravity,
+      })
+      mocks.getProviderAuthStatus.mockResolvedValue({
+        hasAuth: false,
+        source: 'none',
+        antigravityStatus: 'unchecked',
+        localAgentStatus: 'unchecked',
+      })
+      mocks.createSession.mockResolvedValue({
+        sessionId: 'ag-unchecked-session-1',
+        workDir: '/workspace/project',
+      })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      // 0-effort model must not receive a bogus fallback effortLevel.
+      expect(useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY]).toEqual({
+        providerId: 'antigravity-acp',
+        modelId: 'orchestrator-neon',
+      })
+
+      setComposerText('Run orchestrator', 16)
+      const runButton = screen.getByRole('button', { name: 'Run' })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+
+      await waitFor(() => {
+        expect(discoverAntigravity).toHaveBeenCalled()
+        expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+          providerId: 'antigravity-acp',
+          modelId: 'orchestrator-neon',
+        }))
+      })
+      expect(useTabStore.getState().tabs.some((tab) => tab.type === 'settings')).toBe(false)
+      const createdOptions = mocks.createSession.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(createdOptions.effortLevel).toBeUndefined()
+    })
+
+    it('loads and searches Antigravity skills on draft slash menu and inserts /skill without turning into a Claude mention', async () => {
+      useProviderStore.setState({
+        antigravity: readyAntigravity,
+        antigravityEnabled: true,
+        hasLoadedProviders: true,
+      })
+      mocks.listReferences.mockResolvedValue({
+        skills: [{
+          kind: 'skill',
+          id: 'skill-vetter',
+          name: 'skill-vetter',
+          displayName: 'Skill Vetter',
+          description: 'Claude mention version',
+          source: 'user',
+          modelText: 'Use the Skill tool with skill: "skill-vetter" for this request.',
+        }],
+        plugins: [],
+      })
+      mocks.listSkillCommands.mockImplementation(async (_cwd?: string, _profile?: string, providerId?: string) => {
+        if (providerId === 'antigravity-acp') {
+          return {
+            commands: [
+              { name: 'skill-vetter', description: 'AGY security skill vetter', kind: 'skill', source: 'user' },
+              { name: 'release-announcement', description: 'Project release skill', kind: 'skill', source: 'project' },
+            ],
+          }
+        }
+        return {
+          commands: [
+            { name: 'claude-only-skill', description: 'Claude only', kind: 'skill', source: 'user' },
+          ],
+        }
+      })
+
+      render(<EmptySession />)
+      await pickProject()
+
+      const switcher = screen.getByRole('radiogroup', { name: 'Agent engine' })
+      fireEvent.click(within(switcher).getByRole('radio', { name: 'Antigravity' }))
+
+      await waitFor(() => {
+        expect(mocks.listSkillCommands).toHaveBeenCalledWith('/workspace/project', undefined, 'antigravity-acp')
+      })
+
+      setComposerText('/s', 2)
+      const skillOption = await screen.findByRole('option', { name: 'skill-vetter' })
+      expect(skillOption).toBeInTheDocument()
+      expect(screen.getByText('/swarm')).toBeInTheDocument()
+      expect(screen.queryByText('claude-only-skill')).not.toBeInTheDocument()
+      expect(screen.queryByText('/btw')).not.toBeInTheDocument()
+
+      fireEvent.click(skillOption)
+      await waitFor(() => {
+        expect(getComposerText()).toBe('/skill-vetter ')
+      })
+      expect(document.querySelector('.composer-mention')).toBeNull()
     })
   })
 

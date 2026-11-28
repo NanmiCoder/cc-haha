@@ -10,6 +10,7 @@ import {
   ChevronUp,
   CircleAlert,
   CircleCheck,
+  Cloud,
   CloudDownload,
   Download,
   Eye,
@@ -20,6 +21,7 @@ import {
   Key,
   KeyRound,
   KeySquare,
+  Layers,
   Link,
   MapPin,
   MessagesSquare,
@@ -28,6 +30,7 @@ import {
   Route,
   Search,
   SearchX,
+  Server,
   Shrink,
   Star,
   Wrench,
@@ -52,6 +55,7 @@ import { SettingsPageHeader, SettingsPill } from '@/components/settings/Settings
 import { Dropdown } from '@/components/ui/Dropdown'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Tooltip } from '@/components/ui/Tooltip'
+import { ModelBrandIcon, resolveModelBrand } from '@/components/composite/ModelBrandIcon'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode, ProviderProxyMode } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
@@ -59,6 +63,7 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
+import { AntigravityProviderCard } from './AntigravityProviderCard'
 import {
   highlightSegments,
   initialProviderTab,
@@ -71,6 +76,7 @@ import {
   type ProviderSearchMatch,
 } from './providerListSearch'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
+import { OfficialProviderPlanUsage, OfficialUsageToolbar } from '../../components/settings/OfficialProviderPlanUsage'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { DeepSeekAccountLogin } from '../../components/settings/DeepSeekAccountLogin'
@@ -222,7 +228,12 @@ function providerSubtitle(provider: SavedProvider): string {
 function providerFormatBadge(provider: SavedProvider, preset: ProviderPreset | undefined, t: Translate): string | null {
   if (preset?.modelApiFormats?.length) return t('settings.providers.multiProtocolBadge')
   if (!provider.apiFormat || provider.apiFormat === 'anthropic') return null
-  return provider.apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses'
+  if (provider.apiFormat === 'openai_chat') return 'OpenAI Chat'
+  if (provider.apiFormat === 'openai_responses') return 'OpenAI Responses'
+  if (provider.apiFormat === 'google_vertex') return 'Vertex AI'
+  if (provider.apiFormat === 'bedrock_converse') return 'Bedrock'
+  if (provider.apiFormat === 'azure_openai') return 'Azure OpenAI'
+  return 'Gemini'
 }
 
 /** What a saved provider is searched by. The API key never is. */
@@ -253,7 +264,7 @@ function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
   return (
     <>
       {highlightSegments(text, terms).map((segment, index) => segment.match ? (
-        <mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-warning-container)] text-inherit">{segment.text}</mark>
+        <mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-search-highlight)] text-[var(--color-on-search-highlight)]">{segment.text}</mark>
       ) : (
         <Fragment key={index}>{segment.text}</Fragment>
       ))}
@@ -469,15 +480,23 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           dragLabel={t('settings.providers.dragToReorder')}
           dragDisabled={searching}
           onActivate={!isActive ? activate : undefined}
+          icon={(
+            <ModelBrandIcon
+              providerId={item.id}
+              size={15}
+              className={isActive ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-secondary)]'}
+            />
+          )}
           title={<HighlightedText text={t(official.title)} terms={terms} />}
           subtitle={<HighlightedText text={t(official.subtitle)} terms={terms} />}
           badges={isActive ? (
-            <Badge tone="brand">{t('settings.providers.default')}</Badge>
+            <Badge tone="brand" pill={false}>{t('settings.providers.default')}</Badge>
           ) : null}
-          details={!browserMode && isActive ? (
-            <div className="flex flex-col">
-              <official.Login />
-              <OfficialProviderModelSettings providerId={item.id} />
+          details={!browserMode ? (
+            <div className="flex flex-col gap-3">
+              {isActive ? <official.Login /> : null}
+              <OfficialProviderPlanUsage providerId={item.kind} isActive={isActive} />
+              {isActive ? <OfficialProviderModelSettings providerId={item.id} /> : null}
             </div>
           ) : null}
         />
@@ -500,6 +519,15 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
         dragLabel={t('settings.providers.dragToReorder')}
         dragDisabled={searching}
         onActivate={!isActive ? () => handleActivate(provider.id) : undefined}
+        icon={(
+          <ModelBrandIcon
+            presetId={provider.presetId}
+            providerName={provider.name}
+            modelId={resolveModelBrand({ presetId: provider.presetId, providerName: provider.name }) ? undefined : provider.models.main}
+            size={15}
+            className={isActive ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-secondary)]'}
+          />
+        )}
         title={<HighlightedText text={provider.name} terms={terms} />}
         subtitle={<span className="font-mono text-[11px]"><HighlightedText text={providerSubtitle(provider)} terms={terms} /></span>}
         matchNote={match?.hiddenField ? (
@@ -521,13 +549,13 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           <>
             {isMagpie ? (
               // The preset is named like the provider; what tells it apart is where it runs.
-              <Badge tone="neutral">{t('settings.providers.magpie.localGateway')}</Badge>
+              <Badge tone="neutral" pill={false}>{t('settings.providers.magpie.localGateway')}</Badge>
             ) : preset && preset.id !== 'custom' && (
-              <Badge tone="neutral">{preset.name}</Badge>
+              <Badge tone="neutral" pill={false}>{preset.name}</Badge>
             )}
-            {formatBadge && <Badge tone="warning">{formatBadge}</Badge>}
+            {formatBadge && <Badge tone="neutral" variant="outline" pill={false}>{formatBadge}</Badge>}
             {isActive && (
-              <Badge tone="brand">{t('settings.providers.default')}</Badge>
+              <Badge tone="brand" pill={false}>{t('settings.providers.default')}</Badge>
             )}
           </>
         )}
@@ -624,6 +652,8 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
         />
       )}
 
+      {!browserMode && !searching && tab === 'official' && <OfficialUsageToolbar />}
+
       {visibleEntries.length > 0 && (
         <DndContext
           sensors={sensors}
@@ -691,6 +721,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
         </div>
       ) : null}
 
+      {(!searching || terms.some((term) => 'antigravity'.includes(term) || 'agy'.includes(term) || 'local'.includes(term))) && (
+        <AntigravityProviderCard browserMode={browserMode} />
+      )}
+
       {/* Create Modal — conditionally rendered so state resets on close */}
       {showCreateModal && (
         <ProviderFormModal
@@ -746,6 +780,7 @@ type SortableProviderCardProps = {
   dragLabel: string
   /** While searching the list is a filtered view, so it is not reorderable. */
   dragDisabled?: boolean
+  icon?: ReactNode
   title: ReactNode
   subtitle: ReactNode
   badges?: ReactNode
@@ -777,6 +812,7 @@ function SortableProviderCard({
   isActive,
   dragLabel,
   dragDisabled = false,
+  icon,
   title,
   subtitle,
   badges,
@@ -809,12 +845,11 @@ function SortableProviderCard({
       style={style}
       data-testid={providerItemTestId(item)}
       className={cx(
-        'group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] p-[14px] pl-1.5',
+        'v6c-glass-card group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border p-[14px] pl-1.5',
         'transition-[border-color,box-shadow] duration-150 ease-out',
-        // The default provider: a terracotta-mixed hairline plus a soft brand
-        // halo. Not the focus color, which would collide with the real focus ring.
+        // The default provider: a crisp accent-tinted hairline with no outer colored glow.
         isActive
-          ? 'border-[var(--color-primary-fixed-dim)] shadow-[0_0_0_3px_var(--color-brand-soft)]'
+          ? 'border-[var(--color-primary-fixed-dim)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-outline)]',
         isDragging && 'opacity-90 shadow-[var(--shadow-dropdown)]',
       )}
@@ -858,6 +893,7 @@ function SortableProviderCard({
         />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            {icon}
             <span className="min-w-0 truncate text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{title}</span>
             {badges}
           </span>
@@ -949,7 +985,7 @@ function ProviderTestResultLines({ result }: { result: ProviderTestResult }) {
               line.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]',
             )}
           >
-            <Icon size={12} strokeWidth={2} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <Icon size={12} strokeWidth={1.75} aria-hidden="true" className="mt-[3px] shrink-0" />
             <span className="min-w-0">{line.text}</span>
           </span>
         )
@@ -1579,6 +1615,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         const mergedEnv: Record<string, unknown> = {
           ...cleanedEnv,
           ...omitAuthEnv(selectedPreset.defaultEnv),
+          ...(writesManagedSettings && settings.providerEnvOwner === provider?.id && typeof existingEnv.CLAUDE_CODE_SUBAGENT_MODEL === 'string'
+            ? { CLAUDE_CODE_SUBAGENT_MODEL: existingEnv.CLAUDE_CODE_SUBAGENT_MODEL }
+            : {}),
           ...(autoCompactWindowEnv ? { [AUTO_COMPACT_WINDOW_ENV_KEY]: autoCompactWindowEnv } : {}),
           ...(Object.keys(modelContextWindows).length > 0
             ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
@@ -1604,6 +1643,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         // (or whatever was last selected) and saving would write that back.
         delete merged.model
         delete merged.modelContext
+        delete merged.providerEnvOwner
         setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)), null, 2))
       }).catch(() => {
         if (!cancelled && !settingsJsonUserEditedRef.current) {
@@ -1629,7 +1669,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     setModelsErrorCode(null)
     setModelsErrorMessage(null)
     setIsFetchingModels(false)
-  }, [baseUrl, apiKey])
+  }, [baseUrl, apiKey, apiFormat])
 
   const handlePresetChange = (preset: ProviderPreset) => {
     if (preset.id === MAGPIE_PRESET_ID && onPickMagpie) {
@@ -1668,7 +1708,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     setTestResult(null)
   }
 
-  const requiresApiKey = selectedPreset.needsApiKey !== false
+  const allowsAmbientCloudCredential =
+    apiFormat === 'google_vertex' || apiFormat === 'bedrock_converse'
+  const requiresApiKey = selectedPreset.needsApiKey !== false && !allowsAmbientCloudCredential
   const autoCompactWindowErrorKey = getAutoCompactWindowErrorKey(autoCompactWindow)
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
@@ -1718,6 +1760,26 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       value: 'openai_responses' as const,
       label: t('settings.providers.apiFormatOpenaiResponses'),
       icon: <Route size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'gemini' as const,
+      label: t('settings.providers.apiFormatGemini'),
+      icon: <Layers size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'google_vertex' as const,
+      label: t('settings.providers.apiFormatGoogleVertex'),
+      icon: <Cloud size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'bedrock_converse' as const,
+      label: t('settings.providers.apiFormatBedrockConverse'),
+      icon: <Server size={16} strokeWidth={1.75} aria-hidden="true" />,
+    },
+    {
+      value: 'azure_openai' as const,
+      label: t('settings.providers.apiFormatAzureOpenai'),
+      icon: <Globe size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
   ]
   const selectedApiFormatLabel = apiFormatItems.find((item) => item.value === apiFormat)?.label ?? t('settings.providers.apiFormatAnthropic')
@@ -1904,7 +1966,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
   const hasModelsBaseUrl = Boolean(baseUrl.trim())
   const hasModelsApiKey = Boolean(apiKey.trim())
-  const canFetchModels = hasModelsBaseUrl && hasModelsApiKey
+  const canFetchModels = hasModelsBaseUrl && (hasModelsApiKey || allowsAmbientCloudCredential)
   const handleFetchModels = async () => {
     if (!canFetchModels || isFetchingModels) return
     const requestId = modelsRequestRef.current + 1
@@ -1921,7 +1983,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         : proxyMode === 'manual' && isValidHttpProxyUrl(proxyUrl.trim())
           ? { mode: proxyMode, url: proxyUrl.trim() }
           : undefined
-      const result = await fetchModels({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), ...(probeProxy && { proxy: probeProxy }) })
+      const result = await fetchModels({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        ...((apiFormat === 'gemini' || apiFormat === 'google_vertex' || apiFormat === 'bedrock_converse' || apiFormat === 'azure_openai') && { apiFormat }),
+        ...(probeProxy && { proxy: probeProxy }),
+      })
       // The form moved on while we were probing — this answer describes a base
       // URL or key the user no longer has typed in.
       if (modelsRequestRef.current !== requestId) return
@@ -1973,6 +2040,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       openai_chat: '/chat/completions',
       openai_responses: '/responses',
       gemini: ':generateContent',
+      google_vertex: 'Vertex AI',
+      bedrock_converse: '/converse',
+      azure_openai: 'Azure OpenAI',
     }
     return groupProviderModels(
       models.map((model) => ({
@@ -1993,9 +2063,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     >
       {SPONSOR_LOGOS[preset.id] && <img src={SPONSOR_LOGOS[preset.id]} alt="" className="size-4 rounded-[var(--radius-sm)] object-contain" />}
       {presetLabel(preset)}
-      {SPONSOR_LOGOS[preset.id] && <Star size={12} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
+      {SPONSOR_LOGOS[preset.id] && <Star size={12} strokeWidth={1.75} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
       {preset.isNew && (
-        <Badge tone="warning" size="xs" className="absolute -right-1 -top-2">
+        <Badge tone="warning" size="xs" pill={false} className="absolute -right-1 -top-2">
           {t('settings.providers.new')}
         </Badge>
       )}
@@ -2135,7 +2205,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         if (requiresApiKey && !apiKey.trim()) return
         result = await testConfig({
           baseUrl: baseUrl.trim(),
-          apiKey: apiKey.trim() || selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || 'local',
+          apiKey: apiKey.trim() || (allowsAmbientCloudCredential ? '' : selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || 'local'),
           modelId: models.main.trim(),
           authStrategy,
           apiFormat,
@@ -2219,12 +2289,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             </label>
             <Tooltip content={t('settings.providers.baseUrlTooltip')} placement="bottom-start">
               <IconButton
-                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('settings.providers.baseUrlHelp')}
                 showTooltip={false}
                 size="2xs"
                 tone="muted"
-                shape="circle"
               />
             </Tooltip>
           </div>
@@ -2259,6 +2328,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               className="absolute right-1.5 top-1/2 -translate-y-1/2"
             />
           </div>
+          {apiFormat === 'google_vertex' && (
+            <p className={FORM_HINT}>{t('settings.providers.apiKeyHintGoogleVertex')}</p>
+          )}
+          {apiFormat === 'bedrock_converse' && (
+            <p className={FORM_HINT}>{t('settings.providers.apiKeyHintBedrockConverse')}</p>
+          )}
         </div>
 
         {(apiKeyUrl || promoText) && (
@@ -2269,9 +2344,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 onClick={() => openExternalUrl(apiKeyUrl)}
                 className="group inline-flex h-6 w-fit cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 text-[11px] font-medium leading-none text-[var(--color-text-accent)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
               >
-                <KeyRound size={12} strokeWidth={2} aria-hidden="true" />
+                <KeyRound size={12} strokeWidth={1.75} aria-hidden="true" />
                 {t('settings.providers.getApiKey')}
-                <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                <ArrowUpRight size={11} strokeWidth={1.75} aria-hidden="true" className="opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
               </button>
             )}
             {promoText && (
@@ -2282,7 +2357,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                   className="group inline-flex min-w-0 cursor-pointer items-start gap-1 text-left text-[11px] leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-accent)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
                 >
                   <span>{promoText}</span>
-                  <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="mt-1 shrink-0 opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                  <ArrowUpRight size={11} strokeWidth={1.75} aria-hidden="true" className="mt-1 shrink-0 opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </button>
               ) : (
                 <span className="text-[11px] leading-5 text-[var(--color-text-tertiary)]">{promoText}</span>
@@ -2306,7 +2381,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               {t('settings.providers.fetchModels')}
             </Button>}
           </div>
-          {browserMode ? null : !hasModelsApiKey ? (
+          {browserMode ? null : (!hasModelsApiKey && !allowsAmbientCloudCredential) ? (
             <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsApiKeyHint')}</p>
           ) : !hasModelsBaseUrl ? (
             <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsHint')}</p>
@@ -2409,7 +2484,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         ) : (
           <div className="flex flex-col gap-1">
             <span className={FORM_FIELD_LABEL}>{t('settings.providers.apiFormat')}</span>
-            <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+            <div className="rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
               {selectedApiFormatLabel}
             </div>
             <p className={FORM_HINT}>{t('settings.providers.apiFormatPerModelHint')}</p>
@@ -2454,7 +2529,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               />
               <Tooltip content={option.description} placement="top-start" className="[overflow-wrap:anywhere]">
                 <IconButton
-                  icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                  icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                   label={t(`settings.providers.${option.key}`)}
                   showTooltip={false}
                   size="2xs"
@@ -2666,7 +2741,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             }}
             rows={16}
             spellCheck={false}
-            className={`w-full text-xs px-3 py-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] border font-mono leading-relaxed resize-y text-[var(--color-text-secondary)] outline-none ${
+            className={`w-full text-xs px-3 py-3 rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container-low)] border font-mono leading-relaxed resize-y text-[var(--color-text-secondary)] outline-none ${
               settingsJsonError
                 ? 'border-[var(--color-error)] focus:border-[var(--color-error)]'
                 : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)]'
@@ -2689,12 +2764,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             <span className={FORM_FIELD_LABEL}>{t('settings.providers.proxyMode')}</span>
             <Tooltip content={t('settings.providers.proxyModeTooltip')} placement="bottom-start">
               <IconButton
-                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                icon={<Info size={12} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('settings.providers.proxyModeHelp')}
                 showTooltip={false}
                 size="2xs"
                 tone="muted"
-                shape="circle"
               />
             </Tooltip>
           </div>

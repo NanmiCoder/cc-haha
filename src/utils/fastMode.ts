@@ -2,10 +2,12 @@ import axios from 'axios'
 import { getOauthConfig, OAUTH_BETA_HEADER } from 'src/constants/oauth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import {
+  getClientType,
   getIsNonInteractiveSession,
   getKairosActive,
   preferThirdPartyAuthentication,
 } from '../bootstrap/state.js'
+import { isClaudeFastModeSupportedModel } from '../shared/claudeFastMode.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -26,6 +28,7 @@ import {
   type ModelSetting,
   parseUserSpecifiedModel,
 } from './model/model.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 import { getAPIProvider } from './model/providers.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import {
@@ -36,7 +39,22 @@ import {
 import { createSignal } from './signal.js'
 
 export function isFastModeEnabled(): boolean {
-  return !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_FAST_MODE)
+  return (
+    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_FAST_MODE) &&
+    !isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))
+  )
+}
+
+export function isFastModeOrgCheckSkipped(): boolean {
+  return isEnvTruthy(process.env.CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK)
+}
+
+function isDesktopHostSession(): boolean {
+  return (
+    getClientType() === 'claude-desktop' ||
+    process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop' ||
+    process.env.CC_HAHA_TRANSCRIPT_ENTRYPOINT === 'claude-desktop'
+  )
 }
 
 export function isFastModeAvailable(): boolean {
@@ -94,12 +112,13 @@ export function getFastModeUnavailableReason(): string | null {
   }
 
   // Not available in the SDK unless explicitly opted in via --settings.
-  // Assistant daemon mode is exempt — it's first-party orchestration, and
-  // kairosActive is set before this check runs (main.tsx:~1626 vs ~3249).
+  // First-party GUI hosts (claude-desktop, claude-vscode) and assistant daemon
+  // mode are exempt because the user toggles fast mode directly in the host UI.
   if (
     getIsNonInteractiveSession() &&
     preferThirdPartyAuthentication() &&
-    !getKairosActive()
+    !getKairosActive() &&
+    !isDesktopHostSession()
   ) {
     const flagFastMode = getSettingsForSource('flagSettings')?.fastMode
     if (!flagFastMode) {
@@ -117,6 +136,9 @@ export function getFastModeUnavailableReason(): string | null {
   }
 
   if (orgStatus.status === 'disabled') {
+    if (isFastModeOrgCheckSkipped() && orgStatus.source !== 'server') {
+      return null
+    }
     if (
       orgStatus.reason === 'network_error' ||
       orgStatus.reason === 'unknown'
@@ -140,7 +162,7 @@ export function getFastModeUnavailableReason(): string | null {
 }
 
 // @[MODEL LAUNCH]: Update supported Fast Mode models.
-export const FAST_MODE_MODEL_DISPLAY = 'Opus 4.8'
+export const FAST_MODE_MODEL_DISPLAY = 'Opus 5.5'
 
 export function getFastModeModel(): string {
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
@@ -172,7 +194,7 @@ export function isFastModeSupportedByModel(
   }
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
-  return parsedModel.toLowerCase().includes('opus-4-6')
+  return isClaudeFastModeSupportedModel(parsedModel)
 }
 
 // --- Fast mode runtime state ---
@@ -242,10 +264,10 @@ export function clearFastModeCooldown(): void {
  * the same flow as when the prefetch discovers the org has it disabled.
  */
 export function handleFastModeRejectedByAPI(): void {
-  if (orgStatus.status === 'disabled') {
+  if (orgStatus.status === 'disabled' && orgStatus.source === 'server') {
     return
   }
-  orgStatus = { status: 'disabled', reason: 'preference' }
+  orgStatus = { status: 'disabled', reason: 'preference', source: 'server' }
   updateSettingsForSource('userSettings', { fastMode: undefined })
   saveGlobalConfig(current => ({
     ...current,
@@ -351,9 +373,17 @@ export type FastModeDisabledReason =
 type FastModeOrgStatus =
   | { status: 'pending' }
   | { status: 'enabled' }
-  | { status: 'disabled'; reason: FastModeDisabledReason }
+  | { status: 'disabled'; reason: FastModeDisabledReason; source?: 'server' | 'guess' }
 
 let orgStatus: FastModeOrgStatus = { status: 'pending' }
+
+export function resetFastModeStateForTesting(): void {
+  runtimeState = { status: 'active' }
+  hasLoggedCooldownExpiry = false
+  orgStatus = { status: 'pending' }
+  lastPrefetchAt = 0
+  inflightPrefetch = null
+}
 
 // Listeners notified when org-level fast mode status changes
 const orgFastModeChange = createSignal<[orgEnabled: boolean]>()
@@ -396,12 +426,16 @@ export function resolveFastModeStatusFromCache(): void {
   if (orgStatus.status !== 'pending') {
     return
   }
+  if (isFastModeOrgCheckSkipped()) {
+    orgStatus = { status: 'enabled' }
+    return
+  }
   const isAnt = process.env.USER_TYPE === 'ant'
   const cachedEnabled = getGlobalConfig().penguinModeOrgEnabled === true
   orgStatus =
     isAnt || cachedEnabled
       ? { status: 'enabled' }
-      : { status: 'disabled', reason: 'unknown' }
+      : { status: 'disabled', reason: 'unknown', source: 'guess' }
 }
 
 export async function prefetchFastModeStatus(): Promise<void> {
@@ -411,6 +445,13 @@ export async function prefetchFastModeStatus(): Promise<void> {
   }
 
   if (!isFastModeEnabled()) {
+    return
+  }
+
+  if (isFastModeOrgCheckSkipped()) {
+    if (!(orgStatus.status === 'disabled' && orgStatus.source === 'server')) {
+      orgStatus = { status: 'enabled' }
+    }
     return
   }
 
@@ -428,12 +469,15 @@ export async function prefetchFastModeStatus(): Promise<void> {
   const hasUsableOAuth =
     getClaudeAIOAuthTokens()?.accessToken && hasProfileScope()
   if (!hasUsableOAuth && !apiKey) {
+    if (orgStatus.status === 'disabled' && orgStatus.source === 'server') {
+      return
+    }
     const isAnt = process.env.USER_TYPE === 'ant'
     const cachedEnabled = getGlobalConfig().penguinModeOrgEnabled === true
     orgStatus =
       isAnt || cachedEnabled
         ? { status: 'enabled' }
-        : { status: 'disabled', reason: 'preference' }
+        : { status: 'disabled', reason: 'preference', source: 'guess' }
     return
   }
 
@@ -492,6 +536,7 @@ export async function prefetchFastModeStatus(): Promise<void> {
         : {
             status: 'disabled',
             reason: status.disabled_reason ?? 'preference',
+            source: 'server',
           }
       if (previousEnabled !== status.enabled) {
         // When org disables fast mode, permanently turn off the user's fast mode setting
@@ -516,7 +561,7 @@ export async function prefetchFastModeStatus(): Promise<void> {
       orgStatus =
         isAnt || cachedEnabled
           ? { status: 'enabled' }
-          : { status: 'disabled', reason: 'network_error' }
+          : { status: 'disabled', reason: 'network_error', source: 'guess' }
       logForDebugging(
         `Failed to fetch org fast mode status, defaulting to ${orgStatus.status === 'enabled' ? 'enabled (cached)' : 'disabled (network_error)'}: ${err}`,
         { level: 'error' },

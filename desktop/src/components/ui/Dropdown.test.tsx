@@ -174,11 +174,45 @@ describe('Dropdown', () => {
     warn.mockRestore()
   })
 
-  it('sits on the shared dropdown layer', () => {
+  it('sits on the shared dropdown layer with frosted glass and popover motion', () => {
     render(<Dropdown items={ITEMS} value="sonnet" onChange={() => {}} trigger={<button type="button">Model</button>} label="Model" />)
     open()
 
-    expect(screen.getByRole('listbox').className).toContain('z-[var(--z-dropdown)]')
+    const list = screen.getByRole('listbox')
+    expect(list.className).toContain('z-[var(--z-dropdown)]')
+    expect(list.className).toContain('dropdown-glass')
+    expect(list.className).toContain('popover-motion')
+  })
+
+  it('uses concentric V6C corners and lifts only the active row as glass', () => {
+    // V6C: a 14px sheet with a 5px inset holds 9px rows, so the corners nest.
+    // The pointer/keyboard row is lifted glass; the chosen value keeps a quiet
+    // fill, so "selected" and "under the pointer" never read as the same state.
+    render(<Dropdown items={ITEMS} value="sonnet" onChange={() => {}} trigger={<button type="button">Model</button>} label="Model" />)
+    open()
+
+    const list = screen.getByRole('listbox')
+    expect(list.className).toContain('rounded-[var(--radius-xl)]')
+    const [sonnet, opus] = screen.getAllByRole('option')
+    fireEvent.mouseEnter(opus!)
+    expect(opus!.className).toContain('rounded-[var(--radius-control)]')
+    expect(opus!.className).toContain('v6c-row-highlight')
+    expect(sonnet!.className).not.toContain('v6c-row-highlight')
+    expect(sonnet!.className).toContain('bg-[var(--color-surface-hover)]')
+  })
+
+  it('renders optional shortcut adornments on items', () => {
+    render(
+      <Dropdown
+        items={[{ value: 'sonnet', label: 'Sonnet', shortcut: <kbd>⌘1</kbd> }]}
+        value="sonnet"
+        onChange={() => {}}
+        trigger={<button type="button">Model</button>}
+        label="Model"
+      />,
+    )
+    open()
+    expect(screen.getByText('⌘1')).toBeInTheDocument()
   })
 })
 

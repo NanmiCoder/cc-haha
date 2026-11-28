@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import last from 'lodash-es/last.js'
 import {
   addToTotalGenerationDuration,
+  getMainLoopModelOverride,
   getSessionId,
   getMainThreadAgentType,
   isSessionPersistenceDisabled,
@@ -89,6 +90,7 @@ import {
 } from './utils/processUserInput/processUserInput.js'
 import { fetchSystemPromptParts } from './utils/queryContext.js'
 import { setCwd } from './utils/Shell.js'
+import { getCurrentWorktreeSession } from './utils/worktree.js'
 import {
   flushSessionStorage,
   recordTranscript,
@@ -368,6 +370,7 @@ export class QueryEngine {
     }
 
     const initialAppState = getAppState()
+    const initialModelOverride = getMainLoopModelOverride()
     const initialMainLoopModel = userSpecifiedModel
       ? parseUserSpecifiedModel(userSpecifiedModel)
       : getMainLoopModel()
@@ -658,6 +661,12 @@ export class QueryEngine {
         tools,
         verbose,
         mainLoopModel,
+        refreshMainLoopModel: modelFromUserInput
+          ? undefined
+          : () =>
+              getMainLoopModelOverride() !== initialModelOverride
+                ? getMainLoopModel()
+                : mainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
         mcpResources: {},
@@ -695,7 +704,7 @@ export class QueryEngine {
     ])
     headlessProfilerCheckpoint('after_skills_plugins')
 
-    yield buildSystemInitMessage({
+    const systemInitInputs = {
       tools,
       mcpClients,
       model: mainLoopModel,
@@ -706,7 +715,9 @@ export class QueryEngine {
       skills,
       plugins: enabledPlugins,
       fastMode: initialAppState.fastMode,
-    })
+    }
+    let reportedWorktree = getCurrentWorktreeSession()
+    yield buildSystemInitMessage(systemInitInputs)
 
     // Record when system message is yielded for headless latency tracking
     headlessProfilerCheckpoint('system_message_yielded')
@@ -813,7 +824,7 @@ export class QueryEngine {
         permission_denials: this.permissionDenials,
         fast_mode_state: getFastModeState(
           mainLoopModel,
-          initialAppState.fastMode,
+          getAppState().fastMode,
         ),
         uuid: randomUUID(),
       }
@@ -871,6 +882,15 @@ export class QueryEngine {
       maxTurns,
       taskBudget,
     }), completeCheckpoint)) {
+      const currentWorktree = getCurrentWorktreeSession()
+      if (currentWorktree !== reportedWorktree) {
+        // Enter/ExitWorktree changes cwd inside this turn. Publish it before
+        // the tool result, after its worktree-state record is visible to Git/UI
+        // readers, rather than waiting for the next user message's init.
+        await flushSessionStorage()
+        reportedWorktree = currentWorktree
+        yield buildSystemInitMessage(systemInitInputs)
+      }
       // Record assistant, user, and compact boundary messages
       if (
         message.type === 'assistant' ||
@@ -1074,7 +1094,7 @@ export class QueryEngine {
               permission_denials: this.permissionDenials,
               fast_mode_state: getFastModeState(
                 mainLoopModel,
-                initialAppState.fastMode,
+                getAppState().fastMode,
               ),
               uuid: randomUUID(),
               errors: [
@@ -1225,7 +1245,7 @@ export class QueryEngine {
           permission_denials: this.permissionDenials,
           fast_mode_state: getFastModeState(
             mainLoopModel,
-            initialAppState.fastMode,
+            getAppState().fastMode,
           ),
           uuid: randomUUID(),
           errors: [`Reached maximum budget ($${maxBudgetUsd})`],
@@ -1269,7 +1289,7 @@ export class QueryEngine {
             permission_denials: this.permissionDenials,
             fast_mode_state: getFastModeState(
               mainLoopModel,
-              initialAppState.fastMode,
+              getAppState().fastMode,
             ),
             uuid: randomUUID(),
             errors: [
@@ -1332,7 +1352,7 @@ export class QueryEngine {
         permission_denials: this.permissionDenials,
         fast_mode_state: getFastModeState(
           mainLoopModel,
-          initialAppState.fastMode,
+          getAppState().fastMode,
         ),
         uuid: randomUUID(),
         // Diagnostic prefix: these are what isResultSuccessful() checks — if
@@ -1388,7 +1408,7 @@ export class QueryEngine {
       structured_output: structuredOutputFromTool,
       fast_mode_state: getFastModeState(
         mainLoopModel,
-        initialAppState.fastMode,
+        getAppState().fastMode,
       ),
       uuid: randomUUID(),
     }

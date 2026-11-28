@@ -25,6 +25,37 @@ afterEach(async () => {
 
 const worker = { parentSessionId: 'parent', teamName: 'approved', memberId: 'research', name: 'researcher', systemPrompt: 'Read only research', tools: ['Read'], agentDefinition: { disallowedTools: ['Bash'], maxTurns: 3 } }
 
+test('a physical worker stop revokes late permissions and stays pending until exit confirmation', async () => {
+  const service = new ConversationService() as any
+  let finish!: () => void
+  let stops = 0
+  const sdk: string[] = []
+  const stopped = new Promise<void>(resolve => { finish = resolve })
+  const pending = new Map([['late-permission', { toolName: 'Read', input: {} }]])
+  service.sessions.set('child', { teamWorker: worker, sdkToken: 'fake-token', pendingOutbound: [JSON.stringify({ type: 'user', message: { role: 'user', content: 'queued before Stop' } })], sdkMessages: [], sdkMessagesBytes: 0, outputCallbacks: [], pendingPermissionRequests: pending, pendingControlRequests: new Map(), sdkSocket: { send: (value: string) => sdk.push(value) } })
+  service.stopProcessAndWait = async (_id: string, _session: unknown, _timeout: number, requireExit: boolean) => {
+    expect(requireExit).toBe(true)
+    stops++
+    await stopped
+  }
+  const first = service.stopSessionAndWait('child', 1000, { requireExit: true })
+  const repeated = service.stopSessionAndWait('child', 1000, { requireExit: true })
+  expect(service.hasSession('child')).toBe(true)
+  expect(pending.size).toBe(0)
+  service.handleSdkPayload('child', JSON.stringify({ type: 'control_request', request_id: 'arrived-after-stop', request: { subtype: 'can_use_tool', tool_name: 'Read', input: {} } }))
+  expect(pending.size).toBe(0)
+  expect(service.respondToPermission('parent', 'late-permission', true)).toBe(false)
+  expect(service.sendSdkMessage('child', { type: 'user', content: 'late admission' })).toBe(false)
+  expect(sdk).toEqual([])
+  expect(service.authorizeSdkConnection('child', 'fake-token')).toBe(false)
+  expect(service.attachSdkConnection('child', { send: (value: string) => sdk.push(value) })).toBe(false)
+  expect(sdk).toEqual([])
+  expect(stops).toBe(1)
+  finish()
+  await Promise.all([first, repeated])
+  expect(service.hasSession('child')).toBe(false)
+})
+
 test('worker CLI has its own SDK identity and applies the approved preset and model', () => {
   const service = new ConversationService() as any
   service.resolveCliArgs = (args: string[]) => args
@@ -81,6 +112,26 @@ test('independent configured providers produce disjoint child credentials and ro
   expect(process.env.ANTHROPIC_API_KEY).toBe('parent-key')
 })
 
+test('never leaks browser bridge credentials into spawned CLI child environments', async () => {
+  const originalToken = process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+  const originalUrl = process.env.CC_HAHA_BROWSER_BRIDGE_URL
+  process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = 'super-secret-browser-bridge-token'
+  process.env.CC_HAHA_BROWSER_BRIDGE_URL = 'http://127.0.0.1:49999'
+  try {
+    const service = new ConversationService() as any
+    const childEnv = await service.buildChildEnv(home, 'ws://127.0.0.1/sdk/browser-child?token=sdk-tok')
+    expect(childEnv.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBeUndefined()
+    expect(childEnv.CC_HAHA_BROWSER_BRIDGE_URL).toBeUndefined()
+    expect(process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN).toBe('super-secret-browser-bridge-token')
+    expect(process.env.CC_HAHA_BROWSER_BRIDGE_URL).toBe('http://127.0.0.1:49999')
+  } finally {
+    if (originalToken === undefined) delete process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN
+    else process.env.CC_HAHA_BROWSER_BRIDGE_TOKEN = originalToken
+    if (originalUrl === undefined) delete process.env.CC_HAHA_BROWSER_BRIDGE_URL
+    else process.env.CC_HAHA_BROWSER_BRIDGE_URL = originalUrl
+  }
+})
+
 test('parent permission responses route exclusively to the requesting worker', () => {
   const service = new ConversationService() as any
   const responses: unknown[] = []
@@ -108,6 +159,31 @@ test('worker permission identity remains available for replay after leader compl
   expect(output[0].request.agent_id).toBe('researcher@approved')
 })
 
+test('forwarded permission rights follow the live worker process, not a reused session or request id', () => {
+  const service = new ConversationService() as any
+  const output: Array<{ request_id?: unknown }> = []
+  const state = () => ({ pendingPermissionRequests: new Map(), sdkMessages: [], outputCallbacks: [] })
+  service.sessions.set('parent', { ...state(), outputCallbacks: [(message: { request_id?: unknown }) => output.push(message)] })
+  const original = { ...state(), teamWorker: worker, controlRevoked: false }
+  service.sessions.set('child', original)
+  const permission = JSON.stringify({ type: 'control_request', request_id: 'worker-request', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} } })
+  service.handleSdkPayload('child', permission)
+  const first = output[0]!
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(true)
+  expect(service.isLiveTeamWorkerPermission('other-parent', first)).toBe(false)
+  expect(service.isLiveTeamWorkerPermission('parent', { ...first })).toBe(false)
+  original.controlRevoked = true
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(false)
+  service.handleSdkPayload('child', permission)
+  expect(output).toEqual([first])
+
+  service.sessions.set('child', { ...state(), teamWorker: worker })
+  service.handleSdkPayload('child', permission)
+  expect(output).toHaveLength(2)
+  expect(service.isLiveTeamWorkerPermission('parent', first)).toBe(false)
+  expect(service.isLiveTeamWorkerPermission('parent', output[1]!)).toBe(true)
+})
+
 test('real independent CLI processes send their first request to the approved provider after the barrier', async () => {
   const calls: Array<{ provider: string; model: string; credential: string | null; subagentOverride?: string; omitClaudeMd?: string; presetType?: string; presetSource?: string }> = []
   const upstream = (provider: string) => Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -129,12 +205,15 @@ test('real independent CLI processes send their first request to the approved pr
   })
   try {
     process.env.CLAUDE_CLI_PATH = join(import.meta.dir, '__fixtures__', 'team-worker-cli.ts')
+    process.env.FIXTURE_LOAD_MANAGED_ENV = '1'
     process.env.CLAUDE_CODE_SUBAGENT_MODEL = 'wrong-inherited-model'
     process.env.CC_HAHA_TEAM_WORKER_OMIT_CLAUDE_MD = '1'
     const providers = new ProviderService()
     const models = { main: 'cheap', sonnet: 'cheap', opus: 'capable', haiku: 'cheap' }
     const pa = await providers.addProvider({ presetId: 'custom', name: 'A', baseUrl: a.url.toString(), apiKey: 'fake-a', models })
     const pb = await providers.addProvider({ presetId: 'custom', name: 'B', baseUrl: b.url.toString(), apiKey: 'fake-b', models })
+    await providers.activateProvider(pa.id)
+    await providers.updateManagedSettings({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'wrong-saved-model' } }, pa.id)
     for (const [id, provider, model] of [['worker-a', pa.id, 'cheap'], ['worker-b', pb.id, 'capable']]) {
       await service.startSession(id!, home, `ws://127.0.0.1:${bridge.port}/sdk/${id}?token=fixture-${id}`, { providerId: provider, model, teamWorker: { ...worker, agentDefinition: { ...worker.agentDefinition, omitClaudeMd: id === 'worker-a', agentType: 'fixture:researcher', source: 'plugin' } } })
       await service.requestControl(id!, { subtype: 'set_model', model }, 5000)

@@ -9,11 +9,15 @@ import {
 } from '../services/conversationService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
+import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
 import { updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
+import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
+import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 
 describe('ConversationService', () => {
   let tmpDir: string
@@ -1080,6 +1084,50 @@ describe('ConversationService', () => {
     }
   })
 
+  test('sendMessage dispatches to an existing ChatGPT CLI without fetching a cold catalog', async () => {
+    clearOpenAICodexModelCatalogCache()
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('catalog unavailable'))
+    try {
+      await hahaOpenAIOAuthService.saveTokens({ accessToken: 'rotated-fixture-token', refreshToken: null,
+        accountId: 'fixture-account', expiresAt: null, email: null })
+      const service = new ConversationService() as any
+      const sent: string[] = []
+      const session = installNetworkTestSession(service, 'openai-turn', sent)
+      Object.assign(session, {
+        providerId: 'openai-official',
+        providerAuth: { baseUrl: '', apiKey: '', authToken: '' },
+      })
+      expect(await service.sendMessage('openai-turn', 'continue')).toBe(true)
+      expect(sent.map(line => JSON.parse(line).type)).toEqual(['user'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      clearOpenAICodexModelCatalogCache()
+    }
+  })
+
+  test('sendMessage dispatches to an existing Grok CLI without fetching a cold catalog', async () => {
+    clearGrokModelCatalogCache()
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('catalog unavailable'))
+    try {
+      await hahaGrokOAuthService.saveTokens({ accessToken: 'grok-fixture-token', refreshToken: null,
+        expiresAt: null, email: null })
+      const service = new ConversationService() as any
+      const sent: string[] = []
+      const session = installNetworkTestSession(service, 'grok-turn', sent)
+      Object.assign(session, {
+        providerId: 'grok-official',
+        providerAuth: { baseUrl: '', apiKey: '', authToken: '' },
+      })
+      expect(await service.sendMessage('grok-turn', 'continue')).toBe(true)
+      expect(sent.map(line => JSON.parse(line).type)).toEqual(['user'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      clearGrokModelCatalogCache()
+    }
+  })
+
   test('buildChildEnv does NOT inject CLAUDE_CODE_OAUTH_TOKEN when not official mode', async () => {
     const ccHahaDir = path.join(tmpDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })
@@ -2089,6 +2137,98 @@ describe('ConversationService', () => {
     expect(serialized).not.toContain('PRIVATE_SDK_ERROR')
     expect(serialized).not.toContain('PRIVATE_ERROR_DETAILS')
     expect(serialized).not.toContain('PRIVATE_ASSISTANT_REPLY')
+  })
+
+  test('buildChildEnv disables Claude fast mode for non-Anthropic and experimental-betas-disabled providers', async () => {
+    const ccHahaDir = path.join(tmpDir, 'cc-haha')
+    await fs.mkdir(ccHahaDir, { recursive: true })
+    await fs.writeFile(
+      path.join(ccHahaDir, 'providers.json'),
+      JSON.stringify({
+        activeId: 'proxy-no-betas',
+        providers: [
+          {
+            id: 'proxy-no-betas',
+            presetId: 'custom',
+            name: 'Proxy No Betas',
+            apiFormat: 'anthropic',
+            apiKey: 'sk-test',
+            baseUrl: 'https://proxy.example.com',
+            disableExperimentalBetas: true,
+            models: {
+              main: 'claude-opus-5-5',
+              haiku: 'claude-haiku-4-5',
+              sonnet: 'claude-sonnet-5-5',
+              opus: 'claude-opus-5-5',
+            },
+          },
+          {
+            id: 'openai-third-party',
+            presetId: 'custom',
+            name: 'OpenAI Third Party',
+            apiFormat: 'openai',
+            apiKey: 'sk-openai',
+            baseUrl: 'https://api.openai.com/v1',
+            models: {
+              main: 'gpt-5.4',
+              haiku: 'gpt-5.4',
+              sonnet: 'gpt-5.4',
+              opus: 'gpt-5.4',
+            },
+          },
+          {
+            id: 'anthropic-ok',
+            presetId: 'custom',
+            name: 'Anthropic Direct',
+            apiFormat: 'anthropic',
+            apiKey: 'sk-ant',
+            baseUrl: 'https://api.anthropic.com',
+            models: {
+              main: 'claude-opus-5-5',
+              haiku: 'claude-haiku-4-5',
+              sonnet: 'claude-sonnet-5-5',
+              opus: 'claude-opus-5-5',
+            },
+          },
+        ],
+      }),
+      'utf-8',
+    )
+
+    const service = new ConversationService() as any
+    const noBetasEnv = (await service.buildChildEnv(tmpDir, undefined, { providerId: 'proxy-no-betas' })) as Record<string, string>
+    expect(noBetasEnv.CLAUDE_CODE_DISABLE_FAST_MODE).toBe('1')
+
+    const openaiEnv = (await service.buildChildEnv(tmpDir, undefined, { providerId: 'openai-third-party' })) as Record<string, string>
+    expect(openaiEnv.CLAUDE_CODE_DISABLE_FAST_MODE).toBe('1')
+
+    const anthropicEnv = (await service.buildChildEnv(tmpDir, undefined, { providerId: 'anthropic-ok' })) as Record<string, string>
+    expect(anthropicEnv.CLAUDE_CODE_DISABLE_FAST_MODE).toBeUndefined()
+  })
+
+  test('setFastModeForActiveSessions skips ineligible sessions and notifies eligible Claude sessions', () => {
+    const service = new ConversationService() as any
+    const eligibleWrites: string[] = []
+    const ineligibleWrites: string[] = []
+    service.sessions.set('eligible-sess', {
+      claudeFastModeEligible: true,
+      sdkSocket: { send: (chunk: string) => eligibleWrites.push(chunk) },
+      pendingOutbound: [],
+    })
+    service.sessions.set('ineligible-sess', {
+      claudeFastModeEligible: false,
+      sdkSocket: { send: (chunk: string) => ineligibleWrites.push(chunk) },
+      pendingOutbound: [],
+    })
+
+    const count = service.setFastModeForActiveSessions(true)
+    expect(count).toBe(1)
+    expect(eligibleWrites.length).toBe(1)
+    expect(JSON.parse(eligibleWrites[0]!)).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'set_fast_mode', enabled: true },
+    })
+    expect(ineligibleWrites).toHaveLength(0)
   })
 })
 

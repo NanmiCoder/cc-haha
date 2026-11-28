@@ -64,7 +64,7 @@ export function Section({
           type="button"
           onClick={toggle}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           <ChevronRight
             size={14}
