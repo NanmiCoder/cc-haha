@@ -123,7 +123,7 @@ describe('provider presets API', () => {
     const { presets } = await response.json()
     const sponsors = presets.filter((preset: { featured?: boolean }) => preset.featured)
     expect(sponsors.map((preset: { id: string }) => preset.id))
-      .toEqual(['aruhub', 'modelflare', 'atlascloud'])
+      .toEqual(['aruhub', 'modelflare'])
     expect(sponsors[1]).toMatchObject({
       id: 'modelflare',
       name: 'Modelflare',
@@ -411,10 +411,10 @@ describe('provider presets API', () => {
     expect(qiniuai?.modelContextWindows?.['deepseek/deepseek-v4-flash']).toBe(1000000)
     expect(qiniuai?.modelContextWindows?.['z-ai/glm-5.2']).toBe(1000000)
     expect(qiniuai?.modelContextWindows?.['moonshotai/kimi-k3']).toBe(262144)
-    expect(atlascloud?.apiKeyUrl).toBe(
-      'https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha',
-    )
-    expect(atlascloud?.featured).toBe(true)
+    expect(atlascloud?.deprecated).toBe(true)
+    expect(atlascloud?.apiKeyUrl).toBeUndefined()
+    expect(atlascloud?.promoText).toBeUndefined()
+    expect(atlascloud?.featured).toBeUndefined()
     expect(custom?.promoText).toBeUndefined()
     expect(custom?.authStrategy).toBe('auth_token')
     expect(custom?.defaultEnv).toBeUndefined()

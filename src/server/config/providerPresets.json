@@ -328,8 +328,7 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://www.atlascloud.ai",
-    "apiKeyUrl": "https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=cc-haha",
-    "featured": true,
+    "deprecated": true,
     "authStrategy": "api_key",
     "modelContextWindows": {
       "deepseek-ai/deepseek-v4-pro": 1000000

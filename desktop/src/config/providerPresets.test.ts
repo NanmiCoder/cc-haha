@@ -96,7 +96,7 @@ describe('bundled provider presets', () => {
     expect(shengsuanyun?.featured).toBeUndefined()
     const selectableIds = selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((p) => p.id)
     expect(selectableIds).not.toContain('shengsuanyun')
-    expect(selectableIds).toContain('atlascloud')
+    expect(selectableIds).not.toContain('atlascloud')
     expect(selectableIds).toContain('custom')
   })
 
@@ -126,9 +126,24 @@ describe('bundled provider presets', () => {
       .not.toContain(id)
   })
 
-  it('keeps active sponsors selectable with Modelflare between AruHub and Atlas Cloud', () => {
+  it('keeps active sponsors selectable with AruHub and Modelflare', () => {
     expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).filter((preset) => preset.featured).map((preset) => preset.id))
-      .toEqual(['aruhub', 'modelflare', 'atlascloud'])
+      .toEqual(['aruhub', 'modelflare'])
+  })
+
+  it('retires Atlas Cloud without removing what saved providers resolve from the preset', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'atlascloud')
+
+    expect(preset?.deprecated).toBe(true)
+    expect(preset?.apiKeyUrl).toBeUndefined()
+    expect(preset?.promoText).toBeUndefined()
+    expect(preset?.featured).toBeUndefined()
+    expect(preset?.baseUrl).toBe('https://api.atlascloud.ai')
+    expect(preset?.apiFormat).toBe('openai_chat')
+    expect(preset?.authStrategy).toBe('api_key')
+    expect(preset?.modelContextWindows?.['deepseek-ai/deepseek-v4-pro']).toBe(1000000)
+    expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
+      .not.toContain('atlascloud')
   })
 
   it('updates AruHub to its published Claude 5.5 IDs while keeping the Haiku fallback', () => {
