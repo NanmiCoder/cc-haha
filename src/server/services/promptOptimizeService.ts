@@ -1,10 +1,11 @@
 import { z } from 'zod/v4'
+import { optimizeDraftSchema } from '../../utils/promptOptimizeInput.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { powerActivityClock } from './powerActivityClock.js'
 
 export const promptOptimizeInputSchema = z.strictObject({
   requestId: z.uuid(),
-  prompt: z.string().trim().min(1).max(32_000),
+  prompt: optimizeDraftSchema,
 })
 export type PromptOptimizeInput = z.infer<typeof promptOptimizeInputSchema>
 

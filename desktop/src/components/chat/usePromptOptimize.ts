@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { sessionsApi } from '@/api/sessions'
 import { useTranslation } from '@/i18n'
 import {
-  reconcileMentionsAfterRewrite,
+  mentionsEqual,
+  prepareMentionsForRewrite,
   type ComposerMention,
 } from '@/lib/composerMentions'
 import { useUIStore } from '@/stores/uiStore'
@@ -125,20 +126,22 @@ export function usePromptOptimize({
     setIsOptimizing(true)
 
     try {
+      const rewrite = prepareMentionsForRewrite(active.baselineText, active.baselineMentions)
       const response = await sessionsApi.optimizePrompt(
         targetSessionId,
-        { requestId, prompt: draft.text },
+        { requestId, prompt: rewrite.requestPrompt },
         controller.signal,
       )
       if (activeRef.current !== active || controller.signal.aborted) return
       if (sessionIdRef.current !== targetSessionId) return
       // Guard against any edit that slipped in without going through onChange.
-      if (getDraft().text !== active.baselineText) return
+      const current = getDraft()
+      if (current.text !== active.baselineText || !mentionsEqual(current.mentions, active.baselineMentions)) return
 
-      const optimizedText = response.optimizedPrompt.trim()
+      const { text: optimizedText, mentions: reconciledMentions } = rewrite.restore(response.optimizedPrompt.trim())
       if (!optimizedText) return
 
-      if (optimizedText === active.baselineText.trim()) {
+      if (optimizedText === active.baselineText.trim() && mentionsEqual(reconciledMentions, active.baselineMentions)) {
         useUIStore.getState().addToast({
           type: 'info',
           message: t('chat.promptOptimize.unchanged'),
@@ -146,10 +149,6 @@ export function usePromptOptimize({
         return
       }
 
-      const reconciledMentions = reconcileMentionsAfterRewrite(
-        optimizedText,
-        active.baselineMentions,
-      )
       applyingRef.current = true
       try {
         applyDraft(optimizedText, reconciledMentions, { flash: true })

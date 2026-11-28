@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod/v4'
+import { optimizeDraftSchema } from '../../utils/promptOptimizeInput.js'
 import { scheduledTaskMessageInputSchema } from '../../utils/scheduledTaskMessage.js'
 import { sessionMessageInputSchema } from '../../utils/sessionMessageInbox.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -582,7 +583,7 @@ export const SDKControlOptimizePromptRequestSchema = lazySchema(() =>
   z.object({
     subtype: z.literal('optimize_prompt'),
     request_id: z.uuid().optional(),
-    prompt: z.string().trim().min(1).max(32_000),
+    prompt: optimizeDraftSchema,
   }),
 )
 

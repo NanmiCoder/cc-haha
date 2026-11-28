@@ -891,7 +891,7 @@ export const sessionsApi = {
 
   optimizePrompt(
     sessionId: string,
-    body: { requestId: string; prompt: string },
+    body: { requestId: string; prompt: import('../../../src/shared/promptOptimizeReferences').OptimizeDraft },
     signal?: AbortSignal,
   ) {
     return api.post<{ requestId: string; optimizedPrompt: string }>(

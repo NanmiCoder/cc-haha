@@ -384,7 +384,10 @@ export function anthropicToBedrockConverse(
     ...(Object.keys(inferenceConfig).length > 0 ? { inferenceConfig } : {}),
     ...(toolConfig ? { toolConfig } : {}),
     ...(Object.keys(additionalModelRequestFields).length > 0 ? { additionalModelRequestFields } : {}),
-    ...(isAnthropic ? { additionalModelResponseFieldPaths: ['/delta/stop_sequence'] } : {}),
+    // Request both the native field and the delta shape used by some gateways.
+    ...(isAnthropic || inferenceConfig.stopSequences?.length
+      ? { additionalModelResponseFieldPaths: ['/stop_sequence', '/delta/stop_sequence'] }
+      : {}),
     ...(compatibility.serviceTier && compatibility.serviceTier !== 'auto'
       ? { serviceTier: { type: compatibility.serviceTier } }
       : {}),

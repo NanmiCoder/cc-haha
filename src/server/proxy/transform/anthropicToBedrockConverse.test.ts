@@ -297,7 +297,13 @@ describe('anthropicToBedrockConverse', () => {
     ])
     // Under budgetSource: 'default', Claude thinking budget >= 4096 still ensures inferenceConfig.maxTokens > budget_tokens
     expect(guarded.inferenceConfig?.maxTokens).toBe(14_096)
-    expect(guarded.additionalModelResponseFieldPaths).toEqual(['/delta/stop_sequence'])
+    expect(guarded.additionalModelResponseFieldPaths).toContain('/stop_sequence')
+    expect(anthropicToBedrockConverse({
+      model: 'us.anthropic.claude-sonnet-4-6-v1:0',
+      max_tokens: 256,
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }).additionalModelResponseFieldPaths).toEqual(['/stop_sequence', '/delta/stop_sequence'])
 
     // Respect explicit outputTokenLimit cap when above budget_tokens
     const capped = anthropicToBedrockConverse({
@@ -329,6 +335,22 @@ describe('anthropicToBedrockConverse', () => {
     expect(novaSampling.inferenceConfig?.temperature).toBe(0.4)
     expect(novaSampling.inferenceConfig?.topP).toBe(0.9)
     expect(novaSampling.additionalModelResponseFieldPaths).toBeUndefined()
+  })
+
+  test('requests the matching stop field for an opaque inference profile when a stop sequence is sent', () => {
+    const request: AnthropicRequest = {
+      model: 'arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123def456',
+      max_tokens: 128,
+      stop_sequences: ['END'],
+      messages: [{ role: 'user', content: 'hello' }],
+    }
+    for (const stream of [false, true]) {
+      const result = anthropicToBedrockConverse({ ...request, stream })
+      expect(result.inferenceConfig?.stopSequences).toEqual(['END'])
+      expect(result.additionalModelResponseFieldPaths).toEqual(['/stop_sequence', '/delta/stop_sequence'])
+    }
+    expect(anthropicToBedrockConverse({ ...request, model: 'openai.gpt-oss-120b-1:0' }).additionalModelResponseFieldPaths)
+      .toBeUndefined()
   })
 
   test('covers parallelTools disabled tool_choice variants, adaptive thinking, structured output, OpenAI Bedrock models, search_result, and all image/document source variants', () => {
