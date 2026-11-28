@@ -36,6 +36,8 @@ import {
 const CANCEL_TIMEOUT_MS = 3_000
 const DEFAULT_SUBAGENT_POLL_INTERVAL_MS = 1_000
 const DEFAULT_SUBAGENT_WAIT_FLUSH_MS = 1_500
+const DEFAULT_INCREMENTAL_FLUSH_MS = 400
+const DEFAULT_CHUNK_IDLE_FLUSH_MS = 3_000
 const ASYNC_SUBAGENT_LAUNCH_HEADER =
   'Async agent launched successfully.\nThe agent is working in the background. You will be notified automatically when it completes.'
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
@@ -152,7 +154,14 @@ type Turn = {
   resolvedQuestions: Map<string, ResolvedQuestionResult>
   promptQuestion?: PromptQuestion
   promptAnswer?: { toolUseId: string; question: string; label: string }
-  chunk?: { kind: 'text' | 'thinking'; text: string; index: number }
+  chunk?: {
+    kind: 'text' | 'thinking'
+    text: string
+    index: number
+    uuid: string
+    timestamp: string
+    persistedLength: number
+  }
   nextIndex: number
   started: number
   apiDurationMs: number
@@ -183,6 +192,10 @@ type Turn = {
   replyOpen: boolean
   finishing: boolean
   cancelled: boolean
+  enrichableToolUses: Map<string, { uuid: string; timestamp: string; name: string; input: Frame }>
+  flushTimer?: ReturnType<typeof setTimeout>
+  appendFailed: boolean
+  chunkIdleTimer?: ReturnType<typeof setTimeout>
   cancelTimer?: ReturnType<typeof setTimeout>
   resolve: () => void
 }
@@ -206,6 +219,8 @@ export type AntigravityConversationOptions = {
   antigravityAppDataDir?: string
   subagentPollIntervalMs?: number
   subagentWaitFlushMs?: number
+  incrementalFlushMs?: number
+  chunkIdleFlushMs?: number
   pendingForkSeedContext?: string
   onForkSeedConsumed?: () => Promise<void> | void
   sessionId?: string
@@ -883,6 +898,8 @@ export class AntigravityConversation {
   private subagentPollPromise?: Promise<void>
   private readonly subagentPollIntervalMs: number
   private readonly subagentWaitFlushMs: number
+  private readonly incrementalFlushMs: number
+  private readonly chunkIdleFlushMs: number
   private readonly computerUseBridge?: AntigravityComputerUseBridge | null
   private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
@@ -906,6 +923,8 @@ export class AntigravityConversation {
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
     this.subagentPollIntervalMs = Math.max(20, options.subagentPollIntervalMs ?? DEFAULT_SUBAGENT_POLL_INTERVAL_MS)
     this.subagentWaitFlushMs = Math.max(0, options.subagentWaitFlushMs ?? DEFAULT_SUBAGENT_WAIT_FLUSH_MS)
+    this.incrementalFlushMs = Math.max(0, options.incrementalFlushMs ?? DEFAULT_INCREMENTAL_FLUSH_MS)
+    this.chunkIdleFlushMs = Math.max(0, options.chunkIdleFlushMs ?? DEFAULT_CHUNK_IDLE_FLUSH_MS)
     this.pendingForkSeedContext = options.pendingForkSeedContext?.trim() || undefined
     this.onForkSeedConsumed = options.onForkSeedConsumed
     if (options.sessionId?.trim() && options.workDir?.trim()) {
@@ -1277,6 +1296,7 @@ export class AntigravityConversation {
     void this.browserUseBridge?.cleanupAfterTurn()
     const turn = this.turn
     if (turn) {
+      this.clearTurnTimers(turn)
       turn.replyOpen = false
       this.cancelPermissions(turn)
       this.maybeFinish(turn)
@@ -1286,6 +1306,7 @@ export class AntigravityConversation {
 
   flushForShutdown(): Promise<void> | undefined {
     // 不依赖子进程确认取消或主动关闭 stdout；只等本地受控的历史写入。
+    if (this.turn) this.clearTurnTimers(this.turn)
     if (this.turn || [...this.tools.values()].some(tool => tool?.status === 'in_progress')) this.cancel()
     this.listening = false
     this.stopSubagentPoller()
@@ -1365,7 +1386,9 @@ export class AntigravityConversation {
     if (!turn) return false
     const prompt = this.buildPromptBlocks(userContent)
     if (!this.canSteerTurn(turn, userContent)) return false
+    this.clearTurnTimers(turn)
     this.flushChunk(turn)
+    turn.enrichableToolUses.clear()
     const user: Frame = {
       type: 'user',
       uuid,
@@ -1398,6 +1421,7 @@ export class AntigravityConversation {
     if (!turn) {
       return sent
     }
+    this.clearTurnTimers(turn)
     this.pauseModelPhase(turn)
     this.flushSubagentPhase(turn)
     turn.cancelled = true
@@ -1827,6 +1851,8 @@ export class AntigravityConversation {
 
   private beginTurn(detached: boolean): Turn {
     const { promise, resolve } = Promise.withResolvers<void>()
+    // Isolate a new turn from any rejected appendChain left by a prior failed turn.
+    this.appendChain = this.appendChain.catch(() => undefined)
     this.lastProjectedPlanSignature = undefined
     const turn: Turn = {
       entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
@@ -1844,7 +1870,10 @@ export class AntigravityConversation {
       transcriptDecoder: new StringDecoder('utf8'),
       seenTranscriptSteps: new Set(),
       nativeEnd: detached ? { result: {} } : undefined,
-      replyOpen: false, finishing: false, cancelled: false, resolve,
+      replyOpen: false, finishing: false, cancelled: false,
+      enrichableToolUses: new Map(),
+      appendFailed: false,
+      resolve,
     }
     this.turn = turn
     this.turnDone = promise
@@ -2049,9 +2078,7 @@ export class AntigravityConversation {
     const waitVerb = firstTracked?.description ?? 'Subagent'
     if (turn.chunk) {
       this.flushChunk(turn)
-      if (turn.entries.length > 0) {
-        void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
-      }
+      this.flushPersistableEntries(turn)
       turn.subagentWaitNotified = true
       this.emit({
         type: 'system',
@@ -2269,13 +2296,128 @@ export class AntigravityConversation {
     turn.permissions.clear()
   }
 
-  private enqueueAppend(entries: Frame[]): Promise<void> {
+  private enqueueAppend(entries: Frame[], turn?: Turn): Promise<void> {
     if (entries.length === 0) return this.appendChain
     const batch = entries.slice()
     const next = this.appendChain.catch(() => undefined).then(() => this.append(batch))
     this.appendChain = next
-    void next.catch(() => undefined)
+    void next.catch(() => {
+      if (turn) turn.appendFailed = true
+    })
     return next
+  }
+
+  private clearChunkIdleTimer(turn: Turn): void {
+    if (turn.chunkIdleTimer !== undefined) {
+      clearTimeout(turn.chunkIdleTimer)
+      turn.chunkIdleTimer = undefined
+    }
+  }
+
+  private clearFlushTimer(turn: Turn): void {
+    if (turn.flushTimer !== undefined) {
+      clearTimeout(turn.flushTimer)
+      turn.flushTimer = undefined
+    }
+  }
+
+  private clearTurnTimers(turn: Turn): void {
+    this.clearChunkIdleTimer(turn)
+    this.clearFlushTimer(turn)
+  }
+
+  private persistChunkCheckpoint(turn: Turn): void {
+    const chunk = turn.chunk
+    if (!chunk || chunk.text.length <= chunk.persistedLength || turn.isCompact || turn.cancelled || turn.finishing) return
+    chunk.persistedLength = chunk.text.length
+    const content: Frame = chunk.kind === 'text'
+      ? { type: 'text', text: chunk.text }
+      : { type: 'thinking', thinking: chunk.text }
+    // Persist a cumulative snapshot under the chunk's stable UUID without closing
+    // the live stream block; `sessionService.entriesToMessages` keeps the latest
+    // entry per UUID, so reload/mobile views see progress without splitting bubbles.
+    turn.entries.push({
+      type: 'assistant',
+      uuid: chunk.uuid,
+      timestamp: chunk.timestamp,
+      message: {
+        role: 'assistant',
+        model: this.acp.modelId ?? 'Antigravity',
+        content: [content],
+      },
+    })
+    this.flushPersistableEntries(turn)
+  }
+
+  private armChunkIdleFlush(turn: Turn): void {
+    this.clearChunkIdleTimer(turn)
+    if (this.chunkIdleFlushMs <= 0 || turn.isCompact || turn.cancelled || turn.finishing || !turn.chunk) return
+    const timer = setTimeout(() => {
+      if (turn.chunkIdleTimer === timer) turn.chunkIdleTimer = undefined
+      if (
+        this.turn !== turn
+        || turn.isCompact
+        || turn.cancelled
+        || turn.finishing
+        || !turn.chunk
+        || turn.promptQuestion
+      ) {
+        return
+      }
+      this.persistChunkCheckpoint(turn)
+    }, this.chunkIdleFlushMs)
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer && typeof timer.unref === 'function') {
+      timer.unref()
+    }
+    turn.chunkIdleTimer = timer
+  }
+
+  private needsCompletionEnrichment(projected: ProjectedTool, tool: Frame): boolean {
+    if (toolHasFinished(tool)) return false
+    if (tool.kind === 'edit' && projected.name !== 'Edit' && projected.name !== 'Write' && projected.name !== 'MultiEdit') {
+      return true
+    }
+    if (projected.name !== 'Edit' && projected.name !== 'Write' && projected.name !== 'MultiEdit') return false
+    const filePath = typeof projected.input.file_path === 'string' ? projected.input.file_path : ''
+    if (!filePath) return true
+    if (projected.name === 'Edit') {
+      const oldString = typeof projected.input.old_string === 'string' ? projected.input.old_string : ''
+      const newString = typeof projected.input.new_string === 'string' ? projected.input.new_string : ''
+      return !oldString && !newString
+    }
+    if (projected.name === 'Write') {
+      const content = typeof projected.input.content === 'string' ? projected.input.content : ''
+      return !content
+    }
+    return false
+  }
+
+  private flushPersistableEntries(turn: Turn): void {
+    this.clearFlushTimer(turn)
+    if (turn.isCompact || turn.cancelled || turn.finishing || turn.entries.length === 0) return
+    const batch = turn.entries.splice(0)
+    void this.enqueueAppend(batch, turn).catch(() => undefined)
+  }
+
+  private scheduleIncrementalFlush(turn: Turn): void {
+    if (turn.isCompact || turn.cancelled || turn.finishing || turn.entries.length === 0) return
+    if (turn.flushTimer !== undefined) return
+    if (this.incrementalFlushMs === 0) {
+      queueMicrotask(() => {
+        if (this.turn !== turn || turn.isCompact || turn.cancelled || turn.finishing) return
+        this.flushPersistableEntries(turn)
+      })
+      return
+    }
+    const timer = setTimeout(() => {
+      if (turn.flushTimer === timer) turn.flushTimer = undefined
+      if (this.turn !== turn || turn.isCompact || turn.cancelled || turn.finishing) return
+      this.flushPersistableEntries(turn)
+    }, this.incrementalFlushMs)
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer && typeof timer.unref === 'function') {
+      timer.unref()
+    }
+    turn.flushTimer = timer
   }
 
   private async persistTurnSnapshot(snapshot: { snapshotEntry: Frame; insertions: number; deletions: number }): Promise<void> {
@@ -2391,6 +2533,7 @@ export class AntigravityConversation {
   }
 
   private async finish(turn: Turn, end: NonNullable<Turn['nativeEnd']>): Promise<void> {
+    this.clearTurnTimers(turn)
     this.pauseModelPhase(turn)
     this.flushSubagentPhase(turn)
     let error = end.error
@@ -2398,8 +2541,13 @@ export class AntigravityConversation {
     try {
       do {
         this.flushChunk(turn)
-        if (turn.entries.length) await this.enqueueAppend(turn.entries.splice(0))
+        this.clearFlushTimer(turn)
+        turn.enrichableToolUses.clear()
+        if (turn.entries.length) await this.enqueueAppend(turn.entries.splice(0), turn)
         else await this.appendChain
+        if (!error && turn.appendFailed) {
+          throw new Error('Failed to persist Antigravity turn entries')
+        }
         // 通过同一双工管道，后台事件可能在上一次历史写入期间继续到达。
         if (this.awaitsBackgroundWork(turn)) {
           turn.finishing = false
@@ -2523,12 +2671,17 @@ export class AntigravityConversation {
     turn.resolve()
   }
 
-  private assistant(turn: Turn, content: Frame, options?: { streamed?: boolean }): void {
+  private assistant(
+    turn: Turn,
+    content: Frame,
+    options?: { streamed?: boolean; uuid?: string; timestamp?: string; persist?: boolean },
+  ): { uuid: string; timestamp: string } {
     turn.hasOutput = true
-    const uuid = crypto.randomUUID()
+    const uuid = options?.uuid ?? crypto.randomUUID()
+    const timestamp = options?.timestamp ?? new Date().toISOString()
     const message = {
       type: 'assistant', uuid,
-      timestamp: new Date().toISOString(),
+      timestamp,
       message: {
         // Non-streamed blocks (e.g. tool_use) must carry an explicit message id so
         // ws/handler.ts does not treat a detached turn's opening `message_start` as
@@ -2539,8 +2692,12 @@ export class AntigravityConversation {
         content: [content],
       },
     }
-    turn.entries.push(message)
+    if (options?.persist !== false) {
+      turn.entries.push(message)
+      this.scheduleIncrementalFlush(turn)
+    }
     this.emit(message)
+    return { uuid, timestamp }
   }
 
   private stream(event: Frame): void {
@@ -2548,11 +2705,20 @@ export class AntigravityConversation {
   }
 
   private flushChunk(turn: Turn): void {
+    this.clearChunkIdleTimer(turn)
     const chunk = turn.chunk
     if (!chunk) return
     turn.chunk = undefined
     this.stream({ type: 'content_block_stop', index: chunk.index })
-    this.assistant(turn, chunk.kind === 'text' ? { type: 'text', text: chunk.text } : { type: 'thinking', thinking: chunk.text })
+    this.assistant(
+      turn,
+      chunk.kind === 'text' ? { type: 'text', text: chunk.text } : { type: 'thinking', thinking: chunk.text },
+      {
+        uuid: chunk.uuid,
+        timestamp: chunk.timestamp,
+        persist: chunk.persistedLength < chunk.text.length,
+      },
+    )
   }
 
   private chunk(turn: Turn, kind: 'text' | 'thinking', text: string): void {
@@ -2561,11 +2727,19 @@ export class AntigravityConversation {
     if (turn.nativeEnd) turn.replyOpen = true
     if (turn.chunk?.kind !== kind) {
       this.flushChunk(turn)
-      turn.chunk = { kind, text: '', index: turn.nextIndex++ }
+      turn.chunk = {
+        kind,
+        text: '',
+        index: turn.nextIndex++,
+        uuid: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        persistedLength: 0,
+      }
       this.stream({ type: 'content_block_start', index: turn.chunk.index, content_block: { type: kind } })
     }
     turn.chunk.text += text
     this.stream({ type: 'content_block_delta', index: turn.chunk.index, delta: kind === 'text' ? { type: 'text_delta', text } : { type: 'thinking_delta', thinking: text } })
+    this.armChunkIdleFlush(turn)
   }
 
   private recordFileToolPath(projected: ProjectedTool, phase: 'pending' | 'completed'): void {
@@ -2575,6 +2749,22 @@ export class AntigravityConversation {
     if (!filePath) return
     if (phase === 'pending') this.fileTracker.recordPendingToolPath(filePath)
     else this.fileTracker.recordCompletedToolPath(filePath)
+  }
+
+  private shouldEnrichToolUse(existingName: unknown, existingInput: Frame, projected: ProjectedTool): boolean {
+    const existingPath = typeof existingInput.file_path === 'string' ? existingInput.file_path : ''
+    const existingOld = typeof existingInput.old_string === 'string' ? existingInput.old_string : ''
+    const existingNew = typeof existingInput.new_string === 'string' ? existingInput.new_string : ''
+    const existingContent = typeof existingInput.content === 'string' ? existingInput.content : ''
+    const nextOld = typeof projected.input.old_string === 'string' ? projected.input.old_string : ''
+    const nextNew = typeof projected.input.new_string === 'string' ? projected.input.new_string : ''
+    const nextContent = typeof projected.input.content === 'string' ? projected.input.content : ''
+    return (
+      !existingPath ||
+      (existingName !== projected.name && (projected.name === 'Edit' || projected.name === 'Write')) ||
+      (projected.name === 'Edit' && !existingOld && !existingNew && (Boolean(nextOld) || Boolean(nextNew))) ||
+      (projected.name === 'Write' && !existingContent && Boolean(nextContent))
+    )
   }
 
   private enrichTurnToolUseEntry(turn: Turn, toolUseId: string, projected: ProjectedTool): void {
@@ -2590,25 +2780,34 @@ export class AntigravityConversation {
         const record = acpObject(block)
         if (record?.type !== 'tool_use' || record.id !== toolUseId) continue
         const existingInput = acpObject(record.input) ?? {}
-        const existingPath = typeof existingInput.file_path === 'string' ? existingInput.file_path : ''
-        const existingOld = typeof existingInput.old_string === 'string' ? existingInput.old_string : ''
-        const existingNew = typeof existingInput.new_string === 'string' ? existingInput.new_string : ''
-        const existingContent = typeof existingInput.content === 'string' ? existingInput.content : ''
-        const nextOld = typeof projected.input.old_string === 'string' ? projected.input.old_string : ''
-        const nextNew = typeof projected.input.new_string === 'string' ? projected.input.new_string : ''
-        const nextContent = typeof projected.input.content === 'string' ? projected.input.content : ''
-        const shouldEnrich =
-          !existingPath ||
-          (record.name !== projected.name && (projected.name === 'Edit' || projected.name === 'Write')) ||
-          (projected.name === 'Edit' && !existingOld && !existingNew && (Boolean(nextOld) || Boolean(nextNew))) ||
-          (projected.name === 'Write' && !existingContent && Boolean(nextContent))
-        if (shouldEnrich) {
+        if (this.shouldEnrichToolUse(record.name, existingInput, projected)) {
           record.name = projected.name
           record.input = { ...existingInput, ...projected.input }
         }
         return
       }
     }
+    // The initial sparse tool_use was already flushed mid-turn; append an updated
+    // record under the same UUID so `sessionService.entriesToMessages` projects
+    // the enriched diff without ever head-of-line blocking mid-turn persistence.
+    const flushed = turn.enrichableToolUses.get(toolUseId)
+    if (!flushed || !this.shouldEnrichToolUse(flushed.name, flushed.input, projected)) return
+    turn.entries.push({
+      type: 'assistant',
+      uuid: flushed.uuid,
+      timestamp: flushed.timestamp,
+      message: {
+        id: `agy_tool_${flushed.uuid}`,
+        role: 'assistant',
+        model: this.acp.modelId ?? 'Antigravity',
+        content: [{
+          type: 'tool_use',
+          id: toolUseId,
+          name: projected.name,
+          input: { ...flushed.input, ...projected.input },
+        }],
+      },
+    })
   }
 
   private toolCall(turn: Turn, tool: Frame, overrideName?: string, overrideInput?: Frame): ProjectedTool {
@@ -2626,16 +2825,24 @@ export class AntigravityConversation {
     if (effectiveName === 'TodoWrite' && projected.antigravityToolName === 'update_steps' && Array.isArray(effectiveInput.todos)) {
       this.lastProjectedPlanSignature = JSON.stringify(effectiveInput.todos)
     }
-    this.assistant(turn, {
+    const emittedMeta = this.assistant(turn, {
       type: 'tool_use',
       id,
       name: effectiveName,
       input: effectiveInput,
     }, { streamed: false })
-    if (projected.isSubagentInvoke && turn.entries.length > 0) {
+    if (this.needsCompletionEnrichment(projected, tool)) {
+      turn.enrichableToolUses.set(id, {
+        uuid: emittedMeta.uuid,
+        timestamp: emittedMeta.timestamp,
+        name: effectiveName,
+        input: effectiveInput,
+      })
+    }
+    if (projected.isSubagentInvoke) {
       // Flush invoke_subagent tool_use immediately so clicking an in-progress subagent card
       // resolves from session history before the parent turn completes.
-      void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
+      this.flushPersistableEntries(turn)
     }
     this.projectToolState(turn, id, tool)
     return projected
@@ -2666,6 +2873,7 @@ export class AntigravityConversation {
       this.enrichTurnToolUseEntry(turn, id, completedProjection)
       this.recordFileToolPath(completedProjection, 'completed')
     }
+    turn.enrichableToolUses.delete(id)
     const startedAt = this.toolStartedAt.get(id)
     this.toolStartedAt.delete(id)
     const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
@@ -2710,10 +2918,10 @@ export class AntigravityConversation {
     turn.entries.push(message)
     this.emit(message)
     if (tool.name === 'invoke_subagent' && tool.status === 'completed') {
-      if (turn.entries.length > 0) {
-        void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
-      }
+      this.flushPersistableEntries(turn)
       this.registerActiveSubagent(id, launchedSubagentChildId, tool, startedAt ?? Date.now())
+    } else {
+      this.scheduleIncrementalFlush(turn)
     }
     this.maybeResumeModelPhase(turn)
   }
@@ -2928,6 +3136,7 @@ export class AntigravityConversation {
         }
         turn.entries.push(resultMsg)
         this.emit(resultMsg)
+        this.scheduleIncrementalFlush(turn)
         break
       }
       case 'usage_update': {
@@ -3024,6 +3233,7 @@ export class AntigravityConversation {
     const permissionDescription = projected.description ?? projected.displayName
     const requestId = crypto.randomUUID()
     this.toolCall(turn, tool, name, input)
+    this.flushPersistableEntries(turn)
     turn.permissions.set(requestId, pending)
     this.pauseModelPhase(turn)
     this.flushSubagentPhase(turn)

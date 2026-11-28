@@ -5122,6 +5122,300 @@ describe('Antigravity ACP server core & integration', () => {
     resolvePrompt?.({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } })
     await conv.pendingTurnCompletion
   })
+
+  test('persists incrementally without HoL blocking, preserves stable UUIDs across idle chunk checkpoints and sparse Edit enrichment, and reuses O(1) append target in sessionService', async () => {
+    const workDir = join(sandboxDir, 'work-inc-o1')
+    await mkdir(workDir, { recursive: true })
+    const { sessionId } = await sessionService.createSession(workDir)
+    await sessionService.appendSessionMetadata(sessionId, {
+      workDir,
+      runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+      runtimeModelId: 'gemini-4-neon',
+      nativeSessionId: 'native-incremental-1',
+    })
+
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt: ((value: Record<string, unknown>) => void) | undefined
+    const emitted: Array<Record<string, unknown>> = []
+    const appended: Array<Record<string, unknown>> = []
+    let launchInfoLookups = 0
+    const origGetLaunchInfo = sessionService.getSessionLaunchInfo.bind(sessionService)
+    sessionService.getSessionLaunchInfo = async (id: string) => {
+      if (id === sessionId) launchInfoLookups += 1
+      return origGetLaunchInfo(id)
+    }
+
+    const fakeAcp = {
+      sessionId: 'native-incremental-1',
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'bypassPermissions' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined) {
+        onMessage = fn
+      },
+      get onMessage() {
+        return onMessage
+      },
+      prompt() {
+        return new Promise<Record<string, unknown>>(resolve => {
+          resolvePrompt = resolve
+        })
+      },
+      reply: () => true,
+      cancel: () => true,
+      end: () => {},
+      close: () => {},
+    }
+
+    try {
+      const conv = new AntigravityConversation(
+        fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+        msg => emitted.push(msg),
+        async entries => {
+          appended.push(...entries)
+          await sessionService.appendAntigravityMessages(sessionId, 'native-incremental-1', entries, () => true)
+        },
+        { incrementalFlushMs: 25, chunkIdleFlushMs: 45 },
+      )
+
+      expect(conv.send([{ type: 'text', text: 'Long running task' }], 'u-inc-1')).toBe(true)
+      await waitUntil(() => resolvePrompt !== undefined)
+
+      // 1. Thinking + Read tool call & result flush mid-turn via batched timer
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Inspecting files first.' } },
+      })
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_read_1',
+          name: 'read_file',
+          status: 'in_progress',
+          title: 'Read README.md',
+          rawInput: { Path: '/repo/README.md' },
+        },
+      })
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'call_read_1',
+          status: 'completed',
+          content: [{ type: 'content', content: { type: 'text', text: '# Hello' } }],
+        },
+      })
+
+      await waitUntil(() => appended.some(e =>
+        e.type === 'user' &&
+        Array.isArray((e.message as { content?: unknown[] })?.content) &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.tool_use_id === 'call_read_1',
+      ))
+      expect(conv.isResponding).toBe(true)
+
+      // 2. Sparse Edit must NOT head-of-line block subsequent steps from flushing mid-turn,
+      //    and when it later completes it enriches under the SAME UUID.
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_sparse_edit',
+          name: 'edit_file',
+          kind: 'edit',
+          status: 'in_progress',
+          title: 'Edit app.ts',
+        },
+      })
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_after_sparse',
+          name: 'read_file',
+          status: 'completed',
+          title: 'Read package.json',
+          rawInput: { Path: '/repo/package.json' },
+          content: [{ type: 'content', content: { type: 'text', text: '{}' } }],
+        },
+      })
+
+      // Both the sparse Edit tool_use AND the following Read tool_result flush before sparse Edit completes
+      await waitUntil(() => appended.some(e =>
+        e.type === 'user' &&
+        Array.isArray((e.message as { content?: unknown[] })?.content) &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.tool_use_id === 'call_after_sparse',
+      ))
+      const initialSparseEdit = appended.find(e =>
+        e.type === 'assistant' &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.id === 'call_sparse_edit',
+      )
+      expect(initialSparseEdit).toBeDefined()
+
+      // Late completion arrives for sparse Edit -> persists enriched Edit with the SAME UUID
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'call_sparse_edit',
+          status: 'completed',
+          content: [{ type: 'diff', path: '/repo/app.ts', oldText: 'old()', newText: 'new()' }],
+        },
+      })
+      await waitUntil(() => appended.some(e =>
+        e.type === 'user' &&
+        Array.isArray((e.message as { content?: unknown[] })?.content) &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.tool_use_id === 'call_sparse_edit',
+      ))
+      const editEntries = appended.filter(e =>
+        e.type === 'assistant' &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.id === 'call_sparse_edit',
+      )
+      expect(editEntries.length).toBeGreaterThanOrEqual(2)
+      expect(editEntries.at(-1)?.uuid).toBe(initialSparseEdit!.uuid)
+
+      // 3. Streaming text that pauses > chunkIdleFlushMs persists a cumulative checkpoint
+      //    under a stable UUID without emitting content_block_stop, then merges cleanly when resumed.
+      const stopsBeforePause = emitted.filter(m =>
+        m.type === 'stream_event' && (m.event as Record<string, unknown>)?.type === 'content_block_stop',
+      ).length
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Part 1\n```ts\n' } },
+      })
+      await waitUntil(() => appended.some(e =>
+        e.type === 'assistant' &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.text === 'Part 1\n```ts\n',
+      ))
+      const checkpointEntry = appended.find(e =>
+        e.type === 'assistant' &&
+        (e.message as { content: Array<Record<string, unknown>> }).content[0]?.text === 'Part 1\n```ts\n',
+      )
+      expect(checkpointEntry).toBeDefined()
+      // Checkpoint must NOT have closed the live stream block
+      const stopsAfterPause = emitted.filter(m =>
+        m.type === 'stream_event' && (m.event as Record<string, unknown>)?.type === 'content_block_stop',
+      ).length
+      expect(stopsAfterPause).toBe(stopsBeforePause)
+
+      // Model resumes streaming the rest of the code fence into the SAME block
+      onMessage?.('session/update', {
+        sessionId: 'native-incremental-1',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'const x = 1\n```' } },
+      })
+      resolvePrompt?.({ stopReason: 'end_turn', usage: { inputTokens: 80, outputTokens: 25 } })
+      await conv.pendingTurnCompletion
+
+      // Session history deduplicates by stable UUID into ONE intact code block and ONE enriched Edit
+      const history = await sessionService.getSessionHistoryPage(sessionId)
+      const assistantTextMsgs = history.messages.filter(m =>
+        m.type === 'assistant' &&
+        Array.isArray(m.content) &&
+        m.content.some(b => typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'text'),
+      )
+      expect(assistantTextMsgs).toHaveLength(1)
+      expect((assistantTextMsgs[0]!.content as Array<Record<string, unknown>>)[0]).toMatchObject({
+        type: 'text',
+        text: 'Part 1\n```ts\nconst x = 1\n```',
+      })
+      const editHistoryMsgs = history.messages.filter(m =>
+        m.type === 'tool_use' &&
+        Array.isArray(m.content) &&
+        m.content.some(b => typeof b === 'object' && b !== null && (b as Record<string, unknown>).id === 'call_sparse_edit'),
+      )
+      expect(editHistoryMsgs).toHaveLength(1)
+      expect((editHistoryMsgs[0]!.content as Array<Record<string, unknown>>)[0]).toMatchObject({
+        name: 'Edit',
+        input: { file_path: '/repo/app.ts', old_string: 'old()', new_string: 'new()' },
+      })
+
+      // O(1) append target cache: despite multiple mid-turn appends, getSessionLaunchInfo only ran once!
+      expect(launchInfoLookups).toBe(1)
+
+      // Detaching/clearing session invalidates the cached append target and rejects stale nativeSessionId
+      await sessionService.clearSessionTranscript(sessionId, workDir)
+      await expect(
+        sessionService.appendAntigravityMessages(sessionId, 'native-incremental-1', [{ type: 'assistant', uuid: 'stale-u', message: { role: 'assistant', content: [{ type: 'text', text: 'stale' }] } }], () => true),
+      ).rejects.toThrow('Antigravity session is no longer active')
+    } finally {
+      sessionService.getSessionLaunchInfo = origGetLaunchInfo
+    }
+  })
+
+  test('surfaces mid-turn incremental persistence errors when the turn settles', async () => {
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt: ((value: Record<string, unknown>) => void) | undefined
+    const emitted: Array<Record<string, unknown>> = []
+    let appendCalls = 0
+
+    const fakeAcp = {
+      sessionId: 'native-inc-fail-1',
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined) {
+        onMessage = fn
+      },
+      get onMessage() {
+        return onMessage
+      },
+      prompt() {
+        return new Promise<Record<string, unknown>>(resolve => {
+          resolvePrompt = resolve
+        })
+      },
+      reply: () => true,
+      cancel: () => true,
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      msg => emitted.push(msg),
+      async () => {
+        appendCalls += 1
+        // Call 1 is the initial user prompt; fail Call 2 (the incremental mid-turn flush)
+        if (appendCalls === 2) throw new Error('disk full')
+      },
+      { incrementalFlushMs: 10 },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'Trigger flush error' }], 'u-inc-fail')).toBe(true)
+    await waitUntil(() => resolvePrompt !== undefined)
+
+    onMessage?.('session/update', {
+      sessionId: 'native-inc-fail-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_fail_flush',
+        name: 'read_file',
+        status: 'completed',
+        title: 'Read a.ts',
+        rawInput: { Path: '/repo/a.ts' },
+        content: [{ type: 'content', content: { type: 'text', text: 'ok' } }],
+      },
+    })
+    await waitUntil(() => appendCalls >= 2)
+
+    resolvePrompt?.({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } })
+    await conv.pendingTurnCompletion
+
+    const result = emitted.find(m => m.type === 'result')
+    expect(result).toMatchObject({
+      type: 'result',
+      is_error: true,
+      result: 'Could not save the Antigravity response.',
+    })
+  })
 })
 
 async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {

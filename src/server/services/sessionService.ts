@@ -858,9 +858,22 @@ export function hasMalformedFileHistoryBefore(snapshot: FileHistorySnapshot): bo
   return (snapshot as FileHistorySnapshot & { [malformedFileHistoryBefore]?: true })[malformedFileHistoryBefore] === true
 }
 
+const ANTIGRAVITY_LIST_INVALIDATE_THROTTLE_MS = 5_000
+const MAX_ANTIGRAVITY_APPEND_TARGETS = 64
+
 export class SessionService {
   private readonly uiFileHistoryReads = new Map<string, Promise<RawEntry[]>>()
   private readonly inspectionSnapshots = new Map<string, Promise<SessionInspectionTranscriptSnapshot | null>>()
+  private readonly antigravityAppendTargets = new Map<string, {
+    nativeSessionId: string
+    filePath: string
+    workDir: string
+    dev: bigint
+    ino: bigint
+    size: bigint
+    mtimeNs: bigint
+    lastListInvalidatedAt: number
+  }>()
 
   private providerService = new ProviderService()
   // Keep launch state available when retention disables or removes transcripts.
@@ -5295,6 +5308,7 @@ export class SessionService {
     this.knownSessionKeys.delete(this.memorySessionKey(sessionId))
     this.memoryLaunchInfo.delete(this.memorySessionKey(sessionId))
     this.privateTitles.delete(this.memorySessionKey(sessionId))
+    this.antigravityAppendTargets.delete(this.memorySessionKey(sessionId))
     if (found) this.sessionListSummaryCache.delete(found.filePath)
     this.invalidateSessionListCache()
   }
@@ -5492,6 +5506,7 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return
     await fs.unlink(found.filePath)
+    this.antigravityAppendTargets.delete(this.memorySessionKey(sessionId))
     this.invalidateSessionListCache()
   }
 
@@ -5502,6 +5517,7 @@ export class SessionService {
     preservedCustomTitle?: string | null,
   ): Promise<void> {
     if (isSideChatId(sessionId)) throw ApiError.conflict('Open a new side chat to clear temporary history')
+    this.antigravityAppendTargets.delete(this.memorySessionKey(sessionId))
     const persist = this.shouldPersistSession()
     const nextEpoch = (this.taskNotificationMutationEpochs.get(sessionId) ?? 0) + 1
     this.taskNotificationMutationEpochs.set(sessionId, nextEpoch)
@@ -5678,21 +5694,84 @@ export class SessionService {
     isCurrent: () => boolean,
   ): Promise<void> {
     await this.withSessionMetadataMutation(sessionId, async () => {
-      const launchInfo = await this.getSessionLaunchInfo(sessionId)
-      if (!this.shouldPersistSession() || !isCurrent() || launchInfo?.nativeSessionId !== nativeSessionId) {
+      if (!this.shouldPersistSession() || !isCurrent()) {
         throw new Error('Antigravity session is no longer active')
       }
-      const handle = await fs.open(launchInfo.filePath, constants.O_WRONLY | constants.O_APPEND)
+      const key = this.memorySessionKey(sessionId)
+      const cached = this.antigravityAppendTargets.get(key)
+      let filePath: string | undefined
+      let workDir: string | undefined
+
+      if (cached && cached.nativeSessionId === nativeSessionId) {
+        try {
+          const preStat = await fs.stat(cached.filePath, { bigint: true })
+          if (
+            preStat.dev === cached.dev
+            && preStat.ino === cached.ino
+            && preStat.size === cached.size
+            && preStat.mtimeNs === cached.mtimeNs
+          ) {
+            filePath = cached.filePath
+            workDir = cached.workDir
+          }
+        } catch {
+          // File moved or removed; fall through to authoritative launch-info resolution.
+        }
+      }
+
+      if (!filePath || !workDir) {
+        const launchInfo = await this.getSessionLaunchInfo(sessionId)
+        if (!this.shouldPersistSession() || !isCurrent() || launchInfo?.nativeSessionId !== nativeSessionId) {
+          this.antigravityAppendTargets.delete(key)
+          throw new Error('Antigravity session is no longer active')
+        }
+        filePath = launchInfo.filePath
+        workDir = launchInfo.workDir
+      }
+
+      let postStat: Awaited<ReturnType<typeof fs.stat>>
+      const handle = await fs.open(filePath, constants.O_WRONLY | constants.O_APPEND)
       try {
         if (!this.shouldPersistSession() || !isCurrent()) throw new Error('Antigravity session is no longer active')
         const fallbackTimestamp = new Date().toISOString()
         await handle.writeFile(messages.map(message => JSON.stringify({
-          timestamp: fallbackTimestamp, ...message, sessionId, cwd: launchInfo.workDir,
+          timestamp: fallbackTimestamp, ...message, sessionId, cwd: workDir,
         }) + '\n').join(''), 'utf-8')
+        postStat = await handle.stat({ bigint: true })
       } finally {
         await handle.close()
       }
-      this.invalidateSessionListCache()
+
+      const now = this.now()
+      const hasStructuralEntry = messages.some(message => (
+        message.type === 'user'
+        || message.type === 'file-history-snapshot'
+        || (message.type === 'system' && message.subtype === 'compact_boundary')
+      ))
+      const shouldInvalidateList =
+        !cached
+        || cached.filePath !== filePath
+        || hasStructuralEntry
+        || now - cached.lastListInvalidatedAt >= ANTIGRAVITY_LIST_INVALIDATE_THROTTLE_MS
+      const lastListInvalidatedAt = shouldInvalidateList ? now : cached.lastListInvalidatedAt
+      if (shouldInvalidateList) {
+        this.invalidateSessionListCache()
+      }
+
+      this.antigravityAppendTargets.delete(key)
+      this.antigravityAppendTargets.set(key, {
+        nativeSessionId,
+        filePath,
+        workDir,
+        dev: postStat.dev as bigint,
+        ino: postStat.ino as bigint,
+        size: postStat.size as bigint,
+        mtimeNs: postStat.mtimeNs as bigint,
+        lastListInvalidatedAt,
+      })
+      while (this.antigravityAppendTargets.size > MAX_ANTIGRAVITY_APPEND_TARGETS) {
+        this.antigravityAppendTargets.delete(this.antigravityAppendTargets.keys().next().value!)
+      }
     })
   }
 
@@ -5700,7 +5779,10 @@ export class SessionService {
     sessionId: string,
     metadata: SessionMetadataPatch,
   ): Promise<void> {
-    return this.withSessionMetadataMutation(sessionId, () => this.appendSessionMetadataUnlocked(sessionId, metadata))
+    return this.withSessionMetadataMutation(sessionId, () => {
+      this.antigravityAppendTargets.delete(this.memorySessionKey(sessionId))
+      return this.appendSessionMetadataUnlocked(sessionId, metadata)
+    })
   }
 
   private async appendSessionMetadataUnlocked(
