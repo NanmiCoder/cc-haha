@@ -11571,4 +11571,60 @@ describe('MessageList edit and resend', () => {
     ])
     expect(options).toMatchObject({ displayContent: 'How do I stop it?' })
   })
+
+  it('shows read-only per-turn file change cards for Antigravity ACP sessions without undo or conversation-rewind buttons', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: ACTIVE_TAB,
+        title: 'Antigravity Session',
+        messageCount: 6,
+        createdAt: '',
+        modifiedAt: '',
+        projectPath: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    setup([
+      { id: 'user-1', type: 'user_text', content: 'Turn 1 edit', transcriptMessageId: 'user-1', timestamp: 1 },
+      { id: 'assistant-1', type: 'assistant_text', content: 'Edited app.ts', timestamp: 2 },
+      { id: 'user-2', type: 'user_text', content: 'Turn 2 question', transcriptMessageId: 'user-2', timestamp: 3 },
+      { id: 'assistant-2', type: 'assistant_text', content: 'Answered without edits', timestamp: 4 },
+      { id: 'user-3', type: 'user_text', content: 'Turn 3 edit', transcriptMessageId: 'user-3', timestamp: 5 },
+      { id: 'assistant-3', type: 'assistant_text', content: 'Created helper.ts', timestamp: 6 },
+    ], [
+      checkpoint('user-1', 0, 3, {
+        code: { available: true, filesChanged: ['/repo/src/app.ts'], insertions: 4, deletions: 1 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+      checkpoint('user-2', 1, 3, {
+        code: { available: false, filesChanged: [], insertions: 0, deletions: 0 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+      checkpoint('user-3', 2, 3, {
+        code: { available: true, filesChanged: ['/repo/src/helper.ts', '/repo/src/types.ts'], insertions: 12, deletions: 0 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+    ])
+
+    render(<MessageList />)
+
+    await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledWith(ACTIVE_TAB, expect.anything()))
+    expect(await screen.findByText('1 files changed')).toBeTruthy()
+    expect(await screen.findByText('2 files changed')).toBeTruthy()
+    expect(screen.getByText('+4')).toBeTruthy()
+    expect(screen.getByText('-1')).toBeTruthy()
+    expect(screen.getByText('+12')).toBeTruthy()
+
+    // Read-only: no Undo button on change cards, no standalone Rewind conversation button on Turn 2, no Edit & resend.
+    expect(screen.queryByRole('button', { name: /Undo current turn/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Rewind to before this turn/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Roll back conversation/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
+  })
 })

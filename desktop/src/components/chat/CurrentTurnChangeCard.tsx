@@ -29,6 +29,7 @@ type CurrentTurnChangeCardProps = {
   error: string | null
   isUndoing: boolean
   undoDisabled?: boolean
+  showUndo?: boolean
   isLatest: boolean
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
@@ -49,6 +50,7 @@ export function CurrentTurnChangeCard({
   error,
   isUndoing,
   undoDisabled,
+  showUndo = true,
   isLatest,
   onUndo,
   expanded,
@@ -83,7 +85,7 @@ export function CurrentTurnChangeCard({
   // shell command may have touched files no checkpoint captured. Say so instead
   // of withholding the undo — the listed files are still exactly reversible.
   const unverifiedChangeSources = checkpoint.unverifiedChangeSources ?? []
-  const hasUnverifiedChanges = restoreAvailable && unverifiedChangeSources.length > 0
+  const hasUnverifiedChanges = showUndo && restoreAvailable && unverifiedChangeSources.length > 0
 
   const openChangedFile = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     if (isMobile) {
@@ -215,20 +217,22 @@ export function CurrentTurnChangeCard({
           </span>
         </button>
 
-        {/* 无法恢复文件时，仍可选择只回退对话。 */}
-        <Button
-          variant="secondary"
-          size="xs"
-          loading={isUndoing}
-          disabled={undoDisabled}
-          onClick={onUndo}
-          aria-label={undoAria}
-          title={subtitle}
-          className="relative shrink-0"
-          icon={<Undo2 size={13} strokeWidth={1.75} aria-hidden="true" />}
-        >
-          {isUndoing ? t('chat.turnChangesUndoing') : undoLabel}
-        </Button>
+        {/* 无法恢复文件时，仍可选择只回退对话；不支持回滚的运行时仅展示只读文件变更卡片。 */}
+        {showUndo && (
+          <Button
+            variant="secondary"
+            size="xs"
+            loading={isUndoing}
+            disabled={undoDisabled}
+            onClick={onUndo}
+            aria-label={undoAria}
+            title={subtitle}
+            className="relative shrink-0"
+            icon={<Undo2 size={13} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            {isUndoing ? t('chat.turnChangesUndoing') : undoLabel}
+          </Button>
+        )}
         <ChevronRight
           size={14}
           strokeWidth={1.75}

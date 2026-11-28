@@ -1331,6 +1331,8 @@ export class ConversationService {
             })
           },
         } : {}),
+        sessionId,
+        workDir,
         onAvailableCommands: (commands: AntigravitySlashCommand[]) => {
           session.initMessage = {
             ...session.initMessage,

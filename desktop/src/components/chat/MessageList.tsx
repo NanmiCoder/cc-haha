@@ -2606,7 +2606,8 @@ export function MessageList({
   const isAntigravityRuntime = useSessionRuntimeStore(state => Boolean(resolvedSessionId && state.selections[resolvedSessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
   const isAntigravitySession = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID))
   const isAntigravity = isAntigravityRuntime || isAntigravitySession
-  const supportsTurnCheckpoints = !isDirectAgentSession && !isAntigravity
+  const supportsTurnFileChanges = !isDirectAgentSession
+  const supportsTurnRewind = !isDirectAgentSession && !isAntigravity
   const branchActionsDisabled = isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
@@ -3096,7 +3097,7 @@ export function MessageList({
     return null
   }, [renderItems, turnCompletionByMessageId])
   const waitingForReconnect = sessionState?.connectionState === 'reconnecting' || sessionState?.awaitingReconnectSync === true
-  const turnCheckpointQueryPaused = !checkpointHistoryReady || !supportsTurnCheckpoints || turnInProgress ||
+  const turnCheckpointQueryPaused = !checkpointHistoryReady || !supportsTurnFileChanges || turnInProgress ||
     hasRunningBackgroundTasks || waitingForReconnect || sessionState?.awaitingStopIdle === true
   const historyWindowed = sessionState?.historyWindowed === true
   const turnTargetsCurrent = deferredMessages === messages
@@ -3111,11 +3112,11 @@ export function MessageList({
   )) | null>(null)
   // 上次结果可以继续阅读；只有当前请求的结果才可以用于撤销。
   const currentCheckpointResult = checkpointResult?.request === checkpointRequest ? checkpointResult : null
-  const turnUndoBlocked = currentCheckpointResult?.kind !== 'ready'
+  const turnUndoBlocked = !supportsTurnRewind || currentCheckpointResult?.kind !== 'ready'
   const turnChangeLoadError = currentCheckpointResult?.kind === 'error' ? currentCheckpointResult.message : null
   const workspaceChangesFallback = currentCheckpointResult?.kind === 'over-budget' ? currentCheckpointResult : null
   // 断线会重置 historyHydrated，但不会清空正在显示的行；沿用这些行的只读卡片。
-  const canRetainTurnCards = !isDirectAgentSession && (!turnTargetsCurrent || completedTurnTargets.length > 0)
+  const canRetainTurnCards = supportsTurnFileChanges && (!turnTargetsCurrent || completedTurnTargets.length > 0)
   const turnChangeCards = useMemo(() => {
     if (!canRetainTurnCards || checkpointResult?.kind !== 'ready' || checkpointResult.request.sessionId !== resolvedSessionId) {
       return EMPTY_TURN_CHANGE_CARDS
@@ -4186,6 +4187,7 @@ export function MessageList({
             if (!turnUndoBlocked) setTurnUndoConfirmTarget({ sessionId: resolvedSessionId, checkpointId })
           }
           if (!card.checkpoint.code.available) {
+            if (!supportsTurnRewind) return null
             return (
               <div
                 key={`conversation-rewind-${checkpointId}`}
@@ -4223,6 +4225,7 @@ export function MessageList({
               error={error}
               isUndoing={rewindingTurnId === card.target.messageId}
               undoDisabled={turnUndoBlocked}
+              showUndo={supportsTurnRewind}
               isLatest={card.isLatest}
               onUndo={openUndoDialog}
             />

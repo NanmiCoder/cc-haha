@@ -10,6 +10,7 @@ import {
   type FileHistorySnapshot,
   readBackupFileSafely,
 } from '../../utils/fileHistory.js'
+import { ANTIGRAVITY_PROVIDER_ID } from './antigravityAcp.js'
 import { conversationService } from './conversationService.js'
 import { canonicalizeFilesystemAccessPath } from './filesystemAccessRoots.js'
 import { createTranscriptReadBudget, hasMalformedFileHistoryBefore, sessionService, type MessageEntry, type TranscriptReadBudget } from './sessionService.js'
@@ -1090,15 +1091,18 @@ function mergeTurnCodePreviews(
   transcriptEvidence: TranscriptTurnFileEvidence,
   transcriptIntact: boolean,
   frozen = false,
+  turnScopedSnapshots = false,
 ): MergedTurnCodePreview {
   const transcriptChanges = transcriptEvidence.confirmedChanges
   const transcriptPreview = buildTranscriptTurnCodePreview(transcriptChanges)
-  const scopedSnapshotPreview = scopeSnapshotPreviewToTurn(
-    snapshotPreview,
-    transcriptEvidence,
-    transcriptIntact,
-    frozen,
-  )
+  const scopedSnapshotPreview = turnScopedSnapshots
+    ? snapshotPreview
+    : scopeSnapshotPreviewToTurn(
+      snapshotPreview,
+      transcriptEvidence,
+      transcriptIntact,
+      frozen,
+    )
   const checkpointPreview = scopedSnapshotPreview?.preview ?? null
   const hasUncoveredUncertainChange = transcriptEvidence.uncertainChanges.some((change) =>
     !scopedSnapshotPreview?.coveredPathIdentities.has(change.identityPath)
@@ -1326,6 +1330,7 @@ async function getTurnBoundaryContents(
   nextSnapshot: FileHistorySnapshot | null,
   frozen = false,
   nextBackupsByIdentity?: BackupNamesByIdentity,
+  preferCompletedBoundary = false,
 ): Promise<{
   beforeContent: string | null
   afterContent: string | null
@@ -1339,8 +1344,13 @@ async function getTurnBoundaryContents(
   const beforeBytes = await readBackupBytes(sessionId, targetBackup?.backupFileName)
   const beforeContent = checkpointText(beforeBytes, frozen)
   let afterBytes: Buffer | null | undefined
+  const hasCompletedBoundary =
+    Boolean(targetSnapshot.completedFileBackups) &&
+    Object.prototype.hasOwnProperty.call(targetSnapshot.completedFileBackups, trackingPath)
   if (frozen && targetSnapshot.completedFileBackups) {
     afterBytes = await readBackupBytes(sessionId, targetSnapshot.completedFileBackups[trackingPath]?.backupFileName)
+  } else if (preferCompletedBoundary && hasCompletedBoundary) {
+    afterBytes = await readBackupBytes(sessionId, targetSnapshot.completedFileBackups![trackingPath]?.backupFileName)
   } else if (!nextSnapshot) {
     if (!frozen) afterBytes = await readCurrentFileBytes(absolutePath)
   } else {
@@ -1348,7 +1358,11 @@ async function getTurnBoundaryContents(
       nextBackupsByIdentity ?? indexSnapshotBackupsByIdentity(nextSnapshot, checkpointBaseDir, frozen),
       toFileIdentityPath(absolutePath, frozen),
     )
-    afterBytes = await readBackupBytes(sessionId, nextBackupFileName)
+    afterBytes = nextBackupFileName !== undefined
+      ? await readBackupBytes(sessionId, nextBackupFileName)
+      : hasCompletedBoundary
+        ? await readBackupBytes(sessionId, targetSnapshot.completedFileBackups![trackingPath]?.backupFileName)
+        : undefined
   }
 
   const afterContent = checkpointText(afterBytes, frozen)
@@ -1406,6 +1420,7 @@ async function buildTurnCodePreview(
   signal?: AbortSignal,
   frozen = false,
   scanCache?: TurnScanCache,
+  preferCompletedBoundary = false,
 ): Promise<SnapshotTurnCodePreview> {
   const trackedPaths = Object.keys(targetSnapshot.trackedFileBackups)
   const nextBackupsByIdentity = nextSnapshot
@@ -1452,6 +1467,7 @@ async function buildTurnCodePreview(
     // it unchanged; what remains to decide is whether it is readable and safe.
     if (
       !frozen &&
+      !preferCompletedBoundary &&
       nextBackupsByIdentity &&
       resolveIndexedBackupFileName(nextBackupsByIdentity, identityPath) === targetBackupFileName
     ) {
@@ -1493,6 +1509,7 @@ async function buildTurnCodePreview(
         nextSnapshot,
         false,
         nextBackupsByIdentity,
+        preferCompletedBoundary,
       )
     const safeTrackedPath = await isSafeTrackedPathCached(checkpointBaseDir, trackingPath, scanCache)
     signal?.throwIfAborted()
@@ -2036,6 +2053,7 @@ async function buildTurnCheckpointStateFromContext(
   signal?: AbortSignal,
   frozen = false,
   scanCache?: TurnScanCache,
+  turnScopedSnapshots = false,
 ): Promise<SessionTurnCheckpointPreview> {
   signal?.throwIfAborted()
   const snapshotPreview = targetSnapshot
@@ -2047,6 +2065,7 @@ async function buildTurnCheckpointStateFromContext(
       signal,
       frozen,
       scanCache,
+      turnScopedSnapshots,
     )
     : null
   signal?.throwIfAborted()
@@ -2060,6 +2079,7 @@ async function buildTurnCheckpointStateFromContext(
     transcriptEvidence,
     transcriptEvidenceComplete,
     frozen,
+    turnScopedSnapshots,
   )
 
   // Snapshots accumulate paths from earlier turns. With intact, fully attributed
@@ -2093,7 +2113,7 @@ async function buildTurnCheckpointStateFromContext(
     target,
     boundaryUnavailable ? { ...preview, available: false, reason: `Recorded file history is incomplete for: ${missingEvidence.join(', ')}` } : preview,
     checkpointBaseDir,
-    restoreBoundaryUnavailable ? false : restoreAvailable,
+    turnScopedSnapshots || restoreBoundaryUnavailable ? false : restoreAvailable,
     restoreBoundaryUnavailable ? normalizeUnverifiedChangeSources([...unverifiedChangeSources, ...restoreMissingEvidence.map(filePath => `file-history:${filePath}`)]) : unverifiedChangeSources,
   )
 }
@@ -2352,6 +2372,7 @@ export async function listSessionTurnCheckpoints(
   }
 
   const workDir = await resolveSessionWorkDir(sessionId)
+  const isAntigravity = (await sessionService.getSessionLaunchInfo(sessionId))?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID
   const snapshots = await scopeCarriedForwardSnapshots(
     sessionId, await loadFileHistorySnapshots(sessionId, budget), activeMessages, transcriptEvidenceComplete, workDir, frozen,
   )
@@ -2387,6 +2408,7 @@ export async function listSessionTurnCheckpoints(
       signal,
       frozen,
       scanCache,
+      isAntigravity,
     )
 
     const startedAt = Date.parse(turn.userMessage.timestamp)
@@ -2415,6 +2437,7 @@ export async function getSessionTurnCheckpointDiff(
     target.targetUserMessageId,
     workDir,
   )
+  const isAntigravity = (await sessionService.getSessionLaunchInfo(sessionId))?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID
   const snapshots = await scopeCarriedForwardSnapshots(
     sessionId, await loadFileHistorySnapshots(sessionId, budget), activeMessages, transcriptEvidenceComplete, workDir, frozen,
   )
@@ -2480,13 +2503,24 @@ export async function getSessionTurnCheckpointDiff(
 
     try {
       const { beforeContent, afterContent, afterBoundaryAvailable, changed, textComparable } =
-        await (frozen ? getFrozenTurnBoundaryContents : getTurnBoundaryContents)(
-        sessionId,
-        checkpointBaseDir,
-        trackingPath,
-        targetSnapshot,
-        nextSnapshot,
-      )
+        await (frozen
+          ? getFrozenTurnBoundaryContents(
+            sessionId,
+            checkpointBaseDir,
+            trackingPath,
+            targetSnapshot,
+            nextSnapshot,
+          )
+          : getTurnBoundaryContents(
+            sessionId,
+            checkpointBaseDir,
+            trackingPath,
+            targetSnapshot,
+            nextSnapshot,
+            false,
+            undefined,
+            isAntigravity,
+          ))
 
       if (!afterBoundaryAvailable) {
         return transcriptResult ?? {
