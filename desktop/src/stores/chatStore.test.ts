@@ -10039,6 +10039,58 @@ describe('chatStore history mapping', () => {
     expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]?.modelId).toBe('model-a')
   })
 
+  it('adopts a runtime applied by another client when the local choice is settled', () => {
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ runtimeConfigReadyCount: 0 }) } })
+    useSessionRuntimeStore.getState().syncFromSessions([{
+      id: TEST_SESSION_ID, runtimeProviderId: 'desktop-provider', runtimeModelId: 'desktop-model', effortLevel: 'high',
+    } as SessionListItem])
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toMatchObject({
+      providerId: 'desktop-provider', modelId: 'desktop-model', effortLevel: 'high',
+    })
+
+    // A mobile/CLI switch is broadcast to every connection without requestedConfig.
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'runtime_config_applied',
+      providerId: 'mobile-provider',
+      modelId: 'mobile-model',
+      effortLevel: 'max',
+    })
+
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toMatchObject({
+      providerId: 'mobile-provider', modelId: 'mobile-model', effortLevel: 'max',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.runtimeConfigReadyCount).toBe(1)
+  })
+
+  it('adopts a runtime applied by another client when this window has no local choice', () => {
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ runtimeConfigReadyCount: 0 }) } })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'runtime_config_applied', providerId: 'mobile-provider', modelId: 'mobile-model',
+    })
+
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toMatchObject({
+      providerId: 'mobile-provider', modelId: 'mobile-model',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.runtimeConfigReadyCount).toBe(1)
+  })
+
+  it('keeps a pending local runtime choice when another client applies a different one', () => {
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ runtimeConfigReadyCount: 0 }) } })
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, {
+      providerId: 'desktop-provider', modelId: 'desktop-model',
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'runtime_config_applied', providerId: 'mobile-provider', modelId: 'mobile-model',
+    })
+
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toMatchObject({
+      providerId: 'desktop-provider', modelId: 'desktop-model',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.runtimeConfigReadyCount).toBe(0)
+  })
+
   it('accepts a corrected runtime acknowledgement only for the matching restored choice', () => {
     useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ runtimeConfigReadyCount: 0 }) } })
     const requestedConfig = { providerId: 'deleted-provider', modelId: 'old-model', effortLevel: 'max' as const }
