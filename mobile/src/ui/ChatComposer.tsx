@@ -52,17 +52,22 @@ export function useBottomInset() {
 
 /** 键盘弹起时输入框贴着键盘，不再留 Home 指示条的空隙。 */
 function useKeyboardVisible() {
-  const [visible, setVisible] = useState(false)
+  const [visible, setVisible] = useState(() =>
+    Platform.OS === 'ios' && typeof Keyboard.isVisible === 'function' ? Keyboard.isVisible() : false
+  )
   useEffect(() => {
     if (Platform.OS === 'web') return subscribeWebKeyboard(setVisible)
-    const show = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setVisible(true)
-    )
-    const hide = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setVisible(false)
-    )
+    if (Platform.OS === 'ios') {
+      const subs = [
+        Keyboard.addListener('keyboardWillShow', () => setVisible(true)),
+        Keyboard.addListener('keyboardDidShow', () => setVisible(true)),
+        Keyboard.addListener('keyboardWillHide', () => setVisible(false)),
+        Keyboard.addListener('keyboardDidHide', () => setVisible(false)),
+      ]
+      return () => subs.forEach((sub) => sub.remove())
+    }
+    const show = Keyboard.addListener('keyboardDidShow', () => setVisible(true))
+    const hide = Keyboard.addListener('keyboardDidHide', () => setVisible(false))
     return () => {
       show.remove()
       hide.remove()
@@ -411,6 +416,23 @@ export function ChatComposer({
   const unrendered = useRef<string | null>(null)
   const sendWhenRendered = useRef(false)
   const sent = useRef<string | null>(null)
+  // On iOS Fabric, BaseTextInputShadowNode::layout updates state after Yoga's
+  // measureContent pass. When JS clears or shortens a multiline draft (send,
+  // prompt optimize, /model), the field clears visually while keeping the old
+  // multiline height until a later layout pass dirties Yoga. Nudge maxHeight by
+  // 0.5pt on the next commit to force Yoga to re-measure the updated state.
+  const prevDraft = useRef(draft)
+  const lastTypedDraft = useRef<string | null>(null)
+  const [iosRemeasure, setIosRemeasure] = useState(0)
+  useEffect(() => {
+    const shrunkFromJs =
+      Platform.OS === 'ios' &&
+      draft.length < prevDraft.current.length &&
+      draft !== lastTypedDraft.current
+    prevDraft.current = draft
+    lastTypedDraft.current = null
+    if (shrunkFromJs) setIosRemeasure((n) => n + 1)
+  }, [draft])
   const [candidates, setCandidates] = useState<ComposerCandidate[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -675,6 +697,7 @@ export function ChatComposer({
               value === reported
                 ? Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
                 : value.length
+            lastTypedDraft.current = value
             unrendered.current = value
             onDraft(value)
             setSelection({ start: cursor, end: cursor })
@@ -702,7 +725,7 @@ export function ChatComposer({
             // takes its place; completion restores this same editable field.
             display: voice.live ? 'none' : 'flex',
             minHeight: 44,
-            maxHeight: 136,
+            maxHeight: Platform.OS === 'ios' && (iosRemeasure & 1) ? 136.5 : 136,
             paddingHorizontal: 10,
             paddingTop: 10,
             paddingBottom: 10,

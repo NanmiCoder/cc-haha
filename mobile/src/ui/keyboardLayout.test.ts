@@ -3,8 +3,10 @@ import {
   IOS_KEYBOARD_EVENTS,
   iosKeyboardInset,
   keyboardOverlap,
+  nextIosKeyboardState,
   type IosKeyboardEventName,
   type IosKeyboardFrameEvent,
+  type IosKeyboardState,
 } from './keyboardLayout'
 
 describe('keyboard viewport', () => {
@@ -45,12 +47,12 @@ const frame = (height: number, isEventFromThisApp = true): IosKeyboardFrameEvent
   isEventFromThisApp,
 })
 
-/** Same fold as IosKeyboardViewport: only subscribed events, null keeps the inset. */
+/** Same fold as IosKeyboardViewport: only subscribed events, stateful hide guard. */
 function replay(steps: Step[]): number {
-  return steps.reduce((inset, [name, event]) => {
-    if (!(IOS_KEYBOARD_EVENTS as readonly string[]).includes(name)) return inset
-    return iosKeyboardInset(name, event, WINDOW) ?? inset
-  }, 0)
+  return steps.reduce<IosKeyboardState>((state, [name, event]) => {
+    if (!(IOS_KEYBOARD_EVENTS as readonly string[]).includes(name)) return state
+    return nextIosKeyboardState(state, name, event, WINDOW)
+  }, { inset: 0, hiding: false }).inset
 }
 
 describe('iOS keyboard inset', () => {
@@ -95,5 +97,36 @@ describe('iOS keyboard inset', () => {
   test('counts only the visible part of a keyboard sliding off screen', () => {
     expect(iosKeyboardInset('keyboardWillChangeFrame', { endCoordinates: { screenY: 774, height: 336 } }, WINDOW)).toBe(100)
     expect(iosKeyboardInset('keyboardWillChangeFrame', { endCoordinates: { screenY: WINDOW, height: 336 } }, WINDOW)).toBe(0)
+  })
+
+  test('ignores stale non-zero frame events while hiding or after DidHide (WeChat keyboard / Cross-Fade)', () => {
+    // Under Prefer Cross-Fade Transitions or third-party keyboard teardown,
+    // WillChangeFrame / DidChangeFrame can report screenY 0 or a leftover toolbar
+    // height right after WillHide / DidHide.
+    expect(replay([
+      ['keyboardWillShow', frame(371)],
+      ['keyboardDidShow', frame(371)],
+      ['keyboardWillHide', { endCoordinates: { screenY: 0, height: 371 }, isEventFromThisApp: true }],
+      ['keyboardWillChangeFrame', { endCoordinates: { screenY: 0, height: 371 }, isEventFromThisApp: true }],
+      ['keyboardDidChangeFrame', { endCoordinates: { screenY: 0, height: 371 }, isEventFromThisApp: true }],
+      ['keyboardDidHide', { endCoordinates: { screenY: 0, height: 371 }, isEventFromThisApp: true }],
+    ])).toBe(0)
+
+    expect(replay([
+      ['keyboardDidShow', frame(371)],
+      ['keyboardWillHide', frame(371)],
+      ['keyboardDidHide', frame(0)],
+      ['keyboardDidChangeFrame', frame(94)],
+    ])).toBe(0)
+
+    // Re-opening the keyboard later resumes normal tracking.
+    expect(replay([
+      ['keyboardDidShow', frame(371)],
+      ['keyboardWillHide', frame(371)],
+      ['keyboardDidHide', frame(0)],
+      ['keyboardDidChangeFrame', frame(94)],
+      ['keyboardWillShow', frame(371)],
+      ['keyboardDidChangeFrame', frame(340)],
+    ])).toBe(340)
   })
 })

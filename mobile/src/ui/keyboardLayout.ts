@@ -30,6 +30,11 @@ export type IosKeyboardFrameEvent = {
   isEventFromThisApp?: boolean
 }
 
+export type IosKeyboardState = {
+  inset: number
+  hiding: boolean
+}
+
 /**
  * Bottom inset for a viewport that reaches the bottom of the window, as every caller
  * does (native iOS page sheets included): the part of the keyboard inside the window.
@@ -47,4 +52,29 @@ export function iosKeyboardInset(
   // Bounded by the keyboard's own height: with Prefer Cross-Fade Transitions iOS
   // reports screenY 0 for a docked keyboard.
   return Math.max(0, Math.min(height, windowHeight - screenY))
+}
+
+/**
+ * Track hide transitions across frame events: third-party keyboards (e.g. WeChat
+ * keyboard) and Cross-Fade Transitions can emit Will/DidChangeFrame with a stale
+ * non-zero frame while hiding or right after DidHide. Ignore those until a Show
+ * event announces the keyboard is visible again.
+ */
+export function nextIosKeyboardState(
+  state: IosKeyboardState,
+  name: IosKeyboardEventName,
+  event: IosKeyboardFrameEvent,
+  windowHeight: number,
+): IosKeyboardState {
+  if (name === 'keyboardWillHide' || name === 'keyboardDidHide') {
+    return { inset: 0, hiding: true }
+  }
+  if (event.isEventFromThisApp === false) return state
+  if (name === 'keyboardWillShow' || name === 'keyboardDidShow') {
+    const next = iosKeyboardInset(name, event, windowHeight)
+    return { inset: next ?? state.inset, hiding: false }
+  }
+  if (state.hiding) return state
+  const next = iosKeyboardInset(name, event, windowHeight)
+  return next === null ? state : { inset: next, hiding: false }
 }

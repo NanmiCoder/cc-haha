@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react'
 import { Dimensions, Keyboard, Platform, View, type ViewProps } from 'react-native'
-import { IOS_KEYBOARD_EVENTS, iosKeyboardInset, keyboardOverlap } from './keyboardLayout'
+import { IOS_KEYBOARD_EVENTS, iosKeyboardInset, keyboardOverlap, nextIosKeyboardState, type IosKeyboardState } from './keyboardLayout'
 
 /** Android edge-to-edge windows can overlay the IME even with adjustResize enabled. */
 function AndroidKeyboardViewport({ style, onLayout, ...props }: ViewProps) {
@@ -58,16 +58,17 @@ function IosKeyboardViewport({ style, ...props }: ViewProps) {
       ? iosKeyboardInset('keyboardDidShow', { endCoordinates: metrics }, Dimensions.get('window').height) ?? 0
       : 0
   })
-  const current = useRef(bottom)
+  const state = useRef<IosKeyboardState>({ inset: bottom, hiding: false })
 
   useEffect(() => {
     const subscriptions = IOS_KEYBOARD_EVENTS.map((name) =>
       Keyboard.addListener(name, (event) => {
-        const next = iosKeyboardInset(name, event, Dimensions.get('window').height)
-        if (next === null || next === current.current) return
-        current.current = next
+        const prev = state.current
+        const next = nextIosKeyboardState(prev, name, event, Dimensions.get('window').height)
+        state.current = next
+        if (next.inset === prev.inset) return
         if (name.startsWith('keyboardWill')) Keyboard.scheduleLayoutAnimation(event)
-        setBottom(next)
+        setBottom(next.inset)
       }),
     )
     return () => subscriptions.forEach((subscription) => subscription.remove())

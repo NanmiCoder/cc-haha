@@ -23,9 +23,11 @@ function page(height: number) {
     activeElement: composer as Element | null,
     getElementById: (id: string) => (id === 'root' ? appRoot : null),
   }
+  const timers = new Map<number, () => void>()
+  let nextTimerId = 1
   const win = {
-    addEventListener: (type: 'scroll', listener: () => void) => events.addEventListener(type, listener),
-    removeEventListener: (type: 'scroll', listener: () => void) => events.removeEventListener(type, listener),
+    addEventListener: (type: 'scroll' | 'resize' | 'focusout', listener: () => void) => events.addEventListener(type, listener),
+    removeEventListener: (type: 'scroll' | 'resize' | 'focusout', listener: () => void) => events.removeEventListener(type, listener),
     visualViewport: viewport,
     document,
     innerHeight: height,
@@ -36,10 +38,32 @@ function page(height: number) {
       win.scrollX = x
       win.scrollY = y
     },
+    requestAnimationFrame(cb: () => void) {
+      const id = nextTimerId++
+      timers.set(id, cb)
+      return id
+    },
+    cancelAnimationFrame(id: number) {
+      timers.delete(id)
+    },
+    setTimeout(cb: () => void) {
+      const id = nextTimerId++
+      timers.set(id, cb)
+      return id
+    },
+    clearTimeout(id: number | ReturnType<typeof setTimeout>) {
+      timers.delete(id as number)
+    },
   }
   const fire = (type: 'resize' | 'scroll') => viewport.dispatchEvent(new Event(type))
   const fireWindowScroll = () => events.dispatchEvent(new Event('scroll'))
-  return { win: win as ViewportWindow & typeof win, viewport, style, scrolls, fire, fireWindowScroll }
+  const fireWindowEvent = (type: 'resize' | 'focusout') => events.dispatchEvent(new Event(type))
+  const flushTimers = () => {
+    const callbacks = [...timers.values()]
+    timers.clear()
+    callbacks.forEach((cb) => cb())
+  }
+  return { win: win as ViewportWindow & typeof win, viewport, style, scrolls, fire, fireWindowScroll, fireWindowEvent, flushTimers }
 }
 
 describe('web viewport', () => {
@@ -169,5 +193,31 @@ describe('web viewport', () => {
     const states: boolean[] = []
     bare.subscribe((open) => states.push(open))
     expect(states).toEqual([false])
+  })
+
+  test('resyncs viewport height and scroll after focusout when a third-party keyboard hides without a final visualViewport resize', () => {
+    const { win, viewport, style, scrolls, fire, fireWindowEvent, flushTimers } = page(844)
+    const seen: boolean[] = []
+    const watcher = watchWebViewport(win)
+    watcher.subscribe((open) => seen.push(open))
+
+    viewport.height = 473
+    fire('resize')
+    expect(seen).toEqual([false, true])
+    expect(style.get(VIEWPORT_HEIGHT_VAR)).toBe('473px')
+
+    // User collapses WeChat keyboard: input blurs, visualViewport restores without emitting resize.
+    win.document.activeElement = null
+    win.scrollY = 120
+    viewport.height = 844
+    fireWindowEvent('focusout')
+    flushTimers()
+
+    expect(seen).toEqual([false, true, false])
+    expect(style.get(VIEWPORT_HEIGHT_VAR)).toBe('844px')
+    expect(win.scrollY).toBe(0)
+    expect(scrolls).toEqual([[0, 0]])
+
+    watcher.dispose()
   })
 })

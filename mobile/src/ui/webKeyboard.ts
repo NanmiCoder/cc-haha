@@ -28,6 +28,8 @@ type ViewportEvents = {
   addEventListener(type: 'resize' | 'scroll', listener: () => void): void
   removeEventListener(type: 'resize' | 'scroll', listener: () => void): void
 }
+type TimerHandle = ReturnType<typeof setTimeout> | number
+
 export type ViewportWindow = {
   visualViewport?: ViewportEvents | null
   document: {
@@ -38,8 +40,12 @@ export type ViewportWindow = {
   scrollX: number
   scrollY: number
   scrollTo(x: number, y: number): void
-  addEventListener(type: 'scroll', listener: () => void): void
-  removeEventListener(type: 'scroll', listener: () => void): void
+  addEventListener(type: 'scroll' | 'resize' | 'focusout', listener: () => void): void
+  removeEventListener(type: 'scroll' | 'resize' | 'focusout', listener: () => void): void
+  requestAnimationFrame?(cb: () => void): number
+  cancelAnimationFrame?(id: number): void
+  setTimeout?(cb: () => void, ms: number): TimerHandle
+  clearTimeout?(id: TimerHandle): void
 }
 
 /** 焦点在应用自己（index.html 的 #root）里，而不是挂在 body 上的弹层里。 */
@@ -48,11 +54,19 @@ function focusedInApp(doc: ViewportWindow['document']) {
   return !!active && !!doc.getElementById('root')?.contains(active)
 }
 
+function isEditableElement(el: Element | null) {
+  const tag = (el as { tagName?: string } | null)?.tagName
+  return typeof tag === 'string' && /^(INPUT|TEXTAREA|SELECT)$/.test(tag)
+}
+
 /**
  * 让应用跟着可见区域走：可见高度写进 --cc-viewport-height，软键盘弹起时整个应用
  * 缩到键盘上方。iOS 不缩布局视口，而是把整页往上推来露出输入框——应用已经在
  * 键盘上方了，这一推只会把顶部和输入框推出屏幕，所以拉回 0。键盘动画结束时
  * iOS 还会再推一次，只发 window 的 scroll，visualViewport 不发事件，两边都要听。
+ * 第三方输入法（如微信输入法）点收起时，Safari 有时在收起动画结束后不再补发
+ * visualViewport.resize，导致 --cc-viewport-height 停在偏小高度、底部留白；
+ * focusout 后在下一帧及动画落稳后补同步一次。
  * 弹层（react-native-web 的 Modal）挂在 body 上、按整页高度排，不跟着缩；
  * 它里面的输入框只能靠 iOS 这一推露出来，焦点在那里时不拉回。
  */
@@ -60,6 +74,19 @@ export function watchWebViewport(win: ViewportWindow) {
   const viewport = win.visualViewport
   const listeners = new Set<Listener>()
   let open = false
+  let rafId: number | null = null
+  let settleTimer: TimerHandle | null = null
+  const clearScheduled = () => {
+    if (rafId !== null) {
+      win.cancelAnimationFrame?.(rafId)
+      rafId = null
+    }
+    if (settleTimer !== null) {
+      if (win.clearTimeout) win.clearTimeout(settleTimer)
+      else clearTimeout(settleTimer as ReturnType<typeof setTimeout>)
+      settleTimer = null
+    }
+  }
   const sync = () => {
     const height = viewport ? visibleHeight(viewport) : 0
     if (!(height > 0)) return
@@ -67,14 +94,39 @@ export function watchWebViewport(win: ViewportWindow) {
     // 先读布局高度再写变量：反过来每个滚动事件都会强制重新排版一次。
     const next = isWebKeyboardOpen(doc.documentElement.clientHeight, height)
     doc.documentElement.style.setProperty(VIEWPORT_HEIGHT_VAR, `${Math.round(height)}px`)
-    if (next && (win.scrollX !== 0 || win.scrollY !== 0) && focusedInApp(doc)) win.scrollTo(0, 0)
+    const shouldResetScroll =
+      (win.scrollX !== 0 || win.scrollY !== 0) &&
+      (next ? focusedInApp(doc) : open && !isEditableElement(doc.activeElement))
+    if (shouldResetScroll) win.scrollTo(0, 0)
     if (next === open) return
     open = next
     listeners.forEach((listener) => listener(open))
   }
+  const onFocusOut = () => {
+    clearScheduled()
+    const run = () => {
+      rafId = null
+      if (isEditableElement(win.document.activeElement)) return
+      sync()
+    }
+    if (typeof win.requestAnimationFrame === 'function') {
+      rafId = win.requestAnimationFrame(run)
+    } else {
+      run()
+    }
+    const schedule = win.setTimeout ?? ((cb: () => void, ms: number): TimerHandle => setTimeout(cb, ms))
+    settleTimer = schedule(() => {
+      settleTimer = null
+      if (isEditableElement(win.document.activeElement)) return
+      sync()
+      if (!open && (win.scrollX !== 0 || win.scrollY !== 0)) win.scrollTo(0, 0)
+    }, 300)
+  }
   viewport?.addEventListener('resize', sync)
   viewport?.addEventListener('scroll', sync)
   win.addEventListener('scroll', sync)
+  win.addEventListener('resize', sync)
+  win.addEventListener('focusout', onFocusOut)
   sync()
   return {
     subscribe(listener: Listener) {
@@ -85,9 +137,12 @@ export function watchWebViewport(win: ViewportWindow) {
       }
     },
     dispose() {
+      clearScheduled()
       viewport?.removeEventListener('resize', sync)
       viewport?.removeEventListener('scroll', sync)
       win.removeEventListener('scroll', sync)
+      win.removeEventListener('resize', sync)
+      win.removeEventListener('focusout', onFocusOut)
       listeners.clear()
     },
   }
