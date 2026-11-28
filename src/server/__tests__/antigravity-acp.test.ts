@@ -40,6 +40,7 @@ type WireRecord = {
   pid: number
   argv?: string[]
   hasAnthropicApiKey?: boolean
+  envSnapshot?: Record<string, string | undefined>
   jsonrpc?: string
   id?: string | number
   method?: string
@@ -70,6 +71,13 @@ const update = (sessionId, sessionUpdate, data) =>
 record({
   argv: process.argv.slice(2),
   hasAnthropicApiKey: process.env.ANTHROPIC_API_KEY !== undefined,
+  envSnapshot: {
+    AGY_ADC_AUTH: process.env.AGY_ADC_AUTH,
+    GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT,
+    GOOGLE_CLOUD_LOCATION: process.env.GOOGLE_CLOUD_LOCATION,
+    AGY_CLI_AUTO_COMPACT_OVERRIDE: process.env.AGY_CLI_AUTO_COMPACT_OVERRIDE,
+  },
 })
 
 let currentModel = 'gemini-4-neon'
@@ -89,9 +97,10 @@ const buildConfigOptions = () => [
     options: [
       { value: 'gemini-4-neon', name: 'Gemini 4 Neon' },
       { value: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+      ...(mode === 'v1518' ? [{ value: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' }] : []),
     ],
   },
-  {
+  ...(currentModel === 'gemini-pro-orchestrator-neon' ? [] : [{
     id: 'thought_level',
     name: 'Thinking Level',
     category: 'thought_level',
@@ -103,7 +112,7 @@ const buildConfigOptions = () => [
       { value: 'high', name: 'High' },
       { value: 'xhigh', name: 'Extra' },
     ],
-  },
+  }]),
   ...(mode === 'no-mode-config' ? [] : [{
     id: 'mode',
     name: 'Mode',
@@ -177,15 +186,22 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     case 'initialize':
       reply(rpc.id, {
         protocolVersion: 1,
-        agentInfo: { name: 'Antigravity ACP Server', version: '1.5.17' },
+        agentInfo: { name: 'Antigravity ACP Server', version: mode === 'v1518' ? '1.5.18' : '1.5.17' },
         agentCapabilities: {
           promptCapabilities: { image: mode !== 'no-images', embeddedContext: true },
-          sessionCapabilities: { resume: {}, additionalDirectories: {} },
+          sessionCapabilities: {
+            resume: {},
+            ...(mode === 'v1518' ? { close: {} } : {}),
+            additionalDirectories: {},
+          },
           mcpCapabilities: { http: true },
           _meta: { antigravity: { tier: true, systemPrompt: { append: true } } },
         },
         authMethods: [{ id: 'oauth-personal' }],
       })
+      break
+    case 'session/close':
+      reply(rpc.id, {})
       break
     case 'session/new':
       if (mode === 'login') {
@@ -194,6 +210,18 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       }
       if (mode === 'rpc-login') {
         send({ id: rpc.id, error: { code: -32000, message: 'Login required' } })
+        break
+      }
+      if (mode === 'rpc-not-found') {
+        send({ id: rpc.id, error: { code: -32002, message: 'Session not found' } })
+        break
+      }
+      if (mode === 'rpc-prepaid-empty') {
+        send({ id: rpc.id, error: { code: -32603, message: "Your organization's prepaid balance is insufficient. Contact your administrator to add funds." } })
+        break
+      }
+      if (mode === 'rpc-quota-exhausted') {
+        send({ id: rpc.id, error: { code: -32603, message: 'You have exhausted your quota on this model.' } })
         break
       }
       if (mode === 'error-discover') {
@@ -206,6 +234,10 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       reply(rpc.id, { sessionId, configOptions: buildConfigOptions(), tier })
       break
     case 'session/resume':
+      if (mode === 'rpc-not-found') {
+        send({ id: rpc.id, error: { code: -32002, message: 'Session not found' } })
+        break
+      }
       sessionId = rpc.params.sessionId
       update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
       reply(rpc.id, { configOptions: buildConfigOptions(), tier })
@@ -266,6 +298,246 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         // Matches real agy 1.5.18 silent /compact behavior: only usage_update + end_turn, zero text chunks.
         update(sessionId, 'usage_update', { used: 4200, size: 200000 })
         reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 0, outputTokens: 0 } })
+        break
+      }
+      if (promptText.includes('[slow-turn-mode-update]')) {
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Working with mode flip...' } })
+        setTimeout(() => {
+          currentMode = 'accept-edits'
+          update(sessionId, 'config_option_update', { configOptions: buildConfigOptions() })
+        }, 60)
+        const timer = setTimeout(() => {
+          if (activeSlowPrompt?.id !== rpc.id) return
+          activeSlowPrompt = null
+          reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 15, outputTokens: 5 } })
+        }, 220)
+        activeSlowPrompt = { id: rpc.id, timer }
+        break
+      }
+      if (promptText.includes('[subagent-steps-and-dup-plan]')) {
+        // Subagent update_steps must NOT project as root TodoWrite
+        const subStepsTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-conv-7777:call_steps_sub',
+          name: 'update_steps',
+          rawInput: { steps: [{ title: 'Subagent internal step', status: 'in_progress' }] },
+          status: 'in_progress',
+          kind: 'other',
+          title: 'Subagent steps',
+        }
+        update(sessionId, 'tool_call', subStepsTool)
+        update(sessionId, 'tool_call_update', { ...subStepsTool, status: 'completed', rawOutput: 'OK' })
+        // Root update_steps followed by an identical ACP plan update must deduplicate
+        const rootStepsTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_steps_root_dup',
+          name: 'update_steps',
+          rawInput: {
+            steps: [
+              { title: 'Shared step A', status: 'done' },
+              { title: 'Shared step B', status: 'in_progress' },
+            ],
+          },
+          status: 'in_progress',
+          kind: 'other',
+          title: 'Root steps',
+        }
+        update(sessionId, 'tool_call', rootStepsTool)
+        update(sessionId, 'tool_call_update', { ...rootStepsTool, status: 'completed', rawOutput: 'OK' })
+        update(sessionId, 'plan', {
+          entries: [
+            { content: 'Shared step A', status: 'completed' },
+            { content: 'Shared step B', status: 'in_progress' },
+          ],
+        })
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Dedup done' } })
+        update(sessionId, 'usage_update', { used: 4700, size: 200000 })
+        reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 80, outputTokens: 20 } })
+        break
+      }
+      if (promptText.includes('[subagent-perm-pause]')) {
+        const invokeTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_sub_perm_parent',
+          name: 'invoke_subagent',
+          rawInput: { Prompt: 'Check file', Role: 'Perm Worker', TypeName: 'research' },
+          status: 'in_progress',
+          kind: 'other',
+          title: 'Run invoke_subagent',
+        }
+        update(sessionId, 'tool_call', invokeTool)
+        const childCmd = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-conv-8888:call_cmd_1',
+          name: 'run_command',
+          rawInput: { CommandLine: 'echo hi' },
+          status: 'pending',
+          kind: 'execute',
+          title: 'echo hi',
+        }
+        update(sessionId, 'tool_call', childCmd)
+        pendingPermission = {
+          rpcId: 'perm-sub-pause-1',
+          kind: 'sequence',
+          next: () => {
+            update(sessionId, 'tool_call_update', { ...childCmd, status: 'completed', rawOutput: { output: 'hi' } })
+            setTimeout(() => {
+              update(sessionId, 'tool_call_update', { ...invokeTool, status: 'completed', rawOutput: { output: 'done' } })
+              update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Perm worker done' } })
+              update(sessionId, 'usage_update', { used: 19000, size: 200000 })
+              reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 200, outputTokens: 500 } })
+            }, 30)
+          },
+        }
+        send({
+          id: 'perm-sub-pause-1',
+          method: 'session/request_permission',
+          params: {
+            sessionId,
+            toolCall: childCmd,
+            options: [
+              { optionId: 'allow_once_id', name: 'Allow once', kind: 'allow_once' },
+              { optionId: 'reject_once_id', name: 'Deny', kind: 'reject_once' },
+            ],
+          },
+        })
+        break
+      }
+      if (promptText.includes('[config-update]')) {
+        currentModel = 'gemini-3.8-flash'
+        currentEffort = 'medium'
+        update(sessionId, 'config_option_update', { configOptions: buildConfigOptions() })
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Config synced' } })
+        update(sessionId, 'usage_update', { used: 3000, size: 200000 })
+        reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 80, outputTokens: 20 } })
+        break
+      }
+      if (promptText.includes('[update-steps]')) {
+        const stepsTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_steps_1',
+          name: 'update_steps',
+          rawInput: {
+            steps: [
+              { title: 'Audit ACP adapter', status: 'done' },
+              { title: 'Implement plan projection', status: 'in_progress' },
+              { title: 'Optional cleanup', status: 'skipped' },
+              { title: 'Verify failure label', status: 'failed' },
+              { title: 'Run E2E tests', status: 'pending' },
+            ],
+          },
+          status: 'in_progress',
+          kind: 'other',
+          title: 'Update steps',
+        }
+        update(sessionId, 'tool_call', stepsTool)
+        update(sessionId, 'tool_call_update', { ...stepsTool, status: 'completed', rawOutput: 'OK' })
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Steps updated' } })
+        update(sessionId, 'usage_update', { used: 4500, size: 200000 })
+        reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 30 } })
+        break
+      }
+      if (promptText.includes('[acp-plan]')) {
+        update(sessionId, 'plan', {
+          entries: [
+            { content: 'Read protocol', status: 'completed' },
+            { content: 'Wire live checklist', status: 'in_progress' },
+            { content: 'Run verify', status: 'pending' },
+          ],
+        })
+        // Identical duplicate update should be deduplicated
+        update(sessionId, 'plan', {
+          entries: [
+            { content: 'Read protocol', status: 'completed' },
+            { content: 'Wire live checklist', status: 'in_progress' },
+            { content: 'Run verify', status: 'pending' },
+          ],
+        })
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Plan projected' } })
+        update(sessionId, 'usage_update', { used: 4600, size: 200000 })
+        reply(rpc.id, { stopReason: 'end_turn', usage: { inputTokens: 90, outputTokens: 25 } })
+        break
+      }
+      if (promptText.includes('[subagent-interaction]')) {
+        const qTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-conv-5678:interaction_q2',
+          name: 'ask_user',
+          rawInput: { question: 'Which environment should the worker target?' },
+          status: 'pending',
+          title: 'Which environment should the worker target?',
+        }
+        update(sessionId, 'tool_call', qTool)
+        pendingPermission = { rpcId: 'perm-sub-q2', promptId: rpc.id, toolCallId: qTool.toolCallId, toolName: 'ask_user' }
+        send({
+          id: 'perm-sub-q2',
+          method: 'session/request_permission',
+          params: {
+            sessionId,
+            toolCall: qTool,
+            options: [
+              { optionId: 'opt_staging', name: 'Staging', kind: 'allow_once' },
+              { optionId: 'opt_prod', name: 'Production', kind: 'allow_once' },
+            ],
+          },
+        })
+        break
+      }
+      if (promptText.includes('[scoped-allow-always]')) {
+        const toolCall = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_scoped_edit_1',
+          name: 'edit_file',
+          args: { Path: '/repo/shared/config.ts', Target: 'a', Replacement: 'b' },
+          rawInput: { Path: '/repo/shared/config.ts', Target: 'a', Replacement: 'b' },
+          status: 'pending',
+          kind: 'edit',
+          title: 'File config.ts',
+          content: [{ type: 'diff', path: '/repo/shared/config.ts', oldText: 'a', newText: 'b' }],
+        }
+        update(sessionId, 'tool_call', toolCall)
+        pendingPermission = { rpcId: 'perm-scoped-1', promptId: rpc.id, toolCallId: toolCall.toolCallId, toolName: 'edit_file' }
+        send({
+          id: 'perm-scoped-1',
+          method: 'session/request_permission',
+          params: {
+            sessionId,
+            toolCall,
+            options: [
+              { optionId: 'allow_once_id', name: 'Allow once', kind: 'allow_once' },
+              { optionId: 'allow_always_repo', name: 'Always allow edits in /repo/shared', kind: 'allow_always' },
+              { optionId: 'reject_once_id', name: 'Deny', kind: 'reject_once' },
+            ],
+          },
+        })
+        break
+      }
+      if (promptText.includes('[subagent-usage]')) {
+        update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Spawning worker...' } })
+        const invokeTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_sub_usage_1',
+          name: 'invoke_subagent',
+          rawInput: { Prompt: 'Do heavy work', Role: 'Heavy Worker', TypeName: 'research' },
+          status: 'in_progress',
+          kind: 'other',
+          title: 'Run invoke_subagent',
+        }
+        update(sessionId, 'tool_call', invokeTool)
+        setTimeout(() => {
+          update(sessionId, 'tool_call_update', {
+            ...invokeTool,
+            status: 'completed',
+            rawOutput: { conversationId: 'child-usage-9999', output: 'done' },
+          })
+          update(sessionId, 'agent_message_chunk', { content: { type: 'text', text: 'Worker finished.' } })
+          update(sessionId, 'usage_update', { used: 18000, size: 200000 })
+          // Simulated agy 1.5.18 combined parent + subagent token usage (> context window inputTokens & large outputTokens)
+          reply(rpc.id, {
+            stopReason: 'end_turn',
+            usage: { inputTokens: 280000, outputTokens: 1200, cachedReadTokens: 40000 },
+          })
+        }, 90)
         break
       }
       if (mode === 'edit-perm' || promptText.includes('[edit-perm]')) {
@@ -3412,6 +3684,489 @@ describe('Antigravity ACP server core & integration', () => {
       resetAntigravitySwarmControlStateForTests()
       if (prevAppData === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
       else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
+    }
+  }, 20_000)
+
+  test('v1.5.18 protocol: forwards ADC/compact env vars, calls session/close on discovery, and classifies -32002 & prepaid wallet errors', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const prevAdc = process.env.AGY_ADC_AUTH
+    const prevCreds = process.env.GOOGLE_APPLICATION_CREDENTIALS
+    const prevProject = process.env.GOOGLE_CLOUD_PROJECT
+    const prevLocation = process.env.GOOGLE_CLOUD_LOCATION
+    const prevCompact = process.env.AGY_CLI_AUTO_COMPACT_OVERRIDE
+    const prevAnthropic = process.env.ANTHROPIC_API_KEY
+    process.env.AGY_ADC_AUTH = '1'
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/tmp/fake-adc.json'
+    process.env.GOOGLE_CLOUD_PROJECT = 'demo-gcp-project'
+    process.env.GOOGLE_CLOUD_LOCATION = 'us-central1'
+    process.env.AGY_CLI_AUTO_COMPACT_OVERRIDE = '80%'
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-should-never-leak'
+
+    try {
+      const status = await discoverAntigravity()
+      expect(status.status).toBe('ready')
+      expect(status.version).toBe('1.5.18')
+      const orch = status.models.find(m => m.id === 'gemini-pro-orchestrator-neon')
+      expect(orch).toBeDefined()
+      expect(orch?.supportedReasoningEfforts).toEqual([])
+
+      const wire = await fake.readWire()
+      const launch = wire.find(w => w.argv)
+      expect(launch?.hasAnthropicApiKey).toBe(false)
+      expect(launch?.envSnapshot).toEqual({
+        AGY_ADC_AUTH: '1',
+        GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-adc.json',
+        GOOGLE_CLOUD_PROJECT: 'demo-gcp-project',
+        GOOGLE_CLOUD_LOCATION: 'us-central1',
+        AGY_CLI_AUTO_COMPACT_OVERRIDE: '80%',
+      })
+      expect(wire.some(w => w.method === 'session/close')).toBe(true)
+
+      await writeFile(join(fake.binDir, 'agy-mode'), 'rpc-not-found')
+      await expect(openAntigravityAcp(sandboxDir)).rejects.toMatchObject({
+        code: 'ANTIGRAVITY_RESUME_FAILED',
+      })
+
+      await writeFile(join(fake.binDir, 'agy-mode'), 'rpc-prepaid-empty')
+      await expect(openAntigravityAcp(sandboxDir)).rejects.toMatchObject({
+        code: 'ANTIGRAVITY_TURN_FAILED',
+        message: "Your organization's prepaid balance is insufficient. Contact your administrator to add funds.",
+      })
+
+      await writeFile(join(fake.binDir, 'agy-mode'), 'rpc-quota-exhausted')
+      await expect(openAntigravityAcp(sandboxDir)).rejects.toMatchObject({
+        code: 'ANTIGRAVITY_TURN_FAILED',
+        message: 'Antigravity model quota is exhausted. Try another model or wait for quota refresh.',
+      })
+    } finally {
+      if (prevAdc === undefined) delete process.env.AGY_ADC_AUTH; else process.env.AGY_ADC_AUTH = prevAdc
+      if (prevCreds === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS; else process.env.GOOGLE_APPLICATION_CREDENTIALS = prevCreds
+      if (prevProject === undefined) delete process.env.GOOGLE_CLOUD_PROJECT; else process.env.GOOGLE_CLOUD_PROJECT = prevProject
+      if (prevLocation === undefined) delete process.env.GOOGLE_CLOUD_LOCATION; else process.env.GOOGLE_CLOUD_LOCATION = prevLocation
+      if (prevCompact === undefined) delete process.env.AGY_CLI_AUTO_COMPACT_OVERRIDE; else process.env.AGY_CLI_AUTO_COMPACT_OVERRIDE = prevCompact
+      if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prevAnthropic
+    }
+  })
+
+  test('v1.5.18 end-to-end WS: Orchestrator switch drops stale effort cleanly, deferred switch stays in-process, and config_option_update syncs back to clients', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-v1518-config')
+    await mkdir(workDir, { recursive: true })
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws.send(JSON.stringify(msg))
+
+      // Turn 1 starts the agy process
+      send({ type: 'user_message', content: 'Hello v1.5.18' })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+      const initialWire = await fake.readWire()
+      const initialPid = initialWire.find(w => w.method === 'session/new')?.pid
+      expect(typeof initialPid).toBe('number')
+
+      // 1. Switch to Orchestrator while still carrying stale effortLevel: 'high' -> must succeed with NO error event and drop effortLevel
+      const prevAppliedCount = received.filter(m => m.type === 'runtime_config_applied').length
+      send({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-pro-orchestrator-neon',
+        effortLevel: 'high',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'runtime_config_applied').length > prevAppliedCount)
+      const orchApplied = received.filter(m => m.type === 'runtime_config_applied').at(-1) as { modelId?: string; effortLevel?: string }
+      expect(orchApplied.modelId).toBe('gemini-pro-orchestrator-neon')
+      expect(orchApplied.effortLevel).toBeUndefined()
+      expect(received.filter(m => m.type === 'error')).toHaveLength(0)
+
+      // 2. Deferred same-provider switch during active [slow-turn] -> applies in-process (same PID, no kill/restart!)
+      const beforeSlowComplete = received.filter(m => m.type === 'message_complete').length
+      const beforeDeferredApplied = received.filter(m => m.type === 'runtime_config_applied').length
+      send({ type: 'user_message', content: 'Run work [slow-turn]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      send({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-4-neon',
+        effortLevel: 'medium',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > beforeSlowComplete)
+      await waitUntil(() => received.filter(m => m.type === 'runtime_config_applied').length > beforeDeferredApplied)
+      const deferredApplied = received.filter(m => m.type === 'runtime_config_applied').at(-1) as { modelId?: string; effortLevel?: string }
+      expect(deferredApplied.modelId).toBe('gemini-4-neon')
+      expect(deferredApplied.effortLevel).toBe('medium')
+
+      const wireAfterDeferred = await fake.readWire()
+      const uniquePids = new Set(wireAfterDeferred.filter(w => w.method === 'session/new' || w.method === 'session/resume').map(w => w.pid))
+      expect([...uniquePids]).toEqual([initialPid])
+      expect(wireAfterDeferred.some(w => w.method === 'session/resume')).toBe(false)
+
+      // 3. CLI-pushed config_option_update syncs model + effortLevel back to WS clients
+      const beforePushApplied = received.filter(m => m.type === 'runtime_config_applied').length
+      send({ type: 'user_message', content: 'Trigger [config-update]' })
+      await waitUntil(() => received.filter(m => m.type === 'runtime_config_applied').length > beforePushApplied)
+      const pushedApplied = received.filter(m => m.type === 'runtime_config_applied').at(-1) as { modelId?: string; effortLevel?: string }
+      expect(pushedApplied.modelId).toBe('gemini-3.8-flash')
+      expect(pushedApplied.effortLevel).toBe('medium')
+
+      ws.close()
+    } finally {
+      server.stop(true)
+    }
+  }, 20_000)
+
+  test('v1.5.18 end-to-end WS: update_steps & ACP plan -> TodoWrite, subagent <childId>:interaction_ question, scoped allowAlwaysLabel, and subagent usage/baseline protection', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-v1518-features')
+    await mkdir(workDir, { recursive: true })
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws.send(JSON.stringify(msg))
+
+      // Turn 1: Subagent aggregated usage must NOT inflate tok/s or poison /context baseline
+      send({ type: 'user_message', content: 'Run worker [subagent-usage]' })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+      const turn1Complete = received.find(m => m.type === 'message_complete') as {
+        usage?: { output_tokens?: number }
+        timing?: { duration_api_ms?: number; decode_ms?: number }
+      }
+      expect(turn1Complete.usage?.output_tokens).toBe(1200)
+      // Subagent took ~90ms; effective duration_api_ms & decode_ms must include subagentDurationMs instead of near-zero parent-only duration
+      expect(turn1Complete.timing?.duration_api_ms ?? 0).toBeGreaterThanOrEqual(70)
+      expect(turn1Complete.timing?.decode_ms ?? 0).toBeGreaterThanOrEqual(70)
+
+      // Context snapshot baseline should come from parent usage_update (18000), NOT multi-agent summed 320000
+      const ctxRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/inspection?contextOnly=1&summaryOnly=1`)
+      expect(ctxRes.status).toBe(200)
+      const ctxBody = await ctxRes.json() as { context?: { totalTokens: number; maxTokens: number; categories: Array<{ name: string; tokens: number }> } }
+      expect(ctxBody.context?.totalTokens).toBe(18000)
+      expect(ctxBody.context?.maxTokens).toBe(200000)
+      const sysCat = ctxBody.context?.categories.find(c => c.name === 'System & tools')
+      expect(sysCat?.tokens ?? 0).toBeLessThanOrEqual(18000)
+
+      // Turn 2: update_steps tool call -> TodoWrite with normalized todos
+      const completeBeforeSteps = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Track [update-steps]' })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeSteps)
+      const stepsToolUse = received.find(
+        m => m.type === 'tool_use_complete' && m.toolName === 'TodoWrite' && (m.input as { antigravityToolName?: string })?.antigravityToolName === 'update_steps',
+      ) as { input?: { todos?: Array<{ content: string; status: string }> } } | undefined
+      expect(stepsToolUse?.input?.todos).toEqual([
+        { content: 'Audit ACP adapter', status: 'completed' },
+        { content: 'Implement plan projection', status: 'in_progress', activeForm: 'Implement plan projection' },
+        { content: 'Optional cleanup (skipped)', status: 'completed' },
+        { content: 'Verify failure label (failed)', status: 'pending' },
+        { content: 'Run E2E tests', status: 'pending' },
+      ])
+
+      // Turn 3: ACP standard `plan` sessionUpdate -> deduplicated TodoWrite
+      const completeBeforePlan = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Track [acp-plan]' })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforePlan)
+      const planToolUses = received.filter(
+        m => m.type === 'tool_use_complete' && m.toolName === 'TodoWrite' && (m.input as { antigravityToolName?: string })?.antigravityToolName === 'plan',
+      )
+      expect(planToolUses).toHaveLength(1)
+      expect((planToolUses[0] as { input?: { todos?: unknown[] } }).input?.todos).toEqual([
+        { content: 'Read protocol', status: 'completed' },
+        { content: 'Wire live checklist', status: 'in_progress', activeForm: 'Wire live checklist' },
+        { content: 'Run verify', status: 'pending' },
+      ])
+
+      // Turn 4: Subagent forwarded `<childConvId>:interaction_q2` -> AskUserQuestion with subagentName & answer routing
+      const completeBeforeSubQ = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Ask [subagent-interaction]' })
+      await waitUntil(() => received.some(m => m.type === 'permission_request' && m.toolName === 'AskUserQuestion'))
+      const subQPerm = received.find(m => m.type === 'permission_request' && m.toolName === 'AskUserQuestion') as {
+        requestId: string
+        subagentName?: string
+        input: { questions: Array<{ question: string; options: Array<{ label: string }> }> }
+      }
+      expect(subQPerm.subagentName).toBe('child-co')
+      expect(subQPerm.input.questions[0]?.question).toBe('Which environment should the worker target?')
+      send({
+        type: 'permission_response',
+        requestId: subQPerm.requestId,
+        allowed: true,
+        updatedInput: { answers: { 'Which environment should the worker target?': 'Staging' } },
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeSubQ)
+      const wireAfterSubQ = await fake.readWire()
+      const subQReply = wireAfterSubQ.find(w => w.id === 'perm-sub-q2')
+      expect(subQReply?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt_staging' } })
+
+      // Turn 5: Scoped allow_always option name flows as allowAlwaysLabel (and replays on reconnect)
+      const completeBeforeScoped = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Edit [scoped-allow-always]' })
+      await waitUntil(() => received.some(m => m.type === 'permission_request' && m.toolName === 'Edit'))
+      const scopedPerm = received.find(m => m.type === 'permission_request' && m.toolName === 'Edit') as {
+        requestId: string
+        supportsAllowAlways?: boolean
+        allowAlwaysLabel?: string
+      }
+      expect(scopedPerm.supportsAllowAlways).toBe(true)
+      expect(scopedPerm.allowAlwaysLabel).toBe('Always allow edits in /repo/shared')
+
+      // Reconnect a second WS client and verify allowAlwaysLabel is replayed cleanly
+      const replayReceived: ServerMessage[] = []
+      const ws2 = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws2.onopen = () => resolve()
+        ws2.onerror = () => reject(new Error('WS2 failed to connect'))
+      })
+      ws2.onmessage = (event) => {
+        replayReceived.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      await waitUntil(() => replayReceived.some(m => m.type === 'permission_request' && m.requestId === scopedPerm.requestId))
+      const replayedPerm = replayReceived.find(m => m.type === 'permission_request' && m.requestId === scopedPerm.requestId) as {
+        allowAlwaysLabel?: string
+      }
+      expect(replayedPerm.allowAlwaysLabel).toBe('Always allow edits in /repo/shared')
+      ws2.close()
+
+      send({
+        type: 'permission_response',
+        requestId: scopedPerm.requestId,
+        allowed: true,
+        rule: 'always',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeScoped)
+      const wireAfterScoped = await fake.readWire()
+      const scopedReply = wireAfterScoped.find(w => w.id === 'perm-scoped-1')
+      expect(scopedReply?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow_always_repo' } })
+
+      ws.close()
+    } finally {
+      server.stop(true)
+    }
+  }, 20_000)
+
+  test('review regressions: mode-only config_option_update preserves deferred switch, failed deferred switch rolls back & notifies reconnected WS, plan IDs stay unique across instances, subagent update_steps stays isolated, and approval wait pauses subagent timer', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-review-regressions')
+    await mkdir(workDir, { recursive: true })
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws.send(JSON.stringify(msg))
+
+      // Boot ACP session
+      send({ type: 'user_message', content: 'Boot' })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      // Regression 1: Active turn emits mode-only config_option_update while a deferred switch is queued -> must NOT clobber deferred switch
+      const completeBeforeModeTurn = received.filter(m => m.type === 'message_complete').length
+      const appliedBeforeModeTurn = received.filter(m => m.type === 'runtime_config_applied').length
+      send({ type: 'user_message', content: 'Work [slow-turn-mode-update]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      send({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'medium',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeModeTurn)
+      await waitUntil(() => received.filter(m => m.type === 'runtime_config_applied').length > appliedBeforeModeTurn)
+      const afterModeApplied = received.filter(m => m.type === 'runtime_config_applied').at(-1) as { modelId?: string; effortLevel?: string }
+      expect(afterModeApplied.modelId).toBe('gemini-3.8-flash')
+      expect(afterModeApplied.effortLevel).toBe('medium')
+
+      // Regression 2: Deferred switch to an unavailable model fails -> rolls back runtimeOverrides/disk, broadcasts live config, notifies newly connected WS, and retry still errors
+      const ws2Received: ServerMessage[] = []
+      const ws2 = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws2.onopen = () => resolve()
+        ws2.onerror = () => reject(new Error('WS2 failed to connect'))
+      })
+      ws2.onmessage = (event) => {
+        ws2Received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+
+      const completeBeforeFailSwitch = received.filter(m => m.type === 'message_complete').length
+      const errorsBeforeFailSwitch = ws2Received.filter(m => m.type === 'error').length
+      send({ type: 'user_message', content: 'Work [slow-turn]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      send({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'nonexistent-model-v1518',
+        effortLevel: 'low',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeFailSwitch)
+      await waitUntil(() => ws2Received.filter(m => m.type === 'error').length > errorsBeforeFailSwitch)
+      const rollbackApplied = ws2Received.filter(m => m.type === 'runtime_config_applied').at(-1) as { modelId?: string; effortLevel?: string }
+      expect(rollbackApplied.modelId).toBe('gemini-3.8-flash')
+      expect(rollbackApplied.effortLevel).toBe('medium')
+
+      // Retrying the same unavailable model must still return an error (not hit stale prevOverride === nextOverride early return)
+      const errorsBeforeRetry = received.filter(m => m.type === 'error').length
+      send({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'nonexistent-model-v1518',
+        effortLevel: 'low',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'error').length > errorsBeforeRetry)
+      ws2.close()
+
+      // Regression 4 & dedup: subagent update_steps must NOT project as root TodoWrite, and identical plan after root update_steps is deduplicated
+      const completeBeforeSubSteps = received.filter(m => m.type === 'message_complete').length
+      const todosBeforeSubSteps = received.filter(m => m.type === 'tool_use_complete' && m.toolName === 'TodoWrite').length
+      send({ type: 'user_message', content: 'Check [subagent-steps-and-dup-plan]' })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforeSubSteps)
+      const newTodos = received.filter(m => m.type === 'tool_use_complete' && m.toolName === 'TodoWrite').slice(todosBeforeSubSteps)
+      expect(newTodos).toHaveLength(1)
+      expect((newTodos[0] as { input?: { todos?: Array<{ content: string }> } }).input?.todos?.map(t => t.content)).toEqual([
+        'Shared step A',
+        'Shared step B',
+      ])
+      const subStepsRaw = received.find(m => m.type === 'tool_use_complete' && m.toolUseId === 'child-conv-7777:call_steps_sub') as { toolName?: string } | undefined
+      expect(subStepsRaw?.toolName).not.toBe('TodoWrite')
+
+      // Regression 6: Subagent permission wait time (~180ms) must NOT be counted into duration_api_ms / decode_ms
+      const completeBeforePermPause = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Check [subagent-perm-pause]' })
+      await waitUntil(() => received.some(m => m.type === 'permission_request' && m.toolUseId === 'child-conv-8888:call_cmd_1'))
+      const pausePerm = received.find(m => m.type === 'permission_request' && m.toolUseId === 'child-conv-8888:call_cmd_1') as { requestId: string }
+      await new Promise(resolve => setTimeout(resolve, 180))
+      send({ type: 'permission_response', requestId: pausePerm.requestId, allowed: true })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completeBeforePermPause)
+      const permPauseComplete = received.filter(m => m.type === 'message_complete').at(-1) as {
+        timing?: { duration_ms?: number; duration_api_ms?: number; decode_ms?: number }
+      }
+      expect(permPauseComplete.timing?.duration_ms ?? 0).toBeGreaterThanOrEqual(180)
+      expect(permPauseComplete.timing?.duration_api_ms ?? 0).toBeLessThan(150)
+
+      // Regression 3: ACP plan synthetic tool_use IDs remain globally unique across separate AntigravityConversation instances
+      const makeStubAcp = () => {
+        let onMessage: ((method: string, params: Record<string, unknown>, id?: string | number) => void) | undefined
+        const acpStub = {
+          sessionId: 'native-plan-uniq-1',
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+          permissionMode: 'default',
+          launchedWithBypassPermissions: false,
+          supportsImages: true,
+          initialAvailableCommands: [],
+          isOpen: true,
+          set onMessage(handler: typeof onMessage) { onMessage = handler },
+          prompt: async () => {
+            onMessage?.('session/update', {
+              sessionId: 'native-plan-uniq-1',
+              update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'in_progress' }] },
+            })
+            return { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } }
+          },
+          cancel: () => true,
+          reply: () => true,
+          end: () => {},
+          close: () => {},
+          drained: Promise.resolve(),
+        }
+        return acpStub
+      }
+      const planIds: string[] = []
+      for (let i = 0; i < 2; i++) {
+        const emitted: Array<Record<string, unknown>> = []
+        const conv = new AntigravityConversation(
+          makeStubAcp() as never,
+          frame => emitted.push(frame),
+          async () => {},
+        )
+        conv.send([{ type: 'text', text: `plan turn ${i}` }], `u-plan-${i}`)
+        await conv.pendingTurnCompletion
+        const todoMsg = emitted.find(
+          f => f.type === 'assistant' && Array.isArray((f.message as { content?: unknown[] })?.content) &&
+            ((f.message as { content: Array<{ name?: string }> }).content[0]?.name === 'TodoWrite'),
+        ) as { message?: { content?: Array<{ id?: string }> } } | undefined
+        const id = todoMsg?.message?.content?.[0]?.id
+        expect(typeof id).toBe('string')
+        planIds.push(id!)
+      }
+      expect(planIds[0]).not.toBe(planIds[1])
+
+      ws.close()
+    } finally {
+      server.stop(true)
     }
   }, 20_000)
 })

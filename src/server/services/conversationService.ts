@@ -48,6 +48,7 @@ import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ANTIGRAVITY_PROVIDER_ID,
   AntigravityError,
+  isAntigravitySupportedPermissionMode,
   openAntigravityAcp,
   type AntigravitySlashCommand,
 } from './antigravityAcp.js'
@@ -246,6 +247,7 @@ type TrackedPermissionRequest = {
   antigravityToolName?: string
   subagentName?: string
   supportsAllowAlways?: boolean
+  allowAlwaysLabel?: string
   input: Record<string, unknown>
   permissionSuggestions?: unknown[]
   autoAnswerTimer?: ReturnType<typeof setTimeout>
@@ -334,6 +336,7 @@ type SessionProcess = {
   antigravityBrowserUseBridge?: AntigravityBrowserUseBridge | null
   antigravityHistoryDraining?: boolean
   antigravitySwarmPausePending?: boolean
+  antigravityConfigUpdateDepth?: number
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
@@ -387,6 +390,7 @@ export type PendingPermissionRequest = {
   antigravityToolName?: string
   subagentName?: string
   supportsAllowAlways?: boolean
+  allowAlwaysLabel?: string
   autoAnswerDeadline?: number | null
 }
 
@@ -462,6 +466,7 @@ export class ConversationService {
   private teamStopOperations = new Map<string, Promise<void>>()
   private teamRuntimeListeners = new Set<TeamRuntimeListener>()
   private slashCommandsListeners = new Set<(sessionId: string, commands: AntigravitySlashCommand[]) => void>()
+  private runtimeConfigListeners = new Set<(sessionId: string, selection: SessionRuntimeSelection) => void>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
@@ -1317,6 +1322,31 @@ export class ConversationService {
             }
           }
         },
+        onConfigOptionsUpdated: (config) => {
+          if (config.permissionMode && isAntigravitySupportedPermissionMode(config.permissionMode)) {
+            session.permissionMode = config.permissionMode
+          }
+          if (!config.runtimeChanged) return
+          const nextModelId = config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL
+          const nextSelection: SessionRuntimeSelection = {
+            providerId: ANTIGRAVITY_PROVIDER_ID,
+            modelId: nextModelId,
+            ...(config.effortLevel ? { effortLevel: config.effortLevel } : {}),
+          }
+          session.runtimeSelection = nextSelection
+          if (session.initMessage) {
+            session.initMessage = { ...session.initMessage, model: nextModelId }
+          }
+          if (current() && !(session.antigravityConfigUpdateDepth && session.antigravityConfigUpdateDepth > 0)) {
+            for (const listener of this.runtimeConfigListeners) {
+              try {
+                listener(sessionId, nextSelection)
+              } catch (error) {
+                console.error('[ConversationService] Runtime config listener failed', error)
+              }
+            }
+          }
+        },
       },
     )
     rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
@@ -1338,6 +1368,11 @@ export class ConversationService {
   onSlashCommandsUpdated(listener: (sessionId: string, commands: AntigravitySlashCommand[]) => void): () => void {
     this.slashCommandsListeners.add(listener)
     return () => this.slashCommandsListeners.delete(listener)
+  }
+
+  onRuntimeConfigUpdated(listener: (sessionId: string, selection: SessionRuntimeSelection) => void): () => void {
+    this.runtimeConfigListeners.add(listener)
+    return () => this.runtimeConfigListeners.delete(listener)
   }
 
   onOutput(sessionId: string, callback: (msg: any) => void): void {
@@ -1426,45 +1461,51 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (!session?.antigravity || session.controlRevoked || !session.antigravity.acp.isOpen) return false
     const acp = session.antigravity.acp
-    if (config.modelId) {
-      await acp.setModel(config.modelId)
+    session.antigravityConfigUpdateDepth = (session.antigravityConfigUpdateDepth ?? 0) + 1
+    try {
+      if (config.modelId) {
+        await acp.setModel(config.modelId)
+        if (this.sessions.get(sessionId) !== session) return false
+        const supportedEfforts = acp.availableEfforts
+        const previousEffort = session.runtimeSelection?.effortLevel
+        const preservedEffort = supportedEfforts.length === 0
+          ? undefined
+          : acp.effortLevel
+            ?? (previousEffort && supportedEfforts.includes(previousEffort) ? previousEffort : undefined)
+        session.runtimeSelection = {
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: config.modelId,
+          ...(preservedEffort ? { effortLevel: preservedEffort } : {}),
+        }
+        if (session.initMessage) {
+          session.initMessage = { ...session.initMessage, model: acp.modelId ?? config.modelId }
+        }
+      }
+      // Skip stale effortLevel when switching to a model without thought_level (e.g. Orchestrator).
+      if (config.effortLevel && (!config.modelId || acp.hasEffortConfig)) {
+        await acp.setEffortLevel(config.effortLevel)
+        if (this.sessions.get(sessionId) !== session) return false
+        session.runtimeSelection = {
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+          effortLevel: config.effortLevel,
+        }
+      }
       if (this.sessions.get(sessionId) !== session) return false
-      const supportedEfforts = acp.availableEfforts
-      const previousEffort = session.runtimeSelection?.effortLevel
-      const preservedEffort = supportedEfforts.length === 0
-        ? undefined
-        : acp.effortLevel
-          ?? (previousEffort && supportedEfforts.includes(previousEffort) ? previousEffort : undefined)
-      session.runtimeSelection = {
-        providerId: ANTIGRAVITY_PROVIDER_ID,
-        modelId: config.modelId,
-        ...(preservedEffort ? { effortLevel: preservedEffort } : {}),
+      if (!config.modelId && !config.effortLevel) {
+        session.runtimeSelection = {
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+          ...(session.runtimeSelection?.effortLevel ? { effortLevel: session.runtimeSelection.effortLevel } : {}),
+        }
       }
       if (session.initMessage) {
-        session.initMessage = { ...session.initMessage, model: acp.modelId ?? config.modelId }
+        session.initMessage = { ...session.initMessage, model: acp.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL }
       }
+      return true
+    } finally {
+      session.antigravityConfigUpdateDepth = Math.max(0, (session.antigravityConfigUpdateDepth ?? 1) - 1)
     }
-    if (config.effortLevel) {
-      await acp.setEffortLevel(config.effortLevel)
-      if (this.sessions.get(sessionId) !== session) return false
-      session.runtimeSelection = {
-        providerId: ANTIGRAVITY_PROVIDER_ID,
-        modelId: config.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
-        effortLevel: config.effortLevel,
-      }
-    }
-    if (this.sessions.get(sessionId) !== session) return false
-    if (!config.modelId && !config.effortLevel) {
-      session.runtimeSelection = {
-        providerId: ANTIGRAVITY_PROVIDER_ID,
-        modelId: session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
-        ...(session.runtimeSelection?.effortLevel ? { effortLevel: session.runtimeSelection.effortLevel } : {}),
-      }
-    }
-    if (session.initMessage) {
-      session.initMessage = { ...session.initMessage, model: acp.modelId ?? session.runtimeSelection?.modelId ?? ANTIGRAVITY_DEFAULT_MODEL }
-    }
-    return true
   }
 
   async steerAntigravityMessage(
@@ -2364,6 +2405,7 @@ export class ConversationService {
       ...(request.antigravityToolName ? { antigravityToolName: request.antigravityToolName } : {}),
       ...(request.subagentName ? { subagentName: request.subagentName } : {}),
       ...(request.supportsAllowAlways !== undefined ? { supportsAllowAlways: request.supportsAllowAlways } : {}),
+      ...(request.allowAlwaysLabel ? { allowAlwaysLabel: request.allowAlwaysLabel } : {}),
       ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     }))
   }
@@ -2544,6 +2586,10 @@ export class ConversationService {
             supportsAllowAlways:
               typeof msg.request.supports_allow_always === 'boolean'
                 ? msg.request.supports_allow_always
+                : undefined,
+            allowAlwaysLabel:
+              typeof msg.request.allow_always_label === 'string' && msg.request.allow_always_label.trim()
+                ? msg.request.allow_always_label.trim()
                 : undefined,
             permissionSuggestions: Array.isArray(msg.request.permission_suggestions)
               ? msg.request.permission_suggestions

@@ -296,6 +296,7 @@ export async function readAntigravitySwarmBoardMaxSeq(
     lineCount += 1
     try {
       const parsed = JSON.parse(line) as RawBoardMessage
+      if (nonEmptyString(parsed?.agent) === 'system') continue
       const seq = typeof parsed?.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : lineCount
       if (seq > maxSeq) maxSeq = seq
     } catch {
@@ -500,13 +501,25 @@ export function deriveSwarmMemberState(member: RawSwarmMember): {
     || phase === 'IDLE'
     || phase === 'SLEEPING'
     || phase === 'PARKED'
+    || phase === 'WAITING_ON_PEER'
+    || phase === 'WAITING_ON_A_PEER'
+    || phase === 'WAITING_PEER'
+    || phase === 'BLOCKED'
   ) {
     return { status: 'idle', activity: 'idle' }
   }
   if (phase === 'RUNNING' && (wakeMode === 'mentions' || wakeMode === 'all' || wakeMode === 'anything')) {
     return { status: 'idle', activity: 'idle' }
   }
-  if (phase === 'RUNNING' || phase === 'WORKING' || phase === 'STARTING' || wakeMode === 'working') {
+  if (
+    phase === 'RUNNING'
+    || phase === 'WORKING'
+    || phase === 'STARTING'
+    || phase === 'IN_REVIEW'
+    || phase === 'REVIEW'
+    || phase === 'REVIEWING'
+    || wakeMode === 'working'
+  ) {
     return { status: 'running', activity: 'active' }
   }
   return { status: 'idle', activity: 'unknown' }
@@ -635,12 +648,12 @@ async function readSwarmBoardMessages(
 
     const { to, recipients, kind } = extractBoardMentions(text, knownMemberNames, from)
     const entryMs = Date.parse(timestamp)
-    if (Number.isFinite(entryMs)) {
+    if (from !== 'system' && Number.isFinite(entryMs)) {
       if (!firstMentionTimeByMember.has(from)) {
         firstMentionTimeByMember.set(from, entryMs)
       }
       for (const recipient of recipients) {
-        if (!firstMentionTimeByMember.has(recipient)) {
+        if (recipient !== 'system' && !firstMentionTimeByMember.has(recipient)) {
           firstMentionTimeByMember.set(recipient, entryMs)
         }
       }
@@ -686,6 +699,8 @@ function collectBoardSignals(entries: BoardEntryDetail[]): BoardSignals {
   let maxWorkerBriefSeq = 0
 
   for (const entry of entries) {
+    // 1.5.18 attributes swarm board wakeup notifications to "system"; ignore them when tracking member progress.
+    if (entry.from === 'system') continue
     const isDone = DONE_TAG_RE.test(entry.text)
     if (entry.from === 'coordinator') {
       if (isDone && entry.seq >= coordinatorDoneSeq) {
@@ -1098,7 +1113,10 @@ export async function readAntigravitySwarmSnapshot(
     }
   }
 
-  const boardMaxSeq = board.entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
+  const boardMaxSeq = board.entries.reduce(
+    (max, entry) => (entry.from === 'system' ? max : Math.max(max, entry.seq)),
+    0,
+  )
   const runtimeActive = registeredRuntimeProbe ? registeredRuntimeProbe(nativeSessionId) : undefined
   let controlRecord = swarmControlRecords.get(nativeSessionId)
   if (

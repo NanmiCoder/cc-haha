@@ -4630,6 +4630,7 @@ export const MessageBlock = memo(function MessageBlock({
           antigravityToolName={message.antigravityToolName}
           subagentName={message.subagentName}
           supportsAllowAlways={message.supportsAllowAlways}
+          allowAlwaysLabel={message.allowAlwaysLabel}
           markerWhenPending={decisionsInComposer}
         />
       )

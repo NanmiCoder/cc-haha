@@ -2155,8 +2155,100 @@ function applyDeferredRuntimeRestartAfterActiveTurn(
     ) {
       return
     }
+    if (
+      currentOverride.providerId === ANTIGRAVITY_PROVIDER_ID &&
+      conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID
+    ) {
+      const liveBefore = conversationService.getSessionRuntimeSelection(sessionId)
+      const liveFallbackOverride: RuntimeOverride | undefined = liveBefore
+        ? {
+            providerId: liveBefore.providerId,
+            modelId: liveBefore.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+            ...(liveBefore.effortLevel ? { effort: liveBefore.effortLevel } : {}),
+          }
+        : undefined
+      const applied = await applyInProcessAntigravityConfig(ws, sessionId, currentOverride, {
+        prevOverride: liveFallbackOverride,
+        prevOverrideVersion: undefined,
+        persistAndBroadcastOnRollback: true,
+        broadcastErrorToSession: true,
+      })
+      if (applied) return
+    }
     await restartSessionWithRuntimeConfig(ws, sessionId)
   })
+}
+
+async function applyInProcessAntigravityConfig(
+  ws: SessionConnection,
+  sessionId: string,
+  nextOverride: RuntimeOverride,
+  rollback?: {
+    prevOverride: RuntimeOverride | undefined
+    prevOverrideVersion: number | undefined
+    persistAndBroadcastOnRollback?: boolean
+    broadcastErrorToSession?: boolean
+  },
+): Promise<boolean> {
+  const beforeLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
+  try {
+    const updated = await conversationService.setAntigravityConfig(sessionId, {
+      modelId: nextOverride.modelId,
+      effortLevel: nextOverride.effort,
+    })
+    if (!updated) return false
+    const afterLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
+    const effectiveOverride: RuntimeOverride = {
+      ...nextOverride,
+      providerId: ANTIGRAVITY_PROVIDER_ID,
+      modelId: afterLiveSelection?.modelId ?? nextOverride.modelId,
+      ...(afterLiveSelection?.effortLevel ? { effort: afterLiveSelection.effortLevel } : { effort: undefined }),
+    }
+    if (!effectiveOverride.effort) delete effectiveOverride.effort
+    runtimeOverrides.set(sessionId, effectiveOverride)
+    await persistSessionRuntimeConfig(sessionId, effectiveOverride)
+    broadcastAppliedRuntimeConfig(sessionId)
+    return true
+  } catch (err) {
+    const afterLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
+    const modelPartiallyApplied =
+      afterLiveSelection?.providerId === ANTIGRAVITY_PROVIDER_ID &&
+      afterLiveSelection.modelId !== beforeLiveSelection?.modelId
+    if (modelPartiallyApplied) {
+      const partialOverride: RuntimeOverride = {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: afterLiveSelection.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+        ...(afterLiveSelection.effortLevel ? { effort: afterLiveSelection.effortLevel } : {}),
+      }
+      runtimeOverrides.set(sessionId, partialOverride)
+      await persistSessionRuntimeConfig(sessionId, partialOverride).catch(() => undefined)
+      broadcastAppliedRuntimeConfig(sessionId)
+    } else if (rollback) {
+      if (rollback.prevOverride) {
+        runtimeOverrides.set(sessionId, rollback.prevOverride)
+      } else {
+        runtimeOverrides.delete(sessionId)
+      }
+      if (!rollback.persistAndBroadcastOnRollback) {
+        if (rollback.prevOverrideVersion === undefined) {
+          runtimeOverrideVersions.delete(sessionId)
+        } else {
+          runtimeOverrideVersions.set(sessionId, rollback.prevOverrideVersion)
+        }
+      } else if (rollback.prevOverride) {
+        await persistSessionRuntimeConfig(sessionId, rollback.prevOverride).catch(() => undefined)
+        broadcastAppliedRuntimeConfig(sessionId)
+      }
+    }
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const code = err instanceof AntigravityError ? err.code : 'RUNTIME_CONFIG_INVALID'
+    if (rollback?.broadcastErrorToSession) {
+      sendToSession(sessionId, { type: 'error', message: errMsg, code })
+    } else {
+      sendMessage(ws, { type: 'error', message: errMsg, code })
+    }
+    return true
+  }
 }
 
 async function handleDesktopClearCommand(
@@ -2961,48 +3053,11 @@ async function handleSetRuntimeConfig(
         nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID &&
         conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID
       ) {
-        const beforeLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
-        try {
-          const updated = await conversationService.setAntigravityConfig(sessionId, {
-            modelId: nextOverride.modelId,
-            effortLevel: nextOverride.effort,
-          })
-          if (updated) {
-            await persistSessionRuntimeConfig(sessionId, nextOverride)
-            broadcastAppliedRuntimeConfig(sessionId)
-            return
-          }
-        } catch (err) {
-          const afterLiveSelection = conversationService.getSessionRuntimeSelection(sessionId)
-          const modelPartiallyApplied =
-            afterLiveSelection?.providerId === ANTIGRAVITY_PROVIDER_ID &&
-            afterLiveSelection.modelId !== beforeLiveSelection?.modelId
-          if (modelPartiallyApplied) {
-            const partialOverride: RuntimeOverride = {
-              providerId: ANTIGRAVITY_PROVIDER_ID,
-              modelId: afterLiveSelection.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
-              ...(afterLiveSelection.effortLevel ? { effort: afterLiveSelection.effortLevel } : {}),
-            }
-            runtimeOverrides.set(sessionId, partialOverride)
-            await persistSessionRuntimeConfig(sessionId, partialOverride).catch(() => undefined)
-            broadcastAppliedRuntimeConfig(sessionId)
-          } else {
-            if (prevOverride) {
-              runtimeOverrides.set(sessionId, prevOverride)
-            } else {
-              runtimeOverrides.delete(sessionId)
-            }
-            if (prevOverrideVersion === undefined) {
-              runtimeOverrideVersions.delete(sessionId)
-            } else {
-              runtimeOverrideVersions.set(sessionId, prevOverrideVersion)
-            }
-          }
-          const errMsg = err instanceof Error ? err.message : String(err)
-          const code = err instanceof AntigravityError ? err.code : 'RUNTIME_CONFIG_INVALID'
-          sendMessage(ws, { type: 'error', message: errMsg, code })
-          return
-        }
+        const handled = await applyInProcessAntigravityConfig(ws, sessionId, nextOverride, {
+          prevOverride,
+          prevOverrideVersion,
+        })
+        if (handled) return
       }
       await persistSessionRuntimeConfig(sessionId, nextOverride)
       await restartSessionWithRuntimeConfig(ws, sessionId)
@@ -5089,6 +5144,10 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           ...(typeof cliMsg.request.supports_allow_always === 'boolean'
             ? { supportsAllowAlways: cliMsg.request.supports_allow_always }
             : {}),
+          ...(typeof cliMsg.request.allow_always_label === 'string' &&
+          cliMsg.request.allow_always_label.trim()
+            ? { allowAlwaysLabel: cliMsg.request.allow_always_label.trim() }
+            : {}),
         }]
       }
       return []
@@ -5770,6 +5829,7 @@ function replayPendingPermissionRequests(
       ...(request.antigravityToolName ? { antigravityToolName: request.antigravityToolName } : {}),
       ...(request.subagentName ? { subagentName: request.subagentName } : {}),
       ...(request.supportsAllowAlways !== undefined ? { supportsAllowAlways: request.supportsAllowAlways } : {}),
+      ...(request.allowAlwaysLabel ? { allowAlwaysLabel: request.allowAlwaysLabel } : {}),
       ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     })
   }
@@ -6696,6 +6756,21 @@ export function updateSessionSlashCommands(
 
 conversationService.onSlashCommandsUpdated((sessionId, commands) => {
   updateSessionSlashCommands(sessionId, commands)
+})
+
+conversationService.onRuntimeConfigUpdated((sessionId, selection) => {
+  // Never overwrite a user's queued deferred runtime switch while a turn is finishing.
+  if (deferredRuntimeRestarts.has(sessionId)) return
+  const existing = runtimeOverrides.get(sessionId)
+  const nextOverride: RuntimeOverride = {
+    ...(existing?.requestedConfig ? { requestedConfig: existing.requestedConfig } : {}),
+    providerId: selection.providerId,
+    modelId: selection.modelId ?? ANTIGRAVITY_DEFAULT_MODEL,
+    ...(selection.effortLevel ? { effort: selection.effortLevel } : {}),
+  }
+  runtimeOverrides.set(sessionId, nextOverride)
+  void persistSessionRuntimeConfig(sessionId, nextOverride).catch(() => undefined)
+  broadcastAppliedRuntimeConfig(sessionId)
 })
 
 function normalizeSessionSlashCommand(command: unknown): SessionSlashCommand | null {

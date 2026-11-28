@@ -159,6 +159,9 @@ type Turn = {
   promptSeq: number
   accumulatedUsage: AccumulatedUsage
   liveTranscriptUsage: AccumulatedUsage
+  usedSubagent: boolean
+  subagentPhaseStart?: number
+  subagentDurationMs: number
   transcriptByteOffset: number
   transcriptPendingLine: string
   transcriptDecoder: StringDecoder
@@ -186,6 +189,7 @@ export type AntigravityConversationOptions = {
   computerUseBridge?: AntigravityComputerUseBridge | null
   browserUseBridge?: AntigravityBrowserUseBridge | null
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
+  onConfigOptionsUpdated?: (config: { modelId?: string; effortLevel?: string; permissionMode?: string; runtimeChanged: boolean }) => void
   antigravityAppDataDir?: string
 }
 
@@ -447,6 +451,50 @@ export function parseSubagentToolCallPrefix(toolCallId: string | undefined): str
   const prefix = toolCallId.slice(0, colon)
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(prefix)) return undefined
   return prefix
+}
+
+function isInteractionToolCallId(toolCallId: string | undefined): boolean {
+  if (!toolCallId) return false
+  if (toolCallId.startsWith('interaction_')) return true
+  const prefix = parseSubagentToolCallPrefix(toolCallId)
+  return Boolean(prefix && toolCallId.slice(prefix.length + 1).startsWith('interaction_'))
+}
+
+function extractSpecificAllowAlwaysLabel(option: Option | undefined): string | undefined {
+  const raw = typeof option?.name === 'string' ? option.name.trim() : ''
+  if (!raw) return undefined
+  if (/^(?:allow\s+always|always\s+allow)$/i.test(raw)) return undefined
+  return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw
+}
+
+type ProjectedTodoItem = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  activeForm?: string
+}
+
+function normalizePlanStepsToTodos(rawSteps: unknown): ProjectedTodoItem[] {
+  if (!Array.isArray(rawSteps)) return []
+  const todos: ProjectedTodoItem[] = []
+  for (const item of rawSteps) {
+    const step = acpObject(item)
+    if (!step) continue
+    const baseText = firstString(step.title, step.content, step.subject, step.text)?.trim()
+    if (!baseText) continue
+    const rawStatus = typeof step.status === 'string' ? step.status.trim().toLowerCase() : 'pending'
+    if (rawStatus === 'done' || rawStatus === 'completed') {
+      todos.push({ content: baseText, status: 'completed' })
+    } else if (rawStatus === 'in_progress' || rawStatus === 'in-progress' || rawStatus === 'running' || rawStatus === 'active') {
+      todos.push({ content: baseText, status: 'in_progress', activeForm: baseText })
+    } else if (rawStatus === 'skipped') {
+      todos.push({ content: `${baseText} (skipped)`, status: 'completed' })
+    } else if (rawStatus === 'failed' || rawStatus === 'error') {
+      todos.push({ content: `${baseText} (failed)`, status: 'pending' })
+    } else {
+      todos.push({ content: baseText, status: 'pending' })
+    }
+  }
+  return todos
 }
 
 function joinReplacementChunks(chunks: unknown, key: 'TargetContent' | 'ReplacementContent'): string | undefined {
@@ -756,7 +804,9 @@ export class AntigravityConversation {
   private readonly computerUseBridge?: AntigravityComputerUseBridge | null
   private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
+  private readonly onConfigOptionsUpdated?: (config: { modelId?: string; effortLevel?: string; permissionMode?: string; runtimeChanged: boolean }) => void
   private readonly antigravityAppDataDir: string
+  private lastProjectedPlanSignature?: string
 
   constructor(
     readonly acp: AntigravityAcp,
@@ -767,6 +817,7 @@ export class AntigravityConversation {
     this.computerUseBridge = options.computerUseBridge
     this.browserUseBridge = options.browserUseBridge
     this.onAvailableCommands = options.onAvailableCommands
+    this.onConfigOptionsUpdated = options.onConfigOptionsUpdated
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
     acp.onMessage = (method, params, id) => this.receive(method, params, id)
     if (acp.initialAvailableCommands.length > 0) {
@@ -1012,6 +1063,7 @@ export class AntigravityConversation {
 
   private captureFirstTurnBaseline(observedPromptTokens: number): void {
     if (this.firstTurnBaselineTokens !== undefined || observedPromptTokens <= 0) return
+    if (this.contextUsage?.size && this.contextUsage.size > 0 && observedPromptTokens > this.contextUsage.size) return
     this.ensureFirstTurnBaselineFromDisk()
     if (this.firstTurnBaselineTokens !== undefined) return
     const estimatedUserTokens = Math.ceil((this.firstTurnUserChars ?? 0) / 3.5)
@@ -1237,6 +1289,7 @@ export class AntigravityConversation {
     const sent = this.acp.cancel()
     if (!turn) return sent
     this.pauseModelPhase(turn)
+    this.flushSubagentPhase(turn)
     turn.cancelled = true
     if (!turn.nativeEnd) {
       // 截止时间属于 ACP 回合，不受 WebSocket 重连或下一条输入影响。
@@ -1460,6 +1513,25 @@ export class AntigravityConversation {
     const subagentName = explicitSubagentName ?? (subagentId ? this.resolveSubagentName(subagentId) : undefined)
     const title = typeof tool.title === 'string' && tool.title.trim() ? tool.title.trim() : undefined
 
+    // Only project root-level update_steps into TodoWrite so subagent checklists
+    // cannot overwrite the main session's cliTaskStore task bar.
+    if (rawName === 'update_steps' && !subagentId) {
+      const todos = normalizePlanStepsToTodos(rawInput.steps)
+      if (todos.length > 0) {
+        return {
+          name: 'TodoWrite',
+          input: {
+            ...rawInput,
+            todos,
+            antigravityToolName: 'update_steps',
+          },
+          displayName: title,
+          antigravityToolName: 'update_steps',
+          ...(subagentName ? { subagentName } : {}),
+        }
+      }
+    }
+
     if (rawName === 'invoke_subagent') {
       const description = firstString(rawInput.Role, rawInput.TypeName, title) ?? 'Subagent'
       const prompt = typeof rawInput.Prompt === 'string' ? rawInput.Prompt : ''
@@ -1630,6 +1702,7 @@ export class AntigravityConversation {
 
   private beginTurn(detached: boolean): Turn {
     const { promise, resolve } = Promise.withResolvers<void>()
+    this.lastProjectedPlanSignature = undefined
     const turn: Turn = {
       entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
       nextIndex: 0, started: Date.now(),
@@ -1638,6 +1711,8 @@ export class AntigravityConversation {
       promptSeq: 0,
       accumulatedUsage: createEmptyUsage(),
       liveTranscriptUsage: createEmptyUsage(),
+      usedSubagent: false,
+      subagentDurationMs: 0,
       transcriptByteOffset: this.getCurrentTranscriptByteSize(),
       transcriptPendingLine: '',
       transcriptDecoder: new StringDecoder('utf8'),
@@ -1654,6 +1729,26 @@ export class AntigravityConversation {
     return turn
   }
 
+  private isSubagentTool(tool: Frame): boolean {
+    if (tool.name === 'invoke_subagent' || tool.name === 'swarm') return true
+    return Boolean(parseSubagentToolCallPrefix(typeof tool.toolCallId === 'string' ? tool.toolCallId : undefined))
+  }
+
+  private hasActiveSubagentTool(): boolean {
+    for (const tool of this.tools.values()) {
+      if (tool && !toolHasFinished(tool) && this.isSubagentTool(tool)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private flushSubagentPhase(turn: Turn, now = Date.now()): void {
+    if (turn.subagentPhaseStart === undefined) return
+    turn.subagentDurationMs += Math.max(0, now - turn.subagentPhaseStart)
+    turn.subagentPhaseStart = undefined
+  }
+
   private hasActiveNonDaemonWork(turn: Turn): boolean {
     if (turn.permissions.size > 0) return true
     for (const tool of this.tools.values()) {
@@ -1665,6 +1760,8 @@ export class AntigravityConversation {
   }
 
   private startModelPhase(turn: Turn, now = Date.now()): void {
+    // Keep modelPhase and subagentPhase strictly disjoint to avoid double-counting overlapping time.
+    this.flushSubagentPhase(turn, now)
     if (turn.modelPhaseStart !== undefined) return
     turn.modelPhaseStart = now
     turn.decodeStart = undefined
@@ -1697,6 +1794,12 @@ export class AntigravityConversation {
 
   private maybeResumeModelPhase(turn: Turn, now = Date.now()): void {
     if (turn.cancelled || turn.finishing || turn.nativeEnd) return
+    if (turn.permissions.size === 0 && this.hasActiveSubagentTool()) {
+      if (turn.modelPhaseStart === undefined && turn.subagentPhaseStart === undefined) {
+        turn.subagentPhaseStart = now
+      }
+      return
+    }
     if (!this.hasActiveNonDaemonWork(turn)) {
       this.startModelPhase(turn, now)
     }
@@ -1822,6 +1925,7 @@ export class AntigravityConversation {
 
   private async finish(turn: Turn, end: NonNullable<Turn['nativeEnd']>): Promise<void> {
     this.pauseModelPhase(turn)
+    this.flushSubagentPhase(turn)
     let error = end.error
     let compactBoundaryEvent: Frame | undefined
     try {
@@ -1882,30 +1986,48 @@ export class AntigravityConversation {
       }
     }
     if (failed) this.emit({ type: 'assistant', error: failed.code, isApiErrorMessage: true, message: { content: [{ type: 'text', text: failed.message }] } })
+    this.pollLiveTurnTranscriptUsage(turn)
     const finalUsage = readPromptUsage(end.result.usage)
     const inputTokens = turn.accumulatedUsage.inputTokens + finalUsage.inputTokens
     const outputTokens = turn.accumulatedUsage.outputTokens + finalUsage.outputTokens
     const cacheReadTokens = turn.accumulatedUsage.cacheReadTokens + finalUsage.cacheReadTokens
     const cacheCreationTokens = turn.accumulatedUsage.cacheCreationTokens + finalUsage.cacheCreationTokens
     const observedPromptTokens = inputTokens + cacheReadTokens + cacheCreationTokens
-    if (!turn.isCompact && observedPromptTokens > 0) {
-      this.captureFirstTurnBaseline(observedPromptTokens)
+    if (!turn.isCompact) {
+      if (turn.usedSubagent) {
+        // agy 1.5.18 session/prompt aggregates subagent usage; keep /context baseline scoped to parent context.
+        if (this.contextUsage?.used && this.contextUsage.used > 0) {
+          this.captureFirstTurnBaseline(this.contextUsage.used)
+        }
+      } else if (observedPromptTokens > 0) {
+        this.captureFirstTurnBaseline(observedPromptTokens)
+      }
     }
+    const includesSubagentOutput =
+      turn.usedSubagent &&
+      turn.subagentDurationMs > 0 &&
+      outputTokens > turn.liveTranscriptUsage.outputTokens
+    const effectiveApiDurationMs = includesSubagentOutput
+      ? turn.apiDurationMs + turn.subagentDurationMs
+      : turn.apiDurationMs
+    const effectiveDecodeDurationMs = includesSubagentOutput
+      ? turn.decodeDurationMs + turn.subagentDurationMs
+      : turn.decodeDurationMs
     const totalDurationMs = Math.max(0, Date.now() - turn.started)
     this.cumulativeUsage.inputTokens += inputTokens
     this.cumulativeUsage.outputTokens += outputTokens
     this.cumulativeUsage.cacheReadTokens += cacheReadTokens
     this.cumulativeUsage.cacheCreationTokens += cacheCreationTokens
-    this.cumulativeUsage.totalAPIDuration += turn.apiDurationMs
-    this.cumulativeUsage.totalDecodeDuration += turn.decodeDurationMs
+    this.cumulativeUsage.totalAPIDuration += effectiveApiDurationMs
+    this.cumulativeUsage.totalDecodeDuration += effectiveDecodeDurationMs
     this.cumulativeUsage.totalTtftDuration += turn.ttftMs ?? 0
     this.cumulativeUsage.totalDuration += totalDurationMs
     this.emit({
       type: 'result', subtype: failed ? 'error' : 'success', is_error: Boolean(failed),
       ...(failed ? { result: failed.message } : {}),
       duration_ms: totalDurationMs,
-      duration_api_ms: turn.apiDurationMs,
-      ...(turn.decodeDurationMs > 0 ? { decode_ms: turn.decodeDurationMs } : {}),
+      duration_api_ms: effectiveApiDurationMs,
+      ...(effectiveDecodeDurationMs > 0 ? { decode_ms: effectiveDecodeDurationMs } : {}),
       ...(turn.ttftMs !== undefined ? { ttft_ms: turn.ttftMs } : {}),
       usage: {
         input_tokens: inputTokens,
@@ -1958,11 +2080,16 @@ export class AntigravityConversation {
     if (typeof id !== 'string' || this.tools.has(id)) return projected
     this.toolStartedAt.set(id, Date.now())
     this.flushChunk(turn)
+    const effectiveName = overrideName ?? projected.name
+    const effectiveInput = overrideInput ?? projected.input
+    if (effectiveName === 'TodoWrite' && projected.antigravityToolName === 'update_steps' && Array.isArray(effectiveInput.todos)) {
+      this.lastProjectedPlanSignature = JSON.stringify(effectiveInput.todos)
+    }
     this.assistant(turn, {
       type: 'tool_use',
       id,
-      name: overrideName ?? projected.name,
-      input: overrideInput ?? projected.input,
+      name: effectiveName,
+      input: effectiveInput,
     })
     if (projected.isSubagentInvoke && turn.entries.length > 0) {
       // Flush invoke_subagent tool_use immediately so clicking an in-progress subagent card
@@ -1974,14 +2101,22 @@ export class AntigravityConversation {
   }
 
   private projectToolState(turn: Turn, id: string, tool: Frame): void {
+    const isSubagent = this.isSubagentTool(tool)
+    if (isSubagent) turn.usedSubagent = true
     if (!toolHasFinished(tool)) {
       this.tools.set(id, tool)
       if (acpObject(tool.rawInput)?.IsDaemon !== true) {
         this.pauseModelPhase(turn)
       }
+      if (isSubagent && turn.permissions.size === 0 && turn.modelPhaseStart === undefined && turn.subagentPhaseStart === undefined) {
+        turn.subagentPhaseStart = Date.now()
+      }
       return
     }
     this.tools.set(id, null)
+    if (isSubagent && !this.hasActiveSubagentTool()) {
+      this.flushSubagentPhase(turn)
+    }
     const startedAt = this.toolStartedAt.get(id)
     this.toolStartedAt.delete(id)
     const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
@@ -2103,11 +2238,26 @@ export class AntigravityConversation {
       return
     }
     if (update.sessionUpdate === 'config_option_update') {
+      const prevModelId = this.acp.modelId
+      const prevEffortLevel = this.acp.effortLevel
+      const prevPermissionMode = this.acp.permissionMode
+      this.acp.syncConfigOptionsFromResponse(update)
       const modeOpt = configOption(update, 'mode')
       const mapped = acpModeToCcHahaPermissionMode(typeof modeOpt?.currentValue === 'string' ? modeOpt.currentValue : undefined)
       if (mapped && !this.acp.launchedWithBypassPermissions) {
         this.acp.permissionMode = mapped
         this.emit({ type: 'system', subtype: 'status', status: null, permissionMode: mapped })
+      }
+      const runtimeChanged =
+        this.acp.modelId !== prevModelId ||
+        this.acp.effortLevel !== prevEffortLevel
+      if (runtimeChanged || this.acp.permissionMode !== prevPermissionMode) {
+        this.onConfigOptionsUpdated?.({
+          modelId: this.acp.modelId,
+          effortLevel: this.acp.effortLevel,
+          permissionMode: this.acp.permissionMode,
+          runtimeChanged,
+        })
       }
       return
     }
@@ -2137,8 +2287,8 @@ export class AntigravityConversation {
         break
       }
       case 'tool_call': {
-        // interaction_* 等权限 RPC；ask_question 等 elicitation/create 或旧版终端回退。
-        if (typeof update.toolCallId !== 'string' || update.toolCallId.startsWith('interaction_') || this.tools.has(update.toolCallId)) return
+        // interaction_*（含 <childConvId>:interaction_*）等权限 RPC；ask_question 等 elicitation/create 或旧版终端回退。
+        if (typeof update.toolCallId !== 'string' || isInteractionToolCallId(update.toolCallId) || this.tools.has(update.toolCallId)) return
         turn ??= this.beginTurn(true)
         if (turn.pendingAskTools.has(update.toolCallId) || turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
         if (update.name === 'ask_question' && !toolHasFinished(update) && !turn.nativeEnd) {
@@ -2184,6 +2334,34 @@ export class AntigravityConversation {
         this.projectToolState(turn, id, { ...previous, ...update })
         break
       }
+      case 'plan': {
+        const todos = normalizePlanStepsToTodos(update.entries ?? update.steps)
+        if (todos.length === 0) break
+        const signature = JSON.stringify(todos)
+        if (signature === this.lastProjectedPlanSignature) break
+        this.lastProjectedPlanSignature = signature
+        turn ??= this.beginTurn(true)
+        const syntheticId = `acp_plan_${crypto.randomUUID()}`
+        this.flushChunk(turn)
+        this.assistant(turn, {
+          type: 'tool_use',
+          id: syntheticId,
+          name: 'TodoWrite',
+          input: { todos, antigravityToolName: 'plan' },
+        })
+        const resultMsg = {
+          type: 'user',
+          uuid: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: syntheticId, content: 'Plan updated', is_error: false }],
+          },
+        }
+        turn.entries.push(resultMsg)
+        this.emit(resultMsg)
+        break
+      }
       case 'usage_update': {
         const used = typeof update.used === 'number' && Number.isFinite(update.used) ? update.used : undefined
         const size = typeof update.size === 'number' && Number.isFinite(update.size) ? update.size : undefined
@@ -2220,10 +2398,11 @@ export class AntigravityConversation {
     }
 
     const input = acpObject(mergedTool.rawInput) ?? acpObject(mergedTool.args) ?? {}
-    const question = toolUseId.startsWith('interaction_')
+    const isInteraction = isInteractionToolCallId(toolUseId)
+    const question = isInteraction
       ? (typeof input.question === 'string' ? input.question : typeof mergedTool.title === 'string' ? mergedTool.title : undefined)
       : undefined
-    if (toolUseId.startsWith('interaction_') && (!question || options.length === 0 || new Set(options.map(option => option.name)).size !== options.length)) {
+    if (isInteraction && (!question || options.length === 0 || new Set(options.map(option => option.name)).size !== options.length)) {
       this.replyPermission(rpcId)
       return
     }
@@ -2260,17 +2439,23 @@ export class AntigravityConversation {
     const isElicitation = 'kind' in pending && pending.kind === 'elicitation'
     const isQuestion = isElicitation || Boolean(pending.question)
     const name = isQuestion ? 'AskUserQuestion' : projected.name
-    const input = isElicitation
+    const baseInput = isElicitation
       ? buildElicitationQuestionInput(pending.questions, pending.allowFreeText)
       : pending.question
         ? questionInput(pending.question, pending.options)
         : projected.input
-    const supportsAllowAlways = !isQuestion && pending.options.some(option => option.kind === 'allow_always')
+    const input = isQuestion && projected.subagentName
+      ? { ...baseInput, subagentName: projected.subagentName }
+      : baseInput
+    const allowAlwaysOption = !isQuestion ? pending.options.find(option => option.kind === 'allow_always') : undefined
+    const supportsAllowAlways = Boolean(allowAlwaysOption)
+    const allowAlwaysLabel = extractSpecificAllowAlwaysLabel(allowAlwaysOption)
     const permissionDescription = projected.description ?? projected.displayName
     const requestId = crypto.randomUUID()
     this.toolCall(turn, tool, name, input)
     turn.permissions.set(requestId, pending)
     this.pauseModelPhase(turn)
+    this.flushSubagentPhase(turn)
     this.emit({
       type: 'control_request',
       request_id: requestId,
@@ -2285,6 +2470,7 @@ export class AntigravityConversation {
         ...(projected.subagentName ? { subagent_name: projected.subagentName } : {}),
         ...(projected.subagentId ? { agent_id: projected.subagentId } : {}),
         ...(!isQuestion ? { supports_allow_always: supportsAllowAlways } : {}),
+        ...(allowAlwaysLabel ? { allow_always_label: allowAlwaysLabel } : {}),
       },
     })
   }

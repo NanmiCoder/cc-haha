@@ -17,6 +17,7 @@ vi.mock('../api/websocket', () => ({
 
 import { ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, ANTIGRAVITY_ACP_PROVIDER_ID } from '../constants/antigravityAcp'
 import { createDefaultSessionState, useChatStore } from './chatStore'
+import { useCLITaskStore } from './cliTaskStore'
 import { useProviderStore } from './providerStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSessionStore } from './sessionStore'
@@ -335,5 +336,54 @@ describe('chatStore Antigravity runtime preservation & permission classification
       message: 'Turn failed',
     })
     expect(useChatStore.getState().sessions[SESSION_ID]?.chatState).toBe('idle')
+  })
+
+  it('retains allowAlwaysLabel on permission_request and syncs projected Antigravity TodoWrite steps into cliTaskStore', () => {
+    useCLITaskStore.setState({
+      sessionId: SESSION_ID,
+      tasks: [],
+      resetting: false,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+      expanded: false,
+    })
+
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'permission_request',
+      requestId: 'req-scoped-ag',
+      toolName: 'Edit',
+      toolUseId: 'tool-scoped-ag',
+      input: { file_path: '/repo/shared/a.ts', old_string: '1', new_string: '2' },
+      displayName: 'Antigravity',
+      antigravityToolName: 'edit_file',
+      supportsAllowAlways: true,
+      allowAlwaysLabel: 'Always allow edits in /repo/shared',
+    })
+
+    const session = useChatStore.getState().sessions[SESSION_ID]!
+    expect(session.pendingPermission?.allowAlwaysLabel).toBe('Always allow edits in /repo/shared')
+    const permMsg = session.messages.find(m => m.type === 'permission_request' && m.requestId === 'req-scoped-ag')
+    expect(permMsg && permMsg.type === 'permission_request' ? permMsg.allowAlwaysLabel : undefined).toBe(
+      'Always allow edits in /repo/shared',
+    )
+
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'call_steps_ag_1',
+      input: {
+        antigravityToolName: 'update_steps',
+        todos: [
+          { content: 'Audit ACP adapter', status: 'completed' },
+          { content: 'Run E2E suite', status: 'in_progress', activeForm: 'Run E2E suite' },
+        ],
+      },
+    })
+
+    const taskState = useCLITaskStore.getState()
+    expect(taskState.sessionId).toBe(SESSION_ID)
+    expect(taskState.tasks).toHaveLength(2)
+    expect(taskState.tasks[0]).toMatchObject({ subject: 'Audit ACP adapter', status: 'completed' })
+    expect(taskState.tasks[1]).toMatchObject({ subject: 'Run E2E suite', status: 'in_progress' })
   })
 })

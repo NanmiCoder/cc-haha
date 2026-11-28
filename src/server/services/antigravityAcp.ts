@@ -138,8 +138,8 @@ function executable(env: NodeJS.ProcessEnv = process.env): string | null {
 }
 
 export function antigravityEnvironment(cwd: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  // 保留系统身份和 CLI 配置位置，不向外部 Agent 传入本应用的密钥或运行时配置。
-  const allowed = /^(HOME|USER|LOGNAME|SHELL|PATH|TMPDIR|TMP|TEMP|LANG|LANGUAGE|LC_\w+|TERM|DISPLAY|WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_(CONFIG|DATA|STATE|CACHE|RUNTIME)_HOME|XDG_RUNTIME_DIR|USERPROFILE|HOMEDRIVE|HOMEPATH|LOCALAPPDATA|APPDATA|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|PROGRAMFILES(?:\(X86\))?|PROGRAMDATA|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|SSL_CERT_(FILE|DIR)|GEMINI_HOME|SSH_CONNECTION)$/i
+  // 保留系统身份、CLI 配置位置及官方 ADC/自动压缩环境变量，不向外部 Agent 传入本应用的密钥或运行时配置。
+  const allowed = /^(HOME|USER|LOGNAME|SHELL|PATH|TMPDIR|TMP|TEMP|LANG|LANGUAGE|LC_\w+|TERM|DISPLAY|WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_(CONFIG|DATA|STATE|CACHE|RUNTIME)_HOME|XDG_RUNTIME_DIR|USERPROFILE|HOMEDRIVE|HOMEPATH|LOCALAPPDATA|APPDATA|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|PROGRAMFILES(?:\(X86\))?|PROGRAMDATA|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|SSL_CERT_(FILE|DIR)|GEMINI_HOME|SSH_CONNECTION|AGY_ADC_AUTH|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|AGY_CLI_AUTO_COMPACT_OVERRIDE)$/i
   return {
     ...Object.fromEntries(Object.entries(env).filter(([key, value]) => allowed.test(key) && typeof value === 'string')) as Record<string, string>,
     PWD: cwd,
@@ -161,6 +161,15 @@ function rpcError(value: unknown): AntigravityError {
   const text = typeof error?.message === 'string' ? error.message : ''
   if (error?.code === -32000 || (error?.code === -32603 && text.startsWith('No browser is available here'))) {
     return new AntigravityError('ANTIGRAVITY_LOGIN_REQUIRED', LOGIN_MESSAGE)
+  }
+  if (error?.code === -32002) {
+    return new AntigravityError('ANTIGRAVITY_RESUME_FAILED', 'This Antigravity session no longer exists. Start a new chat to continue.')
+  }
+  if (/prepaid balance is insufficient|prepaid wallet is empty/i.test(text)) {
+    return new AntigravityError('ANTIGRAVITY_TURN_FAILED', "Your organization's prepaid balance is insufficient. Contact your administrator to add funds.")
+  }
+  if (/exhausted your quota/i.test(text)) {
+    return new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Antigravity model quota is exhausted. Try another model or wait for quota refresh.')
   }
   // AGY errors can contain account URLs or command output. Do not expose raw RPC errors.
   return connectionError(typeof error?.code === 'number' ? `Antigravity CLI rejected an ACP request (RPC ${error.code}).` : undefined)
@@ -394,6 +403,7 @@ type AntigravityAcpInitState = {
   permissionMode: AntigravityCcHahaPermissionMode
   launchedWithBypassPermissions: boolean
   supportsImages: boolean
+  supportsSessionClose: boolean
   version?: string
   tier?: AntigravityTierInfo
   modelConfigId?: string
@@ -412,14 +422,15 @@ export class AntigravityAcp {
   readonly sessionId: string
   readonly launchedWithBypassPermissions: boolean
   readonly supportsImages: boolean
+  readonly supportsSessionClose: boolean
   readonly version?: string
   readonly tier?: AntigravityTierInfo
   initialAvailableCommands: AntigravitySlashCommand[]
+  availableEfforts: string[]
   private modelConfigId?: string
   private effortConfigId?: string
   private modeConfigId?: string
   private availableModels: AntigravityModelInfo[]
-  private availableEfforts: string[]
   private availableModes: string[]
 
   constructor(
@@ -432,6 +443,7 @@ export class AntigravityAcp {
     this.permissionMode = state.permissionMode
     this.launchedWithBypassPermissions = state.launchedWithBypassPermissions
     this.supportsImages = state.supportsImages
+    this.supportsSessionClose = state.supportsSessionClose
     this.version = state.version
     this.tier = state.tier
     this.modelConfigId = state.modelConfigId
@@ -446,6 +458,7 @@ export class AntigravityAcp {
   get proc() { return this.rpc.proc }
   get drained() { return this.rpc.drained }
   get isOpen() { return this.rpc.isOpen }
+  get hasEffortConfig() { return Boolean(this.effortConfigId) }
   set onMessage(handler: AntigravityRpc['onMessage']) { this.rpc.onMessage = handler }
   prompt(prompt: unknown[]) { return this.rpc.request('session/prompt', { sessionId: this.sessionId, prompt }, 0) }
   cancel() { return this.rpc.notify('session/cancel', { sessionId: this.sessionId }) }
@@ -453,7 +466,16 @@ export class AntigravityAcp {
   end() { this.rpc.end() }
   close(signal?: NodeJS.Signals) { this.rpc.close(signal) }
 
-  private syncConfigOptionsFromResponse(response: RpcObject): void {
+  async closeSession(timeoutMs = 1_500): Promise<void> {
+    if (!this.supportsSessionClose || !this.isOpen) return
+    try {
+      await this.rpc.request('session/close', { sessionId: this.sessionId }, timeoutMs)
+    } catch {
+      // Best-effort cleanup before terminating the ACP subprocess.
+    }
+  }
+
+  syncConfigOptionsFromResponse(response: RpcObject): void {
     const hasConfigOptions = Array.isArray(response.configOptions)
     const model = configOption(response, 'model')
     if (typeof model?.id === 'string') this.modelConfigId = model.id
@@ -785,6 +807,7 @@ export async function openAntigravityAcp(
       permissionMode: initialMode,
       launchedWithBypassPermissions,
       supportsImages: acpObject(capabilities?.promptCapabilities)?.image === true,
+      supportsSessionClose: Boolean(sessionCaps?.close),
       ...(typeof version === 'string' ? { version } : {}),
       ...(tier ? { tier } : {}),
       modelConfigId: typeof modelOpt?.id === 'string' ? modelOpt.id : undefined,
@@ -888,6 +911,7 @@ export function discoverAntigravity(options?: { exitTimeoutMs?: number }): Promi
           },
         }
       }
+      await acp.closeSession()
       acp.close()
       await waitForSubprocessExit(acp.proc, options?.exitTimeoutMs ?? DISCOVERY_EXIT_TIMEOUT_MS)
       return getAntigravityStatus()

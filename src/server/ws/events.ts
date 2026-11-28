@@ -98,6 +98,7 @@ export type ServerMessage =
       antigravityToolName?: string
       subagentName?: string
       supportsAllowAlways?: boolean
+      allowAlwaysLabel?: string
       /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
       autoAnswerDeadline?: number | null
     }

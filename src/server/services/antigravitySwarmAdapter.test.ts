@@ -921,4 +921,62 @@ describe('antigravitySwarmAdapter', () => {
       else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevEnv
     }
   })
+
+  it('ignores system-attributed board wakeups in progress tracking and maps v1.5.18 overview member phases', async () => {
+    const appDataDir = await makeTempAppDataDir()
+    const nativeSessionId = 'v1518-swarm-1111-2222-333333333333'
+    const swarmDir = path.join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+    await fs.mkdir(swarmDir, { recursive: true })
+    await fs.writeFile(
+      path.join(swarmDir, 'swarm.json'),
+      JSON.stringify({ version: 1, backend: 'local', swarm_id: nativeSessionId, created_at: '2026-11-27T05:00:00Z' }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'members.json'),
+      JSON.stringify({
+        title: 'v1.5.18 Overview Swarm',
+        members: {
+          coordinator: { conversation_id: nativeSessionId, role: 'coordinator', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+          reviewer: { conversation_id: 'rev-conv', role: 'worker', phase: 'IN_REVIEW', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+          peerWaiter: { conversation_id: 'peer-conv', role: 'worker', phase: 'WAITING_ON_PEER', wake_mode: 'mentions', killed: false, model: 'gemini-4-neon' },
+          blockedWorker: { conversation_id: 'blk-conv', role: 'worker', phase: 'BLOCKED', wake_mode: 'mentions', killed: false, model: 'gemini-4-neon' },
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(swarmDir, 'board.jsonl'),
+      [
+        JSON.stringify({ seq: 1, agent: 'system', time: '2026-11-27 04:55:00', text: '[swarm] wakeup @reviewer [done]' }),
+        JSON.stringify({ seq: 2, agent: 'coordinator', kind: 'brief', time: '2026-11-27 05:00:01', text: '@reviewer Check diff' }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    disposeRuntimeProbe = registerAntigravitySwarmRuntimeProbe(() => true)
+    const snap = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'cc-v1518-lead' })
+    expect(snap).not.toBeNull()
+    expect(snap!.team.members.find(m => m.name === 'reviewer')).toMatchObject({
+      status: 'running',
+      activity: 'active',
+      joinedAt: Date.parse('2026-11-27T05:00:01'),
+    })
+    expect(snap!.team.members.find(m => m.name === 'peerWaiter')).toMatchObject({ status: 'idle', activity: 'idle' })
+    expect(snap!.team.members.find(m => m.name === 'blockedWorker')).toMatchObject({ status: 'idle', activity: 'idle' })
+    // System wakeup containing "[done]" must NOT prematurely complete the reviewer task or create a bogus "system" task
+    expect(snap!.tasks.find(t => t.owner === 'system')).toBeUndefined()
+    expect(snap!.tasks.find(t => t.owner === 'reviewer')?.status).toBe('in_progress')
+
+    // A system wakeup arriving after pause must NOT flip paused state back to running
+    const token = beginAntigravitySwarmPause(nativeSessionId)
+    completeAntigravitySwarmPause(nativeSessionId, token, { boardMaxSeq: 2 })
+    await fs.appendFile(
+      path.join(swarmDir, 'board.jsonl'),
+      JSON.stringify({ seq: 3, agent: 'system', time: '2026-11-27 05:05:00', text: '[swarm] wakeup @reviewer' }) + '\n',
+      'utf8',
+    )
+    const pausedSnap = await readAntigravitySwarmSnapshot(nativeSessionId, { appDataDir, leadSessionId: 'cc-v1518-lead' })
+    expect(pausedSnap!.team.members.find(m => m.name === 'reviewer')).toMatchObject({ status: 'idle', activity: 'stopped' })
+  })
 })

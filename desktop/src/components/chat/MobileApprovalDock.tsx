@@ -162,9 +162,11 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
               <Button
                 variant="ghost"
                 size="md"
+                className="min-w-0 max-w-[60%]"
+                title={current.allowAlwaysLabel?.trim() || t('permission.allowForSession')}
                 onClick={() => respondToPermission(sessionId, current.requestId, true, { rule: 'always' })}
               >
-                {t('permission.allowForSession')}
+                <span className="truncate">{current.allowAlwaysLabel?.trim() || t('permission.allowForSession')}</span>
               </Button>
             ) : null}
           </div>
@@ -228,6 +230,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
             antigravityToolName={current.antigravityToolName}
             subagentName={current.subagentName}
             supportsAllowAlways={current.supportsAllowAlways}
+            allowAlwaysLabel={current.allowAlwaysLabel}
           />
         )}
       </MobileBottomSheet>

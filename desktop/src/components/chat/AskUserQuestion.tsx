@@ -249,6 +249,10 @@ export function AskUserQuestion({
   const textareaId = useId()
   const questions = useMemo(() => parseInput(input), [input])
   const inputObject = isRecord(input) ? input : {}
+  const subagentName = pendingRequest?.subagentName
+    ?? (typeof inputObject.subagentName === 'string' && inputObject.subagentName.trim()
+      ? inputObject.subagentName.trim()
+      : undefined)
   const allowFreeText = inputObject.allowFreeText !== false
   const allowImages = allowFreeText && inputObject.allowImages !== false
   // Read once instead of subscribing: this card writes the draft on every
@@ -1019,6 +1023,11 @@ export function AskUserQuestion({
         <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
           {t('question.needsInput')}
         </span>
+        {subagentName && (
+          <Badge pill={false} tone="info" className="shrink-0" data-testid="question-subagent-badge">
+            {t('permission.fromSubagent', { name: subagentName })}
+          </Badge>
+        )}
         {(submitted || expired) && (
           // handing the question back is not an answer — saying "answered"
           // there misreports what the user did; and an expired question was

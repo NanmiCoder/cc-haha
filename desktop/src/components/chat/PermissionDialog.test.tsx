@@ -139,6 +139,45 @@ describe('PermissionDialog Antigravity & Subagent extensions', () => {
     })
   })
 
+  it('renders scoped allowAlwaysLabel on the always-allow button when provided by ACP', () => {
+    const permission: PendingPermission = {
+      requestId: 'req-scoped',
+      toolName: 'Edit',
+      toolUseId: 'tool-scoped',
+      antigravityToolName: 'edit_file',
+      supportsAllowAlways: true,
+      allowAlwaysLabel: 'Always allow edits in /repo/shared',
+      input: {
+        file_path: '/repo/shared/config.ts',
+        old_string: 'a',
+        new_string: 'b',
+      },
+    }
+    seedPending(permission)
+
+    render(
+      <PermissionDialog
+        sessionId={SESSION}
+        requestId={permission.requestId}
+        toolName={permission.toolName}
+        input={permission.input}
+        antigravityToolName={permission.antigravityToolName}
+        supportsAllowAlways={permission.supportsAllowAlways}
+        allowAlwaysLabel={permission.allowAlwaysLabel}
+      />,
+    )
+
+    const scopedBtn = screen.getByRole('button', { name: /^Always allow edits in \/repo\/shared/ })
+    expect(scopedBtn).toHaveAttribute('title', 'Always allow edits in /repo/shared')
+    fireEvent.click(scopedBtn)
+    expect(sendMock).toHaveBeenCalledWith(SESSION, {
+      type: 'permission_response',
+      requestId: 'req-scoped',
+      allowed: true,
+      rule: 'always',
+    })
+  })
+
   it('keeps the subagent badge visible on resolved permission rows', () => {
     seedPending(null)
 

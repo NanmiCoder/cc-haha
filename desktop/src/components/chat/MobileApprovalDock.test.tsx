@@ -186,6 +186,27 @@ describe('MobileApprovalDock', () => {
     expect(within(sheet).queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument()
   })
 
+  it('displays scoped allowAlwaysLabel on mobile dock and detail sheet when provided', () => {
+    seed([{
+      requestId: 'perm-ag-scoped',
+      toolName: 'Edit',
+      toolUseId: 'toolu-ag-scoped',
+      antigravityToolName: 'edit_file',
+      supportsAllowAlways: true,
+      allowAlwaysLabel: 'Always allow edits in /repo/shared',
+      input: { file_path: '/repo/shared/app.ts', old_string: 'a', new_string: 'b' },
+    }])
+    render(<MobileApprovalDock sessionId={SESSION} />)
+
+    const dock = screen.getByTestId('mobile-approval-dock')
+    const dockAlwaysBtn = within(dock).getByRole('button', { name: 'Always allow edits in /repo/shared' })
+    expect(dockAlwaysBtn).toHaveAttribute('title', 'Always allow edits in /repo/shared')
+
+    fireEvent.click(within(dock).getByRole('button', { name: 'View details' }))
+    const sheet = screen.getByTestId('mobile-approval-sheet')
+    expect(within(sheet).getByRole('button', { name: /^Always allow edits in \/repo\/shared/ })).toBeInTheDocument()
+  })
+
   it('uses Antigravity actor title and displays tool summary description cleanly', () => {
     seed([{
       requestId: 'perm-ag-cmd',

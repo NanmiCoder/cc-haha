@@ -46,6 +46,7 @@ type Props = {
   antigravityToolName?: string
   subagentName?: string
   supportsAllowAlways?: boolean
+  allowAlwaysLabel?: string
   /**
    * While the request waits, draw one marker line instead of the card. The
    * phone answers it from the approval bar in the composer's place.
@@ -141,6 +142,7 @@ export function PermissionDialog({
   antigravityToolName,
   subagentName,
   supportsAllowAlways,
+  allowAlwaysLabel,
   markerWhenPending = false,
 }: Props) {
   const respondToPermission = useChatStore((s) => s.respondToPermission)
@@ -180,6 +182,8 @@ export function PermissionDialog({
   const allowAlways =
     (supportsAllowAlways ?? pendingPermission?.supportsAllowAlways) !== false &&
     inputSupportsAllowAlways !== false
+  const effectiveAllowAlwaysLabel =
+    (allowAlwaysLabel ?? pendingPermission?.allowAlwaysLabel)?.trim() || t('permission.allowForSession')
   const ToolIcon = PERMISSION_TOOL_ICONS[toolName]
     ?? (effectiveAntigravityToolName ? PERMISSION_TOOL_ICONS[effectiveAntigravityToolName] : undefined)
     ?? Shield
@@ -324,10 +328,12 @@ export function PermissionDialog({
           <Button
             variant="secondary"
             size="base"
-            aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
+            className="max-w-full"
+            title={effectiveAllowAlwaysLabel}
+            aria-label={`${effectiveAllowAlwaysLabel}: ${permissionContext}`}
             onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
           >
-            {t('permission.allowForSession')}
+            <span className="truncate">{effectiveAllowAlwaysLabel}</span>
           </Button>
         ) : null}
         <div className="flex-1" />

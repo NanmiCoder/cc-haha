@@ -120,6 +120,7 @@ export type ServerMessage =
       antigravityToolName?: string
       subagentName?: string
       supportsAllowAlways?: boolean
+      allowAlwaysLabel?: string
     }
   | {
       type: 'computer_use_permission_request'
@@ -454,6 +455,7 @@ export type UIMessage =
       antigravityToolName?: string
       subagentName?: string
       supportsAllowAlways?: boolean
+      allowAlwaysLabel?: string
       timestamp: number
     }
   | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; transcriptMessageId?: string; timestamp: number }

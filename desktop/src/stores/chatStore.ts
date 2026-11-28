@@ -158,6 +158,7 @@ export type PendingPermission = {
   antigravityToolName?: string
   subagentName?: string
   supportsAllowAlways?: boolean
+  allowAlwaysLabel?: string
   planRuntimeSubmission?: {
     previousSelection?: RuntimeSelection
     stagedSelection?: RuntimeSelection
@@ -6114,6 +6115,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
             ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
             ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
+            ...(msg.allowAlwaysLabel ? { allowAlwaysLabel: msg.allowAlwaysLabel } : {}),
           }
           const pendingPermissions = {
             ...getPendingPermissionRecord(s),
@@ -6169,6 +6171,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     ...(msg.antigravityToolName ? { antigravityToolName: msg.antigravityToolName } : {}),
                     ...(msg.subagentName ? { subagentName: msg.subagentName } : {}),
                     ...(msg.supportsAllowAlways !== undefined ? { supportsAllowAlways: msg.supportsAllowAlways } : {}),
+                    ...(msg.allowAlwaysLabel ? { allowAlwaysLabel: msg.allowAlwaysLabel } : {}),
                     timestamp: Date.now(),
                   }],
           }

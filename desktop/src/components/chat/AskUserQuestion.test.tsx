@@ -2321,5 +2321,21 @@ describe('AskUserQuestion', () => {
         },
       })
     })
+
+    it('renders subagent attribution badge on AskUserQuestion cards from subagentName', () => {
+      const subagentInput = {
+        subagentName: 'research-worker',
+        questions: [
+          {
+            question: 'Which environment should the worker target?',
+            header: 'Antigravity',
+            multiSelect: false,
+            options: [{ label: 'Staging' }, { label: 'Production' }],
+          },
+        ],
+      }
+      render(<AskUserQuestion toolUseId="tool-1" input={subagentInput} />)
+      expect(screen.getByTestId('question-subagent-badge').textContent).toContain('From research-worker')
+    })
   })
 })
