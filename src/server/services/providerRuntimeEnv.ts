@@ -762,6 +762,14 @@ export function mergeActiveProviderManagedEnv(
   configDir: string,
   options?: { serverPort?: number; settingsProviderId?: unknown },
 ): Record<string, string> {
+  // Official desktop OAuth gets its preferences from original user settings,
+  // never the active custom/built-in provider's shared Haha env (#2054).
+  if (
+    process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop' &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)
+  ) {
+    return {}
+  }
   const active = readActiveProviderSnapshot(configDir, options)
   const cleanedEnv = { ...settingsEnv }
   if (active) {
@@ -778,12 +786,6 @@ export function mergeActiveProviderManagedEnv(
     }
   } else if (typeof options?.settingsProviderId === 'string') {
     // A failed switch to Official may leave the previous provider's file behind.
-    delete cleanedEnv.CLAUDE_CODE_SUBAGENT_MODEL
-  }
-  // Official desktop OAuth gets its preferences from original user settings,
-  // never the active custom provider's shared Haha env (including preset defaults).
-  if (process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop' &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)) {
     delete cleanedEnv.CLAUDE_CODE_SUBAGENT_MODEL
   }
   return cleanedEnv

@@ -376,3 +376,74 @@ test('an explicit subagent choice overrides a preset default only for its active
   await providers.activateOfficial()
   expect((await providers.getManagedSettings()).env).not.toHaveProperty('CLAUDE_CODE_SUBAGENT_MODEL')
 })
+
+test('Claude Official session stays on Claude transport when ChatGPT Official is the active default provider (#2054)', async () => {
+  const providers = new ProviderService()
+  await providers.updateOfficialProviderModels('openai-official', {
+    main: 'gpt-6.2-astra',
+    fable: 'gpt-6.2-astra',
+    haiku: 'gpt-6.2-sol',
+    sonnet: 'gpt-6.2-sol',
+    opus: 'gpt-6.2-sol',
+  })
+  await providers.activateProvider('openai-official')
+  await writeFile(join(process.env.CLAUDE_CONFIG_DIR!, 'cc-haha', 'openai-oauth.json'), JSON.stringify({
+    accessToken: 'fake-openai-access',
+    refreshToken: 'fake-openai-refresh',
+    expiresAt: Date.now() + 60_000,
+    accountId: 'fake-account',
+  }))
+
+  const service = new ConversationService() as unknown as {
+    buildChildEnv(workDir: string, sdkUrl: undefined, options: { providerId: string | null; model?: string }): Promise<Record<string, string>>
+    buildOfficialOAuthEnv(): Promise<Record<string, string>>
+  }
+  spyOn(service, 'buildOfficialOAuthEnv').mockResolvedValue({
+    CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+    CLAUDE_CODE_OAUTH_TOKEN: 'fake-claude-oauth-token',
+    CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1',
+  })
+  const env = await service.buildChildEnv(home, undefined, {
+    providerId: null,
+    model: 'claude-opus-5-5',
+  })
+
+  const managedEnvUrl = pathToFileURL(join(import.meta.dir, '../../utils/managedEnv.ts')).href
+  const clientUrl = pathToFileURL(join(import.meta.dir, '../../services/api/client.ts')).href
+  const openaiModelsUrl = pathToFileURL(join(import.meta.dir, '../../services/openaiAuth/models.ts')).href
+  const envUtilsUrl = pathToFileURL(join(import.meta.dir, '../../utils/envUtils.ts')).href
+  const proc = Bun.spawn([process.execPath, '--no-env-file', '--preload', join(import.meta.dir, '../../../preload.ts'), '-e', `
+    const { applySafeConfigEnvironmentVariables, applyConfigEnvironmentVariables } = await import(${JSON.stringify(managedEnvUrl)})
+    const { shouldUseOpenAICodexTransport } = await import(${JSON.stringify(clientUrl)})
+    const { isOpenAIResponsesModel } = await import(${JSON.stringify(openaiModelsUrl)})
+    const { isEnvTruthy } = await import(${JSON.stringify(envUtilsUrl)})
+    applySafeConfigEnvironmentVariables()
+    applyConfigEnvironmentVariables()
+    console.log(JSON.stringify({
+      openAiFlag: process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER ?? null,
+      anthropicModel: process.env.ANTHROPIC_MODEL ?? null,
+      opusModel: process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? null,
+      isOpenAIModel: isOpenAIResponsesModel('claude-opus-5-5'),
+      usingOpenAICodex: shouldUseOpenAICodexTransport({
+        hasOpenAIAuth: true,
+        isClaudeSubscriber: true,
+        forceOpenAICodex: isEnvTruthy(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER),
+        isOpenAIModel: isOpenAIResponsesModel('claude-opus-5-5'),
+        hasAnthropicAuthToken: !!process.env.ANTHROPIC_AUTH_TOKEN,
+        hasExplicitApiKey: false,
+        hasFallbackApiKey: false,
+      }),
+    }))
+  `], { env, stdout: 'pipe', stderr: 'pipe' })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+  ])
+  expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 })
+  expect(JSON.parse(stdout.trim().split('\n').at(-1)!)).toEqual({
+    openAiFlag: null,
+    anthropicModel: null,
+    opusModel: null,
+    isOpenAIModel: false,
+    usingOpenAICodex: false,
+  })
+})

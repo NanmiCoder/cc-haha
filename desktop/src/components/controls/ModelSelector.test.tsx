@@ -28,6 +28,7 @@ import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useMagpieStore } from '../../stores/magpieStore'
 import { providersApi } from '../../api/providers'
+import { modelsApi } from '../../api/models'
 import { useSessionStore } from '@/stores/sessionStore'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import type { ModelInfo } from '../../types/settings'
@@ -2206,5 +2207,160 @@ describe('controlled runtime pickers outside the composer', () => {
     } finally {
       localStorage.removeItem('cc-haha-antigravity-last-selection')
     }
+  })
+
+  it('loads and displays each signed-in official provider live model catalog regardless of default provider (#2054)', async () => {
+    const claudeModels: ModelInfo[] = [
+      { id: 'claude-opus-5-5', name: 'Opus 5.5', description: 'Claude Opus', context: '1m' },
+      { id: 'claude-future-6', name: 'Claude Future 6', description: 'Live Claude model', context: '1m' },
+    ]
+    const openAIModels: ModelInfo[] = [
+      {
+        id: 'gpt-6.2-astra',
+        name: 'GPT-6.2 Astra',
+        description: 'Live ChatGPT Astra',
+        context: '400000',
+        defaultReasoningEffort: 'high',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      },
+      {
+        id: 'gpt-6.2-sol',
+        name: 'GPT-6.2 Sol',
+        description: 'Live ChatGPT Sol',
+        context: '400000',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      },
+    ]
+    const grokModels: ModelInfo[] = [
+      { id: 'grok-5-live', name: 'Grok 5 Live', description: 'Live Grok model', context: '500000' },
+    ]
+    const catalogSpy = vi.spyOn(modelsApi, 'catalog').mockImplementation(async (providerId) => {
+      if (providerId === 'claude-official') return { models: claudeModels }
+      if (providerId === 'openai-official') return { models: openAIModels }
+      if (providerId === 'grok-official') return { models: grokModels }
+      return { models: [] }
+    })
+
+    useHahaOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, scopes: [], subscriptionType: 'max' },
+      fetchStatus: async () => {},
+    })
+    useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, accountId: 'acct-1', email: 'user@example.test' },
+      fetchStatus: async () => {},
+    })
+    useHahaGrokOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, email: 'user@example.test' },
+      fetchStatus: async () => {},
+    })
+    useHahaDeepSeekOAuthStore.setState({
+      status: { loggedIn: false },
+      fetchStatus: async () => {},
+    })
+    // Claude Official is the default provider; ChatGPT Official and Grok Official are non-default.
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: claudeModels,
+      currentModel: claudeModels[0],
+      activeProviderName: null,
+    })
+    useProviderStore.setState({
+      providers: [],
+      activeId: null,
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector runtimeKey="__draft__" onRuntimeSelectionChange={onRuntimeSelectionChange} />)
+
+    await clickByRole(/Opus 5\.5/)
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+
+    await waitFor(() => {
+      expect(dropdown.getByRole('button', { name: /GPT-6\.2 Astra/ })).toBeInTheDocument()
+      expect(dropdown.getByRole('button', { name: /GPT-6\.2 Sol/ })).toBeInTheDocument()
+      expect(dropdown.getByRole('button', { name: /Grok 5 Live/ })).toBeInTheDocument()
+    })
+    expect(catalogSpy).toHaveBeenCalledWith('openai-official')
+    expect(catalogSpy).toHaveBeenCalledWith('grok-official')
+
+    fireEvent.click(dropdown.getByRole('button', { name: /GPT-6\.2 Sol/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      providerId: OPENAI_OFFICIAL_PROVIDER_ID,
+      modelId: 'gpt-6.2-sol',
+    }))
+
+    // Reopening reuses the cached catalogs without refetching.
+    await clickByRole(/GPT-6\.2 Sol/)
+    expect(catalogSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('loads Claude Official and DeepSeek Account live catalogs when ChatGPT Official is the default provider (#2054)', async () => {
+    const openAIModels: ModelInfo[] = [
+      { id: 'gpt-6.2-astra', name: 'GPT-6.2 Astra', description: 'Live ChatGPT Astra', context: '400000' },
+    ]
+    const claudeLiveModels: ModelInfo[] = [
+      { id: 'claude-opus-5-5', name: 'Opus 5.5', description: 'Claude Opus', context: '1m' },
+      { id: 'claude-live-preview', name: 'Claude Live Preview', description: 'Account-only Claude model', context: '1m' },
+    ]
+    const deepSeekLiveModels: ModelInfo[] = [
+      { id: 'deepseek-v5-live', name: 'DeepSeek V5 Live', description: '', context: '1048576' },
+    ]
+    const catalogSpy = vi.spyOn(modelsApi, 'catalog').mockImplementation(async (providerId) => {
+      if (providerId === 'claude-official') return { models: claudeLiveModels }
+      if (providerId === 'deepseek-account') return { models: deepSeekLiveModels }
+      return { models: [] }
+    })
+
+    useHahaOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, scopes: [], subscriptionType: 'max' },
+      fetchStatus: async () => {},
+    })
+    useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: null, accountId: 'acct-1', email: 'user@example.test' },
+      fetchStatus: async () => {},
+    })
+    useHahaGrokOAuthStore.setState({
+      status: { loggedIn: false },
+      fetchStatus: async () => {},
+    })
+    useHahaDeepSeekOAuthStore.setState({
+      status: { loggedIn: true, contact: 'user@example.test', name: 'User' },
+      fetchStatus: async () => {},
+    })
+    useSettingsStore.setState({
+      locale: 'en',
+      availableModels: openAIModels,
+      currentModel: openAIModels[0],
+      activeProviderName: 'ChatGPT Official',
+    })
+    useProviderStore.setState({
+      providers: [],
+      activeId: OPENAI_OFFICIAL_PROVIDER_ID,
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector runtimeKey="__draft__" onRuntimeSelectionChange={onRuntimeSelectionChange} />)
+
+    await clickByRole(/GPT-6\.2 Astra/)
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+
+    await waitFor(() => {
+      expect(dropdown.getByRole('button', { name: /Claude Live Preview/ })).toBeInTheDocument()
+      expect(dropdown.getByRole('button', { name: /DeepSeek V5 Live/ })).toBeInTheDocument()
+    })
+    expect(catalogSpy).toHaveBeenCalledWith('claude-official')
+    expect(catalogSpy).toHaveBeenCalledWith('deepseek-account')
+    expect(catalogSpy).not.toHaveBeenCalledWith('openai-official')
+
+    fireEvent.click(dropdown.getByRole('button', { name: /Opus 5\.5/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      providerId: null,
+      modelId: 'claude-opus-5-5',
+    }))
   })
 })

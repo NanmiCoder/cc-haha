@@ -15,6 +15,8 @@ vi.mock('../api/hahaOpenAIOAuth', () => ({
 }))
 
 import { useHahaOpenAIOAuthStore } from './hahaOpenAIOAuthStore'
+import { useProviderStore } from './providerStore'
+import { modelsApi } from '../api/models'
 
 const initialState = useHahaOpenAIOAuthStore.getState()
 
@@ -36,6 +38,8 @@ describe('hahaOpenAIOAuthStore', () => {
   afterEach(() => {
     useHahaOpenAIOAuthStore.getState().stopPolling()
     useHahaOpenAIOAuthStore.setState(initialState)
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -113,5 +117,29 @@ describe('hahaOpenAIOAuthStore', () => {
     await useHahaOpenAIOAuthStore.getState().fetchStatus()
     expect(useHahaOpenAIOAuthStore.getState().status).toBeNull()
     expect(useHahaOpenAIOAuthStore.getState().error).toBe('Please retry')
+  })
+
+  it('clears cached official catalog on logout and discards in-flight stale fetches', async () => {
+    logoutMock.mockResolvedValue({ ok: true })
+    let resolveCatalog!: (value: { models: Array<{ id: string; name: string; description: string; context: string }> }) => void
+    vi.spyOn(modelsApi, 'catalog').mockImplementationOnce(
+      () => new Promise((resolve) => { resolveCatalog = resolve }),
+    )
+    useProviderStore.getState().setOfficialCatalog('openai-official', [
+      { id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol', description: '', context: '400000' },
+    ])
+    const pendingFetch = useProviderStore.getState().fetchOfficialCatalog('openai-official')
+    useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, expiresAt: Date.now() + 60_000, email: 'user@example.com', accountId: 'acct_123' },
+    })
+
+    await useHahaOpenAIOAuthStore.getState().logout()
+    expect(useProviderStore.getState().officialCatalogs['openai-official']).toBeUndefined()
+
+    resolveCatalog({
+      models: [{ id: 'gpt-stale', name: 'Stale GPT', description: '', context: '400000' }],
+    })
+    await pendingFetch
+    expect(useProviderStore.getState().officialCatalogs['openai-official']).toBeUndefined()
   })
 })

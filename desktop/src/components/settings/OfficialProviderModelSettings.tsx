@@ -120,6 +120,9 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
         setError(t('settings.providers.officialModelsLoadError'))
       }
       if (catalogResult.status === 'fulfilled') {
+        if (catalogResult.value.models.length > 0) {
+          useProviderStore.getState().setOfficialCatalog(providerId, catalogResult.value.models)
+        }
         setAvailableModelIds(catalogResult.value.models.map((model) => model.id))
         setWindowInfo(toOfficialWindowInfo(catalogResult.value.models))
       }
@@ -157,6 +160,7 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
       // catalog must never replace the current chat's available models.
       await useSettingsStore.getState().fetchAll()
       if (generation !== requestGeneration.current) return
+      useProviderStore.getState().setOfficialCatalog(providerId, result.models)
       setAvailableModelIds(result.models.map((model) => model.id))
       setWindowInfo(toOfficialWindowInfo(result.models))
       setRefreshedCount(result.models.length)

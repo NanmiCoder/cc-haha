@@ -126,6 +126,13 @@ function filterSettingsEnv(
   )
 }
 
+function isDesktopOfficialOAuthMode(): boolean {
+  return (
+    process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop' &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)
+  )
+}
+
 /**
  * Read env vars from ~/.claude/cc-haha/settings.json (Haha-specific provider
  * config). This file is written by ProviderService.syncToSettings() and
@@ -133,6 +140,15 @@ function filterSettingsEnv(
  * Returns an empty object if the file doesn't exist or is invalid.
  */
 function getCcHahaSettingsEnv(): Record<string, string> {
+  // Official desktop OAuth sessions get their preferences from original user
+  // settings (~/.claude/settings.json), never from cc-haha's active provider
+  // snapshot (~/.claude/cc-haha/providers.json + settings.json). Otherwise
+  // selecting Claude Official while another provider is the global default
+  // leaks that default provider's routing and model env (or starts its
+  // standalone proxy) into the Claude Official subprocess (#2054).
+  if (isDesktopOfficialOAuthMode()) {
+    return {}
+  }
   const configDir = getClaudeConfigHomeDir()
   const serverPort =
     !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST) &&

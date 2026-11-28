@@ -1,6 +1,7 @@
 // desktop/src/stores/providerStore.ts
 
 import { create } from 'zustand'
+import { modelsApi } from '../api/models'
 import { providersApi } from '../api/providers'
 import { useChatStore } from './chatStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
@@ -41,6 +42,7 @@ import type {
 } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
 import type { RuntimeSelection } from '../types/runtime'
+import type { ModelInfo } from '../types/settings'
 
 type ProviderStore = {
   providers: SavedProvider[]
@@ -48,6 +50,8 @@ type ProviderStore = {
   activeId: string | null
   /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
   deepSeekAccountModels: ModelMapping
+  /** Per-official-provider account model catalogs, independent of which provider is active. */
+  officialCatalogs: Partial<Record<string, ModelInfo[]>>
   /** Local Antigravity ACP runtime status discovered by the server. */
   antigravity: AntigravityStatus | undefined
   /** Whether a live Antigravity ACP model discovery request is currently in flight. */
@@ -60,6 +64,9 @@ type ProviderStore = {
   error: string | null
 
   fetchProviders: () => Promise<void>
+  setOfficialCatalog: (providerId: string, models: ModelInfo[]) => void
+  fetchOfficialCatalog: (providerId: string, options?: { forceRefresh?: boolean }) => Promise<ModelInfo[]>
+  clearOfficialCatalog: (providerId: string) => void
   discoverAntigravity: () => Promise<AntigravityStatus | undefined>
   setAntigravityEnabled: (enabled: boolean) => void
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
@@ -196,6 +203,14 @@ function refreshSessionsForProvider(provider: SavedProvider, activeId: string | 
 }
 
 let inFlightAntigravityDiscovery: Promise<AntigravityStatus | undefined> | null = null
+const inFlightOfficialCatalogs = new Map<string, Promise<ModelInfo[]>>()
+const officialCatalogVersions = new Map<string, number>()
+
+function bumpOfficialCatalogVersion(providerId: string): number {
+  const next = (officialCatalogVersions.get(providerId) ?? 0) + 1
+  officialCatalogVersions.set(providerId, next)
+  return next
+}
 
 function hydrateAntigravityWithCache(status: AntigravityStatus | undefined): AntigravityStatus | undefined {
   if (!status) return undefined
@@ -232,6 +247,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
   deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
+  officialCatalogs: {},
   antigravity: undefined,
   antigravityDiscovering: false,
   antigravityEnabled: readAntigravityEnabled(),
@@ -277,6 +293,57 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  },
+
+  setOfficialCatalog: (providerId, models) => {
+    if (!models.length) return
+    bumpOfficialCatalogVersion(providerId)
+    set((state) => ({
+      officialCatalogs: {
+        ...state.officialCatalogs,
+        [providerId]: models,
+      },
+    }))
+  },
+
+  clearOfficialCatalog: (providerId) => {
+    bumpOfficialCatalogVersion(providerId)
+    inFlightOfficialCatalogs.delete(providerId)
+    set((state) => {
+      if (!(providerId in state.officialCatalogs)) return state
+      const { [providerId]: _removed, ...rest } = state.officialCatalogs
+      return { officialCatalogs: rest }
+    })
+  },
+
+  fetchOfficialCatalog: async (providerId, options) => {
+    if (!options?.forceRefresh) {
+      const existing = inFlightOfficialCatalogs.get(providerId)
+      if (existing) return existing
+    }
+    const version = officialCatalogVersions.get(providerId) ?? 0
+    const promise = (async () => {
+      const { models } = options
+        ? await modelsApi.catalog(providerId, options)
+        : await modelsApi.catalog(providerId)
+      if (models.length > 0 && (officialCatalogVersions.get(providerId) ?? 0) === version) {
+        set((state) => ({
+          officialCatalogs: {
+            ...state.officialCatalogs,
+            [providerId]: models,
+          },
+        }))
+      }
+      return models
+    })()
+    inFlightOfficialCatalogs.set(providerId, promise)
+    const clearInFlight = () => {
+      if (inFlightOfficialCatalogs.get(providerId) === promise) {
+        inFlightOfficialCatalogs.delete(providerId)
+      }
+    }
+    promise.then(clearInFlight, clearInFlight)
+    return promise
   },
 
   discoverAntigravity: async () => {

@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { hahaGrokOAuthApi, type HahaGrokOAuthStatus } from '../api/hahaGrokOAuth'
+import { GROK_OFFICIAL_PROVIDER_ID } from '../constants/grokOfficialProvider'
+import { useProviderStore } from './providerStore'
 import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
@@ -30,6 +32,12 @@ export const useHahaGrokOAuthStore = create<HahaGrokOAuthState>((set, get) => {
         const previous = get().status
         const status = await hahaGrokOAuthApi.status()
         set({ status, error: null })
+        if (previous !== null && (
+          previous.loggedIn !== status.loggedIn ||
+          (previous.loggedIn && status.loggedIn && previous.email !== status.email)
+        )) {
+          useProviderStore.getState().clearOfficialCatalog(GROK_OFFICIAL_PROVIDER_ID)
+        }
         if (previous !== null && previous.loggedIn !== status.loggedIn) {
           void useUsageSummaryStore.getState().fetchSummary({ force: true })
         }
@@ -59,6 +67,7 @@ export const useHahaGrokOAuthStore = create<HahaGrokOAuthState>((set, get) => {
       try {
         await hahaGrokOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        useProviderStore.getState().clearOfficialCatalog(GROK_OFFICIAL_PROVIDER_ID)
         void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({

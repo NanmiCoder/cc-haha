@@ -2,6 +2,8 @@
 
 import { create } from 'zustand'
 import { hahaOAuthApi, type HahaOAuthStatus } from '../api/hahaOAuth'
+import { CLAUDE_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import { useProviderStore } from './providerStore'
 import { useSettingsStore } from './settingsStore'
 import { useUsageSummaryStore } from './usageSummaryStore'
 
@@ -34,6 +36,13 @@ export const useHahaOAuthStore = create<HahaOAuthState>((set, get) => {
         const previous = get().status
         const status = await hahaOAuthApi.status()
         set({ status, error: null })
+        const accountChanged = previous !== null && (
+          previous.loggedIn !== status.loggedIn ||
+          (previous.loggedIn && status.loggedIn && previous.subscriptionType !== status.subscriptionType)
+        )
+        if (accountChanged) {
+          useProviderStore.getState().clearOfficialCatalog(CLAUDE_OFFICIAL_PROVIDER_ID)
+        }
         if (
           status.loggedIn &&
           (
@@ -73,6 +82,7 @@ export const useHahaOAuthStore = create<HahaOAuthState>((set, get) => {
       try {
         await hahaOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        useProviderStore.getState().clearOfficialCatalog(CLAUDE_OFFICIAL_PROVIDER_ID)
         void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({

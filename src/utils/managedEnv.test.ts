@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { applyConfigEnvironmentVariables, applySafeConfigEnvironmentVariables } from './managedEnv.js'
+import { resetSettingsCache } from './settings/settingsCache.js'
 
 let tmpDir: string
 const originalEnv = {
@@ -17,6 +18,11 @@ const originalEnv = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+  ANTHROPIC_DEFAULT_OPUS_MODEL: process.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
+  CC_HAHA_OPENAI_OAUTH_PROVIDER: process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER,
+  OPENAI_CODEX_OAUTH_FILE: process.env.OPENAI_CODEX_OAUTH_FILE,
+  CC_HAHA_GROK_OAUTH_PROVIDER: process.env.CC_HAHA_GROK_OAUTH_PROVIDER,
+  CC_HAHA_DEEPSEEK_OAUTH_PROVIDER: process.env.CC_HAHA_DEEPSEEK_OAUTH_PROVIDER,
   CLAUDE_CODE_SUBAGENT_MODEL: process.env.CLAUDE_CODE_SUBAGENT_MODEL,
   CC_HAHA_IMAGE_PROVIDER_KIND: process.env.CC_HAHA_IMAGE_PROVIDER_KIND,
   CC_HAHA_IMAGE_PROVIDER_ID: process.env.CC_HAHA_IMAGE_PROVIDER_ID,
@@ -41,6 +47,7 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 
 describe('managedEnv', () => {
   beforeEach(async () => {
+    resetSettingsCache()
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'managed-env-'))
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
@@ -52,6 +59,11 @@ describe('managedEnv', () => {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_AUTH_TOKEN
     delete process.env.ANTHROPIC_MODEL
+    delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+    delete process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+    delete process.env.OPENAI_CODEX_OAUTH_FILE
+    delete process.env.CC_HAHA_GROK_OAUTH_PROVIDER
+    delete process.env.CC_HAHA_DEEPSEEK_OAUTH_PROVIDER
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
     delete process.env.CC_HAHA_IMAGE_PROVIDER_KIND
     delete process.env.CC_HAHA_IMAGE_PROVIDER_ID
@@ -61,6 +73,7 @@ describe('managedEnv', () => {
   })
 
   afterEach(async () => {
+    resetSettingsCache()
     await import('../server/proxy/standaloneProviderProxy.js')
       .then((mod) => mod.stopStandaloneProviderProxyForTests?.())
       .catch(() => {})
@@ -75,6 +88,11 @@ describe('managedEnv', () => {
     restoreEnv('ANTHROPIC_API_KEY')
     restoreEnv('ANTHROPIC_AUTH_TOKEN')
     restoreEnv('ANTHROPIC_MODEL')
+    restoreEnv('ANTHROPIC_DEFAULT_OPUS_MODEL')
+    restoreEnv('CC_HAHA_OPENAI_OAUTH_PROVIDER')
+    restoreEnv('OPENAI_CODEX_OAUTH_FILE')
+    restoreEnv('CC_HAHA_GROK_OAUTH_PROVIDER')
+    restoreEnv('CC_HAHA_DEEPSEEK_OAUTH_PROVIDER')
     restoreEnv('CLAUDE_CODE_SUBAGENT_MODEL')
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_KIND')
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_ID')
@@ -184,5 +202,110 @@ describe('managedEnv', () => {
     expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(expected)
     applyConfigEnvironmentVariables()
     expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(expected)
+  })
+
+  test('does not leak active ChatGPT Official or custom provider env into Claude Official desktop sessions (#2054)', async () => {
+    await writeJson(path.join(tmpDir, 'settings.json'), {
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: 'official-user-subagent' },
+    })
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      schemaVersion: 10,
+      activeId: 'openai-official',
+      providers: [],
+      officialProviderModels: {
+        'openai-official': {
+          main: 'gpt-6.2-astra',
+          fable: 'gpt-6.2-astra',
+          haiku: 'gpt-6.2-sol',
+          sonnet: 'gpt-6.2-sol',
+          opus: 'gpt-6.2-sol',
+        },
+      },
+    })
+    await writeJson(path.join(tmpDir, 'cc-haha', 'settings.json'), {
+      providerEnvOwner: 'openai-official',
+      model: 'gpt-6.2-astra',
+      env: {
+        CC_HAHA_OPENAI_OAUTH_PROVIDER: '1',
+        OPENAI_CODEX_OAUTH_FILE: path.join(tmpDir, 'cc-haha', 'openai-oauth.json'),
+        ANTHROPIC_MODEL: 'gpt-6.2-astra',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-6.2-sol',
+      },
+    })
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+
+    applySafeConfigEnvironmentVariables()
+    expect(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
+    expect(process.env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
+    expect(process.env.ANTHROPIC_MODEL).toBeUndefined()
+    expect(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('official-user-subagent')
+
+    applyConfigEnvironmentVariables()
+    expect(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
+    expect(process.env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
+    expect(process.env.ANTHROPIC_MODEL).toBeUndefined()
+    expect(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('official-user-subagent')
+  })
+
+  test('does not start standalone proxy or leak custom OpenAI provider env into Claude Official desktop sessions (#2054)', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      schemaVersion: 10,
+      activeId: 'custom-openai',
+      providers: [
+        {
+          id: 'custom-openai',
+          presetId: 'custom',
+          name: 'Custom OpenAI',
+          apiKey: 'sk-custom',
+          authStrategy: 'api_key',
+          baseUrl: 'https://api.custom.invalid',
+          apiFormat: 'openai_chat',
+          models: {
+            main: 'custom-main',
+            haiku: 'custom-small',
+            sonnet: 'custom-medium',
+            opus: 'custom-large',
+          },
+        },
+      ],
+    })
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+
+    applySafeConfigEnvironmentVariables()
+    applyConfigEnvironmentVariables()
+
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined()
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(process.env.ANTHROPIC_MODEL).toBeUndefined()
+    expect(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined()
+  })
+
+  test.each([
+    { activeId: 'grok-official', flag: 'CC_HAHA_GROK_OAUTH_PROVIDER' },
+    { activeId: 'deepseek-account', flag: 'CC_HAHA_DEEPSEEK_OAUTH_PROVIDER' },
+  ] as const)('does not leak active $activeId env into Claude Official desktop sessions (#2054)', async ({ activeId, flag }) => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      schemaVersion: 10,
+      activeId,
+      providers: [],
+    })
+    await writeJson(path.join(tmpDir, 'cc-haha', 'settings.json'), {
+      providerEnvOwner: activeId,
+      env: {
+        [flag]: '1',
+        ANTHROPIC_BASE_URL: 'https://other-account.invalid',
+        ANTHROPIC_MODEL: 'other-account-model',
+      },
+    })
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+
+    applySafeConfigEnvironmentVariables()
+    applyConfigEnvironmentVariables()
+
+    expect(process.env[flag]).toBeUndefined()
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined()
+    expect(process.env.ANTHROPIC_MODEL).toBeUndefined()
   })
 })

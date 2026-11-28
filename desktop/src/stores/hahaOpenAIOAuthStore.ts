@@ -5,6 +5,8 @@ import {
   hahaOpenAIOAuthApi,
   type HahaOpenAIOAuthStatus,
 } from '../api/hahaOpenAIOAuth'
+import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import { useProviderStore } from './providerStore'
 import { useUsageSummaryStore } from './usageSummaryStore'
 
 const POLL_INTERVAL_MS = 2_000
@@ -36,6 +38,15 @@ export const useHahaOpenAIOAuthStore = create<HahaOpenAIOAuthState>((set, get) =
         const previous = get().status
         const status = await hahaOpenAIOAuthApi.status()
         set({ status, error: null })
+        if (previous !== null && (
+          previous.loggedIn !== status.loggedIn ||
+          (previous.loggedIn && status.loggedIn && (
+            previous.accountId !== status.accountId ||
+            previous.email !== status.email
+          ))
+        )) {
+          useProviderStore.getState().clearOfficialCatalog(OPENAI_OFFICIAL_PROVIDER_ID)
+        }
         if (previous !== null && previous.loggedIn !== status.loggedIn) {
           void useUsageSummaryStore.getState().fetchSummary({ force: true })
         }
@@ -65,6 +76,7 @@ export const useHahaOpenAIOAuthStore = create<HahaOpenAIOAuthState>((set, get) =
       try {
         await hahaOpenAIOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        useProviderStore.getState().clearOfficialCatalog(OPENAI_OFFICIAL_PROVIDER_ID)
         void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({

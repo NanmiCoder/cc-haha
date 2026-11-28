@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { hahaDeepSeekOAuthApi, type HahaDeepSeekOAuthStatus } from '../api/hahaDeepSeekOAuth'
+import { DEEPSEEK_ACCOUNT_PROVIDER_ID } from '../constants/deepseekAccountProvider'
+import { useProviderStore } from './providerStore'
 import { useSettingsStore } from './settingsStore'
 import { useUsageSummaryStore } from './usageSummaryStore'
 
@@ -31,6 +33,15 @@ export const useHahaDeepSeekOAuthStore = create<HahaDeepSeekOAuthState>((set, ge
         const previous = get().status
         const status = await hahaDeepSeekOAuthApi.status()
         set({ status, error: null })
+        if (previous !== null && (
+          previous.loggedIn !== status.loggedIn ||
+          (previous.loggedIn && status.loggedIn && (
+            previous.contact !== status.contact ||
+            previous.name !== status.name
+          ))
+        )) {
+          useProviderStore.getState().clearOfficialCatalog(DEEPSEEK_ACCOUNT_PROVIDER_ID)
+        }
         if (previous !== null && previous.loggedIn !== status.loggedIn) {
           void useUsageSummaryStore.getState().fetchSummary({ force: true })
         }
@@ -60,6 +71,7 @@ export const useHahaDeepSeekOAuthStore = create<HahaDeepSeekOAuthState>((set, ge
       try {
         await hahaDeepSeekOAuthApi.logout()
         set({ status: { loggedIn: false }, isLoading: false })
+        useProviderStore.getState().clearOfficialCatalog(DEEPSEEK_ACCOUNT_PROVIDER_ID)
         void useUsageSummaryStore.getState().fetchSummary({ force: true })
       } catch (err) {
         set({

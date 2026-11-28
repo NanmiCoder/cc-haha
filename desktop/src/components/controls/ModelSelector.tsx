@@ -16,6 +16,7 @@ import {
   ANTIGRAVITY_ACP_PROVIDER_ID,
 } from '../../constants/antigravityAcp'
 import {
+  CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_MODELS,
   OPENAI_OFFICIAL_PROVIDER_ID,
 } from '../../constants/openaiOfficialProvider'
@@ -163,12 +164,15 @@ function deepSeekAccountChoice(
   labels: Record<ModelSlot, string>,
   availableModels: ModelInfo[],
   savedModels: ModelMapping,
+  officialCatalog?: ModelInfo[],
 ): ModelProviderChoice {
   const provider = buildDeepSeekAccountProvider(savedModels)
   const isActive = activeId === DEEPSEEK_ACCOUNT_PROVIDER_ID
-  const catalog = isActive && availableModels.length > 0
-    ? availableModels
-    : DEEPSEEK_ACCOUNT_CATALOG_MODELS
+  const catalog = officialCatalog?.length
+    ? officialCatalog
+    : isActive && availableModels.length > 0
+      ? availableModels
+      : DEEPSEEK_ACCOUNT_CATALOG_MODELS
   const namesByBaseId = new Map(catalog.map((model) => [baseModelId(model.id), model.name]))
   const models = buildProviderModels(provider, labels).map((model) => ({
     ...model,
@@ -265,10 +269,37 @@ function buildProviderModelRow(
   }
 }
 
+function resolveClaudeOfficialModels(
+  activeId: string | null,
+  availableModels: ModelInfo[],
+  officialCatalogs: Partial<Record<string, ModelInfo[]>>,
+): ModelInfo[] {
+  const liveModels = officialCatalogs[CLAUDE_OFFICIAL_PROVIDER_ID]?.length
+    ? officialCatalogs[CLAUDE_OFFICIAL_PROVIDER_ID]!
+    : activeId === null && availableModels.length > 0
+      ? availableModels
+      : []
+  return liveModels.length > 0 ? mergeOfficialModels(liveModels) : OFFICIAL_MODELS
+}
+
+function resolveOfficialCatalogModels(
+  providerId: string,
+  activeId: string | null,
+  availableModels: ModelInfo[],
+  officialCatalogs: Partial<Record<string, ModelInfo[]>>,
+  fallback: ModelInfo[],
+): ModelInfo[] {
+  if (officialCatalogs[providerId]?.length) return officialCatalogs[providerId]!
+  return activeId === providerId && availableModels.length > 0
+    ? availableModels
+    : fallback
+}
+
 function buildProviderChoices(
   providers: SavedProvider[],
   activeId: string | null,
   availableModels: ModelInfo[],
+  officialCatalogs: Partial<Record<string, ModelInfo[]>>,
   officialName: string,
   openAIOfficialName: string,
   grokOfficialName: string,
@@ -282,15 +313,21 @@ function buildProviderChoices(
   magpieCatalog: readonly MagpieModel[] | null = null,
   describeMagpieModel: (model: MagpieModel) => string = (model) => model.displayName,
 ): ModelProviderChoice[] {
-  const claudeOfficialModels = activeId === null && availableModels.length > 0
-    ? mergeOfficialModels(availableModels)
-    : OFFICIAL_MODELS
-  const openAIOfficialModels = activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length > 0
-    ? availableModels
-    : OPENAI_OFFICIAL_MODELS
-  const grokOfficialModels = activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length > 0
-    ? availableModels
-    : GROK_OFFICIAL_MODELS
+  const claudeOfficialModels = resolveClaudeOfficialModels(activeId, availableModels, officialCatalogs)
+  const openAIOfficialModels = resolveOfficialCatalogModels(
+    OPENAI_OFFICIAL_PROVIDER_ID,
+    activeId,
+    availableModels,
+    officialCatalogs,
+    OPENAI_OFFICIAL_MODELS,
+  )
+  const grokOfficialModels = resolveOfficialCatalogModels(
+    GROK_OFFICIAL_PROVIDER_ID,
+    activeId,
+    availableModels,
+    officialCatalogs,
+    GROK_OFFICIAL_MODELS,
+  )
 
   const choices: ModelProviderChoice[] = []
 
@@ -314,7 +351,14 @@ function buildProviderChoices(
     ))
   }
   if (deepSeekAccountLoggedIn) {
-    choices.push(deepSeekAccountChoice(activeId, deepSeekAccountName, labels, availableModels, deepSeekAccountModels))
+    choices.push(deepSeekAccountChoice(
+      activeId,
+      deepSeekAccountName,
+      labels,
+      availableModels,
+      deepSeekAccountModels,
+      officialCatalogs[DEEPSEEK_ACCOUNT_PROVIDER_ID],
+    ))
   }
 
   for (const provider of providers) {
@@ -410,11 +454,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     providers,
     activeId,
     deepSeekAccountModels,
+    officialCatalogs,
     antigravity,
     antigravityDiscovering,
     hasLoadedProviders,
     isLoading: providersLoading,
     fetchProviders,
+    fetchOfficialCatalog,
     discoverAntigravity,
   } = useProviderStore()
   const claudeOAuthStatus = useHahaOAuthStore((s) => s.status)
@@ -437,6 +483,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const dropdownRef = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
   const requestedOAuthStatusRef = useRef(false)
+  const requestedOfficialCatalogsRef = useRef<Set<string>>(new Set())
 
   const EFFORT_OPTIONS: { value: ReasoningEffortLevel; label: string }[] = [
     { value: 'low', label: t('settings.general.effort.low') },
@@ -487,6 +534,59 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     runtimeChoices,
     savedProvidersOnly,
     open,
+  ])
+
+  useEffect(() => {
+    if (!open) {
+      requestedOfficialCatalogsRef.current.clear()
+      return
+    }
+    if (runtimeChoices !== undefined || savedProvidersOnly || !isRuntimeScoped) return
+
+    const targets: Array<{ providerId: string; loggedIn: boolean; activeHasLiveList: boolean }> = [
+      {
+        providerId: CLAUDE_OFFICIAL_PROVIDER_ID,
+        loggedIn: claudeOAuthStatus?.loggedIn === true,
+        activeHasLiveList: activeId === null && availableModels.length > 0,
+      },
+      {
+        providerId: OPENAI_OFFICIAL_PROVIDER_ID,
+        loggedIn: openAIOAuthStatus?.loggedIn === true,
+        activeHasLiveList: activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length > 0,
+      },
+      {
+        providerId: GROK_OFFICIAL_PROVIDER_ID,
+        loggedIn: grokOAuthStatus?.loggedIn === true,
+        activeHasLiveList: activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length > 0,
+      },
+      {
+        providerId: DEEPSEEK_ACCOUNT_PROVIDER_ID,
+        loggedIn: deepSeekOAuthStatus?.loggedIn === true,
+        activeHasLiveList: activeId === DEEPSEEK_ACCOUNT_PROVIDER_ID && availableModels.length > 0,
+      },
+    ]
+
+    for (const target of targets) {
+      if (!target.loggedIn) continue
+      if (officialCatalogs[target.providerId]?.length) continue
+      if (target.activeHasLiveList) continue
+      if (requestedOfficialCatalogsRef.current.has(target.providerId)) continue
+      requestedOfficialCatalogsRef.current.add(target.providerId)
+      void fetchOfficialCatalog(target.providerId).catch(() => {})
+    }
+  }, [
+    activeId,
+    availableModels.length,
+    claudeOAuthStatus?.loggedIn,
+    deepSeekOAuthStatus?.loggedIn,
+    fetchOfficialCatalog,
+    grokOAuthStatus?.loggedIn,
+    isRuntimeScoped,
+    officialCatalogs,
+    open,
+    openAIOAuthStatus?.loggedIn,
+    runtimeChoices,
+    savedProvidersOnly,
   ])
 
   const closeSelector = useCallback(() => setOpen(false), [])
@@ -600,6 +700,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           : providers,
         activeId,
         availableModels,
+        officialCatalogs,
         t('settings.providers.officialName'),
         t('settings.providers.openaiOfficialName'),
         t('settings.providers.grokOfficialName'),
@@ -624,6 +725,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       runtimeChoices,
       activeId,
       availableModels,
+      officialCatalogs,
       providers,
       deepSeekAccountModels,
       roleLabels,
@@ -692,13 +794,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       ?? (activeRuntimeSelection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
         ? antigravityChoice
         : activeRuntimeSelection.providerId === null
-        ? officialChoices(null, mergeOfficialModels(activeId === null ? availableModels : []), activeId === null, t('settings.providers.officialName'))
+        ? officialChoices(null, resolveClaudeOfficialModels(activeId, availableModels, officialCatalogs), activeId === null, t('settings.providers.officialName'))
         : activeRuntimeSelection.providerId === OPENAI_OFFICIAL_PROVIDER_ID
-          ? officialChoices(OPENAI_OFFICIAL_PROVIDER_ID, activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length ? availableModels : OPENAI_OFFICIAL_MODELS, activeId === OPENAI_OFFICIAL_PROVIDER_ID, t('settings.providers.openaiOfficialName'))
+          ? officialChoices(OPENAI_OFFICIAL_PROVIDER_ID, resolveOfficialCatalogModels(OPENAI_OFFICIAL_PROVIDER_ID, activeId, availableModels, officialCatalogs, OPENAI_OFFICIAL_MODELS), activeId === OPENAI_OFFICIAL_PROVIDER_ID, t('settings.providers.openaiOfficialName'))
           : activeRuntimeSelection.providerId === GROK_OFFICIAL_PROVIDER_ID
-            ? officialChoices(GROK_OFFICIAL_PROVIDER_ID, activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length ? availableModels : GROK_OFFICIAL_MODELS, activeId === GROK_OFFICIAL_PROVIDER_ID, t('settings.providers.grokOfficialName'))
+            ? officialChoices(GROK_OFFICIAL_PROVIDER_ID, resolveOfficialCatalogModels(GROK_OFFICIAL_PROVIDER_ID, activeId, availableModels, officialCatalogs, GROK_OFFICIAL_MODELS), activeId === GROK_OFFICIAL_PROVIDER_ID, t('settings.providers.grokOfficialName'))
             : activeRuntimeSelection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID
-              ? deepSeekAccountChoice(activeId, t('settings.providers.deepseekAccountName'), roleLabels, availableModels, deepSeekAccountModels)
+              ? deepSeekAccountChoice(activeId, t('settings.providers.deepseekAccountName'), roleLabels, availableModels, deepSeekAccountModels, officialCatalogs[DEEPSEEK_ACCOUNT_PROVIDER_ID])
               : null)
     : null
 

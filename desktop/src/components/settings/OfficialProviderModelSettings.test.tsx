@@ -131,6 +131,7 @@ describe('OfficialProviderModelSettings', () => {
     expect(main).toHaveValue('my-unsaved-model')
     expect(providersApi.updateOfficialModels).not.toHaveBeenCalled()
     expect(useSettingsStore.getState().fetchAll).toHaveBeenCalledTimes(1)
+    expect(useProviderStore.getState().officialCatalogs['openai-official']).toEqual(futureCatalog.models)
     expect(screen.getByRole('status')).toHaveTextContent('Model list updated (1)')
     expect(refresh).toBeEnabled()
 
