@@ -9,7 +9,7 @@ import { useUIStore } from '../stores/uiStore'
 import { useMcpStore } from '../stores/mcpStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import type { McpReconnectResult, McpSessionSync } from '../types/mcp'
+import type { McpReconnectResult, McpServerRecord, McpSessionSync } from '../types/mcp'
 
 vi.mock('../api/sessions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/sessions')>()
@@ -42,6 +42,30 @@ async function renderLoadedMcpSettings() {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
   return result
+}
+
+function projectCopy(
+  projectPath: string,
+  overrides: Partial<McpServerRecord> = {},
+): McpServerRecord {
+  return {
+    name: 'shared-tools',
+    scope: 'project',
+    transport: 'stdio',
+    enabled: true,
+    status: 'connected',
+    statusLabel: 'Connected',
+    configLocation: `${projectPath}/.mcp.json`,
+    summary: 'npx shared-tools',
+    canEdit: true,
+    canRemove: true,
+    canReconnect: true,
+    canToggle: true,
+    projectPath,
+    activeInCurrentContext: true,
+    config: { type: 'stdio', command: 'npx', args: ['shared-tools'], env: {} },
+    ...overrides,
+  }
 }
 
 describe('McpSettings', () => {
@@ -944,6 +968,124 @@ describe('McpSettings', () => {
     expect(reconnectServer).toHaveBeenCalledWith(server, '/workspace/project', 'session-1')
     expect(addToast).toHaveBeenCalledWith({ type, message: expect.stringContaining(message) })
     expect(screen.queryByText('Reconnecting...')).not.toBeInTheDocument()
+  })
+
+  it('renders a single project copy without expansion controls', async () => {
+    useMcpStore.setState({ servers: [projectCopy('/workspace/project')] })
+
+    await renderLoadedMcpSettings()
+
+    expect(screen.queryByRole('button', { name: 'Show projects' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open shared-tools' })).toBeInTheDocument()
+  })
+
+  it('groups project servers with the same name into one expandable row', async () => {
+    const active = projectCopy('/workspace/project')
+    const other = projectCopy('/workspace/other-project', { activeInCurrentContext: false })
+    useMcpStore.setState({ servers: [other, active] })
+
+    await renderLoadedMcpSettings()
+
+    expect(screen.getAllByText('shared-tools')).toHaveLength(1)
+    expect(screen.getByText('1/2 connected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit shared service shared-tools' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show projects' }))
+
+    expect(screen.getAllByText(/\/workspace\/(project|other-project)$/).map((node) => node.textContent)).toEqual([
+      '/workspace/project',
+      '/workspace/other-project',
+    ])
+    expect(screen.getByText('Current project')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Hide projects' })).toBeInTheDocument()
+  })
+
+  it('shows disabled project copies and counts them on the service row', async () => {
+    const active = projectCopy('/workspace/project')
+    const disabled = projectCopy('/workspace/other-project', {
+      activeInCurrentContext: false,
+      enabled: false,
+      status: 'disabled',
+      statusLabel: 'Disabled',
+    })
+    useMcpStore.setState({ servers: [active, disabled] })
+
+    await renderLoadedMcpSettings()
+
+    expect(screen.getByText('1 disabled')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show projects' }))
+
+    expect(screen.getByText('Disabled')).toBeInTheDocument()
+    expect(screen.queryByText(
+      'Not loaded in the current chat. Open a chat in this project to use it.',
+    )).not.toBeInTheDocument()
+  })
+
+  it('marks config conflicts and hides group edit', async () => {
+    const active = projectCopy('/workspace/project')
+    const other = projectCopy('/workspace/other-project', {
+      activeInCurrentContext: false,
+      config: { type: 'stdio', command: 'uvx', args: ['other'], env: {} },
+    })
+    useMcpStore.setState({ servers: [active, other] })
+
+    await renderLoadedMcpSettings()
+
+    expect(screen.getByText('Config mismatch')).toBeInTheDocument()
+    expect(screen.getByText('Project copies differ. Edit each project separately.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit shared service shared-tools' })).not.toBeInTheDocument()
+  })
+
+  it('edits only the selected project copy with its project path locked', async () => {
+    const active = projectCopy('/workspace/project')
+    const other = projectCopy('/workspace/other-project', { activeInCurrentContext: false })
+    const updateServer = vi.fn().mockResolvedValue(active)
+    useMcpStore.setState({ servers: [active, other], updateServer })
+
+    await renderLoadedMcpSettings()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show projects' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit shared-tools in /workspace/project' }))
+
+    expect(screen.queryByRole('button', { name: /^Project/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('Target projects')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/Command to launch/), { target: { value: 'uvx' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+
+    expect(updateServer).toHaveBeenCalledWith(
+      active,
+      {
+        scope: 'project',
+        config: { type: 'stdio', command: 'uvx', args: ['shared-tools'], env: {} },
+      },
+      '/workspace/project',
+    )
+  })
+
+  it('removes only the selected project copy', async () => {
+    const active = projectCopy('/workspace/project')
+    const other = projectCopy('/workspace/other-project', { activeInCurrentContext: false })
+    const deleteServer = vi.fn().mockResolvedValue(undefined)
+    useMcpStore.setState({ servers: [active, other], deleteServer })
+
+    await renderLoadedMcpSettings()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show projects' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove shared-tools from /workspace/project' }))
+
+    expect(screen.getByText(
+      'Remove MCP server "shared-tools" from /workspace/project? This action cannot be undone.',
+    )).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    })
+
+    expect(deleteServer).toHaveBeenCalledWith(active, '/workspace/project')
   })
 
 })
