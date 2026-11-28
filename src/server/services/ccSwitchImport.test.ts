@@ -1381,7 +1381,7 @@ describe('cc-switch candidate mapping', () => {
   test('matches the MartLLM preset from any spelling of its root URL', async () => {
     await writeFixtureDb([
       { id: 'ull', sortIndex: 1, env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://api.martllm.com' }) },
-      { id: 'ull-trailing', sortIndex: 2, env: claudeEnv({ ANTHROPIC_BASE_URL: 'HTTPS://API.MARTLLM.DEV/' }) },
+      { id: 'ull-trailing', sortIndex: 2, env: claudeEnv({ ANTHROPIC_BASE_URL: 'HTTPS://API.MARTLLM.COM/' }) },
       {
         id: 'ull-token', sortIndex: 3,
         meta: JSON.stringify({ apiFormat: 'anthropic', apiKeyField: 'ANTHROPIC_AUTH_TOKEN' }),

@@ -253,7 +253,7 @@ describe('bundled provider presets', () => {
     // MartLLM serves /v1/messages at its root, so no proxy route or header is needed.
     expect(preset?.modelApiFormats).toBeUndefined()
     expect(preset?.upstreamHeaders).toBeUndefined()
-    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://API.MARTLLM.DEV/ ')).toBe(true)
+    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://API.MARTLLM.COM/ ')).toBe(true)
     expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
       .toContain('martllm')
     for (const model of Object.values(preset!.defaultModels)) {
