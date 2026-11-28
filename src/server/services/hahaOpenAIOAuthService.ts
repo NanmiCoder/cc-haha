@@ -211,7 +211,10 @@ export class HahaOpenAIOAuthService {
   consumeSession(state: string): OpenAIOAuthSession | null {
     const s = this.getSession(state)
     if (s) {
-      this.clearSessionTimer(s)
+      // The dedicated callback still owes its browser a response. When the
+      // main server receives the callback, its unused listener can close now.
+      if (s.authCodeListener?.hasPendingResponse()) this.clearSessionTimer(s)
+      else this.closeSession(s)
       this.sessions.delete(state)
     }
     return s

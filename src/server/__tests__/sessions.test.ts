@@ -5178,6 +5178,23 @@ describe('Sessions API', () => {
     }
   })
 
+  it('GET /api/sessions/:id/git-info detects git init after a non-repository lookup', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'late-init-'))
+    const { sessionId } = await sessionService.createSession(workDir)
+    const url = `${baseUrl}/api/sessions/${sessionId}/git-info`
+    const before = await fetch(url)
+    expect(before.status).toBe(200)
+    expect(await before.json()).toMatchObject({ branch: null, changedFiles: 0 })
+
+    git(workDir, 'init', '--initial-branch', 'new-project')
+    await fs.writeFile(path.join(workDir, 'README.md'), 'New project\n')
+    git(workDir, 'add', 'README.md')
+
+    const after = await fetch(url)
+    expect(after.status).toBe(200)
+    expect(await after.json()).toMatchObject({ branch: 'new-project', changedFiles: 1 })
+  })
+
   it('GET /api/sessions/:id/git-info should track master -> dev_xxxx, detached HEAD, and unborn branches in regular sessions', async () => {
     const workDir = path.join(tmpDir, `repo-master-${Date.now()}`)
     await fs.mkdir(workDir, { recursive: true })

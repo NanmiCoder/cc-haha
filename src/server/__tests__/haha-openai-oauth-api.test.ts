@@ -2,12 +2,12 @@
  * Integration tests for /api/haha-openai-oauth/* endpoints.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { createServer } from 'net'
-import { handleHahaOpenAIOAuthApi } from '../api/haha-openai-oauth.js'
+import { handleHahaOpenAIOAuthApi, handleHahaOpenAIOAuthCallback } from '../api/haha-openai-oauth.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { ProviderService } from '../services/providerService.js'
@@ -215,6 +215,32 @@ describe('DELETE /api/haha-openai-oauth', () => {
 describe('GET /auth/callback', () => {
   beforeEach(setup)
   afterEach(teardown)
+
+  test.each([200, 400])('compatibility callback releases the login port after token response %i', async (status) => {
+    const callbackPort = await getFreePort()
+    hahaOpenAIOAuthService.setCallbackPortForTests(callbackPort)
+    const session = await hahaOpenAIOAuthService.startSession({ serverPort: 3456 })
+    const closeListener = spyOn(session.authCodeListener!, 'close')
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => Response.json(
+      status === 200 ? { access_token: 'test-access-token', refresh_token: 'test-refresh-token', expires_in: 3600 } : { error: 'invalid_grant' },
+      { status },
+    )) as typeof fetch
+    try {
+      const url = new URL('http://localhost:3456/callback/openai')
+      url.searchParams.set('state', session.state)
+      url.searchParams.set('code', 'test-code')
+      const result = await handleHahaOpenAIOAuthCallback(url)
+      expect(await result.text()).toContain(status === 200 ? 'OpenAI Login Successful' : 'OpenAI Login Failed')
+      expect(closeListener).toHaveBeenCalledTimes(1)
+      const next = await hahaOpenAIOAuthService.startSession({ serverPort: 3456 })
+      expect(next.redirectUri).toBe(session.redirectUri)
+    } finally {
+      globalThis.fetch = originalFetch
+      closeListener.mockRestore()
+      session.authCodeListener?.close()
+    }
+  })
 
   test('routes the OpenAI Codex redirect path to the desktop callback page', async () => {
     const originalServerPort = ProviderService.getServerPort()
