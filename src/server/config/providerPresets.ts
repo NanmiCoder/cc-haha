@@ -4,7 +4,7 @@
 import { z } from 'zod'
 
 import providerPresetsJson from './providerPresets.json'
-import { ApiFormatSchema, ImageGenerationConfigSchema, ModelApiFormatSchema, ProviderAuthStrategySchema } from '../types/provider.js'
+import { ApiFormatSchema, ImageGenerationConfigSchema, ModelApiFormatSchema, ModelMaxOutputTokensSchema, ProviderAuthStrategySchema } from '../types/provider.js'
 import type { ModelReasoningProviderKind } from '../../shared/modelReasoning.js'
 
 const ModelMappingSchema = z.object({
@@ -75,6 +75,8 @@ export const ProviderPresetSchema = z.object({
     z.string().min(1),
     z.number().int().min(16000).max(10000000),
   ).optional(),
+  /** Per-model reply ceilings from a gateway catalog. Not a per-request budget. */
+  modelMaxOutputTokens: ModelMaxOutputTokensSchema.optional(),
   /** Per-model protocol overrides for path-bound gateways (see shared/modelApiFormats). */
   modelApiFormats: z.array(ModelApiFormatRuleSchema).min(1).optional(),
   /**
