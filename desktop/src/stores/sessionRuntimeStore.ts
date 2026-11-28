@@ -15,6 +15,16 @@ const STORAGE_KEY = 'cc-haha-session-runtime'
 // lets callers discard list responses started before a choice/confirmation.
 // This transient state follows moveSelection without changing persisted JSON.
 const pendingRuntimes = new WeakSet<RuntimeSelection>()
+
+/**
+ * True while `selection` is still awaiting the server's runtime acknowledgement.
+ * Callers use this to tell their own unconfirmed optimistic choice apart from a
+ * runtime change that another client (mobile, CLI) already applied.
+ */
+export function isRuntimeSelectionPending(selection: RuntimeSelection | undefined): boolean {
+  return Boolean(selection && pendingRuntimes.has(selection))
+}
+
 const RETIRED_GROK_MODEL_IDS = new Set([
   'grok-build',
   'grok-build-0.1',

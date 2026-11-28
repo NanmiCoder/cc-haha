@@ -16,7 +16,7 @@ import { useTeamStore } from './teamStore'
 import { useSessionStore } from './sessionStore'
 import { useCLITaskStore, type CLITaskSnapshot } from './cliTaskStore'
 import { useWorkflowStore } from './workflowStore'
-import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { isRuntimeSelectionPending, useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
@@ -5613,8 +5613,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           (selected?.openAIFastMode ?? false) === (runtime.openAIFastMode ?? false)
         const matchesCurrentSelection = matchesSelection(msg)
         const correctsCurrentSelection = msg.requestedConfig && matchesSelection(msg.requestedConfig)
-        if (matchesCurrentSelection || correctsCurrentSelection) {
-          if (correctsCurrentSelection && !matchesCurrentSelection) {
+        // Another client (mobile, CLI) or a server-side rollback applied this
+        // runtime. Those broadcasts carry no `requestedConfig`, and when this
+        // window has no choice awaiting confirmation the server is authoritative.
+        // Adopt it, otherwise this window keeps showing the previous model while
+        // the other client already runs on the new one.
+        const adoptsRemoteSelection = !matchesCurrentSelection && !correctsCurrentSelection &&
+          !msg.requestedConfig && !isRuntimeSelectionPending(selected)
+        if (matchesCurrentSelection || correctsCurrentSelection || adoptsRemoteSelection) {
+          if (!matchesCurrentSelection) {
             useSessionRuntimeStore.getState().setSelection(sessionId, {
               providerId: msg.providerId, modelId: msg.modelId,
               ...(msg.effortLevel && isModelReasoningEffort(msg.effortLevel) ? { effortLevel: msg.effortLevel } : {}),
