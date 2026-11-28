@@ -231,6 +231,36 @@ describe('bundled provider presets', () => {
     }
   })
 
+  it('bundles MartLLM as a direct Anthropic-native aggregation preset', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'martllm')
+
+    expect(preset).toMatchObject({
+      name: 'MartLLM',
+      baseUrl: 'https://api.martllm.com',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      needsApiKey: true,
+      websiteUrl: 'https://martllm.com',
+      apiKeyUrl: 'https://martllm.com/signup',
+      defaultModels: {
+        main: 'anthropic/claude-sonnet-5.5',
+        haiku: 'anthropic/claude-haiku-5.5',
+        sonnet: 'anthropic/claude-sonnet-5.5',
+        opus: 'anthropic/claude-opus-5.5',
+      },
+    })
+    expect(preset?.deprecated).toBeUndefined()
+    // MartLLM serves /v1/messages at its root, so no proxy route or header is needed.
+    expect(preset?.modelApiFormats).toBeUndefined()
+    expect(preset?.upstreamHeaders).toBeUndefined()
+    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://API.MARTLLM.COM/ ')).toBe(true)
+    expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
+      .toContain('martllm')
+    for (const model of Object.values(preset!.defaultModels)) {
+      expect(preset?.modelContextWindows?.[model], model).toBeGreaterThan(0)
+    }
+  })
+
   it('does not bundle the removed TeamoRouter preset', () => {
     expect(BUNDLED_PROVIDER_PRESETS.some((preset) => preset.id === 'teamorouter')).toBe(false)
   })

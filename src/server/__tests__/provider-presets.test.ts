@@ -649,6 +649,76 @@ describe('provider presets API', () => {
     })
   })
 
+  /**
+   * MartLLM serves Anthropic Messages at its own root (and OpenAI chat at /v1),
+   * so like OpenRouter the preset stays a direct connection with no proxy, no
+   * per-model routing and no injected env.
+   */
+  describe('MartLLM preset', () => {
+    const martllm = PROVIDER_PRESETS.find((preset) => preset.id === 'martllm')!
+
+    test('publishes a direct Anthropic-native preset with API key signup', () => {
+      expect(martllm).toBeDefined()
+      expect(martllm.name).toBe('MartLLM')
+      expect(martllm.baseUrl).toBe('https://api.martllm.com')
+      expect(martllm.apiFormat).toBe('anthropic')
+      expect(martllm.authStrategy).toBe('auth_token')
+      expect(martllm.needsApiKey).toBe(true)
+      expect(martllm.websiteUrl).toBe('https://martllm.com')
+      expect(martllm.apiKeyUrl).toBe('https://martllm.com/signup')
+      expect(martllm.deprecated).toBeUndefined()
+      // Claude Code appends /v1/messages itself; a /v1 base URL would double it.
+      expect(martllm.baseUrl).not.toMatch(/\/v1$/)
+    })
+
+    test('stays out of the sponsor row and ships no proxy or routing rules', () => {
+      expect(martllm.featured).toBeUndefined()
+      expect(martllm.promoText).toBeUndefined()
+      expect(martllm.modelApiFormats).toBeUndefined()
+      expect(martllm.upstreamHeaders).toBeUndefined()
+      expect(martllm.defaultEnv).toEqual({})
+      expect(providerNeedsProxy(martllm.apiFormat, undefined)).toBe(false)
+    })
+
+    test('connects straight to MartLLM with the token and a cleared x-api-key', () => {
+      const env = buildProviderManagedEnv({
+        id: 'martllm-test', presetId: martllm.id, name: martllm.name,
+        baseUrl: martllm.baseUrl, apiFormat: martllm.apiFormat,
+        authStrategy: martllm.authStrategy, apiKey: 'ull-offline-fixture',
+        models: martllm.defaultModels,
+      })
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://api.martllm.com')
+      expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe('ull-offline-fixture')
+      expect(env.ANTHROPIC_API_KEY).toBe('')
+      expect(env.ANTHROPIC_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('anthropic/claude-opus-5.5')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('anthropic/claude-haiku-5.5')
+      expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toMatchObject({
+        'anthropic/claude-sonnet-5.5': 1000000,
+        'anthropic/claude-opus-5.5': 1000000,
+        'anthropic/claude-haiku-5.5': 100000,
+      })
+      expect(env.API_TIMEOUT_MS).toBeUndefined()
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    })
+
+    test('publishes a context window for every model it offers as a default', () => {
+      for (const model of Object.values(martllm.defaultModels)) {
+        expect(model).toContain('/')
+        expect(martllm.modelContextWindows?.[model], model).toBeGreaterThan(0)
+      }
+    })
+
+    test('stays ordered before the local endpoints so the catalog layout is stable', () => {
+      const ids = PROVIDER_PRESETS.map((preset) => preset.id)
+      expect(ids.indexOf('martllm')).toBeGreaterThan(-1)
+      expect(ids.indexOf('martllm')).toBeLessThan(ids.indexOf('lmstudio'))
+      expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
+    })
+  })
+
   test('rejects an upstream header name that would break the upstream request', () => {
     const base = {
       id: 'probe', name: 'Probe', baseUrl: 'https://probe.test', apiFormat: 'anthropic',
