@@ -203,6 +203,44 @@ describe('evaluateChangePolicy', () => {
   })
 
   test.each([
+    'desktop/build/installer.nsh',
+    'desktop/build/check-install-processes.ps1',
+    'desktop/build/check-install-processes.nsh',
+    'desktop/build/recover-legacy-install-data.ps1',
+    'scripts/pr/prepare-windows-installer-tests.ts',
+    'scripts/pr/run-windows-installer-checks.ts',
+    'scripts/pr/run-windows-installer-profile-checks.ts',
+    'scripts/pr/windows-installer-profile-fixture.cs',
+    'scripts/pr/windows-installer-profile-native.cs',
+    'scripts/pr/windows-installer-profile-fixture-tests.cs',
+    'scripts/pr/windows-installer-profile-only/argv-env-plan.json',
+    'scripts/pr/windows-installer-profile-only/preflight.ps1',
+    'scripts/pr/windows-installer-profile-only/fixtures/launch-profile-only.proposed.ps1',
+    'scripts/pr/windows-installer-profile-only/fixtures/reconcile-profile-only.proposed.ps1',
+    'scripts/pr/windows-installer-profile-only/fixtures/pins.proposed.json',
+    'scripts/pr/windows-installer-profile-only/fixtures/profile-only-spec.proposed.json',
+    'scripts/pr/windows-installer-profile-only/fixtures/root-admission.proposed.json',
+    'scripts/pr/windows-installer-profile-only/fixtures/argv-env-plan.json',
+    'scripts/pr/windows-installer-profile-review.ts',
+    'scripts/pr/windows-installer-profile-review.test.ts',
+    '.github/workflows/windows-installer-profile-review.yml',
+    'scripts/pr/windows-installer-profile-review/launch-stage-b.proposed.ps1',
+    'scripts/pr/windows-installer-profile-review/reconcile-stage-b.proposed.ps1',
+    'scripts/pr/windows-installer-profile-review/controller-spec.proposed-admitted.json',
+    'scripts/pr/windows-installer-profile-review/pins.json',
+    'scripts/pr/windows-installer-process-check.test.ts',
+    'scripts/pr/windows-installer-recovery.test.ts',
+    'scripts/pr/windows-installer-native-fixtures.ts',
+    'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
+    'scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh',
+  ])('runs the native jobs for a standalone installer dependency or fixture: %s', file => {
+    const result = evaluateChangePolicy([file])
+    expect(result.checks.desktopNative).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test.each([
     'native/cu-helper/Sources/cu-helper/VirtualCursor.swift',
     'native/cu-helper/Tests/CuHelperTests/VirtualCursorResourceTests.swift',
     'native/cu-helper/Sources/cu-helper/Resources/LensSequence/frame_000.png',

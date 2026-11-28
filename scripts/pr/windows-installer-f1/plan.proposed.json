@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "status": "proposed",
+  "realExecutionAdmitted": false,
+  "activationHead": null,
+  "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+  "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+  "generation": 1,
+  "controllerMode": "guarded-f1-controller",
+  "subjectMode": "guarded-f1-subject",
+  "roles": [
+    "f1-controller",
+    "f1-subject"
+  ],
+  "phaseSequence": [
+    "observer-calibration",
+    "powershell-normal-capability-1",
+    "powershell-normal-capability-2",
+    "powershell-unavailable-capability",
+    "fresh-install",
+    "negative-preflight",
+    "old22-negative",
+    "positive-preflight",
+    "old-normal-removal-positive",
+    "rebuild-old-install",
+    "upgrade-negative-preflight",
+    "guarded-new-upgrade"
+  ],
+  "auditRequiredBeforeAck": [
+    "old22-negative",
+    "guarded-new-upgrade"
+  ],
+  "facts": [
+    "member_proven",
+    "installed_bytes_equal",
+    "old22_before_protected_mutation",
+    "removal_equivalence",
+    "full_old_to_new"
+  ],
+  "sameVersionAllowed": true,
+  "nativeAuditAdapter": "unavailable;default-deny-before-account",
+  "oldBUnchanged": true,
+  "profileOnlyUnchanged": true
+}
