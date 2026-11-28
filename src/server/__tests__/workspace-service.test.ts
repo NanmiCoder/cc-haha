@@ -767,6 +767,46 @@ describe('WorkspaceService', () => {
     expect(result.error).toContain('synthetic git failure')
   })
 
+  it('returns tracked line counts for Chinese filenames and the destination of a rename', async () => {
+    const repoDir = await makeTempDir('workspace-numstat-paths-')
+    git(repoDir, 'init')
+    await fs.writeFile(path.join(repoDir, '需求.md'), 'first\n')
+    await fs.writeFile(path.join(repoDir, '旧名.txt'), 'line one\nline two\nline three\n')
+    git(repoDir, 'add', '--', '需求.md', '旧名.txt')
+    git(repoDir, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'initial')
+    await fs.writeFile(path.join(repoDir, '需求.md'), 'second\nthird\n')
+    git(repoDir, 'mv', '--', '旧名.txt', '新名.txt')
+    await fs.appendFile(path.join(repoDir, '新名.txt'), 'added\n')
+
+    const result = await new WorkspaceService(async () => repoDir).getStatus('session')
+    expect(result.state).toBe('ok')
+    const byPath = new Map(result.changedFiles.map(file => [file.path, file]))
+    expect(byPath.get('需求.md')).toMatchObject({ status: 'modified', additions: 2, deletions: 1 })
+    expect(byPath.get('新名.txt')).toMatchObject({ status: 'renamed', oldPath: '旧名.txt', additions: 1, deletions: 0 })
+  })
+
+  it('counts a cross-workspace rename as a deletion in the source and an addition in the destination', async () => {
+    const repoDir = await makeTempDir('workspace-numstat-scoped-')
+    const source = '[a]模块'
+    const destination = 'a模块'
+    await fs.mkdir(path.join(repoDir, source))
+    await fs.mkdir(path.join(repoDir, destination))
+    git(repoDir, 'init')
+    await fs.writeFile(path.join(repoDir, source, '说明.md'), 'one\ntwo\nthree\n')
+    git(repoDir, 'add', '--', source)
+    git(repoDir, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'initial')
+    git(repoDir, 'mv', '--', `${source}/说明.md`, `${destination}/新名.md`)
+
+    const service = new WorkspaceService(async sessionId => path.join(repoDir, sessionId))
+    const [from, to] = await Promise.all([service.getStatus(source), service.getStatus(destination)])
+    expect(from).toMatchObject({
+      state: 'ok', changedFiles: [{ path: '说明.md', status: 'deleted', additions: 0, deletions: 3 }],
+    })
+    expect(to).toMatchObject({
+      state: 'ok', changedFiles: [{ path: '新名.md', status: 'added', additions: 3, deletions: 0 }],
+    })
+  })
+
   it('reads tracked diff stats in one bulk git call', async () => {
     const repoDir = await makeTempDir('workspace-service-bulk-stats-')
     await fs.writeFile(path.join(repoDir, 'a.txt'), 'a\n')
@@ -788,11 +828,11 @@ describe('WorkspaceService', () => {
         return { stdout: 'main\n', stderr: '', code: 0 }
       }
       if (args[0] === 'status') {
-        return { stdout: ' M a.txt\0 M b.txt\0', stderr: '', code: 0 }
+        return { stdout: ' M a.txt\0 M b.txt\0 M odd\tpath\nname \0', stderr: '', code: 0 }
       }
       if (args[0] === 'diff' && args.includes('--numstat')) {
         diffStatCalls.push(args)
-        return { stdout: '1\t0\ta.txt\n2\t3\tb.txt\n', stderr: '', code: 0 }
+        return { stdout: '1\t0\ta.txt\0-\t-\tb.txt\0' + '2\t3\todd\tpath\nname \0', stderr: '', code: 0 }
       }
       return { stdout: '', stderr: `unexpected git call: ${args.join(' ')}`, code: 1 }
     }
@@ -801,9 +841,11 @@ describe('WorkspaceService', () => {
 
     expect(result.state).toBe('ok')
     expect(diffStatCalls).toHaveLength(1)
+    expect(diffStatCalls[0]).toContain('-z')
     expect(result.changedFiles).toEqual([
       { path: 'a.txt', oldPath: undefined, status: 'modified', additions: 1, deletions: 0 },
-      { path: 'b.txt', oldPath: undefined, status: 'modified', additions: 2, deletions: 3 },
+      { path: 'b.txt', oldPath: undefined, status: 'modified', additions: 0, deletions: 0 },
+      { path: 'odd\tpath\nname ', oldPath: undefined, status: 'modified', additions: 2, deletions: 3 },
     ])
   })
 
@@ -936,7 +978,11 @@ describe('WorkspaceService', () => {
     expect(rootStatus.totalChangedFiles).toBeGreaterThan(2_000)
   }, 30_000)
 
-  it('drops split rename records on truncated status output and strips incomplete trailing numstat lines on timeout', async () => {
+  it.each([
+    '9\t2\ttracked.txt',
+    '9\t2\t\0old-name\0tracked.txt',
+    '9\t2\t\0old-name\0',
+  ])('keeps only complete status and numstat records on timeout: %j', async (incompleteRecord) => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async () => repoDir) as WorkspaceService & {
       runGit: (workDir: string, args: string[]) => Promise<{
@@ -969,7 +1015,7 @@ describe('WorkspaceService', () => {
       }
       if (args[0] === 'diff' && args.includes('--numstat')) {
         return {
-          stdout: '3\t1\ttracked.txt\n9\t2\ttruncated-path-without-newline',
+          stdout: '3\t1\ttracked.txt\0' + incompleteRecord,
           stderr: '',
           code: 1,
           timedOut: true,

@@ -6,6 +6,7 @@ import type {
 import { connectionHeaders, hostOrigin } from '../core/connection'
 import {
   classifyUpdateError,
+  compareSemver,
   extractErrorCode,
   isNewerVersion,
   isOlderDesktopRelayError,
@@ -107,6 +108,11 @@ export type AndroidUpdateControllerDeps = {
 
 type Listener = (snapshot: AndroidUpdateSnapshot) => void
 
+function isAlreadyInstalled(candidate: string, installed: string): boolean {
+  const order = compareSemver(candidate, installed)
+  return order !== null && order <= 0
+}
+
 export class AndroidUpdateController {
   private readonly nativeUpdater: CCHahaUpdaterModule
   private readonly store: AndroidUpdateStore
@@ -120,7 +126,7 @@ export class AndroidUpdateController {
 
   private listeners = new Set<Listener>()
   private progressSub: { remove(): void } | null = null
-  private initialized = false
+  private initialization: Promise<void> | null = null
   private running = false
   private settingsFocused = false
   private downloadStarting = false
@@ -241,7 +247,7 @@ export class AndroidUpdateController {
 
   setSettingsFocused(focused: boolean): void {
     this.settingsFocused = focused
-    if (focused && this.initialized && this.running) {
+    if (focused && this.initialization && this.running) {
       void this.maybeSilentCheck()
     }
   }
@@ -254,10 +260,7 @@ export class AndroidUpdateController {
         this.handleProgress(event)
       })
     }
-    if (!this.initialized) {
-      return this.initialize(options)
-    }
-    return Promise.resolve()
+    return this.initialize(options)
   }
 
   /** Pauses timers and native event listeners without permanently poisoning the instance. */
@@ -278,9 +281,15 @@ export class AndroidUpdateController {
     this.listeners.clear()
   }
 
-  async initialize(options: { scheduleStartupCheck?: boolean } = {}): Promise<void> {
-    if (this.initialized) return
-    this.initialized = true
+  initialize(options: { scheduleStartupCheck?: boolean } = {}): Promise<void> {
+    this.initialization ??= this.restoreState(options).catch((error) => {
+      this.initialization = null
+      throw error
+    })
+    return this.initialization
+  }
+
+  private async restoreState(options: { scheduleStartupCheck?: boolean }): Promise<void> {
     this.running = true
 
     if (!this.progressSub) {
@@ -302,14 +311,14 @@ export class AndroidUpdateController {
     // 1. Reconcile downloaded APK against currently installed version.
     if (nextRecord.downloaded) {
       const dl = nextRecord.downloaded
-      if (!isNewerVersion(dl.version, currentVersion)) {
+      if (isAlreadyInstalled(dl.version, currentVersion)) {
         nextRecord = {
           ...nextRecord,
           downloaded: null,
           partial: null,
           pendingInstall: null,
           dismissedVersion:
-            nextRecord.dismissedVersion && !isNewerVersion(nextRecord.dismissedVersion, currentVersion)
+            nextRecord.dismissedVersion && isAlreadyInstalled(nextRecord.dismissedVersion, currentVersion)
               ? null
               : nextRecord.dismissedVersion,
         }
@@ -337,7 +346,10 @@ export class AndroidUpdateController {
           if (pending && pending.sha256 === dl.sha256 && pending.version === dl.version) {
             const age = this.now() - pending.requestedAt
             nextRecord = { ...nextRecord, pendingInstall: null }
-            if (age >= 0 && age < PENDING_INSTALL_WINDOW_MS && this.safeCanRequestPackageInstalls()) {
+            if (
+              age >= 0 && age < PENDING_INSTALL_WINDOW_MS &&
+              isNewerVersion(dl.version, currentVersion) && this.safeCanRequestPackageInstalls()
+            ) {
               if (age < PENDING_INSTALL_AUTO_LAUNCH_MS || this.settingsFocused) {
                 shouldAutoInstall = true
               }
@@ -354,7 +366,7 @@ export class AndroidUpdateController {
     // 2. Reconcile resumable partial download if no verified APK is ready.
     if (!restoredRelease && nextRecord.partial) {
       const part = nextRecord.partial
-      if (!isNewerVersion(part.version, currentVersion)) {
+      if (isAlreadyInstalled(part.version, currentVersion)) {
         nextRecord = { ...nextRecord, partial: null }
       } else {
         const cached = await this.safeGetCachedApk(part.sha256, part.version)
@@ -414,6 +426,24 @@ export class AndroidUpdateController {
       }
     }
 
+    const available = nextRecord.available
+    if (available) {
+      if (isAlreadyInstalled(available.manifest.version, currentVersion)) {
+        nextRecord = { ...nextRecord, available: null }
+      } else if (!restoredRelease) {
+        restoredRelease = releaseFromManifest(available.manifest, available)
+        restoredStatus = 'available'
+        restoredTotalBytes = restoredRelease.sizeBytes
+      }
+    } else if (!restoredRelease) {
+      // Older records only kept a release alongside its download. If the OS
+      // evicted that file, rediscover the release instead of waiting 12 hours.
+      const oldTarget = this.record.downloaded ?? this.record.partial ?? this.record.pendingInstall
+      if (oldTarget && !isAlreadyInstalled(oldTarget.version, currentVersion)) {
+        nextRecord = { ...nextRecord, lastCheckedAt: null }
+      }
+    }
+
     if (nextRecord !== this.record) {
       this.record = await this.store.update(() => nextRecord)
     }
@@ -449,17 +479,19 @@ export class AndroidUpdateController {
   }
 
   async handleAppForeground(): Promise<void> {
+    await this.initialization
     if (!this.running) return
     this.syncConnection()
 
     // 1. Check if installation finished while backgrounded.
     const currentVersion = this.readCurrentVersion()
-    if (this.snapshot.release && !isNewerVersion(this.snapshot.release.version, currentVersion)) {
+    if (this.snapshot.release && isAlreadyInstalled(this.snapshot.release.version, currentVersion)) {
       this.installLaunchedAt = null
       this.sawBackgroundDuringInstall = false
       this.clearInstallWatchdog()
       this.record = await this.store.update((cur) => ({
         ...cur,
+        available: null,
         downloaded: null,
         partial: null,
         pendingInstall: null,
@@ -499,13 +531,14 @@ export class AndroidUpdateController {
     }
 
     // 4. Gentle 12h-cooldown silent check.
-    if (this.initialized) {
-      void this.maybeSilentCheck()
+    if (this.initialization) {
+      await this.maybeSilentCheck()
     }
   }
 
   async maybeSilentCheck(): Promise<void> {
-    if (!this.running) return
+    await this.initialization
+    if (!this.running || this.downloadStarting) return
     if (
       this.snapshot.status === 'downloading' ||
       this.snapshot.status === 'verifying' ||
@@ -527,6 +560,7 @@ export class AndroidUpdateController {
   }
 
   async checkForUpdates(options: { manual: boolean; preferDesktop?: boolean; directOnly?: boolean }): Promise<void> {
+    await this.initialization
     if (!this.running) return
 
     if (options.manual) {
@@ -557,9 +591,6 @@ export class AndroidUpdateController {
     }
 
     this.checkIsManual = options.manual
-    const previousStatus = this.snapshot.status
-    const previousRelease = this.snapshot.release
-
     if (options.manual) {
       this.patch({
         status: 'checking',
@@ -574,11 +605,8 @@ export class AndroidUpdateController {
     }
 
     const task = this.runCheck({
-      manual: options.manual,
       preferDesktop: Boolean(options.preferDesktop),
       directOnly: Boolean(options.directOnly),
-      previousStatus,
-      previousRelease,
     }).finally(() => {
       this.checkInFlight = null
       this.checkIsManual = false
@@ -597,9 +625,13 @@ export class AndroidUpdateController {
   }
 
   async download(source: UpdateSource): Promise<void> {
+    if (this.checkInFlight) {
+      const selectedSha = this.snapshot.release?.sha256
+      await this.checkInFlight
+      if (this.snapshot.release?.sha256 !== selectedSha) return
+    }
     if (!this.running) return
-    // Synchronous re-entrancy guard BEFORE any await so double-taps can never
-    // launch a second native download or clobber the active downloadId.
+    // Acquire the download slot synchronously, including after a shared version check.
     if (
       this.downloadStarting ||
       this.activeDownloadId !== null ||
@@ -1070,13 +1102,9 @@ export class AndroidUpdateController {
   }
 
   private async runCheck(input: {
-    manual: boolean
     preferDesktop: boolean
     directOnly: boolean
-    previousStatus: AndroidUpdateSnapshot['status']
-    previousRelease: AndroidUpdateRelease | null
   }): Promise<void> {
-    const currentVersion = this.readCurrentVersion()
     const net = await this.safeNetworkState()
     if (!net.online) {
       if (this.checkIsManual) {
@@ -1103,30 +1131,37 @@ export class AndroidUpdateController {
         this.syncConnection()
       }
 
-      this.record = await this.store.update((cur) => ({
-        ...cur,
-        lastCheckedAt: checkedAt,
-        dismissedVersion:
-          this.checkIsManual && manifest && cur.dismissedVersion === manifest.version
-            ? null
-            : cur.dismissedVersion,
-      }))
-
       if (!manifest) {
+        this.lastSilentFailureAt = checkedAt
         if (this.checkIsManual) {
           this.setError('manifest_unavailable', via, 'check', false)
         }
         return
       }
 
-      if (!isNewerVersion(manifest.version, currentVersion)) {
+      const currentVersion = this.readCurrentVersion()
+      const order = compareSemver(manifest.version, currentVersion)
+      if (order === null) {
+        this.lastSilentFailureAt = checkedAt
+        if (this.checkIsManual) this.setError('unknown', via, 'check', false)
+        return
+      }
+      const available = order > 0
+        ? { manifest, discoveredVia: via, sizeBytes: cachedSizeBytes }
+        : null
+      const targetSha = available?.manifest.sha256
+      this.record = await this.store.update((cur) => ({
+        ...cur,
+        lastCheckedAt: checkedAt,
+        dismissedVersion: this.checkIsManual && cur.dismissedVersion === manifest.version ? null : cur.dismissedVersion,
+        available,
+        downloaded: cur.downloaded?.sha256 === targetSha ? cur.downloaded : null,
+        partial: cur.partial?.sha256 === targetSha ? cur.partial : null,
+        pendingInstall: cur.pendingInstall?.sha256 === targetSha ? cur.pendingInstall : null,
+      }))
+
+      if (!available) {
         await this.safeCleanupCachedApks(null)
-        this.record = await this.store.update((cur) => ({
-          ...cur,
-          downloaded: null,
-          partial: null,
-          pendingInstall: null,
-        }))
         this.patch({
           currentVersion,
           status: this.checkIsManual ? 'up-to-date' : 'idle',
@@ -1140,10 +1175,7 @@ export class AndroidUpdateController {
         return
       }
 
-      const release = releaseFromManifest(manifest, {
-        discoveredVia: via,
-        sizeBytes: cachedSizeBytes,
-      })
+      const release = releaseFromManifest(manifest, available)
       const cached = await this.safeGetCachedApk(release.sha256, release.version)
 
       if (cached?.ready && cached.verified) {
@@ -1302,9 +1334,6 @@ export class AndroidUpdateController {
 
       if (!this.checkIsManual) {
         this.lastSilentFailureAt = this.now()
-        if (input.previousStatus !== this.snapshot.status || input.previousRelease !== this.snapshot.release) {
-          this.patch({ status: input.previousStatus, release: input.previousRelease })
-        }
         return
       }
 

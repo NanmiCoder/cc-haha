@@ -1,5 +1,5 @@
 import type { Storage } from './storage'
-import type { UpdateSource } from '../core/androidUpdateModel'
+import { parseAndroidReleaseManifest, type AndroidReleaseManifest, type UpdateSource } from '../core/androidUpdateModel'
 
 const STORAGE_KEY = 'cc-haha.android-update'
 const SHA256_RE = /^[a-f0-9]{64}$/
@@ -38,18 +38,20 @@ export type PersistedPendingInstall = {
 }
 
 export type AndroidUpdateRecord = {
-  version: 1
+  version: 2
   lastCheckedAt: number | null
   dismissedVersion: string | null
+  available: { manifest: AndroidReleaseManifest; discoveredVia: UpdateSource; sizeBytes: number | null } | null
   downloaded: PersistedDownloadedApk | null
   partial: PersistedPartialDownload | null
   pendingInstall: PersistedPendingInstall | null
 }
 
 export const EMPTY_ANDROID_UPDATE_RECORD: AndroidUpdateRecord = {
-  version: 1,
+  version: 2,
   lastCheckedAt: null,
   dismissedVersion: null,
+  available: null,
   downloaded: null,
   partial: null,
   pendingInstall: null,
@@ -61,6 +63,15 @@ function isFiniteNonNegative(value: unknown): value is number {
 
 function isHttpsUrl(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('https://') && value.length <= 512
+}
+
+function parseAvailable(value: unknown): AndroidUpdateRecord['available'] {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const manifest = parseAndroidReleaseManifest(item.manifest)
+  if (!manifest || (item.discoveredVia !== 'github' && item.discoveredVia !== 'desktop')) return null
+  const sizeBytes = isFiniteNonNegative(item.sizeBytes) && item.sizeBytes > 0 ? item.sizeBytes : null
+  return { manifest, discoveredVia: item.discoveredVia, sizeBytes }
 }
 
 function parseDownloaded(value: unknown): PersistedDownloadedApk | null {
@@ -153,18 +164,24 @@ export function parseAndroidUpdateRecord(raw: string | null): AndroidUpdateRecor
     return { ...EMPTY_ANDROID_UPDATE_RECORD }
   }
   const value = parsed as Record<string, unknown>
-  if (value.version !== 1) return { ...EMPTY_ANDROID_UPDATE_RECORD }
+  if (value.version !== 1 && value.version !== 2) return { ...EMPTY_ANDROID_UPDATE_RECORD }
+  const downloaded = parseDownloaded(value.downloaded)
+  const partial = parsePartial(value.partial)
+  const pendingInstall = parsePendingInstall(value.pendingInstall)
+  // A v1 check without a download did not record whether an update was available.
+  const needsDiscovery = value.version === 1 && !downloaded && !partial && !pendingInstall
 
   return {
-    version: 1,
-    lastCheckedAt: isFiniteNonNegative(value.lastCheckedAt) ? value.lastCheckedAt : null,
+    version: 2,
+    available: value.version === 2 ? parseAvailable(value.available) : null,
+    lastCheckedAt: !needsDiscovery && isFiniteNonNegative(value.lastCheckedAt) ? value.lastCheckedAt : null,
     dismissedVersion:
       typeof value.dismissedVersion === 'string' && SEMVER_RE.test(value.dismissedVersion)
         ? value.dismissedVersion
         : null,
-    downloaded: parseDownloaded(value.downloaded),
-    partial: parsePartial(value.partial),
-    pendingInstall: parsePendingInstall(value.pendingInstall),
+    downloaded,
+    partial,
+    pendingInstall,
   }
 }
 

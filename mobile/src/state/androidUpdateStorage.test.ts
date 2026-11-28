@@ -75,6 +75,23 @@ describe('androidUpdateStorage & support gate', () => {
     )
   })
 
+  test('migrates existing v1 state without inventing an available release', async () => {
+    const storage = memoryStorage()
+    const key = 'cc-haha.android-update'
+    const old = {
+      version: 1, lastCheckedAt: 1234, dismissedVersion: '0.1.7',
+      pendingInstall: { version: '0.1.7', sha256: 'a'.repeat(64), requestedAt: 5000 },
+    }
+    await storage.setItem(key, JSON.stringify(old))
+    const store = new AndroidUpdateStore(storage)
+    expect(await store.load()).toMatchObject({ ...old, version: 2, available: null })
+    const updated = await store.update((cur) => ({ ...cur, lastCheckedAt: 6000 }))
+    expect(JSON.parse((await storage.getItem(key))!)).toEqual(updated)
+    expect(parseAndroidUpdateRecord(JSON.stringify({ ...updated, available: {
+      manifest: { version: '0.1.8' }, discoveredVia: 'github', sizeBytes: 100,
+    } }))).toEqual(updated)
+  })
+
   test('round-trips valid records and drops malformed sub-records', async () => {
     const sha = 'a'.repeat(64)
     const store = new AndroidUpdateStore(memoryStorage())

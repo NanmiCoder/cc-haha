@@ -463,9 +463,8 @@ export class WorkspaceService {
       repoInfo.repoRoot,
       workspaceInfo.canonicalWorkspaceRoot,
     )
-    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot, {
-      pathspec: workspaceRepoRelPath || undefined,
-    })
+    const workspacePathspec = workspaceRepoRelPath ? `:(literal)${workspaceRepoRelPath}` : undefined
+    const statusEntries = await this.getStatusEntries(repoInfo.repoRoot, { pathspec: workspacePathspec })
     if (statusEntries.kind === 'error') {
       return {
         state: 'error',
@@ -486,7 +485,11 @@ export class WorkspaceService {
     const limitedEntries = scopedEntries.length > MAX_STATUS_ENTRIES
       ? scopedEntries.slice(0, MAX_STATUS_ENTRIES)
       : scopedEntries
-    const trackedStats = await this.getTrackedDiffStats(repoInfo.repoRoot, limitedEntries, repoInfo.diffBase)
+    // Both queries need the same scope: a rename across the workspace boundary
+    // appears as a full deletion or addition when viewed from either side.
+    const trackedStats = await this.getTrackedDiffStats(
+      repoInfo.repoRoot, limitedEntries, repoInfo.diffBase, workspacePathspec,
+    )
     if (trackedStats.kind === 'error') {
       return {
         state: 'error',
@@ -2075,118 +2078,55 @@ export class WorkspaceService {
     return this.getUntrackedStats(validatedPath.canonicalTargetPath)
   }
 
-  private async getDiffStats(
-    workDir: string,
-    entry: ScopedStatusEntry,
-  ): Promise<DiffStatsResult> {
-    if (entry.status === 'untracked') {
-      const validatedPath = await this.validateCanonicalWorkspacePath(
-        entry.canonicalWorkspaceRoot,
-        entry.absolutePath,
-        entry.path,
-      )
-      if (validatedPath.kind === 'error') {
-        return { kind: 'error', message: validatedPath.message }
-      }
-
-      return this.getUntrackedStats(validatedPath.canonicalTargetPath)
-    }
-
-    const result = await this.runGit(workDir, [
-      'diff',
-      '--numstat',
-      '--find-renames',
-      '--find-copies',
-      'HEAD',
-      '--',
-      entry.repoPath,
-    ])
-
-    if (result.code !== 0) {
-      return {
-        kind: 'error',
-        message: this.formatGitError(
-          'Failed to read git diff stats',
-          [
-            'diff',
-            '--numstat',
-            '--find-renames',
-            '--find-copies',
-            'HEAD',
-            '--',
-            entry.repoPath,
-          ],
-          workDir,
-          result,
-        ),
-      }
-    }
-
-    const line = result.stdout.trim().split('\n').find(Boolean)
-    if (!line) {
-      return {
-        kind: 'ok',
-        additions: 0,
-        deletions: 0,
-      }
-    }
-
-    const [additions, deletions] = line.split('\t')
-    return {
-      kind: 'ok',
-      additions: additions === '-' ? 0 : parseInt(additions || '0', 10) || 0,
-      deletions: deletions === '-' ? 0 : parseInt(deletions || '0', 10) || 0,
-    }
-  }
-
   private async getTrackedDiffStats(
     workDir: string,
     entries: ScopedStatusEntry[],
     diffBase: string,
+    pathspec?: string,
   ): Promise<DiffStatsByRepoPathResult> {
     if (!entries.some((entry) => entry.status !== 'untracked')) {
       return { kind: 'ok', statsByRepoPath: new Map() }
     }
 
-    const result = await this.runGit(workDir, [
+    const args = [
       'diff',
+      '-z',
       '--numstat',
       '--find-renames',
       '--find-copies',
       diffBase,
       '--',
-    ])
+      ...(pathspec ? [pathspec] : []),
+    ]
+    const result = await this.runGit(workDir, args)
 
     if (result.code !== 0 && !result.maxBufferExceeded && !result.timedOut) {
       return {
         kind: 'error',
-        message: this.formatGitError(
-          'Failed to read git diff stats',
-          [
-            'diff',
-            '--numstat',
-            '--find-renames',
-            '--find-copies',
-            diffBase,
-            '--',
-          ],
-          workDir,
-          result,
-        ),
+        message: this.formatGitError('Failed to read git diff stats', args, workDir, result),
       }
     }
 
     const statsByRepoPath = new Map<string, { additions: number; deletions: number }>()
-    const rawStdout = (result.maxBufferExceeded || result.timedOut) && !result.stdout.endsWith('\n')
-      ? result.stdout.slice(0, Math.max(0, result.stdout.lastIndexOf('\n')))
-      : result.stdout
-    for (const line of rawStdout.trim().split('\n')) {
-      if (!line) continue
-      const [additions, deletions, repoPath] = line.split('\t')
+    const records = result.stdout.split('\0')
+    // Even a timeout can contain complete records. The final split fragment
+    // has no terminator and must never be treated as a filename.
+    records.pop()
+    for (let index = 0; index < records.length; index++) {
+      const fields = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(records[index]!)
+      if (!fields) continue
+      const [, additions, deletions, inlinePath] = fields
+      // Renames and copies store the old and new names in two more records.
+      // Status identifies the file by its destination.
+      let repoPath = inlinePath
+      if (!repoPath) {
+        index += 2
+        repoPath = records[index]
+      }
       if (!repoPath) continue
       statsByRepoPath.set(this.normalizeRelativePath(repoPath), {
-        additions: additions === '-' ? 0 : parseInt(additions || '0', 10) || 0,
-        deletions: deletions === '-' ? 0 : parseInt(deletions || '0', 10) || 0,
+        additions: additions === '-' ? 0 : Number(additions),
+        deletions: deletions === '-' ? 0 : Number(deletions),
       })
     }
 
