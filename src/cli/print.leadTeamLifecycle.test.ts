@@ -43,11 +43,12 @@ const { Stream } = await import('../utils/stream.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
 const commandQueue = await import('../utils/messageQueueManager.js')
 const { clearCommandQueue } = commandQueue
-const { setIsInteractive, getIsInteractive } = await import(
+const { getSessionId, setIsInteractive, getIsInteractive } = await import(
   '../bootstrap/state.js'
 )
 const mailbox = await import('../utils/teammateMailbox.js')
-const { writeTeamFileAsync } = await import('../utils/swarm/teamHelpers.js')
+const { readTeamFile, writeTeamFileAsync } = await import('../utils/swarm/teamHelpers.js')
+const { ensureTeamRuntimeControl, teamControlIdentity } = await import('../utils/swarm/teamRuntimeControlStore.js')
 const tasks = await import('../utils/tasks.js')
 
 const wasInteractive = getIsInteractive()
@@ -92,12 +93,13 @@ async function finishedTeam(team: string): Promise<void> {
 async function setWorker(
   team: string,
   worker: { isActive: boolean; terminated?: boolean },
+  leadSessionId = 'lead-session',
 ): Promise<void> {
   await writeTeamFileAsync(team, {
     name: team,
     createdAt: CREATED_AT,
     leadAgentId: `team-lead@${team}`,
-    leadSessionId: 'lead-session',
+    leadSessionId,
     reviewRequired: true,
     members: [
       { agentId: `team-lead@${team}`, name: 'team-lead', joinedAt: CREATED_AT, tmuxPaneId: '', cwd: home, subscriptions: [] },
@@ -106,13 +108,13 @@ async function setWorker(
   })
 }
 
-function startLead(team: string) {
+function startLead(team: string, hasContext = true) {
   const leadId = `team-lead@${team}`
   const workerId = `worker@${team}`
   const defaults = getDefaultAppState()
   let state = {
     ...defaults,
-    teamContext: {
+    teamContext: hasContext ? {
       teamName: team,
       teamFilePath: join(home, 'teams', team, 'config.json'),
       leadAgentId: leadId,
@@ -120,7 +122,7 @@ function startLead(team: string) {
         [leadId]: { name: 'team-lead' },
         [workerId]: { name: 'worker' },
       },
-    },
+    } : undefined,
   } as unknown as typeof defaults
   const input = new Stream<string>()
   const responses = new Set<string>()
@@ -176,6 +178,30 @@ async function until(done: () => boolean, ms = 10_000): Promise<void> {
 
 const reminders = () =>
   prompts.filter(prompt => prompt.text.includes('Every task on the shared task list'))
+
+test('restoring a running team wakes an idle lead and delivers its backlog in separate turns', async () => {
+  const team = 'restored-lead-mail'
+  await setWorker(team, { isActive: true }, getSessionId())
+  await ensureTeamRuntimeControl(team, teamControlIdentity(readTeamFile(team)!), 'test-owner', { approvedLaunch: true })
+  const reports = ['first', 'second'].map(label => `${label}: ${'x'.repeat(25_000)}`)
+  for (const text of reports) {
+    expect(await mailbox.writeToMailbox('team-lead', {
+      from: 'worker', text, timestamp: new Date().toISOString(),
+    }, team)).toBe(true)
+  }
+
+  const lead = startLead(team, false)
+  try {
+    await lead.control('team_runtime_snapshot', { team_name: team, created_at: CREATED_AT })
+    await until(() => prompts.length >= reports.length)
+    expect(prompts.map(prompt => prompt.text)).toEqual(reports.map(text =>
+      `<teammate-message teammate_id="worker">\n${text}\n</teammate-message>`,
+    ))
+    expect(await mailbox.readUnreadMessages('team-lead', team)).toEqual([])
+  } finally {
+    await lead.close()
+  }
+}, 15_000)
 
 test('a mailbox poll released after its lead closes cannot enqueue another turn', async () => {
   const team = 'closed-lead-poll'

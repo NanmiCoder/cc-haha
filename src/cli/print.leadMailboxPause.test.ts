@@ -103,7 +103,7 @@ function startLead(team: string) {
   })()
   const send = (message: unknown) => input.enqueue(`${JSON.stringify(message)}\n`)
   return {
-    say: (content: string) => send({ type: 'user', message: { role: 'user', content } }),
+    say: (content: string, isSynthetic = false) => send({ type: 'user', message: { role: 'user', content }, isSynthetic }),
     async control(subtype: string) {
       const id = `${subtype}-${Math.random()}`
       send({ type: 'control_request', request_id: id, request: { subtype } })
@@ -149,14 +149,16 @@ test('a team pause keeps teammate mail from starting lead turns until the user s
 
     // A report a member wrote before the Stop killed it.
     await report(team, 'halfway done')
-    // Several poll intervals: the lead must not act on its own.
-    await Bun.sleep(1_500)
-    expect(prompts).toEqual(['start'])
+    lead.say('team status notice', true)
+    await until(() => prompts.length === 2)
+    // The SDK notice runs, but it must not release the held reports.
+    await Bun.sleep(600)
+    expect(prompts).toEqual(['start', 'team status notice'])
     expect((await mailbox.readUnreadMessages('team-lead', team)).map(m => m.text)).toEqual(['halfway done'])
 
     lead.say('continue')
-    await until(() => prompts.length === 3)
-    expect(prompts).toEqual(['start', 'continue', delivered('halfway done')])
+    await until(() => prompts.length === 4)
+    expect(prompts).toEqual(['start', 'team status notice', 'continue', delivered('halfway done')])
   } finally {
     await lead.close()
   }

@@ -10,8 +10,11 @@ import {
 import * as mailbox from '../teammateMailbox.js'
 import {
   HEADLESS_TEAMMATE_PERMISSION_UNAVAILABLE,
+  LEAD_MAIL_TURN_CHARS,
+  LEAD_MAIL_TURN_MESSAGES,
   partitionLeadMailboxMessages,
   resolveTeammatePermissionRequests,
+  takeLeadMailboxTurn,
   type HostToolPermissionPrompt,
 } from './printLeaderPermissionBridge.js'
 
@@ -77,6 +80,37 @@ describe('printLeaderPermissionBridge', () => {
       'sandbox-1',
     )
     expect(partitioned.remaining).toEqual([chat])
+  })
+
+  test('caps one turn of lead chat and keeps protocol asks', () => {
+    const chat = Array.from({ length: LEAD_MAIL_TURN_MESSAGES + 5 }, (_, index) =>
+      mailboxMessage('researcher', `report ${index}`),
+    )
+    const permission = mailboxMessage(
+      'researcher',
+      createPermissionRequestMessage({
+        request_id: 'perm-1',
+        agent_id: 'researcher',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_1',
+        description: 'list files',
+        input: { command: 'ls' },
+      }),
+    )
+
+    const turn = takeLeadMailboxTurn([...chat, permission])
+
+    expect(turn.permissionRequests).toHaveLength(1)
+    expect(turn.remaining).toEqual(chat.slice(0, LEAD_MAIL_TURN_MESSAGES))
+
+    // One message larger than the limit still goes out instead of blocking the rest.
+    const oversized = {
+      ...chat[0]!,
+      text: 'x'.repeat(LEAD_MAIL_TURN_CHARS + 1),
+    }
+    expect(takeLeadMailboxTurn([oversized, chat[1]!]).remaining).toEqual([
+      oversized,
+    ])
   })
 
   test('rejects teammate tool asks when the host cannot prompt', async () => {

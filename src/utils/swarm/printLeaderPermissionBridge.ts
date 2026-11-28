@@ -88,6 +88,35 @@ export function partitionLeadMailboxMessages(
   return { permissionRequests, sandboxPermissionRequests, remaining }
 }
 
+/**
+ * How much chat one lead turn carries. A lead whose inbox was never polled has
+ * hundreds of reports waiting; they arrive over several turns instead of one
+ * prompt that overflows its context. A single message larger than the limit
+ * still goes out on its own rather than blocking the ones behind it.
+ */
+export const LEAD_MAIL_TURN_MESSAGES = 40
+export const LEAD_MAIL_TURN_CHARS = 40_000
+
+/** The lead's mail for one turn: host prompts aside, chat capped to one batch. */
+export function takeLeadMailboxTurn(
+  messages: TeammateMessage[],
+): PartitionedLeadMailbox {
+  const partitioned = partitionLeadMailboxMessages(messages)
+  const remaining: TeammateMessage[] = []
+  let chars = 0
+  for (const message of partitioned.remaining) {
+    if (
+      remaining.length >= LEAD_MAIL_TURN_MESSAGES ||
+      (remaining.length > 0 && chars + message.text.length > LEAD_MAIL_TURN_CHARS)
+    ) {
+      break
+    }
+    remaining.push(message)
+    chars += message.text.length
+  }
+  return { ...partitioned, remaining }
+}
+
 export async function resolveTeammatePermissionRequests(params: {
   host: HostToolPermissionPrompt
   canPromptHost: boolean
