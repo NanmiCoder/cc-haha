@@ -249,4 +249,62 @@ describe('BrowserUseSettings', () => {
     render(<BrowserUseSettings />)
     expect(await screen.findByText('Failed to load Browser Use settings.')).toBeInTheDocument()
   })
+
+  it('uses V6C switch rows without duplicate labels, non-pill badges, and pressable browser selector tiles', async () => {
+    apiMock.getStatus.mockResolvedValueOnce({
+      ...baseStatus,
+      chrome: {
+        ...baseStatus.chrome,
+        detectedBrowsers: [
+          ...baseStatus.chrome.detectedBrowsers,
+          {
+            id: 'edge',
+            name: 'Microsoft Edge',
+            executablePath: '/Applications/Edge.app',
+            userDataDir: '/tmp/edge',
+            devToolsActivePortPath: '/tmp/edge/DevToolsActivePort',
+            hasDevToolsActivePort: true,
+            platform: 'darwin',
+          },
+        ],
+      },
+    })
+
+    render(<BrowserUseSettings />)
+    await screen.findByText('Google Chrome')
+
+    // SettingsSwitchRow hides duplicate visible switch label while preserving aria-label
+    expect(screen.getAllByText('Show virtual cursor and action effects')).toHaveLength(1)
+    expect(screen.getAllByText('Auto-expand right workspace during browser control')).toHaveLength(1)
+    expect(screen.getByLabelText('Show virtual cursor and action effects')).toBeInTheDocument()
+    expect(screen.getByLabelText('Auto-expand right workspace during browser control')).toBeInTheDocument()
+
+    // Non-pill badges
+    const readyBadge = screen.getByText('Ready · No OS permissions')
+    expect(readyBadge.className).toContain('rounded-[var(--radius-sm)]')
+    expect(readyBadge.className).not.toContain('rounded-full')
+
+    // Pressable browser tiles with aria-pressed
+    const chromeTile = screen.getByTestId('detected-browser-chrome')
+    const edgeTile = screen.getByTestId('detected-browser-edge')
+    expect(chromeTile).toHaveAttribute('aria-pressed', 'true')
+    expect(edgeTile).toHaveAttribute('aria-pressed', 'false')
+    expect(chromeTile.className).toContain('v6c-pressable')
+    expect(chromeTile.className).toContain('rounded-[var(--radius-card-inner)]')
+    expect(chromeTile.className).toContain('border-[var(--color-brand)]')
+    expect(edgeTile.className).toContain('v6c-raised')
+
+    fireEvent.click(edgeTile)
+    expect(edgeTile).toHaveAttribute('aria-pressed', 'true')
+    expect(chromeTile).toHaveAttribute('aria-pressed', 'false')
+
+    // Wizard inner card and CopyButton tokens
+    fireEvent.click(screen.getByRole('button', { name: '2-step setup guide' }))
+    const wizard = screen.getByTestId('chrome-live-attach-wizard')
+    expect(wizard.className).toContain('rounded-[var(--radius-card-inner)]')
+    const copyBtn = screen.getByRole('button', { name: 'Copy URL' })
+    expect(copyBtn.className).toContain('v6c-raised')
+    expect(copyBtn.className).toContain('v6c-pressable')
+    expect(copyBtn.className).toContain('rounded-[var(--radius-control)]')
+  })
 })

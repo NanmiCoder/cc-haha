@@ -1,6 +1,11 @@
-import { closeSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
+import {
+  ASK_USER_QUESTION_CLARIFY_MESSAGE,
+  ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
+} from '../../constants/messages.js'
 import {
   acpModeToCcHahaPermissionMode,
   acpObject,
@@ -11,6 +16,12 @@ import {
   type AntigravitySlashCommand,
 } from './antigravityAcp.js'
 import {
+  estimateAntigravityBrowserUseTokens,
+  isAntigravityBrowserUseToolName,
+  resolveAntigravityBrowserUseToolName,
+  type AntigravityBrowserUseBridge,
+} from './antigravityBrowserUseBridge.js'
+import {
   estimateAntigravityComputerUseTokens,
   isAntigravityComputerUseToolName,
   type AntigravityComputerUseBridge,
@@ -18,20 +29,51 @@ import {
 
 const CANCEL_TIMEOUT_MS = 3_000
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
+const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024
+const TRANSCRIPT_TAIL_MAX_READ_BYTES = 4 * 1024 * 1024
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,256}$/
+const ELICITATION_SELECT_KEY_RE = /^q([1-9]\d*)$/
+const ELICITATION_OTHER_KEY_RE = /^q([1-9]\d*)_other$/
+const ELICITATION_OTHER_DESC_PREFIX = 'Optional free-form answer to: '
 
 type Frame = Record<string, unknown>
 type Option = { optionId: string; name: string; kind?: unknown }
-type PendingPermission = { options: Option[]; toolUseId?: string } & (
-  | { id: number | string; question?: string }
-  | { promptToolUseId: string; question: string }
-)
+type ElicitationOption = { constValue: string; title: string }
+type ElicitationQuestion = {
+  index: number
+  selectKey?: string
+  otherKey?: string
+  question: string
+  multiSelect: boolean
+  options: ElicitationOption[]
+}
+type ElicitationPending = {
+  id: number | string
+  kind: 'elicitation'
+  toolUseId: string
+  questions: ElicitationQuestion[]
+  allowFreeText: boolean
+  hasNativeToolCall: boolean
+}
+type PendingPermission =
+  | ({ options: Option[]; toolUseId?: string } & (
+      | { id: number | string; question?: string }
+      | { promptToolUseId: string; question: string }
+    ))
+  | ElicitationPending
 type PromptQuestion = {
   tool: Frame
   question: string
   options: Option[]
   echo: string
   buffered: string
+}
+type ResolvedQuestionResult = {
+  questions: Frame[]
+  answers?: Record<string, string>
+  annotations?: Record<string, { notes: string }>
+  handedOff?: boolean
+  handoffMessage?: string
 }
 
 type AccumulatedUsage = {
@@ -55,7 +97,6 @@ function readPromptUsage(rawUsage: unknown): AccumulatedUsage {
   const inputTokens = typeof usage?.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0
   const rawOutputTokens = typeof usage?.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0
   const thoughtTokens = typeof usage?.thoughtTokens === 'number' && Number.isFinite(usage.thoughtTokens) ? usage.thoughtTokens : 0
-  const outputTokens = rawOutputTokens + thoughtTokens
   const cacheReadTokens = typeof usage?.cachedReadTokens === 'number' && Number.isFinite(usage.cachedReadTokens)
     ? usage.cachedReadTokens
     : typeof usage?.cacheReadTokens === 'number' && Number.isFinite(usage.cacheReadTokens)
@@ -66,6 +107,19 @@ function readPromptUsage(rawUsage: unknown): AccumulatedUsage {
     : typeof usage?.cacheCreationTokens === 'number' && Number.isFinite(usage.cacheCreationTokens)
       ? usage.cacheCreationTokens
       : 0
+  const totalTokens = typeof usage?.totalTokens === 'number' && Number.isFinite(usage.totalTokens) ? usage.totalTokens : undefined
+  // Real `agy acp` reports `outputTokens` inclusive of `thoughtTokens` (matching SQLite
+  // ModelUsageStats field 3 = thinking + response), with `totalTokens = input + cached + output`.
+  // When `totalTokens` proves inclusive semantics, do not add `thoughtTokens` twice.
+  const promptSum = inputTokens + cacheReadTokens + cacheCreationTokens
+  const thoughtIncludedInOutput =
+    thoughtTokens > 0 &&
+    rawOutputTokens >= thoughtTokens &&
+    totalTokens !== undefined &&
+    totalTokens > 0 &&
+    Math.abs(totalTokens - (promptSum + rawOutputTokens)) <
+      Math.abs(totalTokens - (promptSum + rawOutputTokens + thoughtTokens))
+  const outputTokens = thoughtIncludedInOutput ? rawOutputTokens : rawOutputTokens + thoughtTokens
   return {
     inputTokens,
     outputTokens,
@@ -84,6 +138,8 @@ function addAccumulatedUsage(target: AccumulatedUsage, delta: AccumulatedUsage):
 type Turn = {
   entries: Frame[]
   permissions: Map<string, PendingPermission>
+  pendingAskTools: Map<string, Frame>
+  resolvedQuestions: Map<string, ResolvedQuestionResult>
   promptQuestion?: PromptQuestion
   promptAnswer?: { toolUseId: string; question: string; label: string }
   chunk?: { kind: 'text' | 'thinking'; text: string; index: number }
@@ -102,6 +158,11 @@ type Turn = {
   detached: boolean
   promptSeq: number
   accumulatedUsage: AccumulatedUsage
+  liveTranscriptUsage: AccumulatedUsage
+  transcriptByteOffset: number
+  transcriptPendingLine: string
+  transcriptDecoder: StringDecoder
+  seenTranscriptSteps: Set<number>
   nativeEnd?: { result: Frame; error?: AntigravityError }
   replyOpen: boolean
   finishing: boolean
@@ -123,6 +184,7 @@ type ProjectedTool = {
 
 export type AntigravityConversationOptions = {
   computerUseBridge?: AntigravityComputerUseBridge | null
+  browserUseBridge?: AntigravityBrowserUseBridge | null
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   antigravityAppDataDir?: string
 }
@@ -242,22 +304,100 @@ function textContent(value: unknown): string {
   return block?.type === 'text' && typeof block.text === 'string' ? block.text : ''
 }
 
+function imageContentBlock(value: unknown): Frame | null {
+  const block = acpObject(value)
+  if (block?.type !== 'image') return null
+  const mimeType = typeof block.mimeType === 'string'
+    ? block.mimeType
+    : typeof block.mime_type === 'string'
+      ? block.mime_type
+      : undefined
+  const data = typeof block.data === 'string' ? block.data : undefined
+  if (mimeType && data) {
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mimeType,
+        data,
+      },
+    }
+  }
+  const source = acpObject(block.source)
+  if (source?.type === 'base64' && typeof source.media_type === 'string' && typeof source.data === 'string') {
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: source.media_type,
+        data: source.data,
+      },
+    }
+  }
+  return null
+}
+
 function fallbackToolName(tool: Frame): string {
   // ACP 标题是显示文本，不应触发同名的 Claude Code 特殊工具逻辑。
   return typeof tool.title === 'string' && tool.title.trim() ? `Antigravity: ${tool.title}` : 'Antigravity'
 }
 
-function toolContent(tool: Frame): string {
+function toolContentText(content: string | Frame[]): string {
+  if (typeof content === 'string') return content
+  return content
+    .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .filter(Boolean)
+    .join('\n')
+}
+
+function collectToolContentItems(
+  items: unknown[],
+  textParts: string[],
+  imageBlocks: Frame[],
+): void {
+  for (const value of items) {
+    const item = acpObject(value)
+    if (!item) continue
+    if (item.type === 'content') {
+      const text = textContent(item.content)
+      if (text) textParts.push(text)
+      const image = imageContentBlock(item.content)
+      if (image) imageBlocks.push(image)
+    } else if (item.type === 'text') {
+      const text = textContent(item)
+      if (text) textParts.push(text)
+    } else if (item.type === 'image') {
+      const image = imageContentBlock(item)
+      if (image) imageBlocks.push(image)
+    } else if (item.type === 'diff' && typeof item.path === 'string') {
+      textParts.push(item.path)
+    }
+  }
+}
+
+function toolContent(tool: Frame): string | Frame[] {
   const output = acpObject(tool.rawOutput)
   const commandOutput = output?.combinedOutput ?? output?.combined_output ?? output?.output
-  if (typeof commandOutput === 'string') return commandOutput
-  const content = Array.isArray(tool.content) ? tool.content.map(value => {
-    const item = acpObject(value)
-    if (item?.type === 'content') return textContent(item.content)
-    if (item?.type === 'diff' && typeof item.path === 'string') return item.path
-    return ''
-  }).filter(Boolean).join('\n') : ''
-  if (content) return content
+  const textParts: string[] = []
+  const imageBlocks: Frame[] = []
+  if (Array.isArray(tool.content) && tool.content.length > 0) {
+    collectToolContentItems(tool.content, textParts, imageBlocks)
+  }
+  if (Array.isArray(output?.content) && output.content.length > 0) {
+    if (textParts.length === 0 && imageBlocks.length === 0) {
+      collectToolContentItems(output.content, textParts, imageBlocks)
+    } else if (imageBlocks.length === 0) {
+      collectToolContentItems(output.content, [], imageBlocks)
+    }
+  }
+  const text = typeof commandOutput === 'string' ? commandOutput : textParts.join('\n')
+  if (imageBlocks.length > 0) {
+    return [
+      ...(text ? [{ type: 'text', text }] : []),
+      ...imageBlocks,
+    ]
+  }
+  if (text) return text
   return typeof tool.rawOutput === 'string' ? tool.rawOutput : typeof tool.title === 'string' ? tool.title : ''
 }
 
@@ -339,6 +479,246 @@ function questionInput(question: string, options: Option[]): Frame {
   }
 }
 
+function parseElicitationOptions(raw: unknown): ElicitationOption[] {
+  if (!Array.isArray(raw)) return []
+  const options: ElicitationOption[] = []
+  for (const item of raw) {
+    const entry = acpObject(item)
+    if (entry && typeof entry.const === 'string' && entry.const.length > 0 && typeof entry.title === 'string' && entry.title.trim()) {
+      options.push({ constValue: entry.const, title: entry.title })
+    }
+  }
+  return options
+}
+
+function parseStringEnumOptions(raw: unknown): ElicitationOption[] {
+  if (!Array.isArray(raw)) return []
+  const options: ElicitationOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim()) {
+      options.push({ constValue: item, title: item })
+    }
+  }
+  return options
+}
+
+function parseElicitationForm(params: Frame): { questions: ElicitationQuestion[]; allowFreeText: boolean } | undefined {
+  if (params.mode !== 'form') return undefined
+  const schema = acpObject(params.requestedSchema)
+  const properties = acpObject(schema?.properties)
+  if (!properties) return undefined
+
+  type DraftEntry = {
+    selectKey?: string
+    selectProp?: Frame
+    otherKey?: string
+    otherProp?: Frame
+  }
+  const byIndex = new Map<number, DraftEntry>()
+  for (const [key, value] of Object.entries(properties)) {
+    const prop = acpObject(value)
+    if (!prop) return undefined
+    const selectMatch = key.match(ELICITATION_SELECT_KEY_RE)
+    if (selectMatch) {
+      const index = Number(selectMatch[1])
+      const draft = byIndex.get(index) ?? {}
+      draft.selectKey = key
+      draft.selectProp = prop
+      byIndex.set(index, draft)
+      continue
+    }
+    const otherMatch = key.match(ELICITATION_OTHER_KEY_RE)
+    if (otherMatch) {
+      const index = Number(otherMatch[1])
+      const draft = byIndex.get(index) ?? {}
+      draft.otherKey = key
+      draft.otherProp = prop
+      byIndex.set(index, draft)
+      continue
+    }
+    // Unrecognized form field: let AGY fall back cleanly rather than misrendering an unknown form.
+    return undefined
+  }
+
+  const sortedIndices = [...byIndex.keys()].sort((a, b) => a - b)
+  if (sortedIndices.length === 0) return undefined
+
+  const fallbackMessage = typeof params.message === 'string' ? params.message.trim() : ''
+  const seenQuestions = new Set<string>()
+  const questions: ElicitationQuestion[] = []
+
+  for (const index of sortedIndices) {
+    const entry = byIndex.get(index)!
+    let multiSelect = false
+    let options: ElicitationOption[] = []
+
+    if (entry.selectProp) {
+      if (entry.selectProp.type === 'array') {
+        multiSelect = true
+        const items = acpObject(entry.selectProp.items)
+        options = parseElicitationOptions(items?.anyOf)
+        if (options.length === 0) options = parseStringEnumOptions(items?.enum)
+      } else if (entry.selectProp.type === 'string') {
+        multiSelect = false
+        options = parseElicitationOptions(entry.selectProp.oneOf)
+        if (options.length === 0) options = parseStringEnumOptions(entry.selectProp.enum)
+      } else {
+        return undefined
+      }
+      if (options.length === 0) return undefined
+    }
+
+    if (entry.otherProp && entry.otherProp.type !== 'string') {
+      return undefined
+    }
+
+    if (options.length === 0 && !entry.otherKey) {
+      return undefined
+    }
+
+    const selectTitle = typeof entry.selectProp?.title === 'string' ? entry.selectProp.title.trim() : ''
+    const selectDesc = typeof entry.selectProp?.description === 'string' ? entry.selectProp.description.trim() : ''
+    const otherTitleRaw = typeof entry.otherProp?.title === 'string' ? entry.otherProp.title.trim() : ''
+    const otherTitle = otherTitleRaw && otherTitleRaw.toLowerCase() !== 'other' ? otherTitleRaw : ''
+    const otherDescRaw = typeof entry.otherProp?.description === 'string' ? entry.otherProp.description.trim() : ''
+    const otherDesc = otherDescRaw.startsWith(ELICITATION_OTHER_DESC_PREFIX)
+      ? otherDescRaw.slice(ELICITATION_OTHER_DESC_PREFIX.length).trim()
+      : ''
+
+    const baseQuestion =
+      selectTitle ||
+      otherTitle ||
+      otherDesc ||
+      selectDesc ||
+      (sortedIndices.length === 1 && fallbackMessage ? fallbackMessage : '') ||
+      `Question ${index}`
+    const question = seenQuestions.has(baseQuestion) ? `${baseQuestion} (${index})` : baseQuestion
+    seenQuestions.add(question)
+
+    questions.push({
+      index,
+      ...(entry.selectKey ? { selectKey: entry.selectKey } : {}),
+      ...(entry.otherKey ? { otherKey: entry.otherKey } : {}),
+      question,
+      multiSelect,
+      options,
+    })
+  }
+
+  return {
+    questions,
+    allowFreeText: questions.some(q => Boolean(q.otherKey)),
+  }
+}
+
+function buildElicitationQuestionInput(questions: ElicitationQuestion[], allowFreeText: boolean): Frame {
+  return {
+    allowFreeText,
+    allowImages: false,
+    questions: questions.map((q, idx) => ({
+      question: q.question,
+      header: questions.length > 1 ? `Q${idx + 1}` : 'Antigravity',
+      multiSelect: q.multiSelect,
+      ...(q.options.length > 0 ? { options: q.options.map(option => ({ label: option.title })) } : {}),
+    })),
+  }
+}
+
+function matchMultiSelectOptions(answer: string, options: ElicitationOption[]): string[] | null {
+  if (!answer || options.length === 0) return null
+  const exact = options.find(option => option.title === answer)
+  if (exact) return [exact.constValue]
+
+  const byLongestTitle = [...options].sort((a, b) => b.title.length - a.title.length)
+  const matched: string[] = []
+  let remaining = answer
+  while (remaining.length > 0) {
+    const hit = byLongestTitle.find(
+      option => remaining === option.title || remaining.startsWith(`${option.title}, `),
+    )
+    if (!hit) return null
+    if (!matched.includes(hit.constValue)) {
+      matched.push(hit.constValue)
+    }
+    remaining = remaining.length === hit.title.length ? '' : remaining.slice(hit.title.length + 2)
+  }
+  return matched.length > 0 ? matched : null
+}
+
+function buildElicitationResponse(
+  pending: ElicitationPending,
+  updatedInput?: Frame,
+): {
+  content: Record<string, string | string[]>
+  answers: Record<string, string>
+  annotations: Record<string, { notes: string }>
+} | null {
+  const rawAnswers = acpObject(updatedInput?.answers) ?? {}
+  const rawAnnotations = acpObject(updatedInput?.annotations) ?? {}
+  const content: Record<string, string | string[]> = {}
+  const answers: Record<string, string> = {}
+  const annotations: Record<string, { notes: string }> = {}
+
+  for (const q of pending.questions) {
+    const rawAnswer = typeof rawAnswers[q.question] === 'string' ? (rawAnswers[q.question] as string).trim() : ''
+    const noteEntry = acpObject(rawAnnotations[q.question])
+    const rawNotes = typeof noteEntry?.notes === 'string' ? noteEntry.notes.trim() : ''
+
+    if (q.options.length === 0) {
+      const writeIn = rawAnswer || rawNotes
+      if (writeIn) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = writeIn
+        answers[q.question] = rawAnswer || rawNotes
+      }
+      continue
+    }
+
+    if (q.multiSelect) {
+      const selectedIds = rawAnswer ? matchMultiSelectOptions(rawAnswer, q.options) : null
+      if (selectedIds && q.selectKey) {
+        content[q.selectKey] = selectedIds
+        answers[q.question] = rawAnswer
+        if (rawNotes) {
+          if (q.otherKey) content[q.otherKey] = rawNotes
+          annotations[q.question] = { notes: rawNotes }
+        }
+      } else if (rawAnswer) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes ? `${rawAnswer}\n${rawNotes}` : rawAnswer
+        answers[q.question] = rawAnswer
+        if (rawNotes) annotations[q.question] = { notes: rawNotes }
+      } else if (rawNotes) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes
+        answers[q.question] = rawNotes
+      }
+    } else {
+      const exact = rawAnswer ? q.options.find(option => option.title === rawAnswer) : undefined
+      if (exact && q.selectKey) {
+        content[q.selectKey] = exact.constValue
+        answers[q.question] = rawAnswer
+        if (rawNotes) {
+          if (q.otherKey) content[q.otherKey] = rawNotes
+          annotations[q.question] = { notes: rawNotes }
+        }
+      } else if (rawAnswer) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes ? `${rawAnswer}\n${rawNotes}` : rawAnswer
+        answers[q.question] = rawAnswer
+        if (rawNotes) annotations[q.question] = { notes: rawNotes }
+      } else if (rawNotes) {
+        if (!q.otherKey) return null
+        content[q.otherKey] = rawNotes
+        answers[q.question] = rawNotes
+      }
+    }
+  }
+
+  if (Object.keys(content).length === 0) return null
+  return { content, answers, annotations }
+}
+
 function resolveDefaultAppDataDir(): string {
   // Never inherit host Antigravity App/IDE's `ANTIGRAVITY_APP_DATA_DIR`:
   // `agy acp` runs with stripped env and always persists to `~/.gemini/antigravity-cli`.
@@ -374,6 +754,7 @@ export class AntigravityConversation {
   private readonly subagentNameCache = new Map<string, string>()
   private readonly claimedSubagentIds = new Set<string>()
   private readonly computerUseBridge?: AntigravityComputerUseBridge | null
+  private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   private readonly antigravityAppDataDir: string
 
@@ -384,6 +765,7 @@ export class AntigravityConversation {
     options: AntigravityConversationOptions = {},
   ) {
     this.computerUseBridge = options.computerUseBridge
+    this.browserUseBridge = options.browserUseBridge
     this.onAvailableCommands = options.onAvailableCommands
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
     acp.onMessage = (method, params, id) => this.receive(method, params, id)
@@ -405,10 +787,10 @@ export class AntigravityConversation {
     return this.availableCommands
   }
 
-  private readBaselineFromAntigravityTranscript(): number | undefined {
+  private resolveAntigravityTranscriptPath(): string | undefined {
     const nativeSessionId = this.acp.sessionId
     if (!nativeSessionId || !SAFE_SESSION_ID_RE.test(nativeSessionId)) return undefined
-    const transcriptPath = join(
+    return join(
       this.antigravityAppDataDir,
       'brain',
       nativeSessionId,
@@ -416,6 +798,158 @@ export class AntigravityConversation {
       'logs',
       'transcript.jsonl',
     )
+  }
+
+  private getCurrentTranscriptByteSize(): number {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return 0
+    try {
+      const size = statSync(transcriptPath).size
+      return Number.isFinite(size) && size > 0 ? size : 0
+    } catch {
+      return 0
+    }
+  }
+
+  private processLiveTranscriptLine(turn: Turn, rawLine: string): void {
+    const line = rawLine.trim()
+    if (!line) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      return
+    }
+    const step = acpObject(parsed)
+    if (!step) return
+    const stepType = typeof step.type === 'string' ? step.type.toUpperCase() : ''
+    if (stepType !== 'PLANNER_RESPONSE') return
+    const status = typeof step.status === 'string' ? step.status.toUpperCase() : ''
+    if (status && status !== 'DONE' && status !== 'COMPLETED' && status !== 'SUCCESS') return
+    const stepIndex = typeof step.step_index === 'number' && Number.isFinite(step.step_index)
+      ? step.step_index
+      : undefined
+    if (stepIndex !== undefined) {
+      if (turn.seenTranscriptSteps.has(stepIndex)) return
+      turn.seenTranscriptSteps.add(stepIndex)
+    }
+    const stepIn = typeof step.input_tokens === 'number' && Number.isFinite(step.input_tokens) && step.input_tokens > 0
+      ? step.input_tokens
+      : 0
+    const stepOut = typeof step.output_tokens === 'number' && Number.isFinite(step.output_tokens) && step.output_tokens > 0
+      ? step.output_tokens
+      : 0
+    const stepCache = typeof step.cache_read_tokens === 'number' && Number.isFinite(step.cache_read_tokens) && step.cache_read_tokens > 0
+      ? step.cache_read_tokens
+      : 0
+    const stepCacheWrite = typeof step.cache_creation_tokens === 'number' && Number.isFinite(step.cache_creation_tokens) && step.cache_creation_tokens > 0
+      ? step.cache_creation_tokens
+      : 0
+    if (stepIn === 0 && stepOut === 0 && stepCache === 0 && stepCacheWrite === 0) return
+    turn.liveTranscriptUsage.inputTokens += stepIn
+    turn.liveTranscriptUsage.outputTokens += stepOut
+    turn.liveTranscriptUsage.cacheReadTokens += stepCache
+    turn.liveTranscriptUsage.cacheCreationTokens += stepCacheWrite
+  }
+
+  /**
+   * Read-only incremental byte-offset tailer over Antigravity's live `transcript.jsonl`.
+   * Each completed internal LLM step (`PLANNER_RESPONSE`) is flushed to disk immediately
+   * by `agy`, allowing mid-turn usage & tok/s snapshots before `session/prompt` resolves.
+   */
+  private pollLiveTurnTranscriptUsage(turn: Turn): void {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return
+    let size: number
+    try {
+      size = statSync(transcriptPath).size
+    } catch {
+      return
+    }
+    if (!Number.isFinite(size) || size <= 0) return
+    if (size < turn.transcriptByteOffset) {
+      turn.transcriptByteOffset = 0
+      turn.transcriptPendingLine = ''
+      turn.transcriptDecoder = new StringDecoder('utf8')
+      turn.seenTranscriptSteps.clear()
+      turn.liveTranscriptUsage = createEmptyUsage()
+    }
+    if (size === turn.transcriptByteOffset) return
+    let fd: number | undefined
+    try {
+      fd = openSync(transcriptPath, 'r')
+      let position = turn.transcriptByteOffset
+      const readLimit = Math.min(size, position + TRANSCRIPT_TAIL_MAX_READ_BYTES)
+      const buffer = Buffer.allocUnsafe(Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, readLimit - position))
+      while (position < readLimit) {
+        const toRead = Math.min(buffer.length, readLimit - position)
+        const bytesRead = readSync(fd, buffer, 0, toRead, position)
+        if (bytesRead <= 0) break
+        position += bytesRead
+        turn.transcriptByteOffset = position
+        let chunk = turn.transcriptDecoder.write(buffer.subarray(0, bytesRead))
+        while (chunk.length > 0) {
+          const newlineIndex = chunk.indexOf('\n')
+          if (newlineIndex < 0) {
+            turn.transcriptPendingLine += chunk
+            break
+          }
+          const line = turn.transcriptPendingLine + chunk.slice(0, newlineIndex)
+          turn.transcriptPendingLine = ''
+          this.processLiveTranscriptLine(turn, line)
+          chunk = chunk.slice(newlineIndex + 1)
+        }
+      }
+    } catch {
+      // Best-effort read-only poll; ignore transient filesystem errors.
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd)
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  private resolveLiveUsageTotals(): CumulativeUsageState {
+    const turn = this.turn
+    if (!turn || turn.finishing) {
+      return this.cumulativeUsage
+    }
+    this.pollLiveTurnTranscriptUsage(turn)
+    // `liveTranscriptUsage` accumulates every completed step since `beginTurn()`,
+    // while `accumulatedUsage` holds settled usage from any steered prompt in the
+    // same turn; taking the per-bucket max avoids double-counting after a steer.
+    const inFlightInput = Math.max(turn.accumulatedUsage.inputTokens, turn.liveTranscriptUsage.inputTokens)
+    const inFlightOutput = Math.max(turn.accumulatedUsage.outputTokens, turn.liveTranscriptUsage.outputTokens)
+    const inFlightCacheRead = Math.max(turn.accumulatedUsage.cacheReadTokens, turn.liveTranscriptUsage.cacheReadTokens)
+    const inFlightCacheCreation = Math.max(turn.accumulatedUsage.cacheCreationTokens, turn.liveTranscriptUsage.cacheCreationTokens)
+    // Pair completed-step output tokens with completed model-phase API time so an
+    // active prefill/thinking phase whose tokens have not landed yet never dilutes tok/s.
+    // Fall back to elapsed modelPhaseStart only if step 1 flushed to disk just before
+    // the corresponding tool_call paused the phase.
+    const inFlightApiDuration = inFlightOutput > 0
+      ? (turn.apiDurationMs > 0
+        ? turn.apiDurationMs
+        : turn.modelPhaseStart !== undefined
+          ? Math.max(0, Date.now() - turn.modelPhaseStart)
+          : 0)
+      : 0
+    return {
+      inputTokens: this.cumulativeUsage.inputTokens + inFlightInput,
+      outputTokens: this.cumulativeUsage.outputTokens + inFlightOutput,
+      cacheReadTokens: this.cumulativeUsage.cacheReadTokens + inFlightCacheRead,
+      cacheCreationTokens: this.cumulativeUsage.cacheCreationTokens + inFlightCacheCreation,
+      totalAPIDuration: this.cumulativeUsage.totalAPIDuration + inFlightApiDuration,
+      totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration + (inFlightOutput > 0 ? turn.decodeDurationMs : 0),
+      totalTtftDuration: this.cumulativeUsage.totalTtftDuration + (inFlightOutput > 0 ? (turn.ttftMs ?? 0) : 0),
+      totalDuration: this.cumulativeUsage.totalDuration + Math.max(0, Date.now() - turn.started),
+    }
+  }
+
+  private readBaselineFromAntigravityTranscript(): number | undefined {
+    const transcriptPath = this.resolveAntigravityTranscriptPath()
+    if (!transcriptPath) return undefined
     let fd: number | undefined
     try {
       fd = openSync(transcriptPath, 'r')
@@ -498,17 +1032,21 @@ export class AntigravityConversation {
       const baseline = Math.min(used, this.firstTurnBaselineTokens)
       const messageTokens = Math.max(0, used - baseline)
       categories = []
-      if (this.computerUseBridge?.isEnabled()) {
-        const cuTokens = Math.min(baseline, estimateAntigravityComputerUseTokens(this.computerUseBridge))
-        const systemAndToolsTokens = baseline - cuTokens
-        if (systemAndToolsTokens > 0) {
-          categories.push({ name: 'System & tools', tokens: systemAndToolsTokens, color: '#6366f1' })
-        }
-        if (cuTokens > 0) {
-          categories.push({ name: 'MCP tools (Computer Use)', tokens: cuTokens, color: '#0ea5e9' })
-        }
-      } else {
-        categories.push({ name: 'System & tools', tokens: baseline, color: '#6366f1' })
+      const cuTokens = this.computerUseBridge?.isEnabled()
+        ? Math.min(baseline, estimateAntigravityComputerUseTokens(this.computerUseBridge))
+        : 0
+      const buTokens = this.browserUseBridge?.isEnabled()
+        ? Math.min(Math.max(0, baseline - cuTokens), estimateAntigravityBrowserUseTokens(this.browserUseBridge))
+        : 0
+      const systemAndToolsTokens = Math.max(0, baseline - cuTokens - buTokens)
+      if (systemAndToolsTokens > 0) {
+        categories.push({ name: 'System & tools', tokens: systemAndToolsTokens, color: '#6366f1' })
+      }
+      if (cuTokens > 0) {
+        categories.push({ name: 'MCP tools (Computer Use)', tokens: cuTokens, color: '#0ea5e9' })
+      }
+      if (buTokens > 0) {
+        categories.push({ name: 'MCP tools (Browser Use)', tokens: buTokens, color: '#14b8a6' })
       }
       if (messageTokens > 0) {
         categories.push({ name: 'Messages', tokens: messageTokens, color: '#7c3aed' })
@@ -522,6 +1060,7 @@ export class AntigravityConversation {
       ]
     }
 
+    const liveUsage = this.resolveLiveUsageTotals()
     return {
       categories,
       totalTokens: used,
@@ -535,38 +1074,39 @@ export class AntigravityConversation {
       mcpTools: [],
       agents: [],
       apiUsage: {
-        input_tokens: this.cumulativeUsage.inputTokens,
-        output_tokens: this.cumulativeUsage.outputTokens,
-        cache_creation_input_tokens: this.cumulativeUsage.cacheCreationTokens,
-        cache_read_input_tokens: this.cumulativeUsage.cacheReadTokens,
+        input_tokens: liveUsage.inputTokens,
+        output_tokens: liveUsage.outputTokens,
+        cache_creation_input_tokens: liveUsage.cacheCreationTokens,
+        cache_read_input_tokens: liveUsage.cacheReadTokens,
       },
     }
   }
 
   getSessionUsageSnapshot(): Record<string, unknown> {
     const model = this.acp.modelId ?? 'Antigravity'
+    const totals = this.resolveLiveUsageTotals()
     return {
       totalCostUSD: 0,
       costDisplay: '$0.00',
       hasUnknownModelCost: true,
-      totalAPIDuration: this.cumulativeUsage.totalAPIDuration,
-      totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration,
-      totalTtftDuration: this.cumulativeUsage.totalTtftDuration,
-      totalDuration: this.cumulativeUsage.totalDuration,
+      totalAPIDuration: totals.totalAPIDuration,
+      totalDecodeDuration: totals.totalDecodeDuration,
+      totalTtftDuration: totals.totalTtftDuration,
+      totalDuration: totals.totalDuration,
       totalLinesAdded: 0,
       totalLinesRemoved: 0,
-      totalInputTokens: this.cumulativeUsage.inputTokens,
-      totalOutputTokens: this.cumulativeUsage.outputTokens,
-      totalCacheReadInputTokens: this.cumulativeUsage.cacheReadTokens,
-      totalCacheCreationInputTokens: this.cumulativeUsage.cacheCreationTokens,
+      totalInputTokens: totals.inputTokens,
+      totalOutputTokens: totals.outputTokens,
+      totalCacheReadInputTokens: totals.cacheReadTokens,
+      totalCacheCreationInputTokens: totals.cacheCreationTokens,
       totalWebSearchRequests: 0,
       models: [{
         model,
         displayName: model,
-        inputTokens: this.cumulativeUsage.inputTokens,
-        outputTokens: this.cumulativeUsage.outputTokens,
-        cacheReadInputTokens: this.cumulativeUsage.cacheReadTokens,
-        cacheCreationInputTokens: this.cumulativeUsage.cacheCreationTokens,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        cacheReadInputTokens: totals.cacheReadTokens,
+        cacheCreationInputTokens: totals.cacheCreationTokens,
         webSearchRequests: 0,
         costUSD: 0,
         costDisplay: '$0.00',
@@ -586,6 +1126,7 @@ export class AntigravityConversation {
     this.tools.clear()
     this.toolStartedAt.clear()
     void this.computerUseBridge?.releaseLock()
+    void this.browserUseBridge?.cleanupAfterTurn()
     const turn = this.turn
     if (turn) {
       turn.replyOpen = false
@@ -601,6 +1142,7 @@ export class AntigravityConversation {
     this.listening = false
     this.acp.end()
     void this.computerUseBridge?.releaseLock()
+    void this.browserUseBridge?.cleanupAfterTurn()
     return this.turnDone
   }
 
@@ -622,7 +1164,7 @@ export class AntigravityConversation {
   private canSteerTurn(turn: Turn, userContent: Frame[]): boolean {
     if (!this.acp.isOpen || turn.cancelled || turn.finishing) return false
     if (turn.isCompact || parseManualCompactPrompt(userContent)) return false
-    if (turn.permissions.size > 0 || turn.promptQuestion) return false
+    if (turn.permissions.size > 0 || turn.promptQuestion || turn.pendingAskTools.size > 0) return false
     return true
   }
 
@@ -630,6 +1172,7 @@ export class AntigravityConversation {
     if (this.turn || !this.acp.isOpen) return false
     const prompt = this.buildPromptBlocks(userContent)
     this.computerUseBridge?.resetTurnAbort()
+    this.browserUseBridge?.resetTurnAbort()
     for (const [id, tool] of this.tools) {
       if (!tool) {
         this.tools.delete(id)
@@ -690,6 +1233,7 @@ export class AntigravityConversation {
     this.tools.clear()
     this.toolStartedAt.clear()
     this.computerUseBridge?.abortCurrentTurn()
+    this.browserUseBridge?.abortCurrentTurn()
     const sent = this.acp.cancel()
     if (!turn) return sent
     this.pauseModelPhase(turn)
@@ -705,10 +1249,55 @@ export class AntigravityConversation {
     return sent
   }
 
-  respond(requestId: string, allowed: boolean, updatedInput?: Frame, rule?: string): boolean {
+  respond(requestId: string, allowed: boolean, updatedInput?: Frame, rule?: string, denyMessage?: string): boolean {
     const turn = this.turn
     const pending = turn?.permissions.get(requestId)
     if (!turn || turn.cancelled || !pending) return false
+    if ('kind' in pending && pending.kind === 'elicitation') {
+      const questionPayload = buildElicitationQuestionInput(pending.questions, pending.allowFreeText)
+      const projectedQuestions = questionPayload.questions as Frame[]
+      if (allowed) {
+        const built = buildElicitationResponse(pending, updatedInput)
+        if (!built) return false
+        if (!this.acp.reply(pending.id, { action: 'accept', content: built.content })) return false
+        turn.resolvedQuestions.set(pending.toolUseId, {
+          questions: projectedQuestions,
+          answers: built.answers,
+          ...(Object.keys(built.annotations).length > 0 ? { annotations: built.annotations } : {}),
+        })
+      } else {
+        const feedback = denyMessage?.trim()
+        const firstOtherKey = pending.questions.find(q => q.otherKey)?.otherKey
+        if (feedback && firstOtherKey) {
+          const clarifyMessage = `${ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX}${feedback}`
+          if (!this.acp.reply(pending.id, { action: 'accept', content: { [firstOtherKey]: clarifyMessage } })) return false
+          turn.resolvedQuestions.set(pending.toolUseId, {
+            questions: projectedQuestions,
+            handedOff: true,
+            handoffMessage: clarifyMessage,
+          })
+        } else {
+          if (!this.acp.reply(pending.id, { action: 'decline' })) return false
+          if (denyMessage !== undefined) {
+            turn.resolvedQuestions.set(pending.toolUseId, {
+              questions: projectedQuestions,
+              handedOff: true,
+              handoffMessage: ASK_USER_QUESTION_CLARIFY_MESSAGE,
+            })
+          }
+        }
+      }
+      turn.permissions.delete(requestId)
+      if (!pending.hasNativeToolCall) {
+        this.projectToolState(turn, pending.toolUseId, {
+          toolCallId: pending.toolUseId,
+          status: allowed || Boolean(denyMessage?.trim()) ? 'completed' : 'failed',
+        })
+      }
+      this.maybeResumeModelPhase(turn)
+      this.maybeFinish(turn)
+      return true
+    }
     let choice: Option | undefined
     if (pending.question) {
       const answer = acpObject(updatedInput?.answers)?.[pending.question]
@@ -794,7 +1383,7 @@ export class AntigravityConversation {
       this.claimedSubagentIds.add(direct)
       return direct
     }
-    const contentText = toolContent(tool)
+    const contentText = toolContentText(toolContent(tool))
     const fromContent = this.extractConversationIdFromText(contentText)
     if (fromContent) {
       this.claimedSubagentIds.add(fromContent)
@@ -1017,6 +1606,18 @@ export class AntigravityConversation {
       }
     }
 
+    const browserUseToolName = resolveAntigravityBrowserUseToolName(rawName)
+    if (browserUseToolName) {
+      return {
+        name: browserUseToolName,
+        input: rawInput,
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
     return {
       name: fallbackToolName(tool),
       input: rawInput,
@@ -1030,11 +1631,17 @@ export class AntigravityConversation {
   private beginTurn(detached: boolean): Turn {
     const { promise, resolve } = Promise.withResolvers<void>()
     const turn: Turn = {
-      entries: [], permissions: new Map(), nextIndex: 0, started: Date.now(),
+      entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
+      nextIndex: 0, started: Date.now(),
       apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
       detached,
       promptSeq: 0,
       accumulatedUsage: createEmptyUsage(),
+      liveTranscriptUsage: createEmptyUsage(),
+      transcriptByteOffset: this.getCurrentTranscriptByteSize(),
+      transcriptPendingLine: '',
+      transcriptDecoder: new StringDecoder('utf8'),
+      seenTranscriptSteps: new Set(),
       nativeEnd: detached ? { result: {} } : undefined,
       replyOpen: false, finishing: false, cancelled: false, resolve,
     }
@@ -1103,7 +1710,11 @@ export class AntigravityConversation {
 
   private cancelPermissions(turn: Turn): void {
     for (const [requestId, pending] of turn.permissions) {
-      if ('id' in pending) this.replyPermission(pending.id)
+      if ('kind' in pending && pending.kind === 'elicitation') {
+        this.acp.reply(pending.id, { action: 'cancel' })
+      } else if ('id' in pending) {
+        this.replyPermission(pending.id)
+      }
       this.emit({ type: 'control_cancel_request', request_id: requestId })
     }
     turn.permissions.clear()
@@ -1169,17 +1780,28 @@ export class AntigravityConversation {
 
   private finishPromptQuestion(turn: Turn, canAsk: boolean): void {
     const pending = turn.promptQuestion
-    if (!pending) return
-    turn.promptQuestion = undefined
-    const { tool, question, options, echo, buffered } = pending
-    const toolUseId = tool.toolCallId as string
-    const ask = canAsk && tool.status === 'pending'
-    // 只隐藏 AGY 自己生成、与结构化字段完全一致的编号列表，保留普通正文。
-    if (buffered && (!ask || buffered !== echo)) this.chunk(turn, 'text', buffered)
-    if (ask) {
-      this.publishPermission(turn, tool, { promptToolUseId: toolUseId, question, options })
-    } else if (!turn.cancelled) {
-      this.toolCall(turn, tool)
+    if (pending) {
+      turn.promptQuestion = undefined
+      const { tool, question, options, echo, buffered } = pending
+      const toolUseId = tool.toolCallId as string
+      turn.pendingAskTools.delete(toolUseId)
+      const ask = canAsk && tool.status === 'pending'
+      // 只隐藏 AGY 自己生成、与结构化字段完全一致的编号列表，保留普通正文。
+      if (buffered && (!ask || buffered !== echo)) this.chunk(turn, 'text', buffered)
+      if (ask) {
+        this.publishPermission(turn, tool, { promptToolUseId: toolUseId, question, options })
+      } else if (!turn.cancelled) {
+        this.toolCall(turn, tool)
+      }
+    }
+    if (turn.pendingAskTools.size > 0) {
+      const remaining = [...turn.pendingAskTools.values()]
+      turn.pendingAskTools.clear()
+      if (!turn.cancelled) {
+        for (const tool of remaining) {
+          this.toolCall(turn, tool)
+        }
+      }
     }
   }
 
@@ -1242,7 +1864,13 @@ export class AntigravityConversation {
     } catch {
       error = new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'Could not save the Antigravity response.')
     }
-    void this.computerUseBridge?.releaseLock()
+    await Promise.race([
+      Promise.allSettled([
+        this.computerUseBridge?.releaseLock(),
+        this.browserUseBridge?.cleanupAfterTurn(),
+      ]),
+      new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+    ])
     this.cancelPermissions(turn)
     this.turn = undefined
     const failed = !turn.cancelled && error
@@ -1358,16 +1986,27 @@ export class AntigravityConversation {
     this.toolStartedAt.delete(id)
     const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
     this.flushChunk(turn)
+    const resolvedQuestion = turn.resolvedQuestions.get(id)
+    if (resolvedQuestion) turn.resolvedQuestions.delete(id)
     const answer = turn.promptAnswer?.toolUseId === id ? turn.promptAnswer : undefined
     if (answer) turn.promptAnswer = undefined
     let content: unknown
-    if (answer && tool.status === 'completed') {
+    if (resolvedQuestion && (tool.status === 'completed' || resolvedQuestion.handedOff)) {
+      content = resolvedQuestion.handedOff
+        ? { handedOff: true, message: resolvedQuestion.handoffMessage ?? ASK_USER_QUESTION_CLARIFY_MESSAGE }
+        : {
+            questions: resolvedQuestion.questions,
+            answers: resolvedQuestion.answers ?? {},
+            ...(resolvedQuestion.annotations ? { annotations: resolvedQuestion.annotations } : {}),
+          }
+    } else if (answer && tool.status === 'completed') {
       content = { answers: { [answer.question]: answer.label } }
     } else if (tool.name === 'invoke_subagent') {
       const childId = this.resolveChildConversationIdForInvoke(tool)
       const body = toolContent(tool)
+      const bodyText = toolContentText(body)
       content = childId
-        ? (body && body !== 'Run invoke_subagent' ? `agentId: ${childId}\n${body}` : `agentId: ${childId}`)
+        ? (bodyText && bodyText !== 'Run invoke_subagent' ? `agentId: ${childId}\n${bodyText}` : `agentId: ${childId}`)
         : body
     } else {
       content = toolContent(tool)
@@ -1394,6 +2033,48 @@ export class AntigravityConversation {
       }
       const turn = this.turn ?? this.beginTurn(true)
       this.requestPermission(turn, tool, params.options, rpcId)
+      this.maybeFinish(turn)
+      return
+    }
+    if (method === 'elicitation/create' && rpcId !== undefined) {
+      if (!matches) {
+        this.acp.reply(rpcId, { action: 'cancel' })
+        return
+      }
+      const parsed = parseElicitationForm(params)
+      if (!parsed) {
+        this.acp.reply(rpcId, undefined, -32602)
+        return
+      }
+      const turn = this.turn ?? this.beginTurn(true)
+      const rawToolCallId = typeof params.toolCallId === 'string' && params.toolCallId.trim()
+        ? params.toolCallId.trim()
+        : undefined
+      const toolUseId = rawToolCallId ?? `elicitation_${String(rpcId)}`
+      const heldTool = rawToolCallId ? turn.pendingAskTools.get(rawToolCallId) : undefined
+      if (rawToolCallId) turn.pendingAskTools.delete(rawToolCallId)
+      if (turn.promptQuestion && (!rawToolCallId || turn.promptQuestion.tool.toolCallId === rawToolCallId)) {
+        const { buffered, echo } = turn.promptQuestion
+        turn.promptQuestion = undefined
+        if (buffered && buffered !== echo) this.chunk(turn, 'text', buffered)
+      }
+      const toolFrame: Frame = heldTool
+        ? { ...heldTool, toolCallId: toolUseId, status: 'pending' }
+        : {
+            toolCallId: toolUseId,
+            name: 'ask_question',
+            title: typeof params.message === 'string' && params.message.trim() ? params.message.trim() : 'Ask question',
+            status: 'pending',
+          }
+      if (turn.nativeEnd) turn.replyOpen = true
+      this.publishPermission(turn, toolFrame, {
+        id: rpcId,
+        kind: 'elicitation',
+        toolUseId,
+        questions: parsed.questions,
+        allowFreeText: parsed.allowFreeText,
+        hasNativeToolCall: Boolean(rawToolCallId),
+      })
       this.maybeFinish(turn)
       return
     }
@@ -1456,14 +2137,15 @@ export class AntigravityConversation {
         break
       }
       case 'tool_call': {
-        // interaction_* 等权限 RPC；终端式 ask_question 等 pending 与 end_turn。
+        // interaction_* 等权限 RPC；ask_question 等 elicitation/create 或旧版终端回退。
         if (typeof update.toolCallId !== 'string' || update.toolCallId.startsWith('interaction_') || this.tools.has(update.toolCallId)) return
         turn ??= this.beginTurn(true)
-        if (turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
-        const question = !turn.nativeEnd && !turn.promptQuestion && readPromptQuestion(update)
-        if (question) {
+        if (turn.pendingAskTools.has(update.toolCallId) || turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
+        if (update.name === 'ask_question' && !toolHasFinished(update) && !turn.nativeEnd) {
           this.flushChunk(turn)
-          turn.promptQuestion = question
+          turn.pendingAskTools.set(update.toolCallId, update)
+          const question = !turn.promptQuestion && readPromptQuestion(update)
+          if (question) turn.promptQuestion = question
         } else {
           this.toolCall(turn, update)
         }
@@ -1472,6 +2154,24 @@ export class AntigravityConversation {
       case 'tool_call_update': {
         const id = update.toolCallId
         if (typeof id !== 'string') return
+        const heldAskTool = turn?.pendingAskTools.get(id)
+        if (turn && heldAskTool) {
+          const merged = { ...heldAskTool, ...update }
+          if (turn.promptQuestion?.tool.toolCallId === id) {
+            turn.promptQuestion.tool = merged
+          }
+          if (toolHasFinished(merged)) {
+            turn.pendingAskTools.delete(id)
+            if (turn.promptQuestion?.tool.toolCallId === id) {
+              this.finishPromptQuestion(turn, false)
+            } else if (!turn.cancelled) {
+              this.toolCall(turn, merged)
+            }
+          } else {
+            turn.pendingAskTools.set(id, merged)
+          }
+          break
+        }
         const question = turn?.promptQuestion
         if (turn && question?.tool.toolCallId === id) {
           question.tool = { ...question.tool, ...update }
@@ -1528,9 +2228,12 @@ export class AntigravityConversation {
       return
     }
 
-    // Auto-approve our own injected Computer Use MCP server when Computer Use is globally enabled in Settings.
+    // Auto-approve our own injected Computer Use / Browser Use MCP servers when globally enabled in Settings.
     const rawToolName = typeof mergedTool.name === 'string' ? mergedTool.name : undefined
-    if (!question && this.computerUseBridge?.isEnabled() && isAntigravityComputerUseToolName(rawToolName)) {
+    const autoApproveInjectedMcp =
+      (this.computerUseBridge?.isEnabled() && isAntigravityComputerUseToolName(rawToolName)) ||
+      (this.browserUseBridge?.isEnabled() && isAntigravityBrowserUseToolName(rawToolName))
+    if (!question && autoApproveInjectedMcp) {
       const allowOption = options.find(option => option.kind === 'allow_once')
         ?? options.find(option => option.kind === 'allow_always')
       if (allowOption) {
@@ -1554,9 +2257,15 @@ export class AntigravityConversation {
 
   private publishPermission(turn: Turn, tool: Frame, pending: PendingPermission): void {
     const projected = this.projectTool(tool)
-    const name = pending.question ? 'AskUserQuestion' : projected.name
-    const input = pending.question ? questionInput(pending.question, pending.options) : projected.input
-    const supportsAllowAlways = !pending.question && pending.options.some(option => option.kind === 'allow_always')
+    const isElicitation = 'kind' in pending && pending.kind === 'elicitation'
+    const isQuestion = isElicitation || Boolean(pending.question)
+    const name = isQuestion ? 'AskUserQuestion' : projected.name
+    const input = isElicitation
+      ? buildElicitationQuestionInput(pending.questions, pending.allowFreeText)
+      : pending.question
+        ? questionInput(pending.question, pending.options)
+        : projected.input
+    const supportsAllowAlways = !isQuestion && pending.options.some(option => option.kind === 'allow_always')
     const permissionDescription = projected.description ?? projected.displayName
     const requestId = crypto.randomUUID()
     this.toolCall(turn, tool, name, input)
@@ -1570,12 +2279,12 @@ export class AntigravityConversation {
         tool_name: name,
         tool_use_id: tool.toolCallId,
         input,
-        ...(!pending.question && permissionDescription ? { description: permissionDescription } : {}),
-        ...(!pending.question ? { display_name: 'Antigravity' } : {}),
-        ...(!pending.question && projected.antigravityToolName ? { antigravity_tool_name: projected.antigravityToolName } : {}),
+        ...(!isQuestion && permissionDescription ? { description: permissionDescription } : {}),
+        ...(!isQuestion ? { display_name: 'Antigravity' } : {}),
+        ...(!isQuestion && projected.antigravityToolName ? { antigravity_tool_name: projected.antigravityToolName } : {}),
         ...(projected.subagentName ? { subagent_name: projected.subagentName } : {}),
         ...(projected.subagentId ? { agent_id: projected.subagentId } : {}),
-        ...(!pending.question ? { supports_allow_always: supportsAllowAlways } : {}),
+        ...(!isQuestion ? { supports_allow_always: supportsAllowAlways } : {}),
       },
     })
   }

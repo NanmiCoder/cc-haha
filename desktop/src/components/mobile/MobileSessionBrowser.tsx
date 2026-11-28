@@ -205,6 +205,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
             groups={groups}
             runningIds={runningIds}
             attentionIds={attentionIds}
+            surface={variant}
             selectedSessionId={variant === 'pane' ? selectedSessionId : null}
             workspaceLabelFor={workspaceLabelFor}
             onOpen={(session) => openMobileSession(session.id)}
@@ -216,7 +217,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         type="button"
         data-testid="mobile-new-task"
         onClick={() => onNewTask(resolveNewTaskWorkDir(visibleSessions, effectiveProjectKey))}
-        className="v6c-pressable control-bevel-cta absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-lg)] bg-[var(--color-btn-primary-bg)] pl-4 pr-5 text-[15px] font-medium text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-overlay)] transition-colors hover:bg-[var(--color-btn-primary-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
+        className="v6c-send-btn v6c-pressable absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-control)] pl-4 pr-5 text-[15px] font-medium shadow-[var(--shadow-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
       >
         <Plus size={18} strokeWidth={1.75} aria-hidden="true" />
         {t('mobile.home.newTask')}
@@ -231,10 +232,10 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`v6c-pressable h-9 max-w-[180px] shrink-0 truncate rounded-[var(--radius-control)] border px-3 text-[13px] font-medium transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+      className={`v6c-pressable h-9 max-w-[180px] shrink-0 truncate rounded-[var(--radius-sm)] border px-3 text-[13px] font-medium transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
         active
           ? 'v6c-raised border-[var(--color-surface-glass-border)] text-[var(--color-text-primary)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface-glass)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+          : 'border-[var(--color-border)] bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
       }`}
     >
       {children}

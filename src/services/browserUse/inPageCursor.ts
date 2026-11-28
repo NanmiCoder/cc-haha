@@ -28,25 +28,35 @@ export function buildInPageCursorBootstrapScript(): string {
 
   let host = null;
   let shadow = null;
+  let trailSvg = null;
+  let trailHaloPath = null;
+  let trailCorePath = null;
   let cursorEl = null;
+  let cursorTagEl = null;
   let boxEl = null;
   let rippleEl = null;
   let pillEl = null;
   let pillDotEl = null;
   let pillTextEl = null;
   let borderEl = null;
+  let lastPos = null;
+  let rafId = null;
   let idleTimer = null;
   let boxTimer = null;
   let rippleTimer = null;
+  let trailTimer = null;
 
   const STYLES = [
     ':host { all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; contain: layout style; }',
     '.cc-frame { position: fixed; inset: 0; pointer-events: none; box-sizing: border-box; border: 2px solid transparent; transition: border-color 180ms ease; }',
     '.cc-frame.active { border-color: rgba(6, 182, 212, 0.45); }',
     '.cc-frame.takeover { border-color: rgba(245, 158, 11, 0.85); box-shadow: inset 0 0 24px rgba(245, 158, 11, 0.25); }',
-    '.cc-box { position: fixed; left: 0; top: 0; width: 0; height: 0; border-radius: 6px; border: 2px solid rgba(6, 182, 212, 0.9); background: rgba(6, 182, 212, 0.12); opacity: 0; pointer-events: none; transition: opacity 120ms ease; }',
-    '.cc-cursor { position: fixed; left: 0; top: 0; width: 24px; height: 24px; pointer-events: none; opacity: 0; transform: translate3d(-100px, -100px, 0); filter: drop-shadow(0 2px 6px rgba(6, 182, 212, 0.55)); will-change: transform, opacity; }',
-    '.cc-ripple { position: fixed; left: 0; top: 0; width: 28px; height: 28px; margin-left: -14px; margin-top: -14px; border-radius: 9999px; border: 2px solid rgba(6, 182, 212, 0.9); opacity: 0; pointer-events: none; transform: translate3d(-100px, -100px, 0) scale(0.3); }',
+    '.cc-trail { position: fixed; inset: 0; width: 100vw; height: 100vh; overflow: visible; pointer-events: none; opacity: 0; transition: opacity 320ms ease; }',
+    '.cc-box { position: fixed; left: 0; top: 0; width: 0; height: 0; border-radius: 6px; border: 2px solid rgba(6, 182, 212, 0.9); background: rgba(6, 182, 212, 0.14); opacity: 0; pointer-events: none; transition: opacity 180ms ease; }',
+    '.cc-cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; pointer-events: none; opacity: 0; transform: translate3d(-100px, -100px, 0); filter: drop-shadow(0 2px 6px rgba(6, 182, 212, 0.55)); will-change: transform, opacity; transition: opacity 200ms ease; }',
+    '.cc-cursor-tag { position: absolute; left: 20px; top: 20px; display: none; max-width: 200px; padding: 2px 8px; border-radius: 9999px; background: rgba(15, 23, 42, 0.92); color: #e0f2fe; border: 1px solid rgba(6, 182, 212, 0.75); font: 500 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); }',
+    '.cc-cursor-tag.visible { display: inline-block; }',
+    '.cc-ripple { position: fixed; left: 0; top: 0; width: 32px; height: 32px; margin-left: -16px; margin-top: -16px; border-radius: 9999px; border: 2px solid rgba(6, 182, 212, 0.92); opacity: 0; pointer-events: none; transform: translate3d(-100px, -100px, 0) scale(0.3); }',
     '.cc-pill { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: none; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 9999px; background: rgba(15, 23, 42, 0.9); color: #f8fafc; font: 500 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); border: 1px solid rgba(148, 163, 184, 0.28); pointer-events: none; max-width: 72vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
     '.cc-pill.visible { display: inline-flex; }',
     '.cc-dot { width: 8px; height: 8px; border-radius: 9999px; background: #06b6d4; flex-shrink: 0; }',
@@ -72,6 +82,23 @@ export function buildInPageCursorBootstrapScript(): string {
     borderEl = document.createElementNS(HTML_NS, 'div');
     borderEl.setAttribute('class', 'cc-frame');
 
+    trailSvg = document.createElementNS(SVG_NS, 'svg');
+    trailSvg.setAttribute('class', 'cc-trail');
+    trailHaloPath = document.createElementNS(SVG_NS, 'path');
+    trailHaloPath.setAttribute('fill', 'none');
+    trailHaloPath.setAttribute('stroke', 'rgba(6, 182, 212, 0.22)');
+    trailHaloPath.setAttribute('stroke-width', '7');
+    trailHaloPath.setAttribute('stroke-linecap', 'round');
+    trailHaloPath.setAttribute('stroke-linejoin', 'round');
+    trailCorePath = document.createElementNS(SVG_NS, 'path');
+    trailCorePath.setAttribute('fill', 'none');
+    trailCorePath.setAttribute('stroke', 'rgba(6, 182, 212, 0.85)');
+    trailCorePath.setAttribute('stroke-width', '2.5');
+    trailCorePath.setAttribute('stroke-linecap', 'round');
+    trailCorePath.setAttribute('stroke-linejoin', 'round');
+    trailSvg.appendChild(trailHaloPath);
+    trailSvg.appendChild(trailCorePath);
+
     boxEl = document.createElementNS(HTML_NS, 'div');
     boxEl.setAttribute('class', 'cc-box');
 
@@ -81,17 +108,20 @@ export function buildInPageCursorBootstrapScript(): string {
     cursorEl = document.createElementNS(HTML_NS, 'div');
     cursorEl.setAttribute('class', 'cc-cursor');
     const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('width', '24');
-    svg.setAttribute('height', '24');
+    svg.setAttribute('width', '26');
+    svg.setAttribute('height', '26');
     svg.setAttribute('viewBox', '0 0 24 24');
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', 'M3 2L20 11L12.5 13.2L9.5 21L3 2Z');
     path.setAttribute('fill', '#06b6d4');
     path.setAttribute('stroke', '#ffffff');
-    path.setAttribute('stroke-width', '1.8');
+    path.setAttribute('stroke-width', '2');
     path.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(path);
     cursorEl.appendChild(svg);
+    cursorTagEl = document.createElementNS(HTML_NS, 'span');
+    cursorTagEl.setAttribute('class', 'cc-cursor-tag');
+    cursorEl.appendChild(cursorTagEl);
 
     pillEl = document.createElementNS(HTML_NS, 'div');
     pillEl.setAttribute('class', 'cc-pill');
@@ -102,6 +132,7 @@ export function buildInPageCursorBootstrapScript(): string {
     pillEl.appendChild(pillTextEl);
 
     shadow.appendChild(borderEl);
+    shadow.appendChild(trailSvg);
     shadow.appendChild(boxEl);
     shadow.appendChild(rippleEl);
     shadow.appendChild(cursorEl);
@@ -118,17 +149,49 @@ export function buildInPageCursorBootstrapScript(): string {
     }
   }
 
+  function interp(from, to, t) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dist = Math.hypot(dx, dy);
+    const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
+    if (dist <= 160) {
+      return { x: from.x + dx * ease, y: from.y + dy * ease };
+    }
+    const bend = Math.min(72, dist * 0.16);
+    const ctrlX = (from.x + to.x) / 2 - (dy / dist) * bend;
+    const ctrlY = (from.y + to.y) / 2 + (dx / dist) * bend;
+    const inv = 1 - ease;
+    return {
+      x: inv * inv * from.x + 2 * inv * ease * ctrlX + ease * ease * to.x,
+      y: inv * inv * from.y + 2 * inv * ease * ctrlY + ease * ease * to.y,
+    };
+  }
+
+  function buildPath(pts) {
+    if (pts.length < 2) return '';
+    let d = 'M ' + pts[0].x.toFixed(1) + ' ' + pts[0].y.toFixed(1);
+    for (let i = 1; i < pts.length; i++) {
+      d += ' L ' + pts[i].x.toFixed(1) + ' ' + pts[i].y.toFixed(1);
+    }
+    return d;
+  }
+
   function move(x, y, options) {
     if (!ensureMounted()) return { arrived: true, skipped: true };
     const opts = options || {};
     const skipAnim = reducedMotion() || document.visibilityState !== 'visible' || opts.style === 'snap';
-    const duration = skipAnim ? 0 : Math.min(Math.max(Number(opts.durationMs) || 220, 0), 420);
+    const duration = skipAnim ? 0 : Math.min(Math.max(Number(opts.durationMs) || 260, 0), 460);
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+    if (trailTimer) { clearTimeout(trailTimer); trailTimer = null; }
 
-    cursorEl.style.transition = duration > 0
-      ? 'transform ' + duration + 'ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease'
-      : 'none';
-    cursorEl.style.opacity = '1';
-    cursorEl.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)';
+    if (cursorTagEl) {
+      if (opts.label) {
+        cursorTagEl.textContent = String(opts.label);
+        cursorTagEl.setAttribute('class', 'cc-cursor-tag visible');
+      } else {
+        cursorTagEl.setAttribute('class', 'cc-cursor-tag');
+      }
+    }
 
     if (opts.targetBox && typeof opts.targetBox.width === 'number') {
       boxEl.style.left = opts.targetBox.x + 'px';
@@ -139,13 +202,47 @@ export function buildInPageCursorBootstrapScript(): string {
       if (boxTimer) clearTimeout(boxTimer);
       boxTimer = setTimeout(() => {
         if (boxEl) boxEl.style.opacity = '0';
-      }, duration + 160);
+      }, duration + 520);
+    }
+
+    const from = lastPos || { x: Math.round((window.innerWidth || 1000) * 0.5), y: Math.round((window.innerHeight || 700) * 0.78) };
+    const to = { x, y };
+    cursorEl.style.opacity = '1';
+
+    if (duration <= 0) {
+      lastPos = to;
+      cursorEl.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)';
+      if (trailSvg) trailSvg.style.opacity = '0';
+    } else {
+      const pts = [from];
+      const startedAt = performance.now();
+      if (trailSvg) trailSvg.style.opacity = '1';
+      const step = (now) => {
+        const p = Math.min(1, (now - startedAt) / duration);
+        const pos = interp(from, to, p);
+        lastPos = pos;
+        pts.push(pos);
+        if (cursorEl) cursorEl.style.transform = 'translate3d(' + pos.x + 'px, ' + pos.y + 'px, 0)';
+        const d = buildPath(pts);
+        if (trailHaloPath) trailHaloPath.setAttribute('d', d);
+        if (trailCorePath) trailCorePath.setAttribute('d', d);
+        if (p < 1) {
+          rafId = requestAnimationFrame(step);
+        } else {
+          rafId = null;
+          trailTimer = setTimeout(() => {
+            if (trailSvg) trailSvg.style.opacity = '0';
+          }, 420);
+        }
+      };
+      rafId = requestAnimationFrame(step);
     }
 
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (cursorEl) cursorEl.style.opacity = '0.2';
-    }, 2000);
+      if (cursorEl) cursorEl.style.opacity = '0.6';
+      if (cursorTagEl) cursorTagEl.setAttribute('class', 'cc-cursor-tag');
+    }, 2400);
 
     return { arrived: true, skipped: skipAnim };
   }
@@ -185,21 +282,28 @@ export function buildInPageCursorBootstrapScript(): string {
   }
 
   function destroy() {
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     if (boxTimer) { clearTimeout(boxTimer); boxTimer = null; }
     if (rippleTimer) { clearTimeout(rippleTimer); rippleTimer = null; }
+    if (trailTimer) { clearTimeout(trailTimer); trailTimer = null; }
     if (host && host.parentNode) {
       host.parentNode.removeChild(host);
     }
     host = null;
     shadow = null;
+    trailSvg = null;
+    trailHaloPath = null;
+    trailCorePath = null;
     cursorEl = null;
+    cursorTagEl = null;
     boxEl = null;
     rippleEl = null;
     pillEl = null;
     pillDotEl = null;
     pillTextEl = null;
     borderEl = null;
+    lastPos = null;
   }
 
   globalThis.__ccHahaCursor = { move, ripple, setControlState, setHidden, destroy };
@@ -368,6 +472,7 @@ export class InPageCursorController {
       durationMs: payload.durationMs,
       style: payload.style,
       targetBox: payload.targetBox,
+      ...(payload.label ? { label: payload.label } : {}),
     })})`
     const res = await this.evaluateInIsolatedWorld<{
       arrived?: boolean

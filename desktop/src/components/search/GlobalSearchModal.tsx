@@ -14,6 +14,7 @@ import { sessionsApi } from '@/api/sessions'
 import { searchApi, type SessionSearchResult, type SessionMatch, type SessionMatchRole } from '../../api/search'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { Badge } from '@/components/ui/Badge'
+import { Kbd } from '@/components/ui/Kbd'
 import { Spinner } from '@/components/ui/Spinner'
 import {
   buildSearchableProjects,
@@ -331,10 +332,10 @@ export function GlobalSearchModal({ open, onClose, onSelectProject }: Props) {
         onClick={onClose}
       />
 
-      {/* V6C command palette: frosted 14px dialog-panel sheet, recessed 10px
-          v6c-field search input, concentric 9px rows, and keycap legend footer. */}
+      {/* V6C command palette: frosted dialog-panel sheet (--radius-3xl), recessed
+          10px v6c-field search input, concentric 9px rows, and keycap legend footer. */}
       <div
-        className="dialog-panel animate-overlay-in relative z-10 flex max-h-[70vh] w-[620px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[var(--radius-xl)]"
+        className="dialog-panel animate-overlay-in relative flex max-h-[70vh] w-[620px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[var(--radius-3xl)]"
         role="dialog"
         aria-modal="true"
         aria-label={t('search.global.placeholder')}
@@ -363,9 +364,11 @@ export function GlobalSearchModal({ open, onClose, onSelectProject }: Props) {
               onClick={onClose}
               aria-label={t('search.global.close')}
               title={t('search.global.close')}
-              className={`${KEYCAP_CLASS} cursor-pointer transition-colors hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
+              className="cursor-pointer rounded-[var(--radius-xs)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
-              esc
+              <Kbd size="xs" appearance="subtle" className="transition-colors hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]">
+                esc
+              </Kbd>
             </button>
           </div>
         </div>
@@ -463,25 +466,18 @@ export function GlobalSearchModal({ open, onClose, onSelectProject }: Props) {
 
         {/* Footer hints */}
         <div className="flex shrink-0 items-center gap-1 border-t border-[var(--color-border)] px-3.5 py-2.5 text-[11px] text-[var(--color-text-tertiary)]">
-          <Keycap>↑</Keycap>
-          <Keycap>↓</Keycap>
+          <Kbd size="xs" appearance="subtle">↑</Kbd>
+          <Kbd size="xs" appearance="subtle">↓</Kbd>
           <span className="ml-0.5 mr-2.5">{t('fileSearch.navigate')}</span>
-          <Keycap>↵</Keycap>
+          <Kbd size="xs" appearance="subtle">↵</Kbd>
           <span className="ml-0.5 mr-2.5">{t('fileSearch.select')}</span>
-          <Keycap>esc</Keycap>
+          <Kbd size="xs" appearance="subtle">esc</Kbd>
           <span className="ml-0.5">{t('fileSearch.close')}</span>
         </div>
       </div>
     </div>,
     document.body,
   )
-}
-
-/** 「素」 kbd: mono 11, 18px tall, `--radius-xs`, hairline, paper fill, tertiary ink. */
-const KEYCAP_CLASS = 'inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-1 font-mono text-[11px] leading-none text-[var(--color-text-tertiary)]'
-
-function Keycap({ children }: { children: ReactNode }) {
-  return <kbd className={KEYCAP_CLASS}>{children}</kbd>
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {
@@ -520,7 +516,7 @@ function ProjectRow({ project, index, active, onActivate, onSelect, t }: Project
       title={project.path || project.title}
       onMouseEnter={() => onActivate(index)}
       onClick={() => onSelect(project)}
-      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none ${
+      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${
         active ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
       }`}
     >
@@ -539,7 +535,7 @@ function ProjectRow({ project, index, active, onActivate, onSelect, t }: Project
             {renderHighlighted(project.displayPath, project.pathHighlights)}
           </span>
         )}
-        {active && <Keycap>↵</Keycap>}
+        {active && <Kbd size="xs" appearance="subtle">↵</Kbd>}
       </div>
     </button>
   )
@@ -566,7 +562,7 @@ function ResultRow({ row, index, active, onActivate, onOpen, t }: RowProps) {
       aria-selected={active}
       onMouseEnter={() => onActivate(index)}
       onClick={() => onOpen(row)}
-      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none ${
+      className={`flex w-full flex-col rounded-[var(--radius-control)] px-2.5 text-left transition-[background-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${
         active ? 'v6c-row-highlight' : 'hover:bg-[var(--color-surface-hover)]'
       }`}
     >
@@ -583,7 +579,7 @@ function ResultRow({ row, index, active, onActivate, onOpen, t }: RowProps) {
         <span className="max-w-[45%] shrink-0 truncate text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
           {meta}
         </span>
-        {active && <Keycap>↵</Keycap>}
+        {active && <Kbd size="xs" appearance="subtle">↵</Kbd>}
       </div>
       {row.matches.length > 0 && (
         <div className="-mt-1 flex w-full flex-col gap-1 pb-2 pl-6">

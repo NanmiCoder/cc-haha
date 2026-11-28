@@ -191,9 +191,60 @@ describe('WorkspaceBackgroundTaskTab', () => {
     fireEvent.scroll(scroller)
     const scrollBtn = screen.getByTestId('background-task-scroll-bottom')
     expect(scrollBtn).toBeInTheDocument()
+    expect(scrollBtn).toHaveAccessibleName('Scroll to bottom')
+    expect(scrollBtn).toHaveClass('dropdown-glass', 'popover-motion', 'rounded-[var(--radius-control)]')
+    expect(scrollBtn).not.toHaveClass('rounded-full')
 
     fireEvent.click(scrollBtn)
     expect(scroller.scrollTop).toBe(1000)
     expect(screen.queryByTestId('background-task-scroll-bottom')).not.toBeInTheDocument()
+  })
+
+  it('uses IconButton loading state while stopping and ErrorState with retry on load failure', async () => {
+    const getOutput = vi
+      .spyOn(sessionsApi, 'getBackgroundTaskOutput')
+      .mockRejectedValueOnce(new Error('Disk read failed'))
+      .mockResolvedValueOnce({
+        taskId: 'ci-task-1',
+        state: 'available',
+        text: 'recovered line\n',
+        totalBytes: 15,
+        truncated: false,
+      })
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        ...state,
+        sessions: {
+          ...state.sessions,
+          [SESSION_ID]: {
+            ...state.sessions[SESSION_ID]!,
+            stoppingBackgroundTaskIds: { 'ci-task-1': true },
+          },
+        },
+      }))
+    })
+
+    render(<WorkspaceBackgroundTaskTab sessionId={SESSION_ID} tab={TAB} active />)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const stopButton = screen.getByTestId('background-task-stop')
+    expect(stopButton).toBeDisabled()
+    expect(stopButton).toHaveAttribute('aria-busy', 'true')
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Failed to load background task output')
+    expect(alert).toHaveTextContent('Disk read failed')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(getOutput).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('background-task-output-lines')).toHaveTextContent('recovered line')
   })
 })

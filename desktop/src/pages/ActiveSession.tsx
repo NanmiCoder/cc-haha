@@ -51,12 +51,10 @@ import {
   type SessionHeaderMetaItem,
 } from '@/components/chat/SessionChatSurface'
 import { getWorktreeDisplayName, WorktreeDetails } from '../components/chat/WorktreeDetails'
-import {
-  WorkspaceSurface,
-  useWorkspaceBrowserEventBridge,
-} from '../components/workbench/WorkspaceSurface'
+import { WorkspaceSurface } from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
-import { endedBeforeAnyMemberJoined, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { endedBeforeAnyMemberJoined, getWorkbenchPhase, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { isAntigravitySwarmPaused } from '../lib/teamRunning'
 import {
   SessionActivityPanel,
   type OpenSubagentPayload,
@@ -289,7 +287,7 @@ function WorkspaceResizeHandle({ panelRef, active }: { panelRef: RefObject<HTMLE
         const next = measured.width + (event.key === 'ArrowLeft' ? WORKSPACE_RESIZE_STEP : -WORKSPACE_RESIZE_STEP)
         setWidth(constrainWorkspaceSideWidth(next, measured.bounds))
       }}
-      className="relative z-10 w-px shrink-0 touch-none cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
+      className="relative z-[var(--z-raised)] w-px shrink-0 touch-none cursor-col-resize bg-[var(--color-border)] outline-none transition-colors hover:bg-[var(--color-border-focus)] focus-visible:bg-[var(--color-border-focus)]"
     >
       <div aria-hidden="true" className="absolute -inset-x-1 inset-y-0" />
     </div>
@@ -490,9 +488,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     void useWorkspaceContentStore.getState().loadStatus(activeTabId)
   }, [activeTabId, activeTabType])
 
-  // Subscribed once for the app, not per task: the owner of each event is
-  // resolved from the page id, so a background task's pages keep reporting.
-  useWorkspaceBrowserEventBridge(active && !isMobileLayout)
   useWorkspaceFocusReturn(active && workspaceEnabled ? activeTabId : null)
   useWorkspaceShortcuts({
     sessionId: activeTabId,
@@ -912,13 +907,52 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       ) : null}</>}
     >
           {/*
-            Mobile has no session header, so its side-chat entry lives here. A
-            blank session has nothing for a side chat to fork, so it gets none.
+            Mobile has no session header, so workspace warnings and the
+            side-chat entry live here. A blank session has nothing to warn about
+            or fork, so it gets neither.
           */}
-          {isMobileLayout && !isEmpty && !isLean && !isAntigravity && (
-            <div className="flex justify-end px-4 py-2">
-              <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
-                pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
+          {isMobileLayout && !isEmpty && (
+            (session && getSessionWorkspaceState(session) !== 'available') || (!isLean && !isAntigravity)
+          ) && (
+            <div
+              data-testid="mobile-session-subbar"
+              className={`flex shrink-0 items-center gap-2 px-3 py-1.5 ${
+                session && getSessionWorkspaceState(session) !== 'available'
+                  ? 'justify-between border-b border-[var(--color-border)]'
+                  : 'justify-end'
+              }`}
+            >
+              {session && getSessionWorkspaceState(session) !== 'available' && (
+                <div
+                  data-testid="mobile-workspace-unavailable-banner"
+                  role="status"
+                  className={`inline-flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-3 py-1.5 text-[12px] ${
+                    getSessionWorkspaceState(session) === 'worktree_removed'
+                      ? 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+                      : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                  }`}
+                >
+                  {getSessionWorkspaceState(session) === 'worktree_removed'
+                    ? <History size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
+                    : <TriangleAlert size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />}
+                  <span className="truncate">
+                    {getSessionWorkspaceState(session) === 'worktree_removed'
+                      ? t('session.worktreeRemoved', { dir: session.projectRoot || '' })
+                      : t('session.workspaceUnavailable', { dir: session.workDir || 'directory no longer exists' })}
+                  </span>
+                </div>
+              )}
+              {!isLean && !isAntigravity && (
+                <IconButton
+                  icon={<MessageCircleQuestion size={20} strokeWidth={1.75} aria-hidden="true" />}
+                  label={t('sideChat.title')}
+                  size="2xl"
+                  tone="secondary"
+                  className="shrink-0 rounded-[var(--radius-control)]! v6c-pressable"
+                  pressed={sideChatOpen}
+                  onClick={() => void openSideChat(activeTabId)}
+                />
+              )}
             </div>
           )}
           {isEmpty ? (
@@ -943,7 +977,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     ? t('empty.heroTitle', { project: emptyHeroProject })
                     : t('empty.heroTitleNoProject')}
                 </h1>
-                <p className="text-[14px] text-[var(--color-text-tertiary)]">
+                <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
                   {t(isAntigravity ? 'empty.heroSubtitleAntigravity' : 'empty.heroSubtitle')}
                 </p>
               </div>
@@ -963,7 +997,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   </>}
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
-                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-[12px] ${
+                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-control)] px-3 py-1.5 text-[12px] ${
                       getSessionWorkspaceState(session) === 'worktree_removed'
                         ? 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
                         : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
@@ -987,7 +1021,17 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     <AgentTeamsStrip
                       snapshot={agentTeamsSnapshot}
                       compact={showRightPanel}
-                      phaseOverride={!agentTeamsSnapshot.deletedAt && interruptedTeamName === agentTeamsSnapshot.team.name ? 'interrupted' : undefined}
+                      phaseOverride={
+                        !agentTeamsSnapshot.deletedAt && (
+                          interruptedTeamName === agentTeamsSnapshot.team.name ||
+                          (isAntigravitySwarmPaused(agentTeamsSnapshot) && (
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'running' ||
+                            getWorkbenchPhase(agentTeamsSnapshot) === 'forming'
+                          ))
+                        )
+                          ? 'interrupted'
+                          : undefined
+                      }
                       onOpen={() => useTabStore.getState().openTeamWorkbenchTab(
                         activeTabId,
                         agentTeamsSnapshot.team.name.startsWith('agy-swarm-') && agentTeamsSnapshot.team.description

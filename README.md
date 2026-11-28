@@ -21,6 +21,9 @@
 
 cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、Agent Teams 协作工作台、动态 Workflow 编排、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、手机 App 与 H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。**Computer Use 在 macOS 上使用原有原生引擎，在 Windows / Linux 上复用 agent-desktop；支持的后台语义操作不移动真实鼠标，物理输入仍会占用前台。** 配套的 Android / iPhone App 扫码连上电脑，离开工位也能审批、派任务。
 
+> [!TIP]
+> **现已全面支持 Antigravity CLI (ACP) 集成！** 可直接在 cc-haha 桌面端、H5 与手机端接入本地 Antigravity CLI，无缝使用原生 Composer、内置 Browser Use、Native Swarm、斜杠技能与中途干预等全部工作台能力。
+
 <p align="center"><b>白金赞助商 · Modelflare</b></p>
 
 <p align="center">

@@ -31,6 +31,8 @@ describe('MarkdownAudioPlayer', () => {
       />,
     )
 
+    const card = container.querySelector('[data-md-audio-card]')!
+    expect(card).toHaveClass('v6c-glass-card', 'rounded-[var(--radius-card-inner)]')
     const audio = container.querySelector('audio')!
     expect(audio).toBeInTheDocument()
     expect(audio).toHaveAttribute('controls')

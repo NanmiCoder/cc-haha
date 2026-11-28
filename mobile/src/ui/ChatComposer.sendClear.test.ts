@@ -50,7 +50,7 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     mock.module(${JSON.stringify(import.meta.resolve('expo-linear-gradient'))}, () => ({ LinearGradient: 'LinearGradient' }))
     mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({ Icon: 'Icon', Mono: 'Mono', Spinner: 'Spinner', useColors: () => ({}) }))
-    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String }))
+    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String, useTheme: () => ({ colors: {}, shadows: {}, dark: false, scheme: 'light' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/BringSheet'))}, () => ({ BringSheet: 'BringSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))

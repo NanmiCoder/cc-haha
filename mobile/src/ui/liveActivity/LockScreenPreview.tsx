@@ -8,9 +8,9 @@ import { Text } from '../Text'
  * 锁屏本身不跟随 App 的明暗主题，所以这里的深色是固定的；琥珀/文字色取深色 token。
  * 只是示意（对读屏隐藏），内容随「锁屏上显示命令」开关变化，文案与真实活动一致。
  */
-const SCREEN = '#1B1A18'
-const PANEL = 'rgba(46,44,41,0.78)'
-const TEXT = '#EDEAE4'
+const SCREEN = '#181818'
+const PANEL = 'rgba(43,43,43,0.78)'
+const TEXT = '#DFDFDF'
 const ISLAND = '#000000'
 const AMBER = dark.attn
 
@@ -65,12 +65,12 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
         {showCommand ? (
           <Mono
             numberOfLines={1}
-            style={{ fontSize: 12.5, lineHeight: 18, color: 'rgba(243,241,236,0.78)' }}
+            style={{ fontSize: 12.5, lineHeight: 18, color: 'rgba(223,223,223,0.78)' }}
           >
             $ bun test src/core/sessionTransport.test.ts
           </Mono>
         ) : (
-          <Text numberOfLines={1} style={{ fontSize: 12.5, lineHeight: 18, color: 'rgba(243,241,236,0.78)' }}>
+          <Text numberOfLines={1} style={{ fontSize: 12.5, lineHeight: 18, color: 'rgba(223,223,223,0.78)' }}>
             打开 App 查看命令
           </Text>
         )}
@@ -80,7 +80,7 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
               flex: 1,
               height: 34,
               borderRadius: 17,
-              backgroundColor: 'rgba(243,241,236,0.16)',
+              backgroundColor: 'rgba(223,223,223,0.16)',
               alignItems: 'center',
               justifyContent: 'center',
             }}
@@ -97,10 +97,10 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
               justifyContent: 'center',
             }}
           >
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1918' }}>允许</Text>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#141414' }}>允许</Text>
           </View>
         </View>
-        <Text style={{ fontSize: 12, color: 'rgba(243,241,236,0.6)', marginTop: 4 }}>
+        <Text style={{ fontSize: 12, color: 'rgba(223,223,223,0.6)', marginTop: 4 }}>
           MacBook Pro · 还有 1 个任务在跑
         </Text>
       </View>

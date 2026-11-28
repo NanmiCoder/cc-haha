@@ -35,6 +35,20 @@ export type OfficialProviderUsageStatus =
   | 'unavailable'
   | 'not_logged_in'
 
+export type OfficialUsageWalletCurrency = 'CNY' | 'USD'
+
+export type OfficialUsageWallet = {
+  currency: OfficialUsageWalletCurrency
+  balance: string
+}
+
+export type OfficialUsageBalanceSummary = {
+  normalWallets: OfficialUsageWallet[]
+  bonusWallets: OfficialUsageWallet[]
+}
+
+export type OfficialProviderNoticeCode = 'grok_team_no_personal_quota'
+
 export type OfficialProviderUsageSummary = {
   providerId: OfficialUsageProviderId
   signedIn: boolean
@@ -45,6 +59,9 @@ export type OfficialProviderUsageSummary = {
   rateLimitedUntil: string | null
   httpStatus?: number
   windows: OfficialUsageWindow[]
+  balance?: OfficialUsageBalanceSummary | null
+  onDemandCapCents?: number | null
+  noticeCode?: OfficialProviderNoticeCode | null
   source: 'official_api' | 'local_only'
 }
 

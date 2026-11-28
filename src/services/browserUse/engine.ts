@@ -287,8 +287,8 @@ export class BrowserUseEngine {
   private noInPageOverlay: boolean
   private readonly tabs = new Map<string, TabRuntimeState>()
   private activeTabId: string | null = null
-  private controlState: BrowserControlState = 'idle'
-  private activeTakeover: BrowserTakeoverState | null = null
+  private readonly tabControlStates = new Map<string, BrowserControlState>()
+  private readonly activeTakeovers = new Map<string, BrowserTakeoverState>()
   private readonly unsubscribeEvent: () => void
 
   constructor(options: BrowserUseEngineOptions) {
@@ -325,14 +325,48 @@ export class BrowserUseEngine {
       void tab.inPageCursor?.teardown()
     }
     this.tabs.clear()
+    this.tabControlStates.clear()
+    this.activeTakeovers.clear()
   }
 
-  getControlState(): BrowserControlState {
-    return this.controlState
+  getControlState(tabId?: string): BrowserControlState {
+    if (tabId) {
+      if (this.activeTakeovers.get(tabId)?.status === 'pending') return 'takeover'
+      return this.tabControlStates.get(tabId) ?? 'idle'
+    }
+    for (const takeover of this.activeTakeovers.values()) {
+      if (takeover.status === 'pending') return 'takeover'
+    }
+    for (const state of this.tabControlStates.values()) {
+      if (state === 'active') return 'active'
+    }
+    return 'idle'
   }
 
-  getActiveTakeover(): BrowserTakeoverState | null {
-    return this.activeTakeover ? { ...this.activeTakeover } : null
+  getActiveTakeover(filter?: {
+    tabId?: string
+    sessionId?: string
+    takeoverId?: string
+  }): BrowserTakeoverState | null {
+    if (filter?.tabId) {
+      const candidate = this.activeTakeovers.get(filter.tabId)
+      if (!candidate) return null
+      if (filter.takeoverId && candidate.takeoverId !== filter.takeoverId) return null
+      if (filter.sessionId && candidate.sessionId && candidate.sessionId !== filter.sessionId) return null
+      return { ...candidate }
+    }
+    const entries = [...this.activeTakeovers.values()]
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const candidate = entries[i]!
+      if (filter?.takeoverId && candidate.takeoverId !== filter.takeoverId) continue
+      if (filter?.sessionId && candidate.sessionId && candidate.sessionId !== filter.sessionId) continue
+      return { ...candidate }
+    }
+    return null
+  }
+
+  getActiveTakeovers(): BrowserTakeoverState[] {
+    return [...this.activeTakeovers.values()].map(takeover => ({ ...takeover }))
   }
 
   resetTabDomains(tabId: string): void {
@@ -410,6 +444,8 @@ export class BrowserUseEngine {
       this.tabs.delete(tabId)
       this.refStore.invalidateTab(tabId)
     }
+    this.tabControlStates.delete(tabId)
+    this.activeTakeovers.delete(tabId)
     if (this.activeTabId === tabId) {
       const next = this.tabs.keys().next().value
       this.activeTabId = next ?? null
@@ -517,13 +553,10 @@ export class BrowserUseEngine {
   }
 
   private assertNoPendingTakeover(tabId: string): void {
-    if (
-      this.activeTakeover &&
-      this.activeTakeover.status === 'pending' &&
-      this.activeTakeover.tabId === tabId
-    ) {
+    const pending = this.activeTakeovers.get(tabId)
+    if (pending && pending.status === 'pending') {
       throw new Error(
-        `Browser tab "${tabId}" is paused for user takeover (${this.activeTakeover.reason}): ${this.activeTakeover.message}. Resume or abort takeover before continuing.`,
+        `Browser tab "${tabId}" is paused for user takeover (${pending.reason}): ${pending.message}. Resume or abort takeover before continuing.`,
       )
     }
   }
@@ -1166,11 +1199,7 @@ export class BrowserUseEngine {
             break
           }
 
-          if (
-            this.activeTakeover &&
-            this.activeTakeover.status === 'pending' &&
-            this.activeTakeover.tabId === tab.info.tabId
-          ) {
+          if (this.activeTakeovers.get(tab.info.tabId)?.status === 'pending') {
             stoppedReason = 'takeover'
             break
           }
@@ -1369,8 +1398,8 @@ export class BrowserUseEngine {
         url: tab.info.url,
         title: tab.info.title,
         ...(dialog ? { dialog, wrappedDialog } : {}),
-        ...(this.activeTakeover && this.activeTakeover.tabId === tab.info.tabId
-          ? { takeover: { ...this.activeTakeover } }
+        ...(this.activeTakeovers.has(tab.info.tabId)
+          ? { takeover: { ...this.activeTakeovers.get(tab.info.tabId)! } }
           : {}),
       }
     })
@@ -1630,6 +1659,7 @@ export class BrowserUseEngine {
         let y = 200
         if (step.ref) {
           const resolved = await this.resolveRef(tab.info.tabId, step.ref, signal)
+          await this.moveVisualCursor(tab, resolved, 'scroll', humanLabel, signal)
           x = resolved.coords.xDispatch
           y = resolved.coords.yDispatch
         }
@@ -1944,24 +1974,39 @@ export class BrowserUseEngine {
     return this.enterTakeoverState(tab, options)
   }
 
-  async resumeTakeover(takeoverId?: string): Promise<BrowserTakeoverState | null> {
-    if (!this.activeTakeover) {
+  private findTakeoverForSettlement(takeoverId?: string): BrowserTakeoverState | null {
+    if (takeoverId) {
+      for (const takeover of this.activeTakeovers.values()) {
+        if (takeover.takeoverId === takeoverId) return takeover
+      }
       return null
     }
-    if (takeoverId && this.activeTakeover.takeoverId !== takeoverId) {
+    if (this.activeTabId) {
+      const active = this.activeTakeovers.get(this.activeTabId)
+      if (active) return active
+    }
+    const entries = [...this.activeTakeovers.values()]
+    return entries.at(-1) ?? null
+  }
+
+  async resumeTakeover(takeoverId?: string): Promise<BrowserTakeoverState | null> {
+    const existing = this.findTakeoverForSettlement(takeoverId)
+    if (!existing) {
       return null
     }
     const resumed: BrowserTakeoverState = {
-      ...this.activeTakeover,
+      ...existing,
       status: 'resumed',
     }
     const tab = this.tabs.get(resumed.tabId)
-    this.activeTakeover = null
+    this.activeTakeovers.delete(resumed.tabId)
     if (tab) {
       await this.updateControlState(tab, 'idle', {
         sessionId: resumed.sessionId,
         agentId: resumed.agentId,
       })
+    } else {
+      this.tabControlStates.delete(resumed.tabId)
     }
     this.emitActivity({
       tabId: resumed.tabId,
@@ -1978,23 +2023,23 @@ export class BrowserUseEngine {
   }
 
   async abortTakeover(takeoverId?: string): Promise<BrowserTakeoverState | null> {
-    if (!this.activeTakeover) {
-      return null
-    }
-    if (takeoverId && this.activeTakeover.takeoverId !== takeoverId) {
+    const existing = this.findTakeoverForSettlement(takeoverId)
+    if (!existing) {
       return null
     }
     const aborted: BrowserTakeoverState = {
-      ...this.activeTakeover,
+      ...existing,
       status: 'aborted',
     }
     const tab = this.tabs.get(aborted.tabId)
-    this.activeTakeover = null
+    this.activeTakeovers.delete(aborted.tabId)
     if (tab) {
       await this.updateControlState(tab, 'idle', {
         sessionId: aborted.sessionId,
         agentId: aborted.agentId,
       })
+    } else {
+      this.tabControlStates.delete(aborted.tabId)
     }
     this.emitActivity({
       tabId: aborted.tabId,
@@ -2013,7 +2058,7 @@ export class BrowserUseEngine {
   async releaseControl(tabId?: string): Promise<void> {
     const tab = tabId ? this.tabs.get(tabId) : this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
     if (!tab) return
-    if (this.activeTakeover?.tabId === tab.info.tabId && this.activeTakeover.status === 'pending') {
+    if (this.activeTakeovers.get(tab.info.tabId)?.status === 'pending') {
       return
     }
     await this.updateControlState(tab, 'idle', {})
@@ -2035,7 +2080,7 @@ export class BrowserUseEngine {
       createdAt: Date.now(),
       status: 'pending',
     }
-    this.activeTakeover = takeover
+    this.activeTakeovers.set(tab.info.tabId, takeover)
     await this.updateControlState(tab, 'takeover', {
       sessionId: options.sessionId,
       agentId: options.agentId,
@@ -2070,8 +2115,8 @@ export class BrowserUseEngine {
     const dx = resolved.coords.xSlot - tab.lastCursorPos.x
     const dy = resolved.coords.ySlot - tab.lastCursorPos.y
     const dist = Math.hypot(dx, dy)
-    const style = dist <= 196 ? 'scoot' : 'bezier'
-    const durationMs = Math.round(Math.min(380, Math.max(160, 140 + dist * 0.35)))
+    const style = dist <= 160 ? 'scoot' : 'bezier'
+    const durationMs = Math.round(Math.min(460, Math.max(220, 180 + dist * 0.42)))
     tab.lastCursorPos = { x: resolved.coords.xSlot, y: resolved.coords.ySlot }
 
     const payload = {
@@ -2147,13 +2192,15 @@ export class BrowserUseEngine {
   ): Promise<void> {
     if (
       state === 'active' &&
-      this.activeTakeover &&
-      this.activeTakeover.status === 'pending' &&
-      this.activeTakeover.tabId === tab.info.tabId
+      this.activeTakeovers.get(tab.info.tabId)?.status === 'pending'
     ) {
       return
     }
-    this.controlState = state
+    if (state === 'idle') {
+      this.tabControlStates.delete(tab.info.tabId)
+    } else {
+      this.tabControlStates.set(tab.info.tabId, state)
+    }
     const payload = {
       tabId: tab.info.tabId,
       target: tab.info.target,

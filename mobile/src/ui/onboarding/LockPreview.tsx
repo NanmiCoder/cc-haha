@@ -12,7 +12,7 @@ export function LockPreview({ hostName }: { hostName: string }) {
   const colors = useColors()
   const glass = {
     borderRadius: 20,
-    backgroundColor: 'rgba(238,236,231,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.10)',
     paddingHorizontal: 14,
     paddingVertical: 12,
     gap: 4,

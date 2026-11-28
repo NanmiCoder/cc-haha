@@ -1565,6 +1565,42 @@ async function handleUserMessage(
   }
 }
 
+/**
+ * Wait briefly for an active or cancelling turn (for example Antigravity
+ * finishing its post-takeover reply or cancelling after user-initiated
+ * Takeover) to settle to `'idle'` before submitting a takeover resume turn.
+ */
+export async function waitForSessionTurnIdle(
+  sessionId: string,
+  timeoutMs = 8_000,
+): Promise<boolean> {
+  if (getSessionTurnState(sessionId) === 'idle') return true
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  const pendingAntigravity = conversationService.getAntigravityTurnCompletion(sessionId)
+  if (pendingAntigravity) {
+    const remaining = Math.max(0, deadline - Date.now())
+    if (remaining > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          pendingAntigravity,
+          new Promise<void>(resolve => {
+            timer = setTimeout(resolve, remaining)
+          }),
+        ])
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
+    if (getSessionTurnState(sessionId) === 'idle') return true
+  }
+  while (Date.now() < deadline) {
+    if (getSessionTurnState(sessionId) === 'idle') return true
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  return getSessionTurnState(sessionId) === 'idle'
+}
+
 /** Shared turn admission for desktop input and independent background sessions. */
 export async function submitSessionTurn(
   sessionId: string,
@@ -4525,8 +4561,16 @@ async function ensureCliSessionStarted(
 ): Promise<void> {
   // Wait before registering startup; a transition may itself await an existing
   // startup. Registering a startup that waits on that transition would deadlock.
-  while (runtimeTransitionPromises.has(sessionId)) {
-    await runtimeTransitionPromises.get(sessionId)
+  while (runtimeTransitionPromises.has(sessionId) || sessionStartupPromises.has(sessionId)) {
+    const pendingTransition = runtimeTransitionPromises.get(sessionId)
+    if (pendingTransition) {
+      await pendingTransition
+      continue
+    }
+    const pendingStartup = sessionStartupPromises.get(sessionId)
+    if (pendingStartup) {
+      await pendingStartup
+    }
   }
 
   if (conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID) {
@@ -4536,22 +4580,34 @@ async function ensureCliSessionStarted(
       applyDeferredRuntimeRestartAfterActiveTurn(ws, sessionId)
       applyDeferredPermissionModeAfterActiveTurn(ws, sessionId)
     }
-    while (runtimeTransitionPromises.has(sessionId)) {
-      await runtimeTransitionPromises.get(sessionId)
+    while (runtimeTransitionPromises.has(sessionId) || sessionStartupPromises.has(sessionId)) {
+      const pendingTransition = runtimeTransitionPromises.get(sessionId)
+      if (pendingTransition) {
+        await pendingTransition
+        continue
+      }
+      const pendingStartup = sessionStartupPromises.get(sessionId)
+      if (pendingStartup) {
+        await pendingStartup
+      }
     }
   }
-  const pendingStartup = sessionStartupPromises.get(sessionId)
-  if (pendingStartup) {
-    await pendingStartup
-    return
-  }
 
-  if (conversationService.hasSession(sessionId)) return
+  const needsCapabilityRestart =
+    reason === 'user_message' &&
+    conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID &&
+    !conversationService.isAntigravityResponding(sessionId) &&
+    conversationService.needsAntigravityCapabilityRestart(sessionId)
+
+  if (conversationService.hasSession(sessionId) && !needsCapabilityRestart) return
 
   const startupRuntimeVersion = runtimeOverrideVersions.get(sessionId) ?? 0
   sessionStartupRuntimeVersions.set(sessionId, startupRuntimeVersion)
 
   const startup = (async () => {
+    if (needsCapabilityRestart) {
+      await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+    }
     const workDir = await resolveSessionWorkDir(sessionId)
     lastResolvedStartupWorkDirs.set(sessionId, workDir)
     const runtimeSettings = await getRuntimeSettings(sessionId)

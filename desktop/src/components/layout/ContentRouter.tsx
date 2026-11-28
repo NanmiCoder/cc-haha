@@ -10,7 +10,10 @@ import { TerminalSettings } from '../../pages/TerminalSettings'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
 import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLayer'
-import { useBrowserUseEventBridge } from '../workbench/WorkspaceSurface'
+import {
+  useBrowserUseEventBridge,
+  useWorkspaceBrowserEventBridge,
+} from '../workbench/WorkspaceSurface'
 
 type ContentRouterProps = {
   /**
@@ -22,6 +25,7 @@ type ContentRouterProps = {
 
 export function ContentRouter({ homePage }: ContentRouterProps = {}) {
   useBrowserUseEventBridge()
+  useWorkspaceBrowserEventBridge(!homePage)
   const newSessionDraft = useUIStore(s => s.newSessionDraft)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
@@ -123,7 +127,7 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
         {...(activeSessionId ? {} : { inert: '' })}
         data-testid="session-tab-panel"
         className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
-          activeSessionId ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0'
+          activeSessionId ? 'z-[var(--z-raised)] opacity-100' : 'pointer-events-none z-0 opacity-0'
         }`}
       >
         {retainedSessionId ? (
@@ -137,7 +141,7 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
           aria-hidden={!draftVisible}
           {...(draftVisible ? {} : { inert: '' })}
           data-testid="new-session-draft-panel"
-          className={draftVisible ? 'absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden' : 'hidden'}
+          className={draftVisible ? 'absolute inset-0 z-[var(--z-raised)] flex min-h-0 flex-col overflow-hidden' : 'hidden'}
         >
           {/* Keyed by revision only: moving an empty draft to another project
               changes `initialWorkDir` and the composer follows it in place. */}
@@ -145,7 +149,7 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
         </div>
       )}
       {page && (
-        <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden">
+        <div className="absolute inset-0 z-[var(--z-raised)] flex min-h-0 flex-col overflow-hidden">
           {page}
         </div>
       )}
@@ -159,7 +163,7 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
             {...(visible ? {} : { inert: '' })}
             data-testid={`terminal-tab-panel-${tab.sessionId}`}
             className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
-              visible ? 'z-20 opacity-100' : 'pointer-events-none z-0 opacity-0'
+              visible ? 'z-[var(--z-sticky)] opacity-100' : 'pointer-events-none z-0 opacity-0'
             }`}
           >
             <TerminalSettings

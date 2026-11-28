@@ -88,7 +88,9 @@ describe('Electron IPC capabilities', () => {
     const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserCreate
     const identity = { tabId: 'wb-1', storageId: 'store-1', webContentsId: 7 }
     expect(validateElectronIpcPayload(channel, identity)).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: 'session-1' })).toBe(true)
     expect(validateElectronIpcPayload(channel, { ...identity, url: 'https://example.com/' })).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...identity, sessionId: '../escape' })).toBe(false)
     for (const webContentsId of [undefined, 0, -1, 1.5, '7', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       expect(validateElectronIpcPayload(channel, { ...identity, webContentsId })).toBe(false)
     }
@@ -417,6 +419,14 @@ describe('Electron IPC capabilities', () => {
     expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
       ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
     )).toBe(true)
+    expect(isElectronIpcChannelAllowedForUsageWidgetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(true)
+    expect(isElectronIpcChannelAllowedForPetWindow(
+      ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
+    )).toBe(false)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, 'dark')).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'providers')).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, 'general')).toBe(true)

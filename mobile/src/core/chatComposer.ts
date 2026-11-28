@@ -20,10 +20,12 @@ export const attachmentOnlyPlaceholder = (text: string) =>
   text === 'Please analyze the attached files.' ||
   text === 'Please analyze the attached image.'
 export function visibleMessageText(text: string) {
-  return text.replace(
-    /<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/,
-    ''
-  )
+  return text
+    .replace(/<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/, '')
+    .replace(
+      /<browser-use-request(?:\s+target="(?:auto|workspace|chrome)")?>[\s\S]*?<\/browser-use-request>\n*/,
+      ''
+    )
 }
 // Same generated formats as desktop/src/stores/chatStore.ts. These are only
 // consumed with a real history image or an optimistic image attachment.

@@ -153,4 +153,41 @@ describe('BackgroundTasksIndicator', () => {
     fireEvent.click(screen.getByTestId('background-tasks-popover-item-wf-1'))
     expect(useActivityPanelStore.getState().isOpen(SESSION_ID)).toBe(true)
   })
+
+  it('opens cleanly when clicking an unfocused trigger and uses V6C glass popover tokens', () => {
+    render(
+      <BackgroundTasksIndicator
+        sessionId={SESSION_ID}
+        backgroundTasks={{
+          ci: makeTask({ taskId: 'ci-1', description: 'Watch CI' }),
+        }}
+        messages={[]}
+      />,
+    )
+
+    const trigger = screen.getByTestId('background-tasks-indicator')
+    expect(trigger).toHaveClass('rounded-[var(--radius-control)]')
+
+    // Simulate clicking an unfocused trigger (pointerDown -> mouseDown -> focus -> click).
+    // Previously `onFocus` opened the menu and `onClick` immediately toggled it back closed.
+    fireEvent.pointerDown(trigger)
+    fireEvent.mouseDown(trigger)
+    fireEvent.focus(trigger)
+    fireEvent.click(trigger)
+
+    const popover = screen.getByTestId('background-tasks-popover')
+    expect(popover).toHaveClass('dropdown-glass', 'popover-motion', 'z-[var(--z-dropdown)]', 'rounded-[var(--radius-xl)]', 'p-[5px]')
+    expect(screen.getByText('Background Tasks')).toHaveClass('text-[11px]', 'font-semibold')
+    expect(screen.getByTestId('background-tasks-popover-item-ci-1')).toHaveClass('rounded-[var(--radius-control)]')
+
+    // Clicking again closes the popover.
+    fireEvent.pointerDown(trigger)
+    fireEvent.mouseDown(trigger)
+    fireEvent.click(trigger)
+    expect(screen.queryByTestId('background-tasks-popover')).not.toBeInTheDocument()
+
+    // Keyboard focus without pointer interaction still opens the popover.
+    fireEvent.focus(trigger)
+    expect(screen.getByTestId('background-tasks-popover')).toBeInTheDocument()
+  })
 })

@@ -7,7 +7,6 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { Spinner } from '@/components/ui/Spinner'
-import { StatusDot } from '@/components/ui/Badge'
 import { useLongPress } from '../../hooks/useLongPress'
 import { formatRelativeTime } from '../../lib/formatRelativeTime'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
@@ -33,6 +32,8 @@ type Props = {
   groups: MobileSessionGroup[]
   runningIds: ReadonlySet<string>
   attentionIds: ReadonlySet<string>
+  /** Surface ground the list sits on so sticky group headers blend cleanly. */
+  surface?: 'home' | 'pane'
   /** Highlighted row, for the tablet pane where the open session sits beside the list. */
   selectedSessionId?: string | null
   workspaceLabelFor: (session: SessionListItem) => string
@@ -48,6 +49,7 @@ export function MobileSessionList({
   groups,
   runningIds,
   attentionIds,
+  surface = 'home',
   selectedSessionId = null,
   workspaceLabelFor,
   onOpen,
@@ -108,7 +110,9 @@ export function MobileSessionList({
           <section key={group.id} aria-labelledby={`mobile-session-group-${group.id}`}>
             <h2
               id={`mobile-session-group-${group.id}`}
-              className={`sticky top-0 z-[var(--z-raised)] flex items-center gap-1.5 bg-[var(--color-surface-glass)] px-4 pb-1.5 pt-3 text-[12px] font-medium ${
+              className={`sticky top-0 z-[var(--z-raised)] flex items-center gap-1.5 border-b border-[var(--color-border)] px-4 pb-1.5 pt-3 text-[12px] font-medium ${
+                surface === 'pane' ? 'bg-[var(--color-surface-sidebar)]' : 'bg-[var(--color-surface)]'
+              } ${
                 group.id === 'attention'
                   ? 'text-[var(--color-on-warning-container)]'
                   : group.id === 'running'
@@ -119,10 +123,7 @@ export function MobileSessionList({
               {t(GROUP_LABEL_KEYS[group.id])}
               <span className="tabular-nums">· {group.sessions.length}</span>
             </h2>
-            <ul className={group.id === 'attention'
-              ? 'v6c-ring-waiting mx-3 flex flex-col gap-0.5 rounded-[var(--radius-lg)] bg-[var(--color-surface-glass)] p-1'
-              : 'mx-3 flex flex-col gap-0.5'}
-            >
+            <ul className="mx-3 flex flex-col gap-0.5 pt-1">
               {group.sessions.map((session) => (
                 <li key={session.id}>
                   <MobileSessionRow
@@ -245,17 +246,17 @@ function MobileSessionRow({
           : 'hover:bg-[var(--color-surface-hover)] active:bg-[var(--color-surface-hover)]'
       }`}
     >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-        {waiting ? (
-          <SessionAttentionMark label={t('mobile.session.waiting')} />
-        ) : running ? (
-          <span role="img" aria-label={t('mobile.session.running')} className="inline-flex text-[var(--color-info)]">
-            <Spinner size={14} />
-          </span>
-        ) : (
-          <StatusDot tone="neutral" size="sm" />
-        )}
-      </span>
+      {(waiting || running) && (
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          {waiting ? (
+            <SessionAttentionMark label={t('mobile.session.waiting')} />
+          ) : (
+            <span role="img" aria-label={t('mobile.session.running')} className="inline-flex text-[var(--color-info)]">
+              <Spinner size={14} />
+            </span>
+          )}
+        </span>
+      )}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[14px] font-medium leading-5 text-[var(--color-text-primary)]">{title}</span>
         <span className="truncate text-[12px] leading-4 text-[var(--color-text-tertiary)]">

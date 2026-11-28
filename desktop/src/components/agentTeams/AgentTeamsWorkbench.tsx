@@ -6,6 +6,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { useTabStore } from '../../stores/tabStore'
+import { isAntigravitySwarmPaused } from '../../lib/teamRunning'
 import type {
   TeamMember,
   TeamWorkbenchSnapshot,
@@ -219,7 +220,11 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
     )
   }
 
-  const phase = getWorkbenchPhase(snapshot)
+  const rawPhase = getWorkbenchPhase(snapshot)
+  const phase: WorkbenchPhase =
+    isAntigravitySwarmPaused(snapshot) && (rawPhase === 'running' || rawPhase === 'forming')
+      ? 'interrupted'
+      : rawPhase
   const counts = stateCounts(snapshot)
   const startTime = timestamp(snapshot.team.createdAt) ?? timestamp(snapshots[0]?.generatedAt) ?? now
   const cursorTime = timestamp(snapshot.generatedAt) ?? startTime

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 const { logoutMock, planUsageMock, startMock, statusMock } = vi.hoisted(() => ({
@@ -110,20 +110,14 @@ describe('ClaudeOfficialLogin', () => {
     expect(screen.getByRole('button', { name: 'Sign in to Claude' })).toBeInTheDocument()
   })
 
-  it('shows the subscription usage once the account is logged in (#1804)', async () => {
+  it('shows the signed-in subscription tier and sign-out control once logged in', async () => {
     statusMock.mockResolvedValue({ loggedIn: true, expiresAt: null, scopes: ['user:inference', 'user:profile'], subscriptionType: 'max' })
-    planUsageMock.mockResolvedValue({
-      available: true,
-      fetchedAt: '2026-11-08T12:00:00.000Z',
-      usage: { five_hour: { utilization: 30, resets_at: null }, seven_day: { utilization: 5, resets_at: null } },
-    })
 
     render(<ClaudeOfficialLogin />)
 
-    const section = await screen.findByRole('region', { name: 'Plan usage' })
-    expect(await within(section).findByText(/30% used/)).toBeInTheDocument()
-    expect(within(section).getByText(/5% used/)).toBeInTheDocument()
-    expect(planUsageMock).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText(/Signed in \(Claude MAX\)/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(planUsageMock).not.toHaveBeenCalled()
   })
 
   it('does not ask for usage while logged out', async () => {

@@ -85,7 +85,7 @@ function Navigation() {
           name="connect"
           options={{
             presentation: 'fullScreenModal',
-            contentStyle: { backgroundColor: '#121110' },
+            contentStyle: { backgroundColor: '#131313' },
           }}
         />
         <Stack.Screen

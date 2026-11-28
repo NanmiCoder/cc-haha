@@ -58,7 +58,7 @@ export type CapabilityAction =
   | { type: 'toggleAgentTeam' }
   /** Flip the global Computer Use switch; turning it on asks for consent first. */
   | { type: 'toggleComputerUse' }
-  /** Flip the global Browser Use switch; turning it on asks for lightweight consent first. */
+  /** Arm or disarm Browser Use for the next message; enables globally with consent if off. */
   | { type: 'toggleBrowserUse' }
   /** Update the global Browser Use preferred target (`auto` | `workspace` | `chrome`). */
   | { type: 'setBrowserUseTarget', target: BrowserPreferredTarget }
@@ -121,11 +121,12 @@ export type CapabilityMenuComputerUse = {
 
 export type CapabilityMenuBrowserUse = {
   enabled: boolean
+  armed: boolean
   preferredTarget: BrowserPreferredTarget
 } | null
 
 export type CapabilityMenuInput = {
-  /** Antigravity ACP engine keeps attachments, Computer Use, and slash commands while hiding Claude-only rows. */
+  /** Antigravity ACP engine keeps attachments, Browser Use, Computer Use, and slash commands while hiding Claude-only rows. */
   antigravity?: boolean
   /** Skill mention candidates (kind 'skill'), already loaded for the composer. */
   skills: ComposerReferenceCandidate[]
@@ -427,7 +428,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
         label: t('chat.capabilities.browserUse'),
         description: t('chat.capabilities.browserUseDescription'),
         icon: { kind: 'lucide', icon: Globe },
-        switch: { checked: input.browserUse.enabled, disabled: false },
+        switch: { checked: input.browserUse.armed, disabled: false },
         action: { type: 'toggleBrowserUse' },
       }
     : {
@@ -521,7 +522,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
         id: 'run',
         title: t('chat.capabilities.sectionRun'),
         showTitle: true,
-        items: [agentTeamItem, computerUseItem],
+        items: [agentTeamItem, browserUseItem, computerUseItem],
       },
       {
         id: 'more',

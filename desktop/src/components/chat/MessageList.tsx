@@ -7,6 +7,7 @@ import { openSideChat } from '@/lib/workspace/openSideChat'
 import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
 import { resolveConversationImages } from '@/components/chat/conversationImages'
 import { isImageGenerationToolName } from '@/components/chat/imageGenerationTools'
+import { isBrowserUseToolName } from './toolCallPresentation'
 import { hasToolResultImageBlock } from '@/lib/toolResultContent'
 import { getServerBaseUrl } from '@/lib/desktopRuntime'
 import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
@@ -863,7 +864,10 @@ export function buildRenderModel(
   const appendRootToolCall = (toolCall: ToolCall, result: ToolResult | undefined) => {
     const nextIsAgent = toolCall.toolName === 'Agent'
     // Keep returned pictures with their source row when surrounding activity folds.
+    // Browser Use cards render their own screenshot thumbnail, so a BrowserSnapshot
+    // returning an image block must not split the surrounding browser run.
     const separateImageRow = !nextIsAgent && !isImageGenerationToolName(toolCall.toolName)
+      && !isBrowserUseToolName(toolCall.toolName)
       && hasToolResultImageBlock(result?.content)
     // Agent runs render as their own dispatch cards, so they never mix with
     // ordinary steps — including the thinking that preceded the dispatch.
@@ -4402,7 +4406,7 @@ export function MessageList({
           // `dropdown-glass` sits after `.v6c-raised` in `@layer components`,
           // so its frosted rest surface wins while `@layer utilities` hover and
           // `focus-visible:ring-2` stay active on keyboard focus.
-          className="dropdown-glass popover-motion absolute bottom-4 right-5 z-20 rounded-[var(--radius-control)] text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
+          className="dropdown-glass popover-motion absolute bottom-4 right-5 z-[var(--z-sticky)] rounded-[var(--radius-control)] text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
           icon={<ArrowDown size={15} strokeWidth={1.75} aria-hidden="true" />}
         >
           {t('chat.jumpToLatest')}

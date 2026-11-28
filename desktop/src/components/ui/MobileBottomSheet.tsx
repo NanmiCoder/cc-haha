@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { isTouchH5Document } from '@/lib/touchH5'
@@ -57,7 +57,12 @@ export function MobileBottomSheet({
   testId,
   tall = false,
 }: Props) {
-  const scrimRef = useRef<HTMLDivElement>(null)
+  const internalPanelRef = useRef<HTMLDivElement | null>(null)
+  const assignPanelRef = useCallback((node: HTMLDivElement | null) => {
+    internalPanelRef.current = node
+    if (typeof panelRef === 'function') panelRef(node)
+    else if (panelRef && 'current' in panelRef) (panelRef as { current: HTMLDivElement | null }).current = node
+  }, [panelRef])
 
   useEffect(() => {
     if (!open) return
@@ -74,7 +79,7 @@ export function MobileBottomSheet({
   useEffect(() => {
     if (!open) return
     const opener = document.activeElement
-    const panel = scrimRef.current?.firstElementChild
+    const panel = internalPanelRef.current
     if (panel instanceof HTMLElement && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true })
     return () => {
       if (opener instanceof HTMLElement && opener.isConnected && !wouldRaiseSoftKeyboard(opener)) opener.focus({ preventScroll: true })
@@ -84,28 +89,30 @@ export function MobileBottomSheet({
   if (!open) return null
 
   return createPortal(
-    <div ref={scrimRef} className="fixed inset-0 z-[var(--z-sheet)] bg-[var(--color-overlay-scrim)]" onClick={onClose}>
+    <div className="fixed inset-0 z-[var(--z-sheet)]" onClick={onClose}>
+      <div aria-hidden="true" data-sheet-backdrop="" className="dialog-backdrop animate-overlay-in absolute inset-0" />
       <div
-        ref={panelRef}
+        ref={assignPanelRef}
         id={id}
         role={role}
         aria-modal={role === 'dialog' ? true : undefined}
         aria-label={ariaLabel ?? (typeof title === 'string' ? title : undefined)}
         data-testid={testId}
         tabIndex={-1}
-        className={`absolute inset-x-0 bottom-0 flex ${tall ? 'max-h-[92dvh]' : 'max-h-[min(78dvh,640px)]'} min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-2xl)] border-x-0 border-y border-[var(--color-surface-glass-border)] bg-[var(--color-surface-dialog)] shadow-[var(--glass-top-rim),var(--shadow-overlay)] focus:outline-none ${panelClassName}`}
+        className={`dialog-glass animate-sheet-rise absolute inset-x-0 bottom-0 flex ${tall ? 'max-h-[92dvh]' : 'max-h-[min(78dvh,640px)]'} min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-3xl)] border-x-0 border-b-0 border-t border-[var(--color-surface-glass-border)] focus:outline-none ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-3">
+        <div className="shrink-0 border-b border-[var(--color-border)] px-4 pb-3 pt-2">
+          <div aria-hidden="true" data-sheet-grabber="" className="mx-auto mb-2 h-1 w-9 shrink-0 rounded-full bg-[var(--color-outline)]" />
           <div className="flex min-h-10 items-center justify-between gap-3">
-            <div className="min-w-0 text-[13px] font-semibold text-[var(--color-text-primary)]">
+            <div className="min-w-0 text-[15px] font-semibold text-[var(--color-text-primary)]">
               {title}
             </div>
             <button
               type="button"
               aria-label={closeLabel}
               onClick={onClose}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card-inner)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <X size={18} strokeWidth={1.75} aria-hidden="true" />
             </button>

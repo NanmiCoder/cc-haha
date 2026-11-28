@@ -2757,7 +2757,7 @@ describe('Sidebar', () => {
     render(<Sidebar />)
 
     expect(screen.getByTestId('sidebar-search-controls-section')).toHaveStyle({ overflow: 'visible' })
-    expect(screen.getByTestId('sidebar-search-controls-section')).toHaveClass('relative', 'z-20')
+    expect(screen.getByTestId('sidebar-search-controls-section')).toHaveClass('relative', 'z-[var(--z-sticky)]')
     expect(screen.getByRole('button', { name: 'Search chats' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /All projects/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('project-filter')).not.toBeInTheDocument()
@@ -3901,6 +3901,38 @@ describe('Sidebar', () => {
       const contextMenu = screen.getByRole('menu')
       expect(aside).not.toContainElement(contextMenu)
       expect(document.body).toContainElement(contextMenu)
+    })
+
+    it('uses mutually exclusive padding and primary text color on a highlighted project row', async () => {
+      const at = new Date(Date.now() - 5 * 60_000).toISOString()
+      useSessionStore.setState({
+        sessions: [
+          makeSession('s-alpha', 'Alpha thread', '/workspace/alpha-repo', at),
+          makeSession('s-beta', 'Beta thread', '/workspace/beta-repo', at),
+        ],
+      })
+      useUIStore.setState({
+        sidebarOpen: true,
+        activeModal: 'globalSearch',
+      } as Partial<ReturnType<typeof useUIStore.getState>>)
+      useTabStore.setState({ tabs: [], activeTabId: null })
+
+      render(<Sidebar />)
+
+      const input = screen.getByPlaceholderText('Search projects and chats…')
+      fireEvent.change(input, { target: { value: 'alpha-repo' } })
+      fireEvent.click(screen.getByRole('option', { name: /alpha-repo/i }))
+
+      const alphaHeader = await screen.findByRole('button', { name: 'Collapse alpha-repo' })
+      expect(alphaHeader).toHaveClass('v6c-raised', 'v6c-active-bar', 'pl-3', 'pr-2', 'text-[var(--color-text-primary)]')
+      expect(alphaHeader).not.toHaveClass('px-2')
+      expect(within(alphaHeader).getByText('alpha-repo')).toHaveClass('text-[var(--color-text-primary)]')
+      expect(within(alphaHeader).getByText('alpha-repo')).not.toHaveClass('text-[var(--color-text-secondary)]')
+
+      const betaHeader = screen.getByRole('button', { name: 'Collapse beta-repo' })
+      expect(betaHeader).toHaveClass('px-2')
+      expect(betaHeader).not.toHaveClass('pl-3', 'pr-2', 'v6c-active-bar')
+      expect(within(betaHeader).getByText('beta-repo')).toHaveClass('text-[var(--color-text-secondary)]')
     })
   })
 })

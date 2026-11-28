@@ -11,9 +11,8 @@ import { useHahaOAuthStore } from '../../stores/hahaOAuthStore'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { OfficialLoginRiskDialog } from './OfficialLoginRiskDialog'
-import { ClaudePlanUsage } from './ClaudePlanUsage'
 
-export function ClaudeOfficialLogin({ usageOnly = false }: { usageOnly?: boolean } = {}) {
+export function ClaudeOfficialLogin() {
   const t = useTranslation()
   const [riskDialogOpen, setRiskDialogOpen] = useState(false)
   const {
@@ -65,29 +64,23 @@ export function ClaudeOfficialLogin({ usageOnly = false }: { usageOnly?: boolean
   }
 
   if (status.loggedIn) {
-    if (usageOnly) return <ClaudePlanUsage />
     const subTypeLabel = status.subscriptionType
       ? status.subscriptionType.toUpperCase()
       : t('settings.claudeOfficialLogin.subTypeUnknown')
     return (
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-3 text-[13px]">
-          <span className="inline-flex items-center gap-1.5 text-[var(--color-success)]">
-            <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" />
-            {t('settings.claudeOfficialLogin.loggedInPrefix')} {subTypeLabel})
-          </span>
-          <Button variant="secondary" size="sm" onClick={logout} disabled={isLoading}>
-            {isLoading
-              ? t('settings.claudeOfficialLogin.logoutProcessing')
-              : t('settings.claudeOfficialLogin.logoutButton')}
-          </Button>
-        </div>
-        <ClaudePlanUsage />
+      <div className="flex flex-wrap items-center gap-3 text-[13px]">
+        <span className="inline-flex items-center gap-1.5 text-[var(--color-success)]">
+          <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" />
+          {t('settings.claudeOfficialLogin.loggedInPrefix')} {subTypeLabel})
+        </span>
+        <Button variant="secondary" size="sm" onClick={logout} disabled={isLoading}>
+          {isLoading
+            ? t('settings.claudeOfficialLogin.logoutProcessing')
+            : t('settings.claudeOfficialLogin.logoutButton')}
+        </Button>
       </div>
     )
   }
-
-  if (usageOnly) return null
 
   return (
     <div className="flex flex-col gap-2">

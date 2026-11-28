@@ -18,12 +18,18 @@ const {
   focusMainWindowMock,
   openSettingsMock,
   notifyPrefsMock,
+  getThemeMock,
   onVisibilityChangedMock,
   onPreferencesChangedMock,
+  onThemeChangedMock,
   prefsChangedListeners,
+  themeChangedListeners,
+  hostState,
 } = vi.hoisted(() => {
   const listeners: Array<() => void> = []
+  const themeListeners: Array<(theme: 'white' | 'dark') => void> = []
   return {
+    hostState: { isDesktop: true },
     getSummaryMock: vi.fn(),
     getPrefsMock: vi.fn(),
     updatePrefsMock: vi.fn(),
@@ -39,6 +45,7 @@ const {
     focusMainWindowMock: vi.fn(async () => {}),
     openSettingsMock: vi.fn(async () => {}),
     notifyPrefsMock: vi.fn(async () => {}),
+    getThemeMock: vi.fn(async (): Promise<'white' | 'dark'> => 'dark'),
     onVisibilityChangedMock: vi.fn(async () => () => {}),
     onPreferencesChangedMock: vi.fn(async (handler: () => void) => {
       listeners.push(handler)
@@ -47,7 +54,15 @@ const {
         if (index >= 0) listeners.splice(index, 1)
       }
     }),
+    onThemeChangedMock: vi.fn(async (handler: (theme: 'white' | 'dark') => void) => {
+      themeListeners.push(handler)
+      return () => {
+        const index = themeListeners.indexOf(handler)
+        if (index >= 0) themeListeners.splice(index, 1)
+      }
+    }),
     prefsChangedListeners: listeners,
+    themeChangedListeners: themeListeners,
   }
 })
 
@@ -74,7 +89,7 @@ vi.mock('@/lib/desktopRuntime', () => ({
 
 vi.mock('@/lib/desktopHost', () => ({
   getDesktopHost: () => ({
-    isDesktop: true,
+    isDesktop: hostState.isDesktop,
     usageWidget: {
       show: showMock,
       hide: hideMock,
@@ -87,8 +102,10 @@ vi.mock('@/lib/desktopHost', () => ({
       focusMainWindow: focusMainWindowMock,
       openSettings: openSettingsMock,
       notifyPreferencesChanged: notifyPrefsMock,
+      getTheme: getThemeMock,
       onVisibilityChanged: onVisibilityChangedMock,
       onPreferencesChanged: onPreferencesChangedMock,
+      onThemeChanged: onThemeChangedMock,
     },
   }),
 }))
@@ -98,9 +115,11 @@ import { UsageSummaryPanel } from './UsageSummaryPanel'
 import {
   computePaceMarkerPercent,
   displayPercentForWindow,
+  formatCentsAsDollars,
   formatCompactTokenCount,
   formatExactResetTime,
   formatResetCountdown,
+  formatWalletAmount,
   providerTitleKey,
   toneForRemainingPercent,
   windowLabelKey,
@@ -195,13 +214,17 @@ const RICH_SUMMARY: UnifiedUsageSummaryResponse = {
     {
       providerId: 'deepseek-account',
       signedIn: true,
-      status: 'local_only',
+      status: 'ok',
       planLabel: null,
       accountLabel: 'ds@example.com',
       fetchedAt: '2026-11-26T18:00:00.000Z',
       rateLimitedUntil: null,
-      source: 'local_only',
+      source: 'official_api',
       windows: [],
+      balance: {
+        normalWallets: [{ currency: 'CNY', balance: '88.50' }],
+        bonusWallets: [{ currency: 'CNY', balance: '10.00' }],
+      },
     },
   ],
   localWindow: {
@@ -228,6 +251,10 @@ const EMPTY_SUMMARY: UnifiedUsageSummaryResponse = {
 beforeEach(() => {
   vi.clearAllMocks()
   prefsChangedListeners.splice(0)
+  themeChangedListeners.splice(0)
+  document.documentElement.removeAttribute('data-theme')
+  document.documentElement.style.colorScheme = ''
+  getThemeMock.mockResolvedValue('dark')
   useSettingsStore.setState({ locale: 'en' })
   useUsageSummaryStore.setState({
     summary: null,
@@ -254,6 +281,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  document.documentElement.removeAttribute('data-theme')
+  document.documentElement.style.colorScheme = ''
 })
 
 describe('UsageWidgetApp', () => {
@@ -262,11 +291,27 @@ describe('UsageWidgetApp', () => {
 
     const win = await screen.findByTestId('usage-widget-window')
     expect(win).toBeInTheDocument()
+    expect(win.className).toContain('dropdown-glass')
+    expect(win.className).toContain('rounded-[var(--radius-xl)]')
+    expect(win.className).not.toContain('--color-border-strong')
     await waitFor(() => expect(getSummaryMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('dark'))
+    expect(document.documentElement.style.colorScheme).toBe('dark')
 
-    // Running-out section renders the unpinned low-quota Claude 7d window.
+    // Live theme broadcasts from the main window update data-theme and colorScheme immediately.
+    act(() => {
+      for (const listener of themeChangedListeners) listener('white')
+    })
+    expect(document.documentElement.getAttribute('data-theme')).toBe('white')
+    expect(document.documentElement.style.colorScheme).toBe('light')
+
+    // Running-out section renders the unpinned low-quota Claude 7d window in error-container
+    // and keeps the DeepSeek balance row visible.
     expect(screen.getByText('Running low')).toBeInTheDocument()
     expect(screen.getByText('12% left')).toBeInTheDocument()
+    expect(screen.getByTestId('usage-running-out-row-claude-official:seven_day').className)
+      .toContain('bg-[var(--color-error-container)]')
+    expect(screen.getByTestId('usage-priority-balance-deepseek-account')).toHaveTextContent('¥88.50')
 
     // Drag header triggers start -> move -> end IPC calls.
     const dragHeader = screen.getByText('Usage monitor').closest('div')!.parentElement!
@@ -313,7 +358,12 @@ describe('UsageWidgetApp', () => {
     // Collapse to top mini bar sets floatingCompact + floatingAlwaysOnTop.
     fireEvent.click(screen.getByRole('button', { name: 'Collapse to top mini bar' }))
     await waitFor(() => expect(snapToTopMock).toHaveBeenCalledTimes(1))
-    expect(await screen.findByTestId('usage-widget-compact')).toBeInTheDocument()
+    const compactBar = await screen.findByTestId('usage-widget-compact')
+    expect(compactBar).toBeInTheDocument()
+    expect(compactBar.className).toContain('dropdown-glass')
+    expect(compactBar.className).toContain('rounded-[var(--radius-xl)]')
+    expect(compactBar.className).not.toContain('rounded-full')
+    expect(compactBar.className).not.toContain('--color-border-strong')
 
     // Expand back to card.
     fireEvent.click(screen.getByRole('button', { name: 'Expand usage card' }))
@@ -390,7 +440,36 @@ describe('UsageWidgetApp', () => {
       />,
     )
     fireEvent.click(screen.getByRole('tab', { name: /All/ }))
-    expect(screen.getByTestId('usage-provider-card-claude-official')).toBeInTheDocument()
+    const card = screen.getByTestId('usage-provider-card-claude-official')
+    expect(card).toBeInTheDocument()
+    expect(card.className).toContain('rounded-[var(--radius-card-inner)]')
+    expect(card.className).toContain('v6c-raised')
+    expect(screen.getByText('Pro').className).not.toContain('rounded-full')
+  })
+
+  it('uses warning container tokens for 16-30% running-out rows and error container for <=15% rows', () => {
+    render(
+      <UsageSummaryPanel
+        summary={RICH_SUMMARY}
+        preferences={{
+          ...DEFAULT_DESKTOP_USAGE_WIDGET_PREFERENCES,
+          pinnedMetricKeys: ['claude-official:five_hour'],
+        }}
+        isLoading={false}
+        isDesktopRuntime
+        onRefresh={vi.fn()}
+        onToggleDisplayMode={vi.fn()}
+        onToggleResetTimeFormat={vi.fn()}
+        onTogglePinMetric={vi.fn()}
+      />,
+    )
+    const warningRow = screen.getByTestId('usage-running-out-row-openai-official:five_hour')
+    const dangerRow = screen.getByTestId('usage-running-out-row-claude-official:seven_day')
+    expect(warningRow.className).toContain('bg-[var(--color-warning-container)]')
+    expect(warningRow.className).toContain('text-[var(--color-on-warning-container)]')
+    expect(warningRow.className).toContain('rounded-[var(--radius-card-inner)]')
+    expect(dangerRow.className).toContain('bg-[var(--color-error-container)]')
+    expect(dangerRow.className).toContain('text-[var(--color-on-error-container)]')
   })
 })
 
@@ -417,7 +496,7 @@ describe('usageFormatting, usageSummaryStore, and browserHost', () => {
     expect(toneForRemainingPercent(null)).toBe('brand')
     expect(toneForRemainingPercent(10)).toBe('danger')
     expect(toneForRemainingPercent(25)).toBe('warning')
-    expect(toneForRemainingPercent(80)).toBe('success')
+    expect(toneForRemainingPercent(80)).toBe('brand')
 
     const sampleWindow = RICH_SUMMARY.providers[0]!.windows[0]!
     expect(displayPercentForWindow(sampleWindow, 'remaining')).toBe(62)
@@ -443,6 +522,12 @@ describe('usageFormatting, usageSummaryStore, and browserHost', () => {
     expect(formatCompactTokenCount(12_400)).toBe('12K')
     expect(formatCompactTokenCount(2_500_000)).toBe('2.50M')
     expect(formatCompactTokenCount(1_250_000_000)).toBe('1.25B')
+
+    expect(formatWalletAmount('CNY', '0E-16')).toBe('¥0.00')
+    expect(formatWalletAmount('CNY', '123.45')).toBe('¥123.45')
+    expect(formatWalletAmount('USD', '6.7')).toBe('$6.70')
+    expect(formatCentsAsDollars(5000)).toBe('$50')
+    expect(formatCentsAsDollars(2550)).toBe('$25.50')
 
     expect(computePaceMarkerPercent({ ...sampleWindow, resetsAt: null }, 'remaining', now)).toBeNull()
     expect(computePaceMarkerPercent({ ...sampleWindow, resetsAt: 'bad' }, 'remaining', now)).toBeNull()
@@ -504,13 +589,37 @@ describe('usageFormatting, usageSummaryStore, and browserHost', () => {
     expect(await browserHost.usageWidget!.dragWindow({ phase: 'end', x: 0, y: 0 })).toEqual({ compact: false, alwaysOnTop: true, snappedTop: false })
     await expect(browserHost.usageWidget!.syncMenuBar({ enabled: false })).resolves.toBeUndefined()
     await expect(browserHost.usageWidget!.notifyPreferencesChanged()).resolves.toBeUndefined()
+    await expect(browserHost.usageWidget!.getTheme!()).resolves.toBe('white')
     const unlistenVis = await browserHost.usageWidget!.onVisibilityChanged(() => {})
     const unlistenPrefs = await browserHost.usageWidget!.onPreferencesChanged(() => {})
+    const unlistenTheme = await browserHost.usageWidget!.onThemeChanged!(() => {})
     unlistenVis()
     unlistenPrefs()
+    unlistenTheme()
     await expect(browserHost.usageWidget!.show()).rejects.toThrow()
     await expect(browserHost.usageWidget!.hide()).rejects.toThrow()
     await expect(browserHost.usageWidget!.focusMainWindow()).rejects.toThrow()
     await expect(browserHost.usageWidget!.openSettings()).rejects.toThrow()
+  })
+
+  it('does not overwrite shared localStorage theme keys when opened in a non-Electron browser', async () => {
+    const previousUrl = window.location.href
+    window.history.replaceState({}, '', '/?usageWidgetWindow=1')
+    window.localStorage.setItem('cc-haha-follow-system-theme', '1')
+    window.localStorage.removeItem('cc-haha-theme')
+    hostState.isDesktop = false
+    try {
+      render(<UsageWidgetApp />)
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('white')
+      })
+      expect(window.localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
+      expect(window.localStorage.getItem('cc-haha-theme')).toBeNull()
+    } finally {
+      hostState.isDesktop = true
+      window.history.replaceState({}, '', previousUrl)
+      window.localStorage.removeItem('cc-haha-follow-system-theme')
+      window.localStorage.removeItem('cc-haha-theme')
+    }
   })
 })

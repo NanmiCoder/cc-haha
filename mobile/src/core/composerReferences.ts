@@ -72,7 +72,7 @@ export async function loadComposerCandidates(client: ApiClient, context: {
   sessionId?: string; workDir?: string; runtime?: RuntimeConfig; lean: boolean
 }, signal: AbortSignal): Promise<ComposerCandidate[]> {
   // Antigravity isolates Claude Code skills, plugins and commands: expose only
-  // Antigravity's native slash commands (plus local host shortcuts).
+  // Antigravity's native slash commands and AGY skills (plus local host shortcuts).
   if (isAntigravityProvider(context.runtime?.providerId)) {
     let rawCommands: SkillCommand[] = []
     if (context.sessionId) {
@@ -81,21 +81,37 @@ export async function loadComposerCandidates(client: ApiClient, context: {
         { signal }
       )
       rawCommands = Array.isArray(response?.commands) ? response.commands : []
+    } else {
+      const query = new URLSearchParams()
+      if (context.workDir) query.set('cwd', context.workDir)
+      query.set('providerId', context.runtime!.providerId!)
+      const response = await client
+        .get<{ commands: SkillCommand[] }>(`/api/skills/commands?${query}`, { signal })
+        .catch(() => ({ commands: [] as SkillCommand[] }))
+      rawCommands = Array.isArray(response?.commands) ? response.commands : []
     }
-    const sourceCommands: SkillCommand[] = rawCommands.length > 0
+    const hasAuthoritativeAcpCommands = rawCommands.some((command) => command.kind !== 'skill')
+    const sourceCommands: SkillCommand[] = hasAuthoritativeAcpCommands
       ? rawCommands
-      : ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((command) => ({ ...command, kind: 'command' as const }))
+      : [
+          ...ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((command) => ({ ...command, kind: 'command' as const })),
+          ...rawCommands,
+        ]
     const candidates: ComposerCandidate[] = []
+    const seen = new Set<string>()
     for (const command of sourceCommands.filter(isCommandVisible)) {
-      if (!candidates.some((candidate) => candidate.name === command.name)) {
-        candidates.push({ ...command, kind: 'command' })
-      }
+      const key = command.name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push({ ...command, kind: command.kind ?? 'command' })
     }
     for (const command of [
       { name: 'model', description: '切换 Antigravity 模型与思考强度' },
       { name: 'permissions', description: '选择权限模式' },
     ]) {
-      if (!candidates.some((candidate) => candidate.name === command.name)) {
+      const key = command.name.toLowerCase()
+      if (!seen.has(key)) {
+        seen.add(key)
         candidates.push({ ...command, kind: 'command' })
       }
     }

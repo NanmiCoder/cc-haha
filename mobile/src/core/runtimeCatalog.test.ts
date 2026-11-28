@@ -4,10 +4,12 @@ import { BUILT_IN_PROVIDER_IDS } from '../../../src/server/types/provider'
 import { ApiClient, type FetchAdapter } from './client'
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  ANTIGRAVITY_DISCOVER_TIMEOUT_MS,
   ANTIGRAVITY_LOGIN_GUIDANCE,
   ANTIGRAVITY_PROVIDER_ID,
   OFFICIAL_RUNTIME_SOURCES,
   antigravityModels,
+  antigravityNeedsDiscovery,
   antigravitySourceDetail,
   canSetRuntimeEffort,
   contextLabel,
@@ -19,6 +21,7 @@ import {
   loadRuntimeModels,
   modelDetail,
   parseAntigravityStatus,
+  resolveAntigravityRuntimeAfterDiscover,
   runtimeSelection,
   runtimeModelSelection,
   runtimeSourceName,
@@ -570,5 +573,140 @@ describe('Antigravity ACP runtime catalog integration', () => {
       name: 'Antigravity 默认模型',
     })
     expect(parseAntigravityStatus({ status: 'bogus' })).toBeNull()
+  })
+
+  test('ready antigravity with empty models triggers discovery and resolves out of agent-default', async () => {
+    const emptyReady: AntigravityStatus = {
+      id: ANTIGRAVITY_PROVIDER_ID,
+      kind: 'acp',
+      status: 'ready',
+      models: [],
+    }
+    expect(antigravityNeedsDiscovery(emptyReady)).toBe(true)
+    expect(antigravityNeedsDiscovery(readyAntigravity)).toBe(false)
+    expect(
+      antigravityNeedsDiscovery({
+        id: ANTIGRAVITY_PROVIDER_ID,
+        kind: 'acp',
+        status: 'error',
+        models: [],
+      })
+    ).toBe(false)
+    expect(
+      antigravityNeedsDiscovery(
+        {
+          id: ANTIGRAVITY_PROVIDER_ID,
+          kind: 'acp',
+          status: 'error',
+          models: [],
+        },
+        { includeError: true }
+      )
+    ).toBe(true)
+    expect(
+      antigravityNeedsDiscovery(
+        {
+          id: ANTIGRAVITY_PROVIDER_ID,
+          kind: 'acp',
+          status: 'login_required',
+          models: [],
+        },
+        { includeError: true }
+      )
+    ).toBe(false)
+
+    const fixture = clientFixture({
+      antigravity: emptyReady,
+      discoverAntigravity: readyAntigravity,
+    })
+    const directory = await loadRuntimeDirectory(fixture.client, signal())
+    const models = await loadRuntimeModels(
+      fixture.client,
+      directory,
+      ANTIGRAVITY_PROVIDER_ID,
+      signal()
+    )
+    expect(fixture.requests.at(-1)).toBe(
+      `/api/providers/${ANTIGRAVITY_PROVIDER_ID}/discover`
+    )
+    expect(models.map((m) => m.id)).toEqual([
+      'gemini-4-neon',
+      'gemini-3.8-flash',
+    ])
+
+    const countBeforeSkip = fixture.requests.length
+    const fallbackModels = await loadRuntimeModels(
+      fixture.client,
+      directory,
+      ANTIGRAVITY_PROVIDER_ID,
+      signal(),
+      { skipEmptyAntigravityDiscover: true }
+    )
+    expect(fixture.requests).toHaveLength(countBeforeSkip)
+    expect(fallbackModels).toEqual([
+      { id: ANTIGRAVITY_DEFAULT_MODEL, name: 'Antigravity 默认模型' },
+    ])
+
+    // Upgrades agent-default placeholder to discovered default, while keeping an explicit model choice.
+    expect(
+      resolveAntigravityRuntimeAfterDiscover(
+        {
+          config: {
+            providerId: ANTIGRAVITY_PROVIDER_ID,
+            modelId: ANTIGRAVITY_DEFAULT_MODEL,
+          },
+          name: 'Antigravity 默认模型',
+        },
+        readyAntigravity
+      )
+    ).toEqual({
+      config: {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-4-neon',
+        effortLevel: 'high',
+      },
+      name: 'Gemini 4 Neon',
+    })
+    expect(
+      resolveAntigravityRuntimeAfterDiscover(
+        {
+          config: {
+            providerId: ANTIGRAVITY_PROVIDER_ID,
+            modelId: 'gemini-3.8-flash',
+            effortLevel: 'high',
+          },
+          name: 'Gemini 3.8 Flash',
+        },
+        readyAntigravity
+      )
+    ).toEqual({
+      config: {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'high',
+      },
+      name: 'Gemini 3.8 Flash',
+    })
+  })
+
+  test('discoverAntigravity uses an extended request timeout for ACP effort probing', async () => {
+    let seenTimeout: number | undefined
+    const client = {
+      post: async (
+        _path: string,
+        _body: unknown,
+        options?: { timeoutMs?: number }
+      ) => {
+        seenTimeout = options?.timeoutMs
+        return { antigravity: readyAntigravity }
+      },
+    } as unknown as ApiClient
+    const result = await discoverAntigravity(client, signal())
+    expect(result?.models.map((m) => m.id)).toEqual([
+      'gemini-4-neon',
+      'gemini-3.8-flash',
+    ])
+    expect(seenTimeout).toBe(ANTIGRAVITY_DISCOVER_TIMEOUT_MS)
+    expect(ANTIGRAVITY_DISCOVER_TIMEOUT_MS).toBeGreaterThan(15_000)
   })
 })

@@ -26,3 +26,11 @@ it('does not offer the saved credential to another entered server', () => {
   render(<H5ConnectionView initialServerUrl="https://other.example" onConnected={vi.fn()} />)
   expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
 })
+
+it('aligns its card shell and heading with the V6C RemoteAccessGate glass dialog', () => {
+  render(<H5ConnectionView initialServerUrl="https://paired.example" onConnected={vi.fn()} />)
+  const card = screen.getByTestId('h5-connection-card')
+  expect(card).toHaveClass('dialog-glass', 'rounded-[var(--radius-3xl)]', 'max-w-[400px]')
+  const heading = screen.getByRole('heading', { level: 1 })
+  expect(heading).toHaveClass('text-[18px]', 'font-semibold')
+})

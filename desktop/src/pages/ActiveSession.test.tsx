@@ -713,9 +713,11 @@ describe('ActiveSession task polling', () => {
     })
     render(<ActiveSession />)
 
-    expect(screen.getByText(
+    const bannerText = screen.getByText(
       'The temporary workspace was cleaned up. History is still available; start a new session in /repo to continue.',
-    )).toBeInTheDocument()
+    )
+    expect(bannerText).toBeInTheDocument()
+    expect(bannerText.parentElement).toHaveClass('rounded-[var(--radius-control)]')
 
     // Open the terminal the way a user does, through the workspace launcher,
     // so the cwd under test is the one ActiveSession actually hands down: the
@@ -2847,7 +2849,8 @@ describe('ActiveSession task polling', () => {
     expect(chatColumn).not.toHaveClass('shrink-0')
     expect(chatColumn).not.toHaveClass('border-r')
     expect(workbenchPanel).not.toHaveClass('border-l')
-    expect(resizeHandle).toHaveClass('w-px', 'bg-[var(--color-border)]')
+    expect(resizeHandle).toHaveClass('w-px', 'z-[var(--z-raised)]', 'bg-[var(--color-border)]')
+    expect(resizeHandle).not.toHaveClass('z-10')
     expect(resizeHandle.firstElementChild).toHaveClass('-inset-x-1')
     expect(contentRow.children[0]).toBe(chatColumn)
     expect(contentRow.children[1]).toBe(resizeHandle)
@@ -3179,6 +3182,7 @@ describe('ActiveSession task polling', () => {
     expect(screen.getByTestId('empty-session-hero')).toHaveClass('min-h-0')
     expect(screen.getByTestId('empty-session-hero')).toHaveClass('pb-6')
     expect(screen.getByTestId('empty-session-hero')).not.toHaveClass('pb-32')
+    expect(screen.getByTestId('empty-session-hero').querySelector('p')).toHaveClass('leading-6')
     expect(screen.getByTestId('session-terminal-panel')).toHaveStyle({ height: '420px' })
     expect(screen.getByTestId('terminal-resize-handle')).toHaveAttribute('aria-valuemax', '760')
   })
@@ -3659,5 +3663,43 @@ describe('ActiveSession delegated sessions', () => {
 
     render(<ActiveSession />)
     expect(screen.queryByRole('button', { name: /side chat/i })).not.toBeInTheDocument()
+  })
+
+  it('uses a 44px touch target for the mobile side-chat button and shows the workspace-unavailable banner on mobile', () => {
+    viewportMocks.isMobile = true
+    const id = 'mobile-removed-worktree'
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: id, tabs: [{ sessionId: id, title: 'Mobile Worktree', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({
+      sessions: [{
+        id,
+        title: 'Mobile Worktree',
+        messageCount: 1,
+        createdAt: '',
+        modifiedAt: '',
+        projectPath: '/repo-worktree',
+        projectRoot: '/repo',
+        workDir: '/repo/.claude/worktrees/desktop-main-12345678',
+        workDirExists: false,
+        workspaceState: 'worktree_removed',
+      }],
+    })
+    useChatStore.setState({
+      sessions: {
+        [id]: {
+          ...createDefaultSessionState(),
+          connectionState: 'connected',
+          historyStatus: 'ready',
+          historyHydrated: true,
+          messages: [{ id: 'm1', type: 'assistant_text', content: 'history', timestamp: 1 }],
+        },
+      },
+    })
+
+    render(<ActiveSession sessionId={id} />)
+    const banner = screen.getByTestId('mobile-workspace-unavailable-banner')
+    expect(banner).toHaveTextContent('The temporary workspace was cleaned up. History is still available; start a new session in /repo to continue.')
+    const sideChatBtn = screen.getByRole('button', { name: 'Side chat' })
+    expect(sideChatBtn).toHaveClass('h-11', 'w-11')
   })
 })

@@ -259,6 +259,23 @@ function resolveStartupWindowBackground(): string {
   return startupWindowBackground(currentAppearance(), nativeTheme.shouldUseDarkColors)
 }
 
+function resolveAppliedUsageWidgetTheme(): 'white' | 'dark' {
+  const current = currentAppearance()
+  if (!current) return nativeTheme.shouldUseDarkColors ? 'dark' : 'white'
+  const isDark = current.followSystem ? nativeTheme.shouldUseDarkColors : current.isDark
+  return isDark ? 'dark' : 'white'
+}
+
+function syncUsageWidgetTheme(
+  target: BrowserWindow | null = usageWidgetWindowController?.getWindow() ?? null,
+) {
+  if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return
+  target.webContents.send(
+    ELECTRON_EVENT_CHANNELS.usageWidgetThemeChanged,
+    resolveAppliedUsageWidgetTheme(),
+  )
+}
+
 /**
  * While the user follows the OS, repaint window backgrounds the moment the OS
  * flips instead of waiting for the renderer to notice and report back — that
@@ -270,6 +287,7 @@ function installSystemAppearanceWatch() {
     if (current && !current.followSystem) return
     const background = startupWindowBackground(current, nativeTheme.shouldUseDarkColors)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(background)
+    syncUsageWidgetTheme()
   })
 }
 
@@ -568,6 +586,9 @@ function getUsageWidgetWindowController() {
         resolveUsageWidgetServerAccess,
       )
       installMainWindowNavigationGuards(window.webContents, { openExternal: openExternalUrl })
+      window.webContents.on('did-finish-load', () => {
+        syncUsageWidgetTheme(window)
+      })
     },
     load: window => loadRendererEntry(window, { usageWidgetWindow: '1' }),
     onVisibilityChanged: (visible) => {
@@ -1066,6 +1087,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged, (event) => {
     broadcastUsageWidgetPreferencesChanged(BrowserWindow.fromWebContents(event.sender))
   })
+  registerHandler(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme, () => resolveAppliedUsageWidgetTheme())
   registerHandler(ELECTRON_IPC_CHANNELS.dialogOpen, (event, payload) =>
     openDialog(currentWindow(event), payload as Parameters<typeof openDialog>[1]))
   registerHandler(ELECTRON_IPC_CHANNELS.dialogSave, (event, payload) =>
@@ -1251,6 +1273,7 @@ function registerIpcHandlers() {
       // The pet window is deliberately transparent, so it stays out of this.
       windows: () => mainWindow ? [mainWindow] : [],
     })
+    syncUsageWidgetTheme()
   })
 }
 
@@ -1546,6 +1569,16 @@ app.on('before-quit', event => {
           console.error('[desktop] browser use bridge cleanup failed during quit')
         }
         browserUseBridge = null
+      }
+      if (typeof workspaceBrowserSessionConfigured !== 'undefined' && workspaceBrowserSessionConfigured) {
+        try {
+          await Promise.race([
+            workspaceBrowserSession().cookies.flushStore(),
+            new Promise(resolve => setTimeout(resolve, 1_500)),
+          ])
+        } catch {
+          console.error('[desktop] workspace browser cookie flush failed during quit')
+        }
       }
       await getServerRuntime().stopAllAndWait()
     } catch (error) {

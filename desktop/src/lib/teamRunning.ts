@@ -29,9 +29,48 @@ export function areTeamMembersAllStopped(team: TeamWorkbenchSnapshot['team'] | n
   })
 }
 
+export const ANTIGRAVITY_SWARM_TEAM_PREFIX = 'agy-swarm-'
+
+export function isAntigravitySwarmTeamName(name: string | null | undefined): boolean {
+  return typeof name === 'string' && name.startsWith(ANTIGRAVITY_SWARM_TEAM_PREFIX)
+}
+
+type TeamRunningSnapshot = Pick<TeamWorkbenchSnapshot, 'team'> & { deletedAt?: string }
+
+/**
+ * Antigravity native Swarms do not use cc-haha's Claude TeamPlan store; a swarm
+ * is actively working in the background whenever any non-lead worker is mid-turn.
+ */
+export function isAntigravitySwarmRunning(
+  snapshot: TeamRunningSnapshot | null | undefined,
+): boolean {
+  if (!snapshot || snapshot.deletedAt || !isAntigravitySwarmTeamName(snapshot.team.name)) {
+    return false
+  }
+  return snapshot.team.members.some((member) => (
+    !resolveTeamMemberIdentity(snapshot.team, member.agentId).isLead &&
+    getMemberWorkState(member) === 'working'
+  ))
+}
+
+/**
+ * An Antigravity Swarm is paused when all non-lead workers are stopped/exited
+ * and at least one unfinished worker is explicitly stopped (not permanently killed).
+ */
+export function isAntigravitySwarmPaused(
+  snapshot: TeamRunningSnapshot | null | undefined,
+): boolean {
+  if (!snapshot || snapshot.deletedAt || !isAntigravitySwarmTeamName(snapshot.team.name)) {
+    return false
+  }
+  const members = snapshot.team.members.filter((member) => !resolveTeamMemberIdentity(snapshot.team, member.agentId).isLead)
+  if (members.length === 0 || !areTeamMembersAllStopped(snapshot.team)) return false
+  return members.some((member) => getMemberWorkState(member) === 'stopped')
+}
+
 export function isTeamRunning(
   plan: { state: string } | null | undefined,
-  snapshot: Pick<TeamWorkbenchSnapshot, 'team'> | null | undefined,
+  snapshot: TeamRunningSnapshot | null | undefined,
 ): boolean {
-  return isTeamPlanActive(plan) && !areTeamMembersAllStopped(snapshot?.team)
+  return (isTeamPlanActive(plan) && !areTeamMembersAllStopped(snapshot?.team)) || isAntigravitySwarmRunning(snapshot)
 }

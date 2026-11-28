@@ -48,6 +48,7 @@ export const ELECTRON_IPC_CHANNELS = {
   usageWidgetFocusMainWindow: 'desktop:usage-widget:focus-main-window',
   usageWidgetOpenSettings: 'desktop:usage-widget:open-settings',
   usageWidgetNotifyPreferencesChanged: 'desktop:usage-widget:notify-preferences-changed',
+  usageWidgetGetTheme: 'desktop:usage-widget:get-theme',
   dialogOpen: 'desktop:dialog:open',
   dialogSave: 'desktop:dialog:save',
   updateCheck: 'desktop:update:check',
@@ -130,6 +131,7 @@ export const ELECTRON_EVENT_CHANNELS = {
   petPanelPlacementChanged: 'desktop:pets:panel-placement-changed',
   usageWidgetVisibilityChanged: 'desktop:usage-widget:visibility-changed',
   usageWidgetPreferencesChanged: 'desktop:usage-widget:preferences-changed',
+  usageWidgetThemeChanged: 'desktop:usage-widget:theme-changed',
   migrationProgress: 'desktop:app-mode:migration:progress',
 } as const
 

@@ -1284,6 +1284,16 @@ describe('ModelSelector', () => {
       providerId: null, modelId: 'claude-opus-4-8', effortLevel: 'high',
     })
     const { rerender } = render(<ModelSelector runtimeKey="claude-session" />)
+    const fastToggle = screen.getByTestId('claude-fast-mode-toggle')
+    expect(fastToggle).toHaveClass('hover:bg-[var(--color-surface-hover)]', 'rounded-[var(--radius-sm)]')
+    expect(fastToggle).not.toHaveClass('hover:bg-[var(--color-surface-container)]')
+
+    Object.assign(runtimeMocks, { isMobileViewport: true, isDesktopRuntime: false })
+    rerender(<ModelSelector runtimeKey="claude-session" />)
+    expect(screen.getByTestId('claude-fast-mode-toggle')).toHaveClass('rounded-[var(--radius-control)]')
+    Object.assign(runtimeMocks, { isMobileViewport: false, isDesktopRuntime: false })
+    rerender(<ModelSelector runtimeKey="claude-session" />)
+
     await clickByRole('Effort: High')
     const claudeFastSwitch = screen.getByRole('switch', { name: 'Fast mode' })
     expect(claudeFastSwitch).not.toBeDisabled()
@@ -2046,7 +2056,9 @@ describe('controlled runtime pickers outside the composer', () => {
     await clickByRole(/Antigravity/)
     expect(discoverMock).toHaveBeenCalledTimes(1)
     const dropdown = screen.getByTestId('model-selector-dropdown')
-    expect(within(dropdown).getByTestId('antigravity-models-loading')).toBeInTheDocument()
+    const loadingNotice = within(dropdown).getByTestId('antigravity-models-loading')
+    expect(loadingNotice).toBeInTheDocument()
+    expect(loadingNotice.querySelector('svg.animate-spin')).toBeInTheDocument()
     expect(within(dropdown).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
 
     act(() => {
@@ -2056,7 +2068,9 @@ describe('controlled runtime pickers outside the composer', () => {
       })
     })
     rerender(<ModelSelector runtimeKey="ag-unchecked" lockedProviderId="antigravity-acp" />)
-    expect(screen.getByTestId('model-selector-dropdown')).toHaveTextContent('agy acp --login')
+    const notice = within(screen.getByTestId('model-selector-dropdown')).getByRole('status')
+    expect(notice).toHaveTextContent('agy acp --login')
+    expect(notice).toHaveClass('rounded-[var(--radius-control)]')
     expect(within(screen.getByTestId('model-selector-dropdown')).queryByRole('button', { name: /Default model/ })).not.toBeInTheDocument()
   })
 
@@ -2103,7 +2117,9 @@ describe('controlled runtime pickers outside the composer', () => {
     // Switching from Neon (xhigh) to Carbon (3 levels) clamps effort to Carbon's default (high)
     await clickByRole('Gemini 4 Neon, Antigravity')
     let dropdown = within(screen.getByTestId('model-selector-dropdown'))
-    fireEvent.click(dropdown.getByRole('button', { name: /Gemini 4 Carbon/ }))
+    const carbonButton = dropdown.getByRole('button', { name: /Gemini 4 Carbon/ })
+    expect(carbonButton).toHaveAttribute('type', 'button')
+    fireEvent.click(carbonButton)
     expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
       providerId: 'antigravity-acp',
       modelId: 'gemini-4-carbon',

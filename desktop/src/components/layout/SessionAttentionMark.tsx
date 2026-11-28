@@ -21,12 +21,11 @@ import { CircleAlert } from 'lucide-react'
  * and an empty span's aria-label is not one, so `status` promised an
  * announcement nothing delivers. The svg inside is hidden for the same reason.
  *
- * The colour is `--color-on-warning-container`, the darker of the two warning
- * tokens, not `--color-warning`. This is a bare graphic that has to clear 3:1 on
- * every ground it can sit on, and `--color-warning` does not: it is 2.92:1 on
- * warm-classic's hovered sidebar row. The two are the same colour in the ink
- * themes, where nothing changes. `contrast.test.ts` measures all four grounds
- * in all six themes.
+ * The colour is `--color-on-warning-container`, the higher-contrast warning
+ * ink token, not `--color-warning`. This is a bare graphic that has to clear
+ * 3:1 on every ground it can sit on (canvas, sidebar, hover, active tab), and
+ * `--color-on-warning-container` stays safely above that bar in both light
+ * and dark themes. `contrast.test.ts` verifies every ground in both themes.
  */
 export function SessionAttentionMark({ label }: { label: string }) {
   return (

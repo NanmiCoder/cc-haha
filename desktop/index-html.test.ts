@@ -60,4 +60,66 @@ describe('desktop index startup diagnostics', () => {
     expect(directives.get('object-src')).toEqual(["'none'"])
     expect(directives.get('worker-src')).toEqual(["'self'", 'blob:'])
   })
+
+  it('marks the floating usage widget window transparent before first paint', () => {
+    const document = new DOMParser().parseFromString(html, 'text/html')
+    const windowKindScript = Array.from(document.scripts).find(script =>
+      script.textContent?.includes('usageWidgetWindow'),
+    )
+    expect(windowKindScript).toBeDefined()
+
+    const mockWindow = { location: { search: '?usageWidgetWindow=1' } }
+    new Function('window', 'document', windowKindScript!.textContent!)(mockWindow, document)
+    expect(document.documentElement.dataset.windowKind).toBe('usage-widget')
+
+    expect(html).toContain('html[data-window-kind="usage-widget"]')
+    expect(html).toContain('html[data-window-kind="usage-widget"] #root { background: transparent !important; }')
+  })
+
+  it.each([
+    {
+      theme: 'dark',
+      bg: 'rgb(24, 24, 24)',
+      panelBg: 'rgb(33, 33, 33)',
+      border: 'rgb(43, 43, 43)',
+      text: 'rgb(223, 223, 223)',
+      preBg: 'rgb(34, 34, 34)',
+    },
+    {
+      theme: 'white',
+      bg: 'rgb(255, 255, 255)',
+      panelBg: 'rgb(255, 255, 255)',
+      border: 'rgb(232, 232, 232)',
+      text: 'rgb(26, 28, 31)',
+      preBg: 'rgb(243, 243, 243)',
+    },
+  ])('renders pure-neutral $theme startup error colors matching the pre-paint theme', ({ theme, bg, panelBg, border, text, preBg }) => {
+    const document = new DOMParser().parseFromString(html, 'text/html')
+    document.documentElement.dataset.theme = theme
+    const watchdog = Array.from(document.scripts).find(script =>
+      script.textContent?.includes('__CC_HAHA_SHOW_STARTUP_ERROR__'),
+    )!
+    vi.useFakeTimers()
+    try {
+      const mockWindow = Object.assign(new EventTarget(), {
+        location: { href: 'file:///desktop/dist/index.html' },
+        setTimeout,
+        clearTimeout,
+      })
+      new Function('window', 'document', watchdog.textContent!)(mockWindow, document)
+      mockWindow.dispatchEvent(new ErrorEvent('error', { message: 'Boom' }))
+
+      const shell = document.querySelector('main') as HTMLElement
+      const panel = document.querySelector('section') as HTMLElement
+      const pre = document.querySelector('pre') as HTMLElement
+      expect(shell.style.backgroundColor).toBe(bg)
+      expect(shell.style.color).toBe(text)
+      expect(panel.style.backgroundColor).toBe(panelBg)
+      expect(panel.style.borderColor).toBe(border)
+      expect(pre.style.backgroundColor).toBe(preBg)
+      expect(pre.style.color).toBe(text)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -27,7 +27,7 @@ export function BrowserUseEnableDialog({
       loading={loading}
       body={(
         <div className="space-y-4 text-[13px] leading-[1.6] text-[var(--color-text-secondary)]">
-          <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] bg-[var(--color-info-container)] px-3 py-2.5 text-[var(--color-on-info-container)]">
+          <div className="flex items-start gap-2.5 rounded-[var(--radius-card-inner)] bg-[var(--color-info-container)] px-3 py-2.5 text-[var(--color-on-info-container)]">
             <Globe size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0" />
             <p className="font-medium">{t('settings.browserUse.enableDialogSummary')}</p>
           </div>
@@ -36,7 +36,7 @@ export function BrowserUseEnableDialog({
             <li>{t('settings.browserUse.enableDialogChrome')}</li>
             <li>{t('settings.browserUse.enableDialogTakeover')}</li>
           </ul>
-          <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+          <p className="rounded-[var(--radius-card-inner)] bg-[var(--color-surface-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
             {t('settings.browserUse.enableDialogNoOsPerms')}
           </p>
         </div>
@@ -61,19 +61,21 @@ export function BrowserUseEnableDialog({
 const TARGET_CYCLE: readonly BrowserPreferredTarget[] = ['auto', 'workspace', 'chrome']
 
 /**
- * Compact target selector chip rendered in both composers only while Browser
- * Use is enabled. Clicking the target label cycles Auto -> Workspace -> Chrome;
- * the trailing close button turns Browser Use off in one click.
+ * Compact target selector chip shown in the composer toolbar and message editor
+ * while Browser Use is armed for the next message. Clicking the target label
+ * cycles Auto -> Workspace -> Chrome; the trailing close button disarms it for
+ * this message. Without `onChange` and `onRemove` it is the read-only record
+ * on a sent message.
  */
 export function BrowserUseTargetPill({
   target,
   onChange,
-  onDisable,
+  onRemove,
   touch = false,
 }: {
   target: BrowserPreferredTarget
-  onChange: (next: BrowserPreferredTarget) => void
-  onDisable: () => void
+  onChange?: (next: BrowserPreferredTarget) => void
+  onRemove?: () => void
   touch?: boolean
 }) {
   const t = useTranslation()
@@ -83,32 +85,45 @@ export function BrowserUseTargetPill({
       ? 'settings.browserUse.targetChrome'
       : 'settings.browserUse.targetAuto'
   const nextTarget = TARGET_CYCLE[(TARGET_CYCLE.indexOf(target) + 1) % TARGET_CYCLE.length] ?? 'auto'
+  const labelContent = (
+    <>
+      <Globe size={12} strokeWidth={1.75} aria-hidden="true" />
+      <span>{t('chat.capabilities.browserUseShort')}</span>
+      <span className="opacity-75">· {t(labelKey)}</span>
+    </>
+  )
 
   return (
     <span
       data-testid="browser-use-target-pill"
-      className={`control-bevel inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-info-container)] pl-2 text-xs font-medium text-[var(--color-on-info-container)] ${touch ? 'h-9' : 'h-6'}`}
+      className={`control-bevel inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] ${onChange || onRemove ? 'pl-1' : 'px-2'} text-xs font-medium text-[var(--color-on-brand-soft)] ${touch ? 'h-9' : 'h-6'}`}
     >
-      <button
-        type="button"
-        onClick={() => onChange(nextTarget)}
-        aria-label={t('chat.capabilities.browserUseTargetCycle', { target: t(labelKey) })}
-        title={t('chat.capabilities.browserUseTargetCycle', { target: t(labelKey) })}
-        className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-      >
-        <Globe size={12} strokeWidth={1.75} aria-hidden="true" />
-        <span>{t('chat.capabilities.browserUseShort')}</span>
-        <span className="opacity-75">· {t(labelKey)}</span>
-      </button>
-      <button
-        type="button"
-        onClick={onDisable}
-        aria-label={t('chat.capabilities.browserUseDisable')}
-        title={t('chat.capabilities.browserUseDisable')}
-        className={`inline-flex items-center justify-center rounded-[var(--radius-xs)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${touch ? 'h-9 w-9' : 'h-6 w-6'}`}
-      >
-        <X size={12} strokeWidth={1.75} aria-hidden="true" />
-      </button>
+      {onChange ? (
+        <button
+          type="button"
+          onClick={() => onChange(nextTarget)}
+          aria-label={t('chat.capabilities.browserUseTargetCycle', { target: t(labelKey) })}
+          title={t('chat.capabilities.browserUseTargetCycle', { target: t(labelKey) })}
+          className="inline-flex h-full cursor-pointer items-center gap-1 rounded-[var(--radius-xs)] px-1 text-left hover:bg-[var(--color-brand-soft-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        >
+          {labelContent}
+        </button>
+      ) : (
+        <span className="inline-flex items-center gap-1">
+          {labelContent}
+        </span>
+      )}
+      {onRemove ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={t('chat.capabilities.browserUseRemove')}
+          title={t('chat.capabilities.browserUseRemove')}
+          className={`inline-flex h-full cursor-pointer items-center justify-center rounded-[var(--radius-xs)] hover:bg-[var(--color-brand-soft-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${touch ? 'w-9' : 'w-6'}`}
+        >
+          <X size={12} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      ) : null}
     </span>
   )
 }

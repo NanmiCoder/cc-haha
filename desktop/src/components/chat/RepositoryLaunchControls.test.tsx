@@ -1646,5 +1646,32 @@ describe('RepositoryLaunchControls', () => {
       expect(within(menu).getByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
       expect(within(menu).queryAllByRole('menuitemradio')).toHaveLength(0)
     })
+
+    it('uses Spinner while loading context and V6C radius tokens on the reveal skeleton', async () => {
+      let resolveContext!: (value: typeof okRepositoryContext) => void
+      apiMocks.getRepositoryContext.mockImplementation(() => new Promise((resolve) => {
+        resolveContext = resolve
+      }))
+
+      render(<ControlledHarness />)
+      await openEmptyPill()
+      fireEvent.click(await screen.findByRole('button', { name: 'Pick /repo' }))
+
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      const skeleton = menu.querySelector('[aria-hidden="true"].animate-pulse')
+      expect(skeleton).toBeInTheDocument()
+      expect(skeleton?.querySelector('.h-11')).toHaveClass('rounded-[var(--radius-control)]')
+      const cardSkeletons = skeleton?.querySelectorAll('.h-16')
+      expect(cardSkeletons).toHaveLength(2)
+      for (const card of cardSkeletons ?? []) {
+        expect(card).toHaveClass('rounded-[var(--radius-card-inner)]')
+      }
+
+      const pill = screen.getByRole('button', { name: /Location: repo/ })
+      expect(pill.querySelector('svg.animate-spin')).toBeInTheDocument()
+
+      resolveContext(okRepositoryContext)
+      await screen.findByRole('menuitem', { name: /Branch/ })
+    })
   })
 })

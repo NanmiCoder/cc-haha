@@ -54,6 +54,8 @@ export type DesktopUsageWidgetMenuBarSync = {
 
 export type DesktopUsageWidgetSettingsTab = 'general' | 'providers'
 
+export type DesktopUsageWidgetTheme = 'white' | 'dark'
+
 export type DialogFileFilter = {
   name: string
   extensions: string[]
@@ -318,11 +320,13 @@ export type BrowserUseHostEvent =
   | {
       type: 'focus-tab'
       tabId: string
+      sessionId?: string
       revealWorkbench?: boolean
     }
   | {
       type: 'close-tab'
       tabId: string
+      sessionId?: string
     }
   | {
       type: 'control-state'
@@ -614,8 +618,10 @@ export type DesktopHost = {
     focusMainWindow(): Promise<void>
     openSettings(tab?: DesktopUsageWidgetSettingsTab): Promise<void>
     notifyPreferencesChanged(): Promise<void>
+    getTheme?(): Promise<DesktopUsageWidgetTheme>
     onVisibilityChanged(handler: (visible: boolean) => void): Promise<DesktopHostUnlisten>
     onPreferencesChanged(handler: () => void): Promise<DesktopHostUnlisten>
+    onThemeChanged?(handler: (theme: DesktopUsageWidgetTheme) => void): Promise<DesktopHostUnlisten>
   }
   dialogs: {
     open(options?: DialogOpenOptions): Promise<string | string[] | null>
@@ -672,7 +678,7 @@ export type DesktopHost = {
     /** Registers the page's `<webview>` guest with the host and starts `url`. */
     create(
       tabId: string,
-      options: { storageId: string; url?: string; webContentsId: number },
+      options: { sessionId?: string; storageId: string; url?: string; webContentsId: number },
     ): Promise<void>
     navigate(tabId: string, url: string): Promise<void>
     goBack(tabId: string): Promise<void>

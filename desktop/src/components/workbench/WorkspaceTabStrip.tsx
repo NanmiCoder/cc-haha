@@ -327,6 +327,9 @@ export function WorkspaceTabStrip({
                       tone={browserAgentStates[tab.browserTabId]?.controlState === 'takeover' ? 'warning' : 'info'}
                       size="sm"
                       pulse
+                      label={browserAgentStates[tab.browserTabId]?.controlState === 'takeover'
+                        ? t('browserUse.takeoverCard.title')
+                        : t('browserUse.overlay.controlling')}
                     />
                   ) : null}
                   {/*

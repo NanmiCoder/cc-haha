@@ -63,7 +63,7 @@ const RESOLVED_ROW =
 
 /** Sunken inset for commands, paths and raw input inside the card. */
 const INSET_BLOCK =
-  'rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-code-fg)]'
+  'rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-code-fg)]'
 
 function renderPermissionPreview(toolName: string, input: unknown, antigravityToolName?: string) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
@@ -267,7 +267,7 @@ export function PermissionDialog({
         {preview ? (
           <div className="space-y-2">
             {details.primary && toolName !== 'Bash' && toolName !== 'run_command' && effectiveAntigravityToolName !== 'run_command' ? (
-              <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+              <div className="flex items-center gap-2 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
                 <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <span className="truncate">{details.primary}</span>
               </div>
@@ -275,7 +275,7 @@ export function PermissionDialog({
             {preview}
           </div>
         ) : details.primary ? (
-          <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+          <div className="flex items-center gap-2 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
             {toolName === 'Glob' || toolName === 'Grep'
               ? <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
               : <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />}
@@ -518,7 +518,7 @@ function ExitPlanModePermissionDialog({
             {t('permission.planExecutionModel')}
           </span>
           <div
-            className={`flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] ${
+            className={`flex min-w-0 items-center gap-1.5 rounded-[var(--radius-control)] ${
               executionRuntime ? 'bg-[var(--color-surface-container)] pr-2' : ''
             }`}
             data-testid="plan-execution-model"
@@ -543,7 +543,7 @@ function ExitPlanModePermissionDialog({
           </div>
         </div>
         {runtimeError && (
-          <p id={errorId} role="alert" className="text-xs text-[var(--color-text-secondary)]">{runtimeError}</p>
+          <p id={errorId} role="alert" className="text-xs text-[var(--color-error)]">{runtimeError}</p>
         )}
       </div>
 

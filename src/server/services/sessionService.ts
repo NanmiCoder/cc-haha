@@ -3847,7 +3847,7 @@ export class SessionService {
           totalTtftDuration: 0,
           totalDuration:
             firstUsageAt !== null && lastUsageAt !== null
-              ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
+              ? Math.max(0, lastUsageAt - firstUsageAt)
               : 0,
           totalLinesAdded: 0,
           totalLinesRemoved: 0,

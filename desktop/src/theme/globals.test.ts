@@ -800,8 +800,8 @@ describe('V6C Calm Liquid Glass contract', () => {
     // `bg-[var(--color-brand)]` on `Button variant="accent"` cannot turn it blue.
     expect(getThemeBlock('.v6c-send-btn')).toContain('background-image: linear-gradient(var(--v6c-send-fill), var(--v6c-send-fill));')
     expect(getThemeBlock('.v6c-send-btn:disabled')).toContain('background-image: linear-gradient(var(--color-surface-container-high), var(--color-surface-container-high));')
-    // Under-composer strip stays flush on dark canvas without an elevated slab.
-    expect(getThemeBlock('[data-testid="composer-context-strip"].surface-glass')).toContain('background: transparent;')
+    // Under-composer strip no longer carries `.surface-glass`, so no dead glass override rule should linger.
+    expect(normalizedCss).not.toContain('[data-testid="composer-context-strip"].surface-glass')
     expect(normalizedCss).toContain('.codex-edge-fade {')
     expect(normalizedCss).toContain('.codex-work-row {')
     expect(normalizedCss).toContain('.thinking-cursor {')
@@ -855,8 +855,8 @@ describe('V6C Calm Liquid Glass contract', () => {
   })
 
   it('ships the shared V6C utilities inside @layer components', () => {
-    const layered = normalizedCss.slice(normalizedCss.indexOf('/* ─── V6C Calm Liquid Glass utilities'))
-    const layerStart = normalizedCss.lastIndexOf('@layer components {', normalizedCss.indexOf('/* ─── V6C Calm Liquid Glass utilities'))
+    const layered = normalizedCss.slice(normalizedCss.indexOf('/* ─── V6C Pure Neutral surface utilities'))
+    const layerStart = normalizedCss.lastIndexOf('@layer components {', normalizedCss.indexOf('/* ─── V6C Pure Neutral surface utilities'))
     expect(layerStart).toBeGreaterThanOrEqual(0)
     for (const selector of [
       '.v6c-ambient-shell {', '.v6c-main-canvas {', '.v6c-sidebar-glass {', '.v6c-glass-card {',
@@ -965,5 +965,52 @@ describe('V6C Calm Liquid Glass contract', () => {
     const darkHighlight = /--v6c-row-highlight:\s*([^;]+);/.exec(dark)?.[1] ?? ''
     const darkGlass = /--color-surface-glass:\s*([^;]+);/.exec(dark)?.[1] ?? ''
     expect(channelDelta(parseHex(darkHighlight), parseRgba(darkGlass))).toBeGreaterThanOrEqual(15)
+  })
+
+  it('uses V6C semantic warning tokens on .pet-permission-badge and pure-neutral RGB on dark pet surfaces', () => {
+    const badge = getThemeBlock('.pet-permission-badge')
+    const badgeHover = getThemeBlock('.pet-permission-badge:hover')
+    expect(badge).toContain('border-color: var(--color-warning);')
+    expect(badge).toContain('background: var(--color-warning-container);')
+    expect(badge).toContain('color: var(--color-on-warning-container);')
+    expect(badge).not.toMatch(/#[0-9a-f]{3,6}/i)
+    expect(badgeHover).toContain('background: var(--color-warning-container);')
+    expect(badgeHover).not.toMatch(/#[0-9a-f]{3,6}/i)
+
+    for (const selector of ["html[data-theme='dark'] .pet-activity-card", "html[data-theme='dark'] .pet-panel-toggle"]) {
+      const block = getThemeBlock(selector)
+      const rgbaMatches = [...block.matchAll(/rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,/g)]
+      expect(rgbaMatches.length, `${selector} should declare rgba colors`).toBeGreaterThan(0)
+      for (const [, r, g, b] of rgbaMatches) {
+        expect(Number(r), `${selector} dark rgba(${r},${g},${b}) must be pure neutral (R === G)`).toBe(Number(g))
+        expect(Number(g), `${selector} dark rgba(${r},${g},${b}) must be pure neutral (G === B)`).toBe(Number(b))
+      }
+    }
+  })
+
+  it('aligns .settings-zoom-preview corner radius with --radius-sm', () => {
+    expect(getThemeBlock('.settings-zoom-preview')).toContain('border-radius: var(--radius-sm);')
+  })
+
+  it('preserves V6C status rings layered on top of .dropdown-glass overlays', () => {
+    const componentsBlock = getThemeBlock('@layer components')
+    const dropdownIdx = componentsBlock.indexOf('.dropdown-glass {')
+    expect(dropdownIdx).toBeGreaterThanOrEqual(0)
+    for (const ring of ['running', 'waiting', 'success', 'error'] as const) {
+      const selector = `.dropdown-glass.v6c-ring-${ring}`
+      const rule = getThemeBlock(selector)
+      expect(rule).toContain(`var(--v6c-ring-${ring})`)
+      expect(rule).toContain('var(--shadow-dropdown-glass)')
+      expect(rule).toContain('var(--glass-rim)')
+      expect(componentsBlock.indexOf(`${selector} {`)).toBeGreaterThan(dropdownIdx)
+    }
+  })
+
+  it('reveals composer attachment remove badges and [data-touch-reveal] controls on Touch-H5 without exposing MessageActionBar', () => {
+    const touchSection = getCssBetween('/* ============================================================================\n   Touch-H5', '/* ─── Companion pet window')
+    expect(touchSection).toContain('html[data-touch-h5] [data-touch-reveal]')
+    expect(touchSection).toContain('html[data-touch-h5] [data-testid="composer-attachment-tray"] .group > button.opacity-0')
+    expect(touchSection).toContain('.app-shell--mobile [data-testid="composer-attachment-tray"] .group > button.opacity-0')
+    expect(touchSection).not.toContain('message-action-bar')
   })
 })

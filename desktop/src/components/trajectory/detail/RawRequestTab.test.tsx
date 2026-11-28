@@ -111,12 +111,23 @@ describe('RawRequestTab', () => {
     expect(screen.getByText('end_turn')).toBeInTheDocument()
     // The harness-injected reminder is split out of the conversation.
     expect(screen.getByText('Injected context')).toBeInTheDocument()
+    const injectedBtn = screen.getByRole('button', { name: /System reminder/i })
+    expect(injectedBtn).toHaveClass('focus-visible:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-[var(--color-border-focus)]')
 
-    fireEvent.click(screen.getByRole('button', { name: /System prompt/ }))
+    const systemPromptToggle = screen.getByRole('button', { name: /System prompt/ })
+    expect(systemPromptToggle).toHaveClass(
+      'rounded-[var(--radius-control)]',
+      'focus-visible:outline-none',
+      'focus-visible:ring-2',
+      'focus-visible:ring-[var(--color-border-focus)]',
+    )
+    fireEvent.click(systemPromptToggle)
     expect(await screen.findByText('You are the harness system prompt.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Tools/ }))
     const tools = screen.getByRole('button', { name: /Tools/ }).closest('section') ?? document.body
-    expect(within(tools as HTMLElement).getByRole('button', { name: 'Bash' })).toBeInTheDocument()
+    const bashBtn = within(tools as HTMLElement).getByRole('button', { name: 'Bash' })
+    expect(bashBtn).toBeInTheDocument()
+    expect(bashBtn).toHaveClass('focus-visible:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-[var(--color-border-focus)]')
   })
 
   it('says the response was never captured and offers the switch right here', async () => {

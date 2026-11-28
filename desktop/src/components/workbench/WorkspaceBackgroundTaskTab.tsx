@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Check, Copy, LoaderCircle, RefreshCw, Square, WrapText } from 'lucide-react'
+import { ArrowDown, Check, Copy, Square, WrapText } from 'lucide-react'
 import { sessionsApi, type SessionBackgroundTaskOutputResult } from '@/api/sessions'
 import { ApiError } from '@/api/client'
 import { StatusDot } from '@/components/ui/Badge'
-import { Button } from '@/components/ui/Button'
 import { CopyButton } from '@/components/ui/CopyButton'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton } from '@/components/ui/IconButton'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { useTranslation } from '@/i18n'
@@ -217,15 +217,11 @@ export function WorkspaceBackgroundTaskTab({
         <div className="flex shrink-0 items-center gap-1">
           {isRunning ? (
             <IconButton
-              icon={stopping ? (
-                <LoaderCircle size={14} strokeWidth={1.75} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              ) : (
-                <Square size={12} strokeWidth={1.75} aria-hidden="true" />
-              )}
+              icon={<Square size={12} strokeWidth={1.75} aria-hidden="true" />}
               label={stopLabel}
               size="sm"
               tone="muted"
-              disabled={stopping}
+              loading={stopping}
               data-testid="background-task-stop"
               onClick={() => stopBackgroundTask(sessionId, tab.taskId)}
             />
@@ -293,16 +289,14 @@ export function WorkspaceBackgroundTaskTab({
               <LoadingState variant="inline" size="sm" label={t('workspace.backgroundTask.loading')} />
             </div>
           ) : error && lines.length === 0 ? (
-            <div role="alert" className="flex flex-col items-center justify-center gap-2.5 px-6 py-10 text-center">
-              <p className="text-[12px] text-[var(--color-text-secondary)]">{error}</p>
-              <Button
-                variant="secondary"
-                size="xs"
-                icon={<RefreshCw size={12} strokeWidth={1.75} aria-hidden="true" />}
-                onClick={() => void fetchOutput()}
-              >
-                {t('common.retry')}
-              </Button>
+            <div className="px-4 py-6 font-sans">
+              <ErrorState
+                size="sm"
+                title={t('workspace.backgroundTask.loadFailed')}
+                detail={error !== t('workspace.backgroundTask.loadFailed') ? error : undefined}
+                onRetry={() => void fetchOutput()}
+                retryLabel={t('common.retry')}
+              />
             </div>
           ) : lines.length === 0 ? (
             <div
@@ -339,16 +333,15 @@ export function WorkspaceBackgroundTaskTab({
         </div>
 
         {awayFromBottom && lines.length > 0 ? (
-          <button
-            type="button"
+          <IconButton
+            icon={<ArrowDown size={15} strokeWidth={1.75} aria-hidden="true" />}
+            label={t('workspace.backgroundTask.scrollToBottom')}
+            size="md"
+            tone="secondary"
             data-testid="background-task-scroll-bottom"
-            aria-label={t('workspace.backgroundTask.scrollToBottom')}
-            title={t('workspace.backgroundTask.scrollToBottom')}
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 z-[var(--z-sticky)] inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)] shadow-[var(--shadow-overlay)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-          >
-            <ArrowDown size={15} strokeWidth={1.75} aria-hidden="true" />
-          </button>
+            className="dropdown-glass popover-motion absolute bottom-4 right-4 z-[var(--z-sticky)] rounded-[var(--radius-control)]"
+          />
         ) : null}
       </div>
     </div>

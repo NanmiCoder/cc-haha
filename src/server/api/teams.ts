@@ -14,6 +14,10 @@
 import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } from '../services/teamPlanService.js'
 import { TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
 import { isAntigravitySwarmTeamName, teamService } from '../services/teamService.js'
+import {
+  getAntigravitySwarmRuntimeControlView,
+  resumeAntigravitySwarm,
+} from '../services/antigravitySwarmAdapter.js'
 import { changeTeamMemberRuntime } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureCliSessionStartedForControl } from '../ws/handler.js'
@@ -31,11 +35,11 @@ export async function handleTeamsApi(
 
     if (teamName && segments[3] === 'runtime-control') {
       if (method === 'GET' && !segments[4]) {
-        if (isAntigravitySwarmTeamName(teamName)) {
-          return Response.json({ control: null })
-        }
         const parsed = teamRuntimeControlIdentitySchema.safeParse(Object.fromEntries(requestUrl.searchParams))
         if (!parsed.success) throw ApiError.badRequest('Team runtime identity is required')
+        if (isAntigravitySwarmTeamName(teamName)) {
+          return Response.json({ control: await getAntigravitySwarmRuntimeControlView(teamName, parsed.data) })
+        }
         return Response.json({ control: await getTeamRuntimeControlView(teamName, parsed.data) })
       }
       if (method === 'POST' && segments[4] === 'resume') {
@@ -43,6 +47,15 @@ export async function handleTeamsApi(
         try { raw = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
         const parsed = teamRuntimeControlActionSchema.safeParse(raw)
         if (!parsed.success) throw ApiError.badRequest('A current team revision and fresh human resume intent are required')
+        if (isAntigravitySwarmTeamName(teamName)) {
+          return Response.json({
+            control: await resumeAntigravitySwarm(
+              teamName,
+              parsed.data,
+              id => ensureCliSessionStartedForControl(id, requestUrl),
+            ),
+          })
+        }
         return Response.json({ control: await resumeReviewedTeam(teamName, parsed.data, id => ensureCliSessionStartedForControl(id, requestUrl)) })
       }
       throw ApiError.badRequest('Unknown team runtime action')
@@ -171,7 +184,12 @@ export async function handleTeamsApi(
         teamName,
         agentId,
         body.content ?? '',
-        leadSessionId ? { leadSessionId } : undefined,
+        {
+          ...(leadSessionId ? { leadSessionId } : {}),
+          ...(isAntigravitySwarmTeamName(teamName)
+            ? { startLeader: id => ensureCliSessionStartedForControl(id, requestUrl) }
+            : {}),
+        },
       )
       return Response.json(result ?? { ok: true })
     }

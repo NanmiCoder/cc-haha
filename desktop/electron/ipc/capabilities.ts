@@ -221,8 +221,9 @@ const workspaceBrowserTab: Validator = value =>
 // the main process adopts it solely if it is a browser guest of the main window.
 const workspaceBrowserCreate: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['tabId', 'storageId', 'url', 'webContentsId'])
+  && hasOnlyKeys(value, ['tabId', 'sessionId', 'storageId', 'url', 'webContentsId'])
   && isWorkspaceBrowserId(value.tabId)
+  && (value.sessionId === undefined || sessionIdPayload(value.sessionId))
   && isWorkspaceBrowserId(value.storageId)
   && (value.url === undefined || (typeof value.url === 'string' && value.url.length <= 8_192))
   && typeof value.webContentsId === 'number'
@@ -423,6 +424,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow]: noPayload,
   [ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings]: usageWidgetSettingsTab,
   [ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged]: noPayload,
+  [ELECTRON_IPC_CHANNELS.usageWidgetGetTheme]: noPayload,
   [ELECTRON_IPC_CHANNELS.dialogOpen]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.dialogSave]: optionalRecord,
   [ELECTRON_IPC_CHANNELS.updateCheck]: updateCheckOptions,
@@ -519,6 +521,7 @@ const usageWidgetWindowChannels = new Set<ElectronIpcChannel>([
   ELECTRON_IPC_CHANNELS.usageWidgetFocusMainWindow,
   ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings,
   ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged,
+  ELECTRON_IPC_CHANNELS.usageWidgetGetTheme,
 ])
 
 export function isElectronIpcChannel(channel: string): channel is ElectronIpcChannel {

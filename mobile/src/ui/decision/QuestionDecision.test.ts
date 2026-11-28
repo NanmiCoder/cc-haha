@@ -37,6 +37,9 @@ function checkQuestionPage(body: string, platform: 'ios' | 'android' | 'web' = '
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
       Button: 'Button', HaloDot: 'HaloDot', Icon: 'Icon', InlineError: 'InlineError', Sheet: 'Sheet', Spinner: 'Spinner', TextButton: 'TextButton', useColors: () => ({ bg: '#F4F3F0' }),
     }))
+    mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({
+      useTheme: () => ({ colors: { bg: '#F4F3F0' }, shadows: {}, dark: false, scheme: 'light' }),
+    }))
     mock.module(${JSON.stringify(import.meta.resolve('../KeyboardViewport'))}, () => ({ KeyboardViewport: 'KeyboardViewport' }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('./parts'))}, () => ({
@@ -508,7 +511,7 @@ test('real QuestionPage + real Sheet mounts only one native Modal and unmounts N
     }))
     mock.module(${JSON.stringify(import.meta.resolve('expo-router'))}, () => ({ router: { canGoBack: () => false, back: () => {}, replace: () => {} } }))
     mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({
-      useTheme: () => ({ colors: { bg: '#F4F3F0', card: '#fff', scrim: 'rgba(0,0,0,0.4)', sheet: '#fff', chevron: '#999', ink: '#111', ink2: '#333', ink3: '#666', hair: '#ddd', fill: '#eee', run: '#2563eb', btn: '#111', btnInk: '#fff' }, dark: false }),
+      useTheme: () => ({ colors: { bg: '#F4F3F0', card: '#fff', cardRaised: '#fff', scrim: 'rgba(0,0,0,0.4)', sheet: '#fff', chevron: '#999', ink: '#111', ink2: '#333', ink3: '#666', hair: '#ddd', fill: '#eee', run: '#2563eb', btn: '#111', btnInk: '#fff' }, shadows: { sheetUp: '0 -8px 28px rgba(0,0,0,0.10)' }, dark: false, scheme: 'light' }),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../KeyboardViewport'))}, () => ({ KeyboardViewport: 'KeyboardViewport' }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))

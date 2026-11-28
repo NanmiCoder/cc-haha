@@ -35,14 +35,14 @@ const TaskActivity = (
   'widget'
   const dim = environment.isLuminanceReduced
   const stale = environment.isStale || props.connectionState === 'stale'
-  const ink = dim ? '#CFCCC5' : '#EDEAE4'
-  const ink2 = dim ? 'rgba(207,204,197,0.72)' : 'rgba(237,234,228,0.72)'
-  const ink3 = dim ? 'rgba(207,204,197,0.6)' : 'rgba(237,234,228,0.6)'
-  const attn = '#E2B055'
-  const run = '#8DB0F4'
-  const ok = '#6AC18C'
-  const err = '#EA736A'
-  const glass = 'rgba(58,56,52,0.62)'
+  const ink = dim ? '#B4B4B4' : '#DFDFDF'
+  const ink2 = dim ? 'rgba(180,180,180,0.72)' : 'rgba(223,223,223,0.72)'
+  const ink3 = dim ? 'rgba(180,180,180,0.6)' : 'rgba(223,223,223,0.6)'
+  const attn = '#FF8549'
+  const run = '#66B5FF'
+  const ok = '#40C977'
+  const err = '#FA423E'
+  const glass = 'rgba(43,43,43,0.72)'
   const waiting = !stale && props.status === 'waiting'
   const running = !stale && props.status === 'running'
   const completed = !stale && props.status === 'completed'
@@ -83,7 +83,7 @@ const TaskActivity = (
         <Circle
           modifiers={[
             frame({ width: size + 6, height: size + 6 }),
-            foregroundStyle('rgba(141,176,244,0.25)'),
+            foregroundStyle('rgba(102,181,255,0.25)'),
           ]}
         />
         <Circle
@@ -98,9 +98,9 @@ const TaskActivity = (
       <Text
         modifiers={[
           font({ size: 15, weight: 'semibold' }),
-          foregroundStyle(primary ? '#111111' : ink),
+          foregroundStyle(primary ? '#141414' : ink),
           frame({ maxWidth: Infinity, minHeight: 44 }),
-          background(primary ? '#F3F1EC' : 'rgba(255,255,255,0.16)'),
+          background(primary ? '#FFFFFF' : 'rgba(255,255,255,0.16)'),
           clipShape('capsule'),
         ]}
       >

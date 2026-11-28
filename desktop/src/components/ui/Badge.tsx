@@ -26,7 +26,7 @@ export type BadgeProps = Omit<HTMLAttributes<HTMLSpanElement>, 'children' | 'tit
    * `/20` alpha the hand-rolled badges used, which Safari 15 drops entirely.
    */
   bordered?: boolean
-  /** Set false for counters, which read better with a square-ish corner. */
+  /** Set true for circular pill counters; defaults to false (V6C 6px corner). */
   pill?: boolean
   icon?: ReactNode
   /** Tabular figures for versions, hashes and paths. */
@@ -99,7 +99,7 @@ export function Badge({
   variant = 'soft',
   size = 'xs',
   bordered = false,
-  pill = true,
+  pill = false,
   icon,
   mono = false,
   tabularNums = false,

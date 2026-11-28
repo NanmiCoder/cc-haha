@@ -154,7 +154,7 @@ function ActionRow({
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className="flex min-h-12 items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left text-[var(--color-text-primary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] disabled:text-[var(--color-text-tertiary)]"
+      className="v6c-pressable flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)] disabled:text-[var(--color-text-tertiary)]"
     >
       <span className="shrink-0 text-[var(--color-text-secondary)]">{icon}</span>
       <span className="flex min-w-0 flex-col">

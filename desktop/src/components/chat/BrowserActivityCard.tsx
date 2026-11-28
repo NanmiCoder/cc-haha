@@ -3,7 +3,6 @@ import {
   Check,
   ChevronRight,
   CircleAlert,
-  CircleCheck,
   CircleStop,
   CircleX,
   Eye,
@@ -20,11 +19,14 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { useTranslation } from '@/i18n'
 import { getDesktopHost } from '@/lib/desktopHost'
+import { getDisclosure, setDisclosure } from '@/lib/disclosureMemory'
 import { extractToolResultImages } from '@/lib/toolResultContent'
 import { useBrowserUseStore } from '@/stores/browserUseStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import type { UIMessage } from '@/types/chat'
+import type { ActivityStep, ToolErrorSeverity } from './activityGroupModel'
+import { ThinkingBlock } from './ThinkingBlock'
 import { describeBrowserToolCall, formatTakeoverReason } from './toolCallPresentation'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -85,7 +87,7 @@ function focusWorkspaceBrowserTab(sessionId: string | null | undefined, tabId?: 
   const workspaceStore = useWorkspaceStore.getState()
   if (tabId) {
     const owner = workspaceStore.findBrowserTabOwner(tabId)
-    if (owner) {
+    if (owner && (!sessionId || owner.sessionId === sessionId)) {
       workspaceStore.activateTab(owner.sessionId, owner.tabId)
       if (workspaceStore.getSession(owner.sessionId).layout === 'hidden') {
         workspaceStore.setLayout(owner.sessionId, 'split')
@@ -104,26 +106,62 @@ function focusWorkspaceBrowserTab(sessionId: string | null | undefined, tabId?: 
   }
 }
 
+function isBlockingBrowserError(
+  toolUseId: string,
+  result: ToolResult | undefined,
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>,
+): boolean {
+  if (!result?.isError) return false
+  if (!errorSeverityByToolUseId) return true
+  return errorSeverityByToolUseId.get(toolUseId) !== 'recovered'
+}
+
 export type BrowserActivityCardProps = {
   sessionId?: string | null
   toolCalls: ToolCall[]
+  /**
+   * Chronological activity steps (browser tool calls plus any interleaved
+   * thinking blocks in the same browser run). Falls back to `toolCalls` when omitted.
+   */
+  steps?: ActivityStep[]
   resultMap: Map<string, ToolResult>
+  errorSeverityByToolUseId?: ReadonlyMap<string, ToolErrorSeverity>
+  activeThinkingId?: string | null
   isStreaming?: boolean
+  /** True while this card is the tail of an active turn (bridges thinking gaps between tool calls). */
+  isLive?: boolean
+  disclosureKey?: string
+  presentation?: 'inline' | 'sheet'
 }
 
 /**
- * Collapsible Codex-style activity card for Browser Use tool runs.
- * Shows human-readable steps (with password fields masked), latest screenshot
- * thumbnail, and desktop/H5-aware controls (`View`, `Takeover`, `Stop`).
+ * Collapsible Codex-style calm work row for Browser Use tool runs.
+ * Stays calm and flicker-free across multi-step browser turns: keeps a single
+ * stable action button (`View` for Workspace Browser; `Take over` only for
+ * live System Chrome runs) and never swaps buttons or headers between steps.
  */
 export const BrowserActivityCard = memo(function BrowserActivityCard({
   sessionId,
   toolCalls,
+  steps: activitySteps,
   resultMap,
+  errorSeverityByToolUseId,
+  activeThinkingId,
   isStreaming = false,
+  isLive = false,
+  disclosureKey,
+  presentation = 'inline',
 }: BrowserActivityCardProps) {
   const t = useTranslation()
-  const [expanded, setExpanded] = useState(false)
+  const [localDisclosure, setLocalDisclosure] = useState({ expanded: false, rev: 0 })
+  const expanded = disclosureKey
+    ? (getDisclosure(disclosureKey) ?? localDisclosure.expanded)
+    : localDisclosure.expanded
+  const toggleExpanded = () => {
+    const next = !expanded
+    if (disclosureKey) setDisclosure(disclosureKey, next)
+    setLocalDisclosure((current) => ({ expanded: next, rev: current.rev + 1 }))
+  }
   const [previewOpen, setPreviewOpen] = useState(false)
   const isDesktop = getDesktopHost().isDesktop
 
@@ -135,54 +173,97 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
   )
   const browserUseConfig = useBrowserUseStore((state) => state.config)
 
-  const steps = useMemo(() => {
-    const list: Array<{
-      id: string
-      label: string
-      status: 'running' | 'done' | 'error' | 'stopped'
-    }> = []
-    for (const toolCall of toolCalls) {
-      const result = resultMap.get(toolCall.toolUseId)
-      const status: 'running' | 'done' | 'error' | 'stopped' = result
-        ? result.isError
-          ? 'error'
-          : 'done'
-        : toolCall.status === 'stopped'
-          ? 'stopped'
-          : 'running'
-      const described = describeBrowserToolCall(toolCall.toolName, toolCall.input, t)
-      for (const entry of described) {
-        list.push({
-          id: `${toolCall.id}:${entry.id}`,
-          label: entry.label,
-          status,
-        })
-      }
-    }
-    return list
-  }, [resultMap, t, toolCalls])
-
+  const hasActiveThinking = Boolean(activeThinkingId) && Boolean(
+    activitySteps?.some((step) => step.kind === 'thinking' && step.message.id === activeThinkingId),
+  )
   const hasUnresolved = toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status !== 'stopped')
-  const isRunning = hasUnresolved || (isStreaming && toolCalls.some((tc) => tc.status !== 'stopped' && !resultMap.has(tc.toolUseId)))
-  const hasError = toolCalls.some((tc) => resultMap.get(tc.toolUseId)?.isError)
-  const allStopped = !hasUnresolved && !hasError && toolCalls.some((tc) => !resultMap.has(tc.toolUseId) && tc.status === 'stopped')
+  const showsProgress = (hasUnresolved && (Boolean(isLive) || Boolean(isStreaming))) || hasActiveThinking
+  const lastToolCall = toolCalls.at(-1)
+  const lastResult = lastToolCall ? resultMap.get(lastToolCall.toolUseId) : undefined
   const hasDisabledError = toolCalls.some((tc) => {
     const result = resultMap.get(tc.toolUseId)
     if (!result?.isError) return false
     return DISABLED_ERROR_RE.test(extractResultText(result.content))
   })
-
-  // Only consult session-level liveActivities while THIS card is actively running
-  // so completed historical cards never bleed screenshots from a later turn.
-  const latestScreenshot = useMemo(
-    () => extractScreenshotFromResults(toolCalls, resultMap, isRunning ? liveActivities : EMPTY_ACTIVITIES),
-    [isRunning, liveActivities, resultMap, toolCalls],
+  const allStopped = !showsProgress && !lastResult?.isError && toolCalls.some((tc) => !resultMap.has(tc.toolUseId))
+  // Bridge brief LLM thinking gaps between consecutive Browser* tool calls in
+  // the same live turn so the header, icon, and controls never flicker on/off.
+  const isActive = showsProgress || (Boolean(isLive) && !allStopped && !hasDisabledError)
+  // Only surface a terminal red error when the run has settled and its final
+  // step failed (or Browser Use is disabled) — intermediate self-recovered
+  // errors stay visible inside the expanded timeline without flashing red.
+  const hasTerminalError = !isActive && (
+    Boolean(lastToolCall && isBlockingBrowserError(lastToolCall.toolUseId, lastResult, errorSeverityByToolUseId)) ||
+    hasDisabledError
   )
 
-  const latestActivity = isRunning ? liveActivities.at(-1) : undefined
-  const activeTabId = latestActivity?.tabId ?? (isRunning ? activeTakeover?.tabId : undefined)
-  const targetKind = latestActivity?.target ?? (isRunning ? activeTakeover?.target : undefined) ?? 'workspace'
-  const headerLabel = isRunning && steps.length > 0
+  const { steps, timelineEntries } = useMemo(() => {
+    type ActionEntry = {
+      kind: 'action'
+      id: string
+      label: string
+      status: 'running' | 'done' | 'error' | 'recovered' | 'stopped'
+    }
+    type TimelineEntry =
+      | ActionEntry
+      | {
+          kind: 'thinking'
+          id: string
+          content: string
+          isActive: boolean
+        }
+
+    const actionList: ActionEntry[] = []
+    const entryList: TimelineEntry[] = []
+    const sourceSteps: ActivityStep[] = activitySteps ?? toolCalls.map((toolCall) => ({ kind: 'tool', toolCall }))
+
+    for (const sourceStep of sourceSteps) {
+      if (sourceStep.kind === 'thinking') {
+        entryList.push({
+          kind: 'thinking',
+          id: `thinking:${sourceStep.message.id}`,
+          content: sourceStep.message.content,
+          isActive: sourceStep.message.id === activeThinkingId,
+        })
+        continue
+      }
+      const toolCall = sourceStep.toolCall
+      const result = resultMap.get(toolCall.toolUseId)
+      const status: ActionEntry['status'] = result
+        ? result.isError
+          ? isBlockingBrowserError(toolCall.toolUseId, result, errorSeverityByToolUseId)
+            ? 'error'
+            : 'recovered'
+          : 'done'
+        : toolCall.status === 'stopped' || !showsProgress
+          ? 'stopped'
+          : 'running'
+      const described = describeBrowserToolCall(toolCall.toolName, toolCall.input, t)
+      for (const entry of described) {
+        const actionEntry: ActionEntry = {
+          kind: 'action',
+          id: `${toolCall.id}:${entry.id}`,
+          label: entry.label,
+          status,
+        }
+        actionList.push(actionEntry)
+        entryList.push(actionEntry)
+      }
+    }
+    return { steps: actionList, timelineEntries: entryList }
+  }, [activeThinkingId, activitySteps, errorSeverityByToolUseId, resultMap, showsProgress, t, toolCalls])
+
+  // Only consult session-level liveActivities while THIS card is actively live
+  // so completed historical cards never bleed screenshots from a later turn.
+  const latestScreenshot = useMemo(
+    () => extractScreenshotFromResults(toolCalls, resultMap, isActive ? liveActivities : EMPTY_ACTIVITIES),
+    [isActive, liveActivities, resultMap, toolCalls],
+  )
+
+  const latestActivity = isActive ? liveActivities.at(-1) : undefined
+  const activeTabId = latestActivity?.tabId ?? (isActive ? activeTakeover?.tabId : undefined)
+  const targetKind = latestActivity?.target ?? (isActive ? activeTakeover?.target : undefined) ?? 'workspace'
+  const headerLabel = isActive && steps.length > 0
     ? steps[steps.length - 1]!.label
     : t(steps.length === 1 ? 'browserUse.chat.summaryOne' : 'browserUse.chat.summaryMany', {
         count: steps.length,
@@ -210,33 +291,41 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
 
       <div
         data-testid="browser-activity-card"
-        className={expanded
-          ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)]'
-          : 'overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]'}
+        data-expanded={expanded ? 'true' : 'false'}
+        data-running={isActive ? 'true' : 'false'}
+        data-presentation={presentation}
       >
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             data-chat-disclosure="true"
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-            className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            onClick={toggleExpanded}
+            className={`codex-work-row group/browser inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+              presentation === 'sheet' ? 'min-h-11' : 'min-h-6'
+            }`}
           >
-            <span aria-hidden="true" className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-info)]">
-              {isRunning ? (
-                <LoaderCircle size={14} strokeWidth={1.75} className="animate-spin" />
-              ) : hasError ? (
-                <CircleX size={14} strokeWidth={1.75} className="text-[var(--color-error)]" />
+            <span aria-hidden="true" className="flex h-4 w-4 shrink-0 items-center justify-center">
+              {isActive ? (
+                <LoaderCircle size={13} strokeWidth={1.75} className="animate-spin text-[var(--color-text-tertiary)]" />
+              ) : hasTerminalError ? (
+                <CircleX size={13} strokeWidth={1.75} className="text-[var(--color-error)]" />
               ) : allStopped ? (
-                <CircleStop size={14} strokeWidth={1.75} className="text-[var(--color-text-tertiary)]" />
+                <CircleStop size={13} strokeWidth={1.75} />
               ) : (
-                <Globe size={14} strokeWidth={1.75} />
+                <Globe size={13} strokeWidth={1.75} />
               )}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+            <span
+              className={`min-w-0 truncate ${
+                isActive
+                  ? 'codex-shimmer-text font-medium'
+                  : 'text-[var(--color-text-tertiary)] transition-colors group-hover/browser:text-[var(--color-text-primary)]'
+              }`}
+            >
               {headerLabel}
             </span>
-            <Badge tone={targetKind === 'chrome' ? 'info' : 'neutral'} size="xs">
+            <Badge tone={targetKind === 'chrome' ? 'info' : 'neutral'} size="xs" pill={false}>
               {targetKind === 'chrome'
                 ? t('settings.browserUse.targetChrome')
                 : t('settings.browserUse.targetWorkspace')}
@@ -245,42 +334,43 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
               size={14}
               strokeWidth={1.75}
               aria-hidden="true"
-              className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+              className={`shrink-0 opacity-60 transition-transform duration-150 motion-reduce:transition-none group-hover/browser:opacity-100 ${expanded ? 'rotate-90' : ''}`}
             />
           </button>
 
-          <div className="flex shrink-0 items-center gap-1">
-            {isDesktop && targetKind === 'workspace' ? (
-              <Button
-                variant="ghost"
-                size="xs"
-                icon={<Eye size={12} strokeWidth={1.75} aria-hidden="true" />}
-                onClick={handleView}
-              >
-                {t('browserUse.chat.view')}
-              </Button>
-            ) : null}
-            {isDesktop && isRunning && activeTabId ? (
-              <Button
-                variant="secondary"
-                size="xs"
-                icon={<Hand size={12} strokeWidth={1.75} aria-hidden="true" />}
-                onClick={handleTakeover}
-              >
-                {t('browserUse.overlay.takeover')}
-              </Button>
-            ) : null}
-          </div>
+          {isDesktop && (targetKind === 'workspace' || (targetKind === 'chrome' && isActive && activeTabId)) ? (
+            <div className="flex shrink-0 items-center gap-1">
+              {targetKind === 'workspace' ? (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon={<Eye size={12} strokeWidth={1.75} aria-hidden="true" />}
+                  onClick={handleView}
+                >
+                  {t('browserUse.chat.view')}
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={<Hand size={12} strokeWidth={1.75} aria-hidden="true" />}
+                  onClick={handleTakeover}
+                >
+                  {t('browserUse.overlay.takeover')}
+                </Button>
+              )}
+            </div>
+          ) : null}
         </div>
 
         {/* Compact screenshot preview thumbnail */}
         {latestScreenshot ? (
-          <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
+          <div className="mt-1.5">
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
               aria-label={t('browserUse.chat.previewScreenshot')}
-              className="group relative block overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+              className="group relative block overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <img
                 src={latestScreenshot}
@@ -295,21 +385,27 @@ export const BrowserActivityCard = memo(function BrowserActivityCard({
         {expanded ? (
           <ul
             data-testid="browser-activity-steps"
-            className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)] px-3 py-1"
+            className="mt-1 divide-y divide-[var(--color-border)] rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-1"
           >
-            {steps.map((step) => (
-              <li key={step.id} className="flex items-center gap-2 py-1.5 text-xs">
-                {step.status === 'running' ? (
+            {timelineEntries.map((entry) => entry.kind === 'thinking' ? (
+              <li key={entry.id} className="py-1">
+                <ThinkingBlock content={entry.content} isActive={entry.isActive} />
+              </li>
+            ) : (
+              <li key={entry.id} className="flex items-center gap-2 py-1.5 text-xs">
+                {entry.status === 'running' ? (
                   <LoaderCircle size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 animate-spin text-[var(--color-info)]" />
-                ) : step.status === 'error' ? (
+                ) : entry.status === 'error' ? (
                   <CircleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
-                ) : step.status === 'stopped' ? (
+                ) : entry.status === 'stopped' ? (
                   <CircleStop size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                ) : entry.status === 'recovered' ? (
+                  <CircleAlert size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 ) : (
-                  <CircleCheck size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-success)]" />
+                  <Check size={12} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 )}
                 <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-                  {step.label}
+                  {entry.label}
                 </span>
               </li>
             ))}
@@ -383,22 +479,24 @@ export function BrowserTakeoverCard({
     <div
       role="alert"
       data-testid="browser-takeover-card"
-      className="rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] p-3.5 text-[var(--color-on-warning-container)]"
+      className="v6c-glass-card v6c-ring-waiting overflow-hidden rounded-[var(--radius-lg)] p-3.5 backdrop-blur-[var(--glass-blur)]"
     >
-      <div className="flex items-start gap-2.5">
-        <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0" />
+      <div className="flex items-start gap-3">
+        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
+          <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" />
+        </div>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
             <StatusDot tone="warning" size="sm" pulse />
-            <span className="text-[13px] font-semibold">
+            <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">
               {t('browserUse.takeoverCard.title')}
             </span>
           </div>
-          <p className="text-xs leading-[1.5]">
+          <p className="text-xs leading-[1.5] text-[var(--color-text-secondary)]">
             {displayReason}
           </p>
           {takeover.url ? (
-            <p className="truncate font-mono text-[11px] opacity-80">{takeover.url}</p>
+            <p className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{takeover.url}</p>
           ) : null}
         </div>
       </div>
@@ -437,7 +535,7 @@ export function BrowserTakeoverCard({
           </Button>
         </div>
       ) : (
-        <p className="mt-2.5 text-xs opacity-85">
+        <p className="mt-2.5 text-xs text-[var(--color-text-secondary)]">
           {t('browserUse.takeoverCard.desktopOnlyHint')}
         </p>
       )}
@@ -493,7 +591,7 @@ export function BrowserUseEnableCard() {
     <>
       <div
         data-testid="browser-use-enable-card"
-        className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] p-3.5"
+        className="v6c-glass-card flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-3.5"
       >
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           <Globe size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-info)]" />

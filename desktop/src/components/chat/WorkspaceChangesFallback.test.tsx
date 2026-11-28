@@ -28,7 +28,7 @@ describe('WorkspaceChangesFallback', () => {
     expect(within(region).queryByRole('button', { name: 'Open current content of src/retained.ts' })).not.toBeInTheDocument()
     fireEvent.click(disclosure)
     const opener = within(region).getByRole('button', { name: 'Open current content of src/retained.ts' })
-    expect(opener).toHaveClass('focus-visible:ring-2')
+    expect(opener).toHaveClass('focus-visible:ring-2', 'rounded-[var(--radius-card-inner)]')
     fireEvent.click(opener)
     expect(workspaceOpen.file).toHaveBeenCalledWith('long-session', 'src/retained.ts')
     expect(workspaceOpen.review).not.toHaveBeenCalled()

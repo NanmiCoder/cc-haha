@@ -175,4 +175,44 @@ describe('AgentTeamsRuntimeControls', () => {
     expect(screen.getByRole('dialog', { name: 'Edit member models' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'reader · Provider and model' })).toHaveAttribute('data-model', 'reader-model')
   })
+
+  it('supports Pause and Resume for Antigravity Swarm while hiding member model editing', async () => {
+    const swarmTeam: TeamDetail = {
+      name: 'agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a',
+      leadSessionId: 'lead-session',
+      incarnationId: 'swarm-incarnation',
+      leadAgentId: 'coordinator@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a',
+      members: [
+        { agentId: 'coordinator@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', name: 'coordinator', role: 'coordinator', status: 'idle', model: 'gemini-4-neon', sessionId: 'native-1' },
+        { agentId: 'reader@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', name: 'reader', role: 'worker', status: 'idle', activity: 'stopped', model: 'gemini-4-neon', sessionId: 'worker-1' },
+      ],
+    }
+    const swarmControl = (status: TeamRuntimeControlView['status'], revision = 2): TeamRuntimeControlView => ({
+      schemaVersion: 1,
+      teamName: swarmTeam.name,
+      leadSessionId: 'lead-session',
+      incarnationId: 'swarm-incarnation',
+      revision,
+      epoch: 1,
+      status,
+      updatedAt: 1,
+      resumeEligibleCount: 1,
+      members: [
+        { agentId: 'reader@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', sessionId: 'worker-1', planId: swarmTeam.name, memberId: 'reader', name: 'reader', status: status === 'running' ? 'running' : 'paused' },
+      ],
+    })
+    mocks.getRuntimeControl.mockResolvedValue({ control: swarmControl('paused', 2) })
+    mocks.resumeRuntime.mockResolvedValue({ control: swarmControl('running', 3) })
+    useTeamStore.setState({ activeTeam: swarmTeam })
+
+    render(<AgentTeamsRuntimeControls team={swarmTeam} />)
+    expect(await screen.findByText('Team paused')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit member models' })).not.toBeInTheDocument()
+
+    const resumeBtn = screen.getByRole('button', { name: 'Resume team (1)' })
+    expect(resumeBtn).toBeEnabled()
+    fireEvent.click(resumeBtn)
+    await waitFor(() => expect(mocks.resumeRuntime).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Team running')).toBeInTheDocument()
+  })
 })

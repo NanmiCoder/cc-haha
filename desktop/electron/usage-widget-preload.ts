@@ -14,6 +14,7 @@ import type {
   DesktopUsageWidgetDrag,
   DesktopUsageWidgetMenuBarSync,
   DesktopUsageWidgetSettingsTab,
+  DesktopUsageWidgetTheme,
 } from '../src/lib/desktopHost/types'
 import type { Locale } from '../src/i18n/locale'
 
@@ -91,6 +92,7 @@ const usageWidgetHost = {
       invoke<void>(ELECTRON_IPC_CHANNELS.usageWidgetOpenSettings, tab),
     notifyPreferencesChanged: () =>
       invoke<void>(ELECTRON_IPC_CHANNELS.usageWidgetNotifyPreferencesChanged),
+    getTheme: () => invoke<DesktopUsageWidgetTheme>(ELECTRON_IPC_CHANNELS.usageWidgetGetTheme),
     onVisibilityChanged: (handler: (visible: boolean) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, visible: boolean) => handler(visible)
       ipcRenderer.on(ELECTRON_EVENT_CHANNELS.usageWidgetVisibilityChanged, listener)
@@ -103,6 +105,13 @@ const usageWidgetHost = {
       ipcRenderer.on(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged, listener)
       return Promise.resolve(() => {
         ipcRenderer.removeListener(ELECTRON_EVENT_CHANNELS.usageWidgetPreferencesChanged, listener)
+      })
+    },
+    onThemeChanged: (handler: (theme: DesktopUsageWidgetTheme) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, theme: DesktopUsageWidgetTheme) => handler(theme)
+      ipcRenderer.on(ELECTRON_EVENT_CHANNELS.usageWidgetThemeChanged, listener)
+      return Promise.resolve(() => {
+        ipcRenderer.removeListener(ELECTRON_EVENT_CHANNELS.usageWidgetThemeChanged, listener)
       })
     },
   },

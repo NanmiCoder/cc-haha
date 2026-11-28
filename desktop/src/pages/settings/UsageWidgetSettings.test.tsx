@@ -72,12 +72,12 @@ afterEach(() => {
 })
 
 describe('UsageWidgetSettings', () => {
-  it('updates sidebar visibility, triggers top-pinned mini bar, and toggles menu bar sync', async () => {
+  it('updates display mode, triggers top-pinned mini bar, and toggles menu bar sync', async () => {
     render(<UsageWidgetSettings />)
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Always' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Used' }))
     await waitFor(() => {
-      expect(updatePrefsMock).toHaveBeenCalledWith({ sidebarVisibility: 'always' })
+      expect(updatePrefsMock).toHaveBeenCalledWith({ displayMode: 'used' })
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Pin to top' }))

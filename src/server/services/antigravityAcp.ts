@@ -293,7 +293,12 @@ class AntigravityRpc {
   }
 
   reply(id: RpcId, result?: RpcObject, errorCode?: number): boolean {
-    return this.send({ id, ...(errorCode ? { error: { code: errorCode, message: 'Unsupported ACP request' } } : { result }) })
+    return this.send({
+      id,
+      ...(errorCode
+        ? { error: { code: errorCode, message: errorCode === -32602 ? 'Invalid ACP params' : 'Unsupported ACP request' } }
+        : { result }),
+    })
   }
 
   get isOpen(): boolean { return !this.failed && this.proc.exitCode === null }
@@ -357,6 +362,7 @@ function parseTier(result: RpcObject): AntigravityTierInfo | undefined {
 }
 
 let lastStatus: { binary: string; report: AntigravityStatus } | undefined
+let lastDiscoveredCommands: { binary: string; commands: AntigravitySlashCommand[] } | undefined
 let pendingDiscovery: Promise<AntigravityStatus> | undefined
 
 function report(status: AntigravityStatus['status'], extra?: Partial<AntigravityStatus>): AntigravityStatus {
@@ -369,8 +375,15 @@ export function getAntigravityStatus(): AntigravityStatus {
   return lastStatus?.binary === binary ? lastStatus.report : report('unchecked')
 }
 
+export function getAntigravityDiscoveredCommands(): AntigravitySlashCommand[] {
+  const binary = executable()
+  if (!binary || lastDiscoveredCommands?.binary !== binary) return []
+  return lastDiscoveredCommands.commands
+}
+
 export function resetAntigravityStatusForTests(): void {
   lastStatus = undefined
+  lastDiscoveredCommands = undefined
   pendingDiscovery = undefined
 }
 
@@ -401,7 +414,7 @@ export class AntigravityAcp {
   readonly supportsImages: boolean
   readonly version?: string
   readonly tier?: AntigravityTierInfo
-  readonly initialAvailableCommands: AntigravitySlashCommand[]
+  initialAvailableCommands: AntigravitySlashCommand[]
   private modelConfigId?: string
   private effortConfigId?: string
   private modeConfigId?: string
@@ -641,6 +654,7 @@ export async function openAntigravityAcp(
   ]
   const rpc = new AntigravityRpc(binary, spawnArgs, cwd, { ...process.env, ...networkEnv })
   let initialAvailableCommands: AntigravitySlashCommand[] = []
+  let acp: AntigravityAcp | undefined
   rpc.onMessage = (method, params, id) => {
     if (id !== undefined) {
       rpc.reply(id, undefined, -32601)
@@ -649,7 +663,11 @@ export async function openAntigravityAcp(
     if (method !== 'session/update') return
     const update = acpObject(params.update)
     if (update?.sessionUpdate === 'available_commands_update') {
-      initialAvailableCommands = parseAvailableCommands(update.availableCommands)
+      const commands = parseAvailableCommands(update.availableCommands)
+      initialAvailableCommands = commands
+      if (acp) {
+        acp.initialAvailableCommands = commands
+      }
     }
   }
 
@@ -657,7 +675,11 @@ export async function openAntigravityAcp(
     const init = await rpc.request('initialize', {
       protocolVersion: 1,
       clientInfo: ANTIGRAVITY_CLIENT_INFO,
-      clientCapabilities: {},
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
     })
     if (init.protocolVersion !== 1) {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This version of Antigravity CLI did not negotiate ACP version 1. Update the CLI and retry.')
@@ -756,7 +778,7 @@ export async function openAntigravityAcp(
       ? 'bypassPermissions'
       : acpModeToCcHahaPermissionMode(currentAcpMode) ?? 'default'
 
-    const acp = new AntigravityAcp(rpc, {
+    acp = new AntigravityAcp(rpc, {
       sessionId: nativeId,
       modelId: currentModelId,
       effortLevel: currentEffortLevel,
@@ -852,6 +874,9 @@ export function discoverAntigravity(options?: { exitTimeoutMs?: number }): Promi
       const initialModelId = acp.modelId
       const initialEffortLevel = acp.effortLevel
       const probedModels = await acp.probeAllModelEfforts()
+      if (acp.initialAvailableCommands.length > 0) {
+        lastDiscoveredCommands = { binary, commands: acp.initialAvailableCommands }
+      }
       if (probedModels.length > 0 && lastStatus?.binary === binary && lastStatus.report.status === 'ready') {
         lastStatus = {
           binary,

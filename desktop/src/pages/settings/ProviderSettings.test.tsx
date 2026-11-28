@@ -929,7 +929,10 @@ describe('OpenCode Go provider', () => {
     }], activeId: null })
     render(<ProviderSettings />)
     const card = await screen.findByTestId('provider-saved-opencode-go')
-    expect(within(card).getByText('Multi-protocol')).toBeInTheDocument()
+    const formatBadge = within(card).getByText('Multi-protocol')
+    expect(formatBadge).toBeInTheDocument()
+    expect(formatBadge).toHaveClass('border-[var(--color-border)]', 'text-[var(--color-text-secondary)]')
+    expect(formatBadge).not.toHaveClass('bg-[var(--color-warning-container)]')
     expect(within(card).queryByText('OpenAI Chat')).not.toBeInTheDocument()
   })
 
@@ -939,8 +942,13 @@ describe('OpenCode Go provider', () => {
     const dialog = within(screen.getByRole('dialog'))
     fireEvent.click(dialog.getByRole('button', { name: 'OpenCode Go' }))
 
-    expect(dialog.getByText('OpenAI Chat Completions (proxy)')).toBeInTheDocument()
+    const fixedFormat = dialog.getByText('OpenAI Chat Completions (proxy)')
+    expect(fixedFormat).toBeInTheDocument()
+    expect(fixedFormat).toHaveClass('rounded-[var(--radius-card-inner)]')
     expect(dialog.getByText(/picks the protocol per model/)).toBeInTheDocument()
+    // Info help IconButtons use the standard control radius rather than shape="circle".
+    expect(dialog.getByRole('button', { name: 'Base URL help' })).not.toHaveClass('rounded-full')
+    expect(dialog.getByRole('button', { name: 'Network proxy mode setting help' })).not.toHaveClass('rounded-full')
     // A record-level format cannot express the per-model split, so the server
     // ignores it; leaving a dropdown here would offer a switch that does nothing.
     expect(dialog.queryByRole('button', { name: /OpenAI Chat Completions \(proxy\)|Anthropic Messages/ })).toBeNull()
@@ -1104,7 +1112,15 @@ describe('provider list tabs and search', () => {
 
     const match = screen.getByTestId('provider-saved-qiniuai')
     expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
-    expect(within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })).toHaveLength(2)
+    const marks = within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })
+    expect(marks).toHaveLength(2)
+    for (const mark of marks) {
+      expect(mark).toHaveClass(
+        'rounded-[var(--radius-xs)]',
+        'bg-[var(--color-search-highlight)]',
+        'text-[var(--color-on-search-highlight)]',
+      )
+    }
     expect(screen.getByRole('tab', { name: /API Key/ })).toHaveTextContent(/API Key\s*1/)
     // A filtered list is not an order to drag within.
     expect(screen.queryByRole('button', { name: 'Drag to reorder' })).not.toBeInTheDocument()

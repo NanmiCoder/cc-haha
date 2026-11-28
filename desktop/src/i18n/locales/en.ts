@@ -5252,7 +5252,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.browserUse.enableDialogNoOsPerms': 'No macOS Accessibility or Screen Recording system permissions are required for Browser Use.',
   'settings.browserUse.enableDialogConfirm': 'Enable Browser Use',
   'settings.browserUse.sectionWorkspace': 'Workspace Browser',
-  'settings.browserUse.sectionWorkspaceDesc': 'Built-in browser panel inside this app, isolated from your personal browser profile.',
+  'settings.browserUse.sectionWorkspaceDesc': 'Built-in browser panel that automatically saves your logins and cookies locally across restarts, isolated from your personal browser.',
   'settings.browserUse.workspaceStatusTitle': 'Built-in browser engine',
   'settings.browserUse.workspaceReadyDesc': 'Ready to use without OS permissions or extra extensions.',
   'settings.browserUse.workspaceUnavailableDesc': 'Built-in Workspace Browser requires the desktop app. System Chrome remains available when connected on the host.',
@@ -5309,7 +5309,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.capabilities.browserUseShort': 'Browser',
   'chat.capabilities.browserUseDescription': 'Control Workspace Browser or Chrome on the next turn',
   'chat.capabilities.browserUseTargetCycle': 'Browser target: {target} (click to switch)',
-  'chat.capabilities.browserUseDisable': 'Disable Browser Use',
+  'chat.capabilities.browserUseRemove': 'Remove Browser Use',
   'toolVerb.browserTabs': 'Browser tabs',
   'toolVerb.browserNavigate': 'Open page',
   'toolVerb.browserSnapshot': 'Inspect page',
@@ -5438,6 +5438,15 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'usageWidget.settingsSnapTopDesc': "Dock the standalone usage window as a compact bar at the top of your screen.",
   'usageWidget.settingsMenuBarTitle': "Show in menu bar / tray",
   'usageWidget.settingsMenuBarDesc': "Show quick quota status in the macOS menu bar or system tray to toggle the usage window.",
+  'usageWidget.officialToolbarTitle': "Official quotas & balances",
+  'usageWidget.openFloatingButton': "Floating window",
+  'usageWidget.balanceTitle': "Account balance",
+  'usageWidget.rechargeBalance': "Recharge balance",
+  'usageWidget.bonusBalance': "Bonus balance",
+  'usageWidget.payAsYouGoLabel': "Pay as you go",
+  'usageWidget.payAsYouGoCap': "{amount} cap",
+  'usageWidget.grokTeamNoPersonalQuota': "Grok team accounts have no personal quota.",
+  'usageWidget.statusAuthExpired': "Session expired. Please sign in again.",
 } as const
 
 export type TranslationKey = keyof typeof en

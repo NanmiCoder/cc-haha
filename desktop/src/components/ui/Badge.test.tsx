@@ -21,12 +21,14 @@ describe('Badge', () => {
     expect(className).not.toMatch(/\bbg-\[/)
   })
 
-  it('is a pill by default and squares off for counters', () => {
-    const { container: pill } = render(<Badge>3</Badge>)
-    expect(pill.firstElementChild?.className).toContain('rounded-full')
+  it('uses the V6C 6px corner by default and renders a pill only when pill={true}', () => {
+    const { container: defaultBadge } = render(<Badge>3</Badge>)
+    expect(defaultBadge.firstElementChild?.className).toContain('rounded-[var(--radius-sm)]')
+    expect(defaultBadge.firstElementChild?.className).not.toContain('rounded-full')
 
-    const { container: square } = render(<Badge pill={false}>3</Badge>)
-    expect(square.firstElementChild?.className).not.toContain('rounded-full')
+    const { container: pill } = render(<Badge pill>3</Badge>)
+    expect(pill.firstElementChild?.className).toContain('rounded-full')
+    expect(pill.firstElementChild?.className).not.toContain('rounded-[var(--radius-sm)]')
   })
 
   it('switches to tabular figures when mono, numeric, or counter-shaped', () => {

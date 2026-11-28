@@ -380,10 +380,14 @@ describe('the Agent mode row', () => {
 })
 
 describe('the Browser Use row', () => {
-  it('renders a live toggle switch when browserUse config is loaded, and falls back to settings otherwise', () => {
-    const loaded = rootItem(buildInput({ browserUse: { enabled: true, preferredTarget: 'chrome' } }), 'browser-use')
-    expect(loaded.switch).toEqual({ checked: true, disabled: false })
-    expect(loaded.action).toEqual({ type: 'toggleBrowserUse' })
+  it('renders a live per-message toggle switch reflecting armed state when loaded, and falls back to settings otherwise', () => {
+    const loadedIdle = rootItem(buildInput({ browserUse: { enabled: true, armed: false, preferredTarget: 'chrome' } }), 'browser-use')
+    expect(loadedIdle.switch).toEqual({ checked: false, disabled: false })
+    expect(loadedIdle.action).toEqual({ type: 'toggleBrowserUse' })
+
+    const loadedArmed = rootItem(buildInput({ browserUse: { enabled: true, armed: true, preferredTarget: 'chrome' } }), 'browser-use')
+    expect(loadedArmed.switch).toEqual({ checked: true, disabled: false })
+    expect(loadedArmed.action).toEqual({ type: 'toggleBrowserUse' })
 
     const fallback = rootItem(buildInput({ browserUse: null }), 'browser-use')
     expect(fallback.switch).toBeUndefined()
@@ -392,15 +396,22 @@ describe('the Browser Use row', () => {
 })
 
 describe('Antigravity capability menu', () => {
-  it('keeps add-files, agent-team, computer-use, and slash-commands while hiding Claude-only controls', () => {
+  it('keeps add-files, agent-team, browser-use, computer-use, and slash-commands while hiding Claude-only controls', () => {
     const sections = buildCapabilitySections(buildInput({
       antigravity: true,
       agentProfile: { value: 'standard', locked: false },
+      browserUse: { enabled: true, armed: false, preferredTarget: 'auto' },
     }))
     const allKeys = sections.flatMap((section) => section.items.map((item) => item.key))
-    expect(allKeys).toEqual(['add-files', 'agent-team', 'computer-use', 'slash-commands'])
+    expect(allKeys).toEqual(['add-files', 'agent-team', 'browser-use', 'computer-use', 'slash-commands'])
     expect(allKeys).not.toContain('agent-profile')
     expect(allKeys).not.toContain('skills')
     expect(allKeys).not.toContain('connectors')
+
+    const browserRow = sections.flatMap((section) => section.items).find((item) => item.key === 'browser-use')
+    expect(browserRow).toMatchObject({
+      action: { type: 'toggleBrowserUse' },
+      switch: { checked: false, disabled: false },
+    })
   })
 })

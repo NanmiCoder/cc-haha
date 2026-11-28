@@ -92,11 +92,11 @@ components/<feature>/  功能目录。单调用方的组件一律放这里
 ```tsx
 // 对
 className="bg-[var(--color-surface)] text-[var(--color-text-primary)]"
-// 错：三个主题下长得一模一样
+// 错：两个主题下长得一模一样
 className="bg-[#FAF9F5] text-[#1B1C1A]"
 ```
 
-三个主题（`white` 默认 / `light` / `dark`）靠 `<html data-theme>` 切换，**不跟随操作系统**。新增 token 必须在三个主题块里都定义，`globals.test.ts` 会检查。
+两个主题（`white` 浅色默认 / `dark` 深色）靠 `<html data-theme>` 切换，跟随操作系统外观在 JS（`src/theme/systemAppearance.ts`）中解析后落到同一属性上。新增 token 必须在两个主题块里都定义，`globals.test.ts` 会检查。
 
 `tokenUsage.test.ts` 扫描全部源码，断言每个 `var(--token)` 都能解析 —— 拼错的 token 不会报错，只会静默渲染成透明背景或 `currentColor` 边框。
 
@@ -104,7 +104,7 @@ className="bg-[#FAF9F5] text-[#1B1C1A]"
 
 语义色是成对的：`--color-<tone>-container` 是底色，`--color-on-<tone>-container` 是它上面的文字色。**不要拿 `--color-warning` 直接当 `--color-warning-container` 上的前景** —— light 主题下那样只有 2.66:1，远低于 AA 的 4.5。
 
-`contrast.test.ts` 对三主题 × 六个 tone 计算实际对比度并断言 ≥4.5（dark 的 container 是半透明的，测试会先与 surface 合成再算）。
+`contrast.test.ts` 对双主题 × 六个 tone 计算实际对比度并断言 ≥4.5（dark 的 container 是半透明的，测试会先与 surface 合成再算）。
 
 ### 3.3 圆角
 
@@ -127,7 +127,7 @@ style={{ zIndex: 'var(--z-dialog)' }}
 
 ### 3.5 `dark:` 变体
 
-可以用，它绑在 `[data-theme="dark"]` 上（见 `globals.css` 顶部的 `@custom-variant dark`）。**但优先用 token** —— `dark:` 只覆盖三个主题中的一个，white 和 light 会共用同一套值。
+可以用，它绑在 `[data-theme="dark"]` 上（见 `globals.css` 顶部的 `@custom-variant dark`）。**但优先用 token** —— 语义 token 会自动在浅色（`white`）与深色（`dark`）两套纯中性色板间切换，减少分散的 `dark:` 覆盖。
 
 ### 3.6 className 覆盖不保证生效
 
@@ -143,13 +143,13 @@ style={{ zIndex: 'var(--z-dialog)' }}
 2. 如果是通用需求（同样的形态在多处出现），**给组件加一个 variant/tone/size**，连同测试一起。
 3. 在当前任务范围内补齐需要的组件能力，并验证调用方、交互和主题效果。只有缺少必要的产品决定或超出授权范围时才请求确认；无法完成的部分说明具体 blocker。
 
-`IconButton` 的 `secondary` tone、`2xs`–`2xl` 六档尺寸、`bordered`、`solid`、`hoverTone="danger"`、`pressed`、`surface="sidebar"`、`surface="terminal"`（墨色终端标题栏，纸主题下 `--color-text-tertiary` 在其上不可见），`Button` 的 `base`(h-8)、`inverse` 与 `tonal-outline`（陶土描边 hover 反色）变体，`Card` 的 `shadow`/`lift`/`container` 档与 rest 透传，`Badge` 的 `wrap`/`title`/rest 透传，`SearchField` 的 `clearLabel` 与 `xl`(44px) 档 —— 全部来自这个流程。多轮独立的替换工作各自撞到同一批缺口，然后一次补齐。
+`IconButton` 的 `secondary` tone、`2xs`–`2xl` 六档尺寸、`bordered`、`solid`、`hoverTone="danger"`、`pressed`、`surface="sidebar"`、`surface="terminal"`（暗色终端标题栏，浅色主题下 `--color-text-tertiary` 在其上不可见），`Button` 的 `base`(h-8)、`inverse` 与 `tonal-outline`（品牌蓝描边 hover 反色）变体，`Card` 的 `shadow`/`lift`/`container` 档与 rest 透传，`Badge` 的 `wrap`/`title`/rest 透传，`SearchField` 的 `clearLabel` 与 `xl`(44px) 档 —— 全部来自这个流程。多轮独立的替换工作各自撞到同一批缺口，然后一次补齐。
 
 几个存在理由值得记住：
 
 > **`hoverTone="danger"`** — 删除类图标静止态就是红的，会被读成"当前处于错误状态"。静止用 `muted`，悬停才变红。
 >
-> **`surface="sidebar"`** — 侧边栏有自己的 hover token（`--color-sidebar-item-hover`），三个主题下都与 `--color-surface-hover` 不同。用 className 覆盖会变成两个 `hover:bg-[…]` 打架，谁赢取决于样式表顺序。
+> **`surface="sidebar"`** — 侧边栏有自己的 hover token（`--color-sidebar-item-hover`），两个主题下都与 `--color-surface-hover` 不同。用 className 覆盖会变成两个 `hover:bg-[…]` 打架，谁赢取决于样式表顺序。
 >
 > **`solid` vs `filled`** — `filled` 只是浅色着色，压在用户上传的图片上会糊掉。`solid` 是满强度填充 + 对比前景（走 `--color-on-error` 这类 token，**不要写 `text-white`** —— dark 主题的 `--color-error` 是浅红，白字读不出来）。
 >
@@ -157,7 +157,7 @@ style={{ zIndex: 'var(--z-dialog)' }}
 >
 > **`SearchField` 的 `clearLabel`** — 组件内部一度用 `` `Clear ${label}` `` 拼英文，导致任何已经翻译过清除按钮的调用方采用它反而是 i18n 退化。**组件库自己不许拼用户可见的英文。**
 
-### 3.8 「素 Porcelain」视觉约束
+### 3.8 「素 Porcelain / V6C Pure Neutral」视觉约束
 
 2026-10 的全量改版把界面收敛到一套可检查的约束，`src/theme/designSystem.test.ts` 逐条守住（违规会列出 文件:行）：
 
@@ -165,8 +165,8 @@ style={{ zIndex: 'var(--z-dialog)' }}
 - **字重最高 semibold**：Inter 只自托管到 600，`font-bold` 会让浏览器合成糊掉的粗体；`font-mono` 不配 semibold（JetBrains Mono 只有 400）。
 - **中文不用斜体、不用宽字距大写标签**；摘要列表用「、」。
 - **图标只用 lucide**（`strokeWidth={1.75}`）；`IconButton` 的 `icon` 只接受元素，不再接受 Material 字符串。
-- **圆角只用 token**：`--radius-xs` 4 / `sm` 6 / `md` 8 / `lg` 12 / `xl` 16 / `3xl` 20 / `full`。
-- **状态色语义固定**：运行中＝info、等你确认＝warning、完成＝success、失败＝error；陶土色只给品牌、发送键与选中指示。
+- **圆角只用 token**：V6C 同心圆角刻度 `--radius-xs` 4 / `sm` 6 / `md` 8 / `control` 9 / `card-inner` 10 / `key` 11 / `lg` 12 / `xl` 14 / `2xl` 16 / `3xl` 16 / `full`。
+- **状态色与强调色语义固定**：运行中＝info、等你确认＝warning、完成＝success、失败＝error；单一 Codex 蓝（`--color-brand`）仅用于交互强调与选中指示，主发送按钮（CTA）保持单色高对比（浅色墨黑 / 深色纯白）。
 - 设置页统一用 `components/settings/SettingsSection.tsx` 的骨架（PageHeader → Section → Group → Row）。
 
 ---
@@ -242,7 +242,7 @@ it('defaults to type="button" so it cannot submit a surrounding form', () => {
 cd desktop && bun run dev
 ```
 
-打开 `http://localhost:1420/gallery.html`。它渲染全部 `ui/` 组件，右上角切三个主题。颜色是否可读、浮层是否盖对、进场动画是否真的在动 —— 这些只有渲染出来才知道。新增组件请同步加进 `src/dev/ComponentGallery.tsx`。
+打开 `http://localhost:1420/gallery.html`。它渲染全部 `ui/` 组件，右上角切浅/深主题。颜色是否可读、浮层是否盖对、进场动画是否真的在动 —— 这些只有渲染出来才知道。新增组件请同步加进 `src/dev/ComponentGallery.tsx`。
 
 > gallery 只在 dev 下可达，不进生产构建（vite 的 build input 只有 `index.html`）。
 
@@ -259,4 +259,4 @@ cd desktop && bun run dev
 - [ ] 颜色、圆角、层级都来自 token
 - [ ] 有 focus ring；图标按钮有名字；输入控件有 label
 - [ ] 有对应测试，且浮层组件测过函数组件 trigger
-- [ ] 视觉改动在 gallery 里三个主题都看过
+- [ ] 视觉改动在 gallery 里浅/深主题都看过

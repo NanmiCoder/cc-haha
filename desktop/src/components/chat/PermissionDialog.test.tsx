@@ -88,6 +88,7 @@ describe('PermissionDialog Antigravity & Subagent extensions', () => {
     const awaitingBadge = screen.getByText('Awaiting approval').closest('span')
     expect(awaitingBadge).toHaveClass('rounded-[var(--radius-sm)]')
     expect(awaitingBadge).not.toHaveClass('rounded-full')
+    expect(screen.getByText('/repo/src/index.ts').parentElement).toHaveClass('rounded-[var(--radius-card-inner)]')
     expect(container.textContent).toContain('/repo/src/index.ts')
     expect(container.textContent).toContain('+1')
     expect(container.textContent).toContain('−1')
@@ -126,7 +127,9 @@ describe('PermissionDialog Antigravity & Subagent extensions', () => {
       />,
     )
 
-    expect(screen.getByText(/bun test src\/acp/)).toBeInTheDocument()
+    const commandText = screen.getByText(/bun test src\/acp/)
+    expect(commandText).toBeInTheDocument()
+    expect(commandText.closest('div')).toHaveClass('rounded-[var(--radius-card-inner)]')
     fireEvent.click(screen.getByRole('button', { name: /^Allow for session/ }))
     expect(sendMock).toHaveBeenCalledWith(SESSION, {
       type: 'permission_response',

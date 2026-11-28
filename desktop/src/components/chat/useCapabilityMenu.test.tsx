@@ -85,6 +85,7 @@ beforeEach(() => {
     showCursorOverlay: true,
     autoOpenWorkspacePanel: true,
     managedChromeHeadless: false,
+    ...(useBrowserUseStore.getState().config ?? {}),
     ...patch,
   }))
   useBrowserUseStore.getState().reset()
@@ -217,7 +218,7 @@ describe('useCapabilityMenu', () => {
     expect(result.current.sections[1]!.items[0]!.action).toEqual({ type: 'settings', tab: 'general' })
   })
 
-  it('toggles Browser Use through consent dialog and syncs preferred target on desktop', async () => {
+  it('arms Browser Use per message via consent dialog when globally off, then toggles locally without turning off global config', async () => {
     window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
     const { result, composer } = renderMenu()
     await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalled())
@@ -231,6 +232,7 @@ describe('useCapabilityMenu', () => {
     const browserRow = runSection.items.find(item => item.key === 'browser-use')!
     expect(browserRow.action).toEqual({ type: 'toggleBrowserUse' })
 
+    // First time while globally disabled: opens consent dialog.
     act(() => result.current.onAction({ type: 'toggleBrowserUse' }))
     expect(result.current.browserUseConsent.open).toBe(true)
     expect(composer.onClose).toHaveBeenCalled()
@@ -240,6 +242,7 @@ describe('useCapabilityMenu', () => {
     })
     expect(result.current.browserUseConsent.open).toBe(false)
     expect(result.current.browserUse.enabled).toBe(true)
+    expect(result.current.browserUse.armed).toBe(true)
     expect(mocks.browserUseUpdateConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
 
     await act(async () => {
@@ -248,11 +251,28 @@ describe('useCapabilityMenu', () => {
     })
     expect(result.current.browserUse.preferredTarget).toBe('chrome')
 
-    await act(async () => {
+    // Toggling off in + menu disarms this message without disabling global config.
+    mocks.browserUseUpdateConfig.mockClear()
+    act(() => {
       result.current.onAction({ type: 'toggleBrowserUse' })
-      await Promise.resolve()
     })
-    expect(result.current.browserUse.enabled).toBe(false)
+    expect(result.current.browserUse.armed).toBe(false)
+    expect(result.current.browserUse.enabled).toBe(true)
+    expect(mocks.browserUseUpdateConfig).not.toHaveBeenCalled()
+
+    // Toggling back on arms immediately without reopening consent.
+    act(() => {
+      result.current.onAction({ type: 'toggleBrowserUse' })
+    })
+    expect(result.current.browserUseConsent.open).toBe(false)
+    expect(result.current.browserUse.armed).toBe(true)
+
+    // Direct disarm clears composer arming without disabling global config.
+    act(() => {
+      result.current.browserUse.disarm()
+    })
+    expect(result.current.browserUse.armed).toBe(false)
+    expect(result.current.browserUse.enabled).toBe(true)
   })
 
   it('hides the Browser Use switch on non-desktop H5 and avoids retry loops on 403', async () => {
@@ -294,23 +314,22 @@ describe('useCapabilityMenu', () => {
       managedChromeHeadless: false,
     })
 
-    // Closed initially: hydration effect still fetches config once on desktop.
+    // Closed initially: hydration effect still fetches config once on desktop,
+    // keeping global enabled true while per-message arming starts false.
     const hook = renderHook(() => useCapabilityMenu({ open: false, cwd: '/repo', references: [], handlers: handlers() }))
     await waitFor(() => expect(hook.result.current.browserUse.enabled).toBe(true))
+    expect(hook.result.current.browserUse.armed).toBe(false)
     expect(hook.result.current.browserUse.preferredTarget).toBe('workspace')
 
-    // Action setBrowserUseTarget & toggleBrowserUse (disable) failures surface error toasts
+    // Action setBrowserUseTarget & direct setPreferredTarget failures surface error toasts
     mocks.browserUseUpdateConfig.mockRejectedValue(new Error('write denied'))
     await act(async () => {
       hook.result.current.onAction({ type: 'setBrowserUseTarget', target: 'chrome' })
-      hook.result.current.onAction({ type: 'toggleBrowserUse' })
       await Promise.resolve()
     })
     expect(useUIStore.getState().toasts.at(-1)?.type).toBe('error')
 
-    // Direct disable / setPreferredTarget failure toasts
     await act(async () => {
-      hook.result.current.browserUse.disable()
       hook.result.current.browserUse.setPreferredTarget('auto')
       await Promise.resolve()
     })
@@ -441,5 +460,37 @@ describe('the Agent mode row', () => {
 
     act(() => result.current.disarmAgentTeam())
     expect(result.current.agentTeamArmed).toBe(false)
+  })
+
+  it('exposes, arms, and updates Browser Use target for Antigravity on desktop', async () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    mocks.browserUseGetConfig.mockResolvedValue({
+      enabled: true,
+      preferredTarget: 'auto',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    })
+    const composer = handlers()
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true,
+      antigravity: true,
+      cwd: '/repo',
+      references: [],
+      handlers: composer,
+    }))
+    await waitFor(() => expect(result.current.browserUse.enabled).toBe(true))
+
+    const browserRow = result.current.sections.flatMap(section => section.items).find(item => item.key === 'browser-use')
+    expect(browserRow).toMatchObject({ action: { type: 'toggleBrowserUse' }, switch: { checked: false, disabled: false } })
+
+    act(() => result.current.onAction({ type: 'toggleBrowserUse' }))
+    expect(result.current.browserUse.armed).toBe(true)
+
+    act(() => result.current.onAction({ type: 'setBrowserUseTarget', target: 'chrome' }))
+    await waitFor(() => expect(mocks.browserUseUpdateConfig).toHaveBeenCalledWith({ preferredTarget: 'chrome' }))
+
+    act(() => result.current.browserUse.disarm())
+    expect(result.current.browserUse.armed).toBe(false)
   })
 })

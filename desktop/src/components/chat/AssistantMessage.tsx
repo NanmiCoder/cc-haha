@@ -370,7 +370,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             copyLabel={t('chat.copyReply')}
             branchAction={actionMenu.enabled ? undefined : branchAction}
             align="start"
-            alwaysVisible={false}
+            alwaysVisible={actionMenu.enabled}
             metadata={<TurnCompletionStamp completion={turnCompletion!} />}
           />
         )}

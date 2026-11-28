@@ -12,7 +12,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle, Path } from 'react-native-svg'
 import { HaloDot, Mono, Spinner, useColors } from '../kit'
 import { Text } from '../Text'
-import { monoFont } from '../palette'
+import { monoFont, radius } from '../palette'
+import { useTheme } from '../theme'
 import { simulatedPhoneChrome } from '../webChrome'
 
 /** web 的 textarea 自带 focus ring（outline-style:auto 不受宽度影响），由我们自己画描边。 */
@@ -24,7 +25,7 @@ export function useBottomInset() {
   return simulatedPhoneChrome ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 16)
 }
 
-/** “需要你决定”的底座：card 背景、顶部圆角 26、向上投影。 */
+/** “需要你决定”的底座：cardRaised 背景、顶部圆角 20、向上投影。 */
 export function DecisionSurface({
   label,
   children,
@@ -34,7 +35,7 @@ export function DecisionSurface({
   children: ReactNode
   style?: StyleProp<ViewStyle>
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const bottom = useBottomInset()
   return (
     <View
@@ -42,10 +43,10 @@ export function DecisionSurface({
       aria-label={label}
       style={[
         {
-          backgroundColor: colors.card,
-          borderTopLeftRadius: 26,
-          borderTopRightRadius: 26,
-          boxShadow: `0 -1px 0 ${colors.hair}, 0 -10px 30px rgba(28,25,23,0.08)`,
+          backgroundColor: colors.cardRaised,
+          borderTopLeftRadius: radius.sheet,
+          borderTopRightRadius: radius.sheet,
+          boxShadow: shadows.sheetUp,
           paddingTop: 18,
           paddingHorizontal: 16,
           paddingBottom: bottom,

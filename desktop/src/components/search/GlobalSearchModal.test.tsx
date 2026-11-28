@@ -574,19 +574,48 @@ describe('GlobalSearchModal', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
-  it('uses V6C dialog-panel, recessed search field, and lifted row highlight', () => {
-    useSessionStore.setState({ sessions: [makeSession('s1', 'Recent One'), makeSession('s2', 'Recent Two')] })
+  it('uses V6C dialog-panel, recessed search field, Kbd keycaps, and focus-visible lifted rows', () => {
+    useSessionStore.setState({
+      sessions: [
+        makeSession('s1', 'Recent One', { projectRoot: '/Users/dev/code/alpha-proj', workDir: '/Users/dev/code/alpha-proj' }),
+        makeSession('s2', 'Recent Two', { projectRoot: '/Users/dev/code/beta-proj', workDir: '/Users/dev/code/beta-proj' }),
+      ],
+    })
     render(<GlobalSearchModal open onClose={() => {}} />)
 
     const dialog = screen.getByRole('dialog', { name: /search projects and chats/i })
-    expect(dialog).toHaveClass('dialog-panel', 'rounded-[var(--radius-xl)]')
+    expect(dialog).toHaveClass('dialog-panel', 'rounded-[var(--radius-3xl)]')
+    expect(dialog).not.toHaveClass('z-10')
 
     const input = screen.getByPlaceholderText(/search projects and chats/i)
     expect(input.parentElement).toHaveClass('v6c-field', 'rounded-[var(--radius-card-inner)]')
 
+    const closeBtn = screen.getByRole('button', { name: 'Close' })
+    expect(closeBtn.querySelector('kbd')).toBeInTheDocument()
+
     const options = screen.getAllByRole('option')
-    expect(options[0]).toHaveClass('rounded-[var(--radius-control)]', 'v6c-row-highlight')
-    expect(options[1]).toHaveClass('rounded-[var(--radius-control)]')
+    expect(options[0]).toHaveClass(
+      'rounded-[var(--radius-control)]',
+      'v6c-row-highlight',
+      'focus-visible:ring-2',
+      'focus-visible:ring-inset',
+      'focus-visible:ring-[var(--color-border-focus)]',
+    )
+    expect(options[1]).toHaveClass(
+      'rounded-[var(--radius-control)]',
+      'focus-visible:ring-2',
+      'focus-visible:ring-inset',
+      'focus-visible:ring-[var(--color-border-focus)]',
+    )
     expect(options[1]).not.toHaveClass('v6c-row-highlight')
+
+    // Also verify ProjectRow receives the inset focus-visible ring.
+    fireEvent.change(input, { target: { value: 'alpha-proj' } })
+    const projectOption = screen.getByRole('option', { name: /alpha-proj/i })
+    expect(projectOption).toHaveClass(
+      'focus-visible:ring-2',
+      'focus-visible:ring-inset',
+      'focus-visible:ring-[var(--color-border-focus)]',
+    )
   })
 })

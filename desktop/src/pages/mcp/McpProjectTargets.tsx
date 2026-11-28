@@ -72,7 +72,7 @@ export function McpProjectTargets({ sharing, disabled }: {
           id={panelId}
           role="dialog"
           aria-label={t('settings.mcp.projects.label')}
-          className="z-[var(--z-dropdown)] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-lg"
+          className="dropdown-glass popover-motion z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] p-3"
           style={{ ...position.style, width: 'min(440px, calc(100vw - 24px))', visibility: position.ready ? 'visible' : 'hidden' }}
         >
           <div className="space-y-3">

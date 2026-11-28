@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,19 +10,24 @@ import {
   acpModeToCcHahaPermissionMode,
   ccHahaPermissionModeToAcpMode,
   discoverAntigravity,
+  getAntigravityDiscoveredCommands,
   getAntigravityStatus,
   openAntigravityAcp,
   resetAntigravityStatusForTests,
 } from '../services/antigravityAcp.js'
+import { listAntigravitySkillSlashCommands } from '../api/skills.js'
 import {
   AntigravityConversation,
   parseSubagentToolCallPrefix,
 } from '../services/antigravityConversation.js'
+import type { AntigravityBrowserUseBridge } from '../services/antigravityBrowserUseBridge.js'
 import type { AntigravityComputerUseBridge } from '../services/antigravityComputerUseBridge.js'
+import { invalidateBrowserUseConfigCache, saveBrowserUseConfig } from '../../services/browserUse/config.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { startServer } from '../index.js'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
+import { getSessionTurnState, stopSessionTurn, submitSessionTurn, waitForSessionTurnIdle } from '../ws/handler.js'
 import type { ClientMessage, ServerMessage } from '../ws/events.js'
 
 const BANNED_FLAGS = [
@@ -136,6 +141,20 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     pendingPermission = null
     if (p.kind === 'sequence' && p.next) {
       p.next(rpc.result)
+    } else if (p.kind === 'elicitation') {
+      const action = rpc.result?.action ?? (rpc.error ? 'error:' + rpc.error.code : 'unknown')
+      const content = rpc.result?.content ?? null
+      update(sessionId, 'tool_call_update', {
+        toolCallId: p.toolCallId,
+        name: 'ask_question',
+        status: action === 'accept' ? 'completed' : 'failed',
+        rawOutput: { action, content },
+      })
+      update(sessionId, 'agent_message_chunk', {
+        content: { type: 'text', text: 'Elicited:' + action + ':' + JSON.stringify(content) },
+      })
+      update(sessionId, 'usage_update', { used: 14000, size: 200000 })
+      reply(p.promptId, { stopReason: 'end_turn', usage: { inputTokens: 130, outputTokens: 50 } })
     } else {
       const outcome = rpc.result?.outcome?.outcome
       const optionId = rpc.result?.outcome?.optionId ?? ''
@@ -181,7 +200,9 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         send({ id: rpc.id, error: { code: -32603, message: 'Backend exploded' } })
         break
       }
-      update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
+      if (mode !== 'late-commands') {
+        update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
+      }
       reply(rpc.id, { sessionId, configOptions: buildConfigOptions(), tier })
       break
     case 'session/resume':
@@ -193,6 +214,15 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       if (rpc.params.configId === 'thought_level' && mode === 'effort-fail' && rpc.params.value === 'xhigh') {
         send({ id: rpc.id, error: { code: -32602, message: 'Effort not supported for model' } })
         break
+      }
+      if (mode === 'late-commands') {
+        update(sessionId, 'available_commands_update', {
+          availableCommands: [
+            ...initialCommands,
+            { name: 'agy-customizations', description: 'AGY built-in customization guide' },
+            { name: 'skill-vetter', description: 'Security vetter skill' },
+          ],
+        })
       }
       if (rpc.params.configId === 'model') currentModel = rpc.params.value
       if (rpc.params.configId === 'thought_level') currentEffort = rpc.params.value
@@ -551,6 +581,89 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         activeSlowPrompt = { id: rpc.id, timer }
         break
       }
+      if (mode === 'elicitation-multi' || promptText.includes('[elicitation-multi]')) {
+        const askTool = {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_elicit_multi',
+          name: 'ask_question',
+          title: 'Run ask_question',
+          kind: 'other',
+          status: 'in_progress',
+          rawInput: {
+            questions: [
+              { question: 'Choose implementation plan', is_multi_select: false, options: ['(Recommended) Plan A', 'Plan B'] },
+              { question: 'Enable extra features', is_multi_select: true, options: ['Strict TypeScript', 'Lint, format, and checks', 'Unit tests'] },
+              { question: 'How to verify?', is_multi_select: false, options: ['Run locally', 'Skip tests'] },
+              { question: 'Any extra notes?', is_multi_select: false, options: [] },
+            ],
+          },
+        }
+        update(sessionId, 'tool_call', askTool)
+        update(sessionId, 'tool_call_update', { toolCallId: askTool.toolCallId, status: 'pending' })
+        pendingPermission = { rpcId: 'elicit-multi-1', promptId: rpc.id, toolCallId: askTool.toolCallId, kind: 'elicitation' }
+        send({
+          id: 'elicit-multi-1',
+          method: 'elicitation/create',
+          params: {
+            sessionId,
+            toolCallId: askTool.toolCallId,
+            mode: 'form',
+            message: 'The agent has 4 questions.',
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                q1: {
+                  type: 'string',
+                  title: 'Choose implementation plan',
+                  oneOf: [
+                    { const: 'opt_plan_a', title: '(Recommended) Plan A' },
+                    { const: 'opt_plan_b', title: 'Plan B' },
+                  ],
+                },
+                q1_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: Choose implementation plan',
+                },
+                q2: {
+                  type: 'array',
+                  title: 'Enable extra features',
+                  items: {
+                    anyOf: [
+                      { const: 'opt_ts', title: 'Strict TypeScript' },
+                      { const: 'opt_lint', title: 'Lint, format, and checks' },
+                      { const: 'opt_tests', title: 'Unit tests' },
+                    ],
+                  },
+                },
+                q2_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: Enable extra features',
+                },
+                q3: {
+                  type: 'string',
+                  title: 'How to verify?',
+                  oneOf: [
+                    { const: 'opt_local', title: 'Run locally' },
+                    { const: 'opt_skip', title: 'Skip tests' },
+                  ],
+                },
+                q3_other: {
+                  type: 'string',
+                  title: 'Other',
+                  description: 'Optional free-form answer to: How to verify?',
+                },
+                q4_other: {
+                  type: 'string',
+                  title: 'Any extra notes?',
+                },
+              },
+            },
+          },
+        })
+        break
+      }
       if (mode === 'fixed-options') {
         const qTool = {
           sessionUpdate: 'tool_call',
@@ -728,6 +841,7 @@ describe('Antigravity ACP server core & integration', () => {
     expect(spawnRecord?.hasAnthropicApiKey).toBe(false)
     const initRecord = wire.find(w => w.method === 'initialize')
     expect(initRecord?.params?.clientInfo).toEqual(ANTIGRAVITY_CLIENT_INFO)
+    expect(initRecord?.params?.clientCapabilities).toEqual({ elicitation: { form: {} } })
 
     // Login required mode transitions status to login_required and auth-status reports hasAuth: false
     await writeFile(fake.modeFile, 'login', 'utf8')
@@ -1093,6 +1207,293 @@ describe('Antigravity ACP server core & integration', () => {
       await acp.proc.exited
     }
   })
+
+  test('ACP elicitation/create projects multi-question single/multi-select + write-in to native AskUserQuestion over WS and supports Chat about this, decline, cancel, subagent attribution, and invalid-schema fallback', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'elicitation-multi')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-elicit')
+    await mkdir(workDir, { recursive: true })
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    let ws: WebSocket | undefined
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: ANTIGRAVITY_DEFAULT_MODEL,
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws!.onopen = () => resolve()
+        ws!.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws!.send(JSON.stringify(msg))
+
+      // Turn 1: multi-question mixed single-select, multi-select (with comma in label), custom write-in, and free-text-only
+      send({ type: 'user_message', content: 'Ask multiple questions [elicitation-multi]' })
+      await waitUntil(() => received.some(m => m.type === 'permission_request'))
+
+      const permReq = received.find(m => m.type === 'permission_request') as Extract<ServerMessage, { type: 'permission_request' }>
+      expect(permReq.toolName).toBe('AskUserQuestion')
+      expect(permReq.toolUseId).toBe('call_elicit_multi')
+      expect(permReq.input).toEqual({
+        allowFreeText: true,
+        allowImages: false,
+        questions: [
+          {
+            question: 'Choose implementation plan',
+            header: 'Q1',
+            multiSelect: false,
+            options: [{ label: '(Recommended) Plan A' }, { label: 'Plan B' }],
+          },
+          {
+            question: 'Enable extra features',
+            header: 'Q2',
+            multiSelect: true,
+            options: [{ label: 'Strict TypeScript' }, { label: 'Lint, format, and checks' }, { label: 'Unit tests' }],
+          },
+          {
+            question: 'How to verify?',
+            header: 'Q3',
+            multiSelect: false,
+            options: [{ label: 'Run locally' }, { label: 'Skip tests' }],
+          },
+          {
+            question: 'Any extra notes?',
+            header: 'Q4',
+            multiSelect: false,
+          },
+        ],
+      })
+
+      // Held ask_question must NOT have emitted a duplicate raw "Antigravity: Run ask_question" tool_use
+      const toolUses = received.filter(m => m.type === 'tool_use_complete') as Array<Extract<ServerMessage, { type: 'tool_use_complete' }>>
+      expect(toolUses.map(t => t.toolName)).toEqual(['AskUserQuestion'])
+
+      // Submitting empty answers is rejected cleanly with PERMISSION_RESPONSE_INVALID
+      const errCountBeforeEmpty = received.filter(m => m.type === 'error').length
+      send({ type: 'permission_response', requestId: permReq.requestId, allowed: true, updatedInput: { answers: {} } })
+      await waitUntil(() => received.filter(m => m.type === 'error').length > errCountBeforeEmpty)
+      expect((received.filter(m => m.type === 'error').at(-1) as Extract<ServerMessage, { type: 'error' }>).code).toBe('PERMISSION_RESPONSE_INVALID')
+
+      // Submit mixed answers: Q1 option + additional note, Q2 multi-select (with comma in option label), Q3 pure free text, Q4 free-text-only
+      send({
+        type: 'permission_response',
+        requestId: permReq.requestId,
+        allowed: true,
+        updatedInput: {
+          answers: {
+            'Choose implementation plan': '(Recommended) Plan A',
+            'Enable extra features': 'Strict TypeScript, Lint, format, and checks',
+            'How to verify?': 'Run CI smoke only',
+            'Any extra notes?': 'Keep diff small',
+          },
+          annotations: {
+            'Choose implementation plan': { notes: 'Prefer zero new deps' },
+          },
+        },
+      })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      const wire = await fake.readWire()
+      const elicitReply = wire.find(w => w.id === 'elicit-multi-1')
+      expect(elicitReply?.result).toEqual({
+        action: 'accept',
+        content: {
+          q1: 'opt_plan_a',
+          q1_other: 'Prefer zero new deps',
+          q2: ['opt_ts', 'opt_lint'],
+          q3_other: 'Run CI smoke only',
+          q4_other: 'Keep diff small',
+        },
+      })
+
+      // Reloaded session transcript preserves structured AskUserQuestion answers + annotations
+      const detailRes = await fetch(`${baseUrl}/api/sessions/${sessionId}`)
+      expect(detailRes.status).toBe(200)
+      const detail = await detailRes.json() as { messages?: Array<{ type: string; content: unknown }> }
+      const toolResultEntry = (detail.messages ?? []).find(m =>
+        (m.type === 'user' || m.type === 'tool_result') &&
+        Array.isArray(m.content) &&
+        m.content.some((b: Record<string, unknown>) => b.type === 'tool_result' && b.tool_use_id === 'call_elicit_multi'),
+      )
+      const resultBlock = ((toolResultEntry?.content as Array<Record<string, unknown>> | undefined) ?? [])
+        .find(b => b.type === 'tool_result' && b.tool_use_id === 'call_elicit_multi')
+      expect(resultBlock?.content).toMatchObject({
+        answers: {
+          'Choose implementation plan': '(Recommended) Plan A',
+          'Enable extra features': 'Strict TypeScript, Lint, format, and checks',
+          'How to verify?': 'Run CI smoke only',
+          'Any extra notes?': 'Keep diff small',
+        },
+        annotations: {
+          'Choose implementation plan': { notes: 'Prefer zero new deps' },
+        },
+      })
+
+      // Turn 2: "Chat about this" (allowed: false + denyMessage) forwards clarify prompt via q1_other and persists handedOff result
+      const permsBeforeChat = received.filter(m => m.type === 'permission_request').length
+      const completesBeforeChat = received.filter(m => m.type === 'message_complete').length
+      send({ type: 'user_message', content: 'Ask again [elicitation-multi]' })
+      await waitUntil(() => received.filter(m => m.type === 'permission_request').length > permsBeforeChat)
+      const permReq2 = received.filter(m => m.type === 'permission_request').at(-1) as Extract<ServerMessage, { type: 'permission_request' }>
+      send({
+        type: 'permission_response',
+        requestId: permReq2.requestId,
+        allowed: false,
+        denyMessage: '- "Choose implementation plan"\n  Answer: (Recommended) Plan A',
+      })
+      await waitUntil(() => received.filter(m => m.type === 'message_complete').length > completesBeforeChat)
+
+      const wireAfterChat = await fake.readWire()
+      const chatReply = wireAfterChat.filter(w => w.id === 'elicit-multi-1').at(-1)
+      const chatResult = chatReply?.result as { action?: string; content?: { q1_other?: string } } | undefined
+      expect(chatResult?.action).toBe('accept')
+      expect(typeof chatResult?.content?.q1_other).toBe('string')
+      expect(chatResult?.content?.q1_other).toContain('The user wants to clarify these questions.')
+      expect(chatResult?.content?.q1_other).toContain('Answer: (Recommended) Plan A')
+      const handedOffResult = received
+        .filter(m => m.type === 'tool_result' && m.toolUseId === 'call_elicit_multi')
+        .at(-1) as Extract<ServerMessage, { type: 'tool_result' }>
+      expect(handedOffResult?.content).toMatchObject({ handedOff: true })
+
+      ws.close()
+    } finally {
+      ws?.close()
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+
+    // Direct unit checks: generic decline (no denyMessage), turn cancel -> { action: 'cancel' }, unsupported mode -> -32602, subagent attribution
+    const replies: Array<{ id: number | string; result?: Record<string, unknown>; errorCode?: number }> = []
+    const emitted: Array<Record<string, unknown>> = []
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt!: (value: Record<string, unknown>) => void
+
+    const appDataDir = join(sandboxDir, 'elicit-sub-appdata')
+    const subagentsDir = join(appDataDir, 'brain', 'native-elicit-unit', '.system_generated', 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+    await writeFile(join(subagentsDir, 'child-elicit-1234.json'), JSON.stringify({
+      conversationId: 'child-elicit-1234',
+      subagentDescriptor: { typeName: 'research', role: 'Planner Helper' },
+      state: 'SUBAGENT_STATE_ALIVE',
+      spawnStepIndex: 1,
+    }), 'utf8')
+
+    const unitAcp = {
+      sessionId: 'native-elicit-unit',
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: typeof onMessage) { onMessage = fn },
+      get onMessage() { return onMessage },
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvePrompt = resolve }),
+      reply: (id: number | string, result?: Record<string, unknown>, errorCode?: number) => {
+        replies.push({ id, result, errorCode })
+        return true
+      },
+      cancel: () => {
+        setTimeout(() => resolvePrompt({ stopReason: 'cancelled' }), 5)
+        return true
+      },
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      unitAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      msg => emitted.push(msg),
+      async () => {},
+      { antigravityAppDataDir: appDataDir },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'start' }], 'u-elicit-unit')).toBe(true)
+    await waitUntil(() => typeof resolvePrompt === 'function')
+
+    // 1. Non-form elicitation (e.g. mode: 'url') returns JSON-RPC -32602 so AGY can fall back safely
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      mode: 'url',
+      message: 'Open URL',
+      url: 'https://example.invalid',
+    }, 'elicit-url')
+    expect(replies.at(-1)).toEqual({ id: 'elicit-url', result: undefined, errorCode: -32602 })
+
+    // 2. Unrecognized non-question form schema also returns -32602
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      mode: 'form',
+      message: 'Enter API token',
+      requestedSchema: {
+        type: 'object',
+        properties: { apiToken: { type: 'string', title: 'API Token' } },
+      },
+    }, 'elicit-unknown-field')
+    expect(replies.at(-1)).toEqual({ id: 'elicit-unknown-field', result: undefined, errorCode: -32602 })
+
+    // 3. Subagent elicitation carries subagent_name + agent_id, and generic decline (no denyMessage) replies { action: 'decline' }
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      toolCallId: 'child-elicit-1234:call_7',
+      mode: 'form',
+      message: 'The agent has a question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: { type: 'string', title: 'Target branch?', oneOf: [{ const: 'main', title: 'main' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    }, 'elicit-sub-decline')
+    const subReq = emitted.filter(m => m.type === 'control_request').at(-1) as { request_id: string; request: Record<string, unknown> }
+    expect(subReq.request.tool_name).toBe('AskUserQuestion')
+    expect(subReq.request.subagent_name).toBe('Planner Helper')
+    expect(subReq.request.agent_id).toBe('child-elicit-1234')
+    expect(conv.respond(subReq.request_id, false)).toBe(true)
+    expect(replies.at(-1)).toEqual({ id: 'elicit-sub-decline', result: { action: 'decline' }, errorCode: undefined })
+
+    // 4. Turn cancel replies { action: 'cancel' } to pending elicitation
+    onMessage?.('elicitation/create', {
+      sessionId: 'native-elicit-unit',
+      toolCallId: 'call_cancel_elicit',
+      mode: 'form',
+      message: 'The agent has a question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: { type: 'string', title: 'Proceed?', oneOf: [{ const: 'yes', title: 'Yes' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    }, 'elicit-cancel-1')
+    expect(conv.cancel()).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(replies.find(r => r.id === 'elicit-cancel-1')).toEqual({
+      id: 'elicit-cancel-1',
+      result: { action: 'cancel' },
+      errorCode: undefined,
+    })
+  }, 20_000)
 
   test('auth-status hasAuth is true ONLY on ready (false on unchecked/error/login_required) and discoverAntigravity enforces bounded SIGKILL exit timeout', async () => {
     const fake = await installFakeAgy(sandboxDir, 'error-discover')
@@ -2209,12 +2610,816 @@ describe('Antigravity ACP server core & integration', () => {
     await conv.pendingTurnCompletion
     expect(conv.isResponding).toBe(false)
   })
+
+  test('retains late available_commands_update arriving after session/new during model setup and caches discovered AGY skills for draft/cold-start slash menus', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'late-commands')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-late-commands')
+    await mkdir(join(workDir, '.git'), { recursive: true })
+    await mkdir(join(workDir, '.agents', 'skills', 'repo-local-skill'), { recursive: true })
+    await writeFile(
+      join(workDir, '.agents', 'skills', 'repo-local-skill', 'SKILL.md'),
+      '---\ndescription: Repo AGY skill\n---\nBody',
+      'utf8',
+    )
+
+    // 1. openAntigravityAcp with explicit model triggers set_config_option after session/new.
+    // Late available_commands_update during that window must NOT be dropped.
+    const acp = await openAntigravityAcp(workDir, { modelId: 'gemini-3.8-flash' })
+    try {
+      expect(acp.initialAvailableCommands.map(c => c.name)).toEqual([
+        'swarm',
+        'plan',
+        'boost',
+        'agy-customizations',
+        'skill-vetter',
+      ])
+    } finally {
+      acp.close()
+      await acp.proc.exited
+    }
+
+    // 2. discoverAntigravity captures global/builtin commands during model effort probing
+    // so draft /api/skills/commands?providerId=antigravity-acp exposes both disk & discovered skills.
+    const status = await discoverAntigravity()
+    expect(status.status).toBe('ready')
+    expect(getAntigravityDiscoveredCommands().map(c => c.name)).toContain('agy-customizations')
+
+    const draftSkills = await listAntigravitySkillSlashCommands(workDir)
+    expect(draftSkills).toContainEqual({
+      name: 'repo-local-skill',
+      description: 'Repo AGY skill',
+      kind: 'skill',
+      source: 'project',
+    })
+    expect(draftSkills).toContainEqual({
+      name: 'agy-customizations',
+      description: 'AGY built-in customization guide',
+      kind: 'skill',
+      source: 'user',
+    })
+    // Built-in AGY commands stay separate from skill entries
+    expect(draftSkills.map(c => c.name)).not.toContain('swarm')
+
+    // 3. Cold-start Antigravity session slash-commands endpoint falls back to AGY skills before ACP starts.
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          title: 'Cold Start AGY',
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-3.8-pro',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const coldSlashRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/slash-commands`)
+      expect(coldSlashRes.status).toBe(200)
+      const coldSlashBody = await coldSlashRes.json() as { commands: Array<{ name: string; kind?: string }> }
+      expect(coldSlashBody.commands.map(c => c.name)).toContain('repo-local-skill')
+      expect(coldSlashBody.commands.map(c => c.name)).toContain('agy-customizations')
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test('projects cc-haha-browser-use MCP tools to canonical Browser* names, preserves image blocks, auto-approves permissions, cleans up after turn, and attributes context tokens', async () => {
+    const emitted: Record<string, unknown>[] = []
+    const replies: Array<{ id: number | string; result?: Record<string, unknown>; errorCode?: number }> = []
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let resolvePrompt!: (result: Record<string, unknown>) => void
+
+    let browserEnabled = true
+    let cleanupCount = 0
+    let abortCount = 0
+    let resetCount = 0
+
+    const mockBrowserBridge: AntigravityBrowserUseBridge = {
+      serverName: 'cc-haha-browser-use',
+      url: 'http://127.0.0.1:23456/mcp',
+      token: 'tok-bu',
+      mcpServerConfig: { type: 'http', name: 'cc-haha-browser-use', url: 'http://127.0.0.1:23456/mcp' },
+      systemPromptAppend: 'a'.repeat(700),
+      isEnabled: () => browserEnabled,
+      abortCurrentTurn: () => { abortCount++ },
+      resetTurnAbort: () => { resetCount++ },
+      cleanupAfterTurn: async () => { cleanupCount++ },
+      close: async () => {},
+    }
+
+    const unitAcp = {
+      sessionId: 'native-bu-unit',
+      modelId: 'gemini-3.8-pro',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: typeof onMessage) { onMessage = fn },
+      get onMessage() { return onMessage },
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvePrompt = resolve }),
+      reply: (id: number | string, result?: Record<string, unknown>, errorCode?: number) => {
+        replies.push({ id, result, errorCode })
+        return true
+      },
+      cancel: () => {
+        setTimeout(() => resolvePrompt({ stopReason: 'cancelled' }), 5)
+        return true
+      },
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      unitAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      msg => emitted.push(msg),
+      async () => {},
+      { browserUseBridge: mockBrowserBridge },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'open example.com and screenshot' }], 'u-bu-1')).toBe(true)
+    expect(resetCount).toBe(1)
+    await waitUntil(() => typeof resolvePrompt === 'function')
+
+    // 1. Auto-approve mcp_cc-haha-browser-use_BrowserSnapshot permission request and project tool_use as canonical BrowserSnapshot
+    onMessage?.('session/request_permission', {
+      sessionId: 'native-bu-unit',
+      toolCall: {
+        toolCallId: 'bu-call-1',
+        name: 'mcp_cc-haha-browser-use_BrowserSnapshot',
+        title: 'BrowserSnapshot',
+        rawInput: { screenshot: true, target: 'workspace' },
+        status: 'in_progress',
+      },
+      options: [
+        { optionId: 'allow-1', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'deny-1', name: 'Reject once', kind: 'reject_once' },
+      ],
+    }, 'perm-bu-1')
+
+    expect(replies).toContainEqual({
+      id: 'perm-bu-1',
+      result: { outcome: { outcome: 'selected', optionId: 'allow-1' } },
+      errorCode: undefined,
+    })
+    expect(emitted.filter(m => m.type === 'control_request')).toHaveLength(0)
+
+    const toolUseMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_use' && b.id === 'bu-call-1')
+    })
+    expect(toolUseMsg).toBeDefined()
+    const toolUseBlock = ((toolUseMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(toolUseBlock.name).toBe('BrowserSnapshot')
+    expect(toolUseBlock.input).toEqual({ screenshot: true, target: 'workspace' })
+
+    // 2. Completing tool_call_update with rawOutput.output + unwrapped text/image content preserves both text and image blocks
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-1',
+        status: 'completed',
+        rawOutput: { output: '{"screenshotAttached":true}' },
+        content: [
+          { type: 'text', text: 'ignored-because-output-wins' },
+          { type: 'image', data: pngBase64, mimeType: 'image/png' },
+        ],
+      },
+    })
+
+    const toolResultMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'bu-call-1')
+    })
+    expect(toolResultMsg).toBeDefined()
+    const resultBlock = ((toolResultMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(resultBlock.content).toEqual([
+      { type: 'text', text: '{"screenshotAttached":true}' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBase64 } },
+    ])
+
+    // 2a. Empty tool.content: [] falls back to rawOutput.content (text + image)
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'bu-call-empty-content',
+        name: 'mcp_cc-haha-browser-use_BrowserSnapshot',
+        title: 'BrowserSnapshot',
+        rawInput: { screenshot: true },
+        content: [],
+        status: 'in_progress',
+      },
+    })
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-empty-content',
+        status: 'completed',
+        rawOutput: {
+          content: [
+            { type: 'text', text: '{"url":"https://example.test"}' },
+            { type: 'image', data: pngBase64, mimeType: 'image/png' },
+          ],
+        },
+      },
+    })
+    const emptyFallbackMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'bu-call-empty-content')
+    })
+    expect(((emptyFallbackMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!.content).toEqual([
+      { type: 'text', text: '{"url":"https://example.test"}' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBase64 } },
+    ])
+
+    // 2b. invoke_subagent completing with an image block in tool.content does not throw in resolveChildConversationIdForInvoke
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'sub-img-1',
+        name: 'invoke_subagent',
+        title: 'Run subagent',
+        rawInput: { Role: 'Inspector', Prompt: 'Check page' },
+        status: 'in_progress',
+      },
+    })
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'sub-img-1',
+        name: 'invoke_subagent',
+        status: 'completed',
+        content: [
+          { type: 'text', text: 'conversationId: child_img_12345678' },
+          { type: 'image', data: pngBase64, mimeType: 'image/png' },
+        ],
+      },
+    })
+    const subResultMsg = emitted.find(m => {
+      const blocks = (m.message as { content?: Array<Record<string, unknown>> } | undefined)?.content
+      return blocks?.some(b => b.type === 'tool_result' && b.tool_use_id === 'sub-img-1')
+    })
+    expect(subResultMsg).toBeDefined()
+    const subResultBlock = ((subResultMsg!.message as { content: Array<Record<string, unknown>> }).content)[0]!
+    expect(String(subResultBlock.content)).toContain('agentId: child_img_12345678')
+
+    // 3. Disabling Browser Use mid-session stops auto-approving permission requests
+    browserEnabled = false
+    onMessage?.('session/request_permission', {
+      sessionId: 'native-bu-unit',
+      toolCall: {
+        toolCallId: 'bu-call-2',
+        name: 'mcp_cc-haha-browser-use_BrowserAct',
+        title: 'BrowserAct',
+        rawInput: { steps: [{ action: 'click', ref: '@e1' }] },
+        status: 'in_progress',
+      },
+      options: [
+        { optionId: 'allow-2', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'deny-2', name: 'Reject once', kind: 'reject_once' },
+      ],
+    }, 'perm-bu-2')
+    const permReq = emitted.filter(m => m.type === 'control_request') as Array<{ request_id: string }>
+    expect(permReq).toHaveLength(1)
+    expect(conv.respond(permReq[0]!.request_id, false)).toBe(true)
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'bu-call-2',
+        status: 'failed',
+        rawOutput: 'User denied permission',
+      },
+    })
+
+    // Re-enable for context usage check before finishing turn
+    browserEnabled = true
+    onMessage?.('session/update', {
+      sessionId: 'native-bu-unit',
+      update: { sessionUpdate: 'usage_update', used: 20_000, size: 200_000 },
+    })
+    resolvePrompt({ stopReason: 'end_turn', usage: { inputTokens: 15_000, outputTokens: 200 } })
+    await conv.pendingTurnCompletion
+
+    // cleanupAfterTurn ran on turn completion
+    expect(cleanupCount).toBe(1)
+
+    // Context snapshot includes MCP tools (Browser Use)
+    const snapshot = conv.getContextUsageSnapshot() as { categories: Array<{ name: string; tokens: number }> }
+    expect(snapshot.categories.some(c => c.name === 'MCP tools (Browser Use)' && c.tokens > 0)).toBe(true)
+
+    // Cancel aborts turn on browserUseBridge
+    expect(conv.send([{ type: 'text', text: 'second turn' }], 'u-bu-2')).toBe(true)
+    await waitUntil(() => conv.isResponding)
+    expect(conv.cancel()).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(abortCount).toBe(1)
+    expect(cleanupCount).toBe(2)
+  })
+
+  test('injects cc-haha-browser-use MCP when enabled, supports mid-session enable restart detection, and accepts enqueue_session_message for takeover resume', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-bu-wire')
+    await mkdir(workDir, { recursive: true })
+
+    invalidateBrowserUseConfigCache()
+    saveBrowserUseConfig({ enabled: false, preferredTarget: 'workspace' })
+
+    const created = await sessionService.createSession(workDir, 'Antigravity BU Test', {
+      providerId: ANTIGRAVITY_PROVIDER_ID,
+      modelId: ANTIGRAVITY_DEFAULT_MODEL,
+    })
+    const sessionId = created.sessionId
+
+    try {
+      // 1. Start while Browser Use is disabled -> no Browser Use MCP, no restart needed
+      await conversationService.startSession(sessionId, workDir, '', {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        model: ANTIGRAVITY_DEFAULT_MODEL,
+      })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(false)
+
+      const initialWire = await fake.readWire()
+      const initialNew = initialWire.find(w => w.method === 'session/new')
+      expect(initialNew).toBeDefined()
+      const initialServers = (initialNew!.params?.mcpServers ?? []) as Array<{ name: string }>
+      expect(initialServers.some(s => s.name === 'cc-haha-browser-use')).toBe(false)
+
+      // 2. Enable Browser Use mid-session -> needsAntigravityCapabilityRestart flips to true
+      saveBrowserUseConfig({ enabled: true, preferredTarget: 'workspace' })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(true)
+
+      // 3. Restart idle session (as ensureCliSessionStarted does on next user_message) -> resumes with cc-haha-browser-use MCP
+      await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+      await conversationService.startSession(sessionId, workDir, '', {
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        model: ANTIGRAVITY_DEFAULT_MODEL,
+      })
+      expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(false)
+
+      const wireAfterRestart = await fake.readWire()
+      const sessionResume = wireAfterRestart.find(w => w.method === 'session/resume')
+      expect(sessionResume).toBeDefined()
+      const mcpServers = (sessionResume!.params?.mcpServers ?? []) as Array<{ name: string; type: string; url: string }>
+      expect(mcpServers.some(s => s.name === 'cc-haha-browser-use' && s.type === 'http')).toBe(true)
+      const meta = sessionResume!.params?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined
+      expect(meta?.antigravity?.systemPrompt?.append).toContain('cc-haha Browser Use MCP')
+
+      // 4. requestControl('enqueue_session_message') rejects cross-session callers and non-start_if_idle calls,
+      //    and supports full Stop -> waitForSessionTurnIdle -> submitSessionTurn Resume flow
+      await expect(
+        conversationService.requestControl(sessionId, {
+          subtype: 'enqueue_session_message',
+          sender_session_id: 'other-session-id',
+          start_if_idle: true,
+          message_id: 'cross-session-attempt',
+          text: 'untrusted cross-session prompt',
+        }),
+      ).rejects.toMatchObject({ code: 'ANTIGRAVITY_UNSUPPORTED' })
+
+      const busyRes = await conversationService.requestControl(sessionId, {
+        subtype: 'enqueue_session_message',
+        sender_session_id: sessionId,
+        message_id: 'resume-bu-no-start',
+        text: 'should not start when start_if_idle is omitted',
+      })
+      expect(busyRes).toEqual({ status: 'busy' })
+
+      const server = startServer(0, '127.0.0.1')
+      try {
+        // Simulate user-initiated Takeover/Stop setting sessionStopRequested before Resume
+        stopSessionTurn(sessionId)
+        expect(await waitForSessionTurnIdle(sessionId, 1_000)).toBe(true)
+        const submitRes = await submitSessionTurn(
+          sessionId,
+          '[Browser Use] The user completed the manual browser takeover. Call BrowserSnapshot to observe the updated page and continue.',
+          {
+            serverHost: '127.0.0.1',
+            serverPort: server.port,
+            messageId: 'resume-bu-after-stop',
+            sourceSessionId: sessionId,
+          },
+        )
+        expect(submitRes).toEqual({ status: 'queued' })
+        // waitForSessionTurnIdle awaits the active Antigravity turn until it settles to idle
+        expect(await waitForSessionTurnIdle(sessionId, 5_000)).toBe(true)
+        expect(getSessionTurnState(sessionId)).toBe('idle')
+
+        const wireAfterPrompt = await fake.readWire()
+        expect(wireAfterPrompt.some(w => w.method === 'session/prompt')).toBe(true)
+
+        // 5. Disabling Browser Use mid-session also marks needsAntigravityCapabilityRestart true (on -> off)
+        saveBrowserUseConfig({ enabled: false })
+        expect(conversationService.needsAntigravityCapabilityRestart(sessionId)).toBe(true)
+      } finally {
+        server.stop(true)
+      }
+    } finally {
+      await conversationService.stopSessionAndWait(sessionId)
+      saveBrowserUseConfig({ enabled: false })
+      invalidateBrowserUseConfigCache()
+    }
+  }, 20_000)
+
+  test('streams mid-turn usage and tok/s incrementally from Antigravity transcript.jsonl without double-counting prior turns or turn finish', async () => {
+    const appDataDir = join(sandboxDir, 'live-usage-appdata')
+    const nativeId = 'native-live-usage-1'
+    const logsDir = join(appDataDir, 'brain', nativeId, '.system_generated', 'logs')
+    await mkdir(logsDir, { recursive: true })
+    const transcriptPath = join(logsDir, 'transcript.jsonl')
+
+    // Pre-existing turn from an earlier/resumed session: MUST be ignored by the new turn's live tailer.
+    await writeFile(
+      transcriptPath,
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        input_tokens: 9_999,
+        cache_read_tokens: 8_888,
+        output_tokens: 7_777,
+      }) + '\n',
+      'utf8',
+    )
+
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let releaseStep1!: () => void
+    let releaseStep2!: () => void
+    const step1Ready = new Promise<void>(resolve => { releaseStep1 = resolve })
+    const step2Ready = new Promise<void>(resolve => { releaseStep2 = resolve })
+    let finishTurn!: (result: Record<string, unknown>) => void
+    const turnRelease = new Promise<Record<string, unknown>>(resolve => { finishTurn = resolve })
+
+    const fakeAcp = {
+      sessionId: nativeId,
+      modelId: 'gemini-4-neon',
+      supportsImages: true,
+      isOpen: true,
+      initialAvailableCommands: [],
+      launchedWithBypassPermissions: false,
+      permissionMode: 'default' as const,
+      drained: Promise.resolve(),
+      set onMessage(fn: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined) {
+        onMessage = fn
+      },
+      get onMessage() {
+        return onMessage
+      },
+      async prompt() {
+        // Step 1: model active ~60ms, then tool call pauses model phase and agy flushes PLANNER_RESPONSE
+        await new Promise(resolve => setTimeout(resolve, 60))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Inspecting...' } },
+        })
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call_live_1',
+            name: 'run_command',
+            status: 'in_progress',
+            rawInput: { CommandLine: 'ls' },
+            title: 'ls',
+          },
+        })
+        // Simulate partial line write followed by completion newline (mid-write safety)
+        const step1Line = JSON.stringify({
+          step_index: 5,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          input_tokens: 1_200,
+          cache_read_tokens: 3_600,
+          output_tokens: 400,
+        })
+        await appendFile(transcriptPath, step1Line.slice(0, 40), 'utf8')
+        await appendFile(transcriptPath, step1Line.slice(40) + '\n', 'utf8')
+        releaseStep1()
+
+        // Complete tool 1 and enter Step 2 (~60ms active)
+        await new Promise(resolve => setTimeout(resolve, 30))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'call_live_1',
+            status: 'completed',
+            rawOutput: { output: 'ok' },
+          },
+        })
+        await new Promise(resolve => setTimeout(resolve, 60))
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call_live_2',
+            name: 'run_command',
+            status: 'in_progress',
+            rawInput: { CommandLine: 'pwd' },
+            title: 'pwd',
+          },
+        })
+        await appendFile(
+          transcriptPath,
+          JSON.stringify({
+            step_index: 9,
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            input_tokens: 800,
+            cache_read_tokens: 4_400,
+            output_tokens: 600,
+          }) + '\n',
+          'utf8',
+        )
+        releaseStep2()
+
+        const result = await turnRelease
+        onMessage?.('session/update', {
+          sessionId: nativeId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'call_live_2',
+            status: 'completed',
+            rawOutput: { output: '/tmp' },
+          },
+        })
+        return result
+      },
+      reply: () => true,
+      cancel: () => true,
+      end: () => {},
+      close: () => {},
+    }
+
+    const conv = new AntigravityConversation(
+      fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+      () => {},
+      async () => {},
+      { antigravityAppDataDir: appDataDir },
+    )
+
+    expect(conv.send([{ type: 'text', text: 'Investigate' }], 'u-live-1')).toBe(true)
+
+    await step1Ready
+    const mid1 = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid1.totalInputTokens).toBe(1_200)
+    expect(mid1.totalCacheReadInputTokens).toBe(3_600)
+    expect(mid1.totalOutputTokens).toBe(400)
+    expect(mid1.totalAPIDuration as number).toBeGreaterThanOrEqual(45)
+
+    // Repeat poll with no new bytes must stay idempotent
+    const mid1Again = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid1Again.totalOutputTokens).toBe(400)
+
+    await step2Ready
+    const mid2 = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(mid2.totalInputTokens).toBe(2_000)
+    expect(mid2.totalCacheReadInputTokens).toBe(8_000)
+    expect(mid2.totalOutputTokens).toBe(1_000)
+    expect(mid2.totalAPIDuration as number).toBeGreaterThan(mid1.totalAPIDuration as number)
+
+    // Settle turn with authoritative ACP result (inclusive thoughtTokens proven by totalTokens)
+    finishTurn({
+      stopReason: 'end_turn',
+      usage: {
+        inputTokens: 2_100,
+        cachedReadTokens: 8_200,
+        outputTokens: 1_150,
+        thoughtTokens: 700,
+        totalTokens: 11_450,
+      },
+    })
+    await conv.pendingTurnCompletion
+
+    const finalSnap = conv.getSessionUsageSnapshot() as Record<string, unknown>
+    expect(finalSnap.totalInputTokens).toBe(2_100)
+    expect(finalSnap.totalCacheReadInputTokens).toBe(8_200)
+    expect(finalSnap.totalOutputTokens).toBe(1_150)
+    expect(finalSnap.totalAPIDuration as number).toBeGreaterThanOrEqual(mid2.totalAPIDuration as number)
+  })
+
+  test('avoids double-counting thoughtTokens when ACP totalTokens proves outputTokens already includes thinking', async () => {
+    const runTurn = async (usage: Record<string, number>) => {
+      const emitted: Array<Record<string, unknown>> = []
+      const fakeAcp = {
+        sessionId: 'native-thought-dedup',
+        modelId: 'gemini-4-neon',
+        supportsImages: true,
+        isOpen: true,
+        initialAvailableCommands: [],
+        launchedWithBypassPermissions: false,
+        permissionMode: 'default' as const,
+        drained: Promise.resolve(),
+        onMessage: undefined as ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined,
+        async prompt() {
+          return { stopReason: 'end_turn', usage }
+        },
+        reply: () => true,
+        cancel: () => true,
+        end: () => {},
+        close: () => {},
+      }
+      const conv = new AntigravityConversation(
+        fakeAcp as unknown as ConstructorParameters<typeof AntigravityConversation>[0],
+        msg => emitted.push(msg),
+        async () => {},
+        { antigravityAppDataDir: join(sandboxDir, 'empty-thought-appdata') },
+      )
+      expect(conv.send([{ type: 'text', text: 'hi' }], 'u-thought')).toBe(true)
+      await conv.pendingTurnCompletion
+      return emitted.find(m => m.type === 'result') as { usage: { output_tokens: number } }
+    }
+
+    // Real agy acp shape: outputTokens (300) already includes thoughtTokens (180); totalTokens = 1000 + 500 + 300 = 1800
+    const inclusive = await runTurn({
+      inputTokens: 1_000,
+      cachedReadTokens: 500,
+      outputTokens: 300,
+      thoughtTokens: 180,
+      totalTokens: 1_800,
+    })
+    expect(inclusive.usage.output_tokens).toBe(300)
+
+    // Exclusive shape: outputTokens (120) excludes thoughtTokens (180); totalTokens = 1000 + 500 + 120 + 180 = 1800
+    const exclusive = await runTurn({
+      inputTokens: 1_000,
+      cachedReadTokens: 500,
+      outputTokens: 120,
+      thoughtTokens: 180,
+      totalTokens: 1_800,
+    })
+    expect(exclusive.usage.output_tokens).toBe(300)
+  })
+
+  test('stop_generation pauses an Antigravity Swarm by cancelling and shutting down agy acp, then runtime-control resume restarts it via session/resume', async () => {
+    const {
+      antigravitySwarmTeamName,
+      forgetAntigravitySwarmSessionMapping,
+      resetAntigravitySwarmControlStateForTests,
+    } = await import('../services/antigravitySwarmAdapter.js')
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-swarm-stop-resume')
+    const appDataDir = join(sandboxDir, 'agy-appdata-swarm-stop')
+    await mkdir(workDir, { recursive: true })
+    const prevAppData = process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+    process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = appDataDir
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+    const nativeSessionId = 'native-session-1'
+    const teamName = antigravitySwarmTeamName(nativeSessionId)
+
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: ANTIGRAVITY_DEFAULT_MODEL,
+          effortLevel: 'high',
+          permissionMode: 'default',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+
+      const received: ServerMessage[] = []
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('WS failed to connect'))
+      })
+      ws.onmessage = (event) => {
+        received.push(JSON.parse(String(event.data)) as ServerMessage)
+      }
+      const send = (msg: ClientMessage) => ws.send(JSON.stringify(msg))
+
+      // Turn 1 establishes nativeSessionId = 'native-session-1'
+      send({ type: 'user_message', content: 'Start swarm' })
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      // Seed Antigravity Swarm on disk for native-session-1
+      const swarmDir = join(appDataDir, 'brain', nativeSessionId, '.system_generated', 'swarm')
+      await mkdir(swarmDir, { recursive: true })
+      await writeFile(
+        join(swarmDir, 'swarm.json'),
+        JSON.stringify({ version: 1, backend: 'local', swarm_id: nativeSessionId, created_at: '2026-11-27T02:00:00Z' }),
+        'utf8',
+      )
+      await writeFile(
+        join(swarmDir, 'members.json'),
+        JSON.stringify({
+          title: 'Stop Resume Swarm',
+          members: {
+            coordinator: { conversation_id: nativeSessionId, role: 'coordinator', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+            reader: { conversation_id: 'worker-reader-1', role: 'worker', phase: 'RUNNING', wake_mode: 'working', killed: false, model: 'gemini-4-neon' },
+            monitor: { conversation_id: 'worker-monitor-1', role: 'worker', phase: 'RUNNING', wake_mode: 'anything', killed: false, model: 'gemini-4-neon' },
+          },
+        }),
+        'utf8',
+      )
+      await writeFile(
+        join(swarmDir, 'board.jsonl'),
+        `${JSON.stringify({ seq: 1, agent: 'coordinator', kind: 'brief', time: '2026-11-27 02:00:01', text: '@reader Inspect repo' })}\n`,
+        'utf8',
+      )
+
+      const wbBefore = await (await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(sessionId)}/workbench`)).json() as {
+        snapshots: Array<{ team: { incarnationId: string; members: Array<{ name?: string; activity?: string }> } }>
+      }
+      const incarnationId = wbBefore.snapshots[0]!.team.incarnationId
+      expect(wbBefore.snapshots[0]!.team.members.find(m => m.name === 'reader')?.activity).toBe('active')
+
+      // Start an active turn and click Stop (stop_generation)
+      send({ type: 'user_message', content: 'Run swarm task [slow-turn]' })
+      await waitUntil(() => conversationService.isAntigravityResponding(sessionId))
+      send({ type: 'stop_generation' })
+
+      // Must cancel AND physically stop the agy acp process so background workers/monitors cannot keep running
+      await waitUntil(() => !conversationService.hasSession(sessionId))
+      const wireAfterStop = await fake.readWire()
+      expect(wireAfterStop.some(w => w.method === 'session/cancel')).toBe(true)
+
+      // Runtime control reports paused, and workbench snapshot projects unfinished workers as stopped
+      await waitUntil(async () => {
+        const res = await fetch(`${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(sessionId)}&incarnationId=${encodeURIComponent(incarnationId)}`)
+        if (res.status !== 200) return false
+        const body = await res.json() as { control: { status: string } | null }
+        return body.control?.status === 'paused'
+      })
+      const pausedControlRes = await fetch(
+        `${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control?leadSessionId=${encodeURIComponent(sessionId)}&incarnationId=${encodeURIComponent(incarnationId)}`,
+      )
+      const pausedControlBody = await pausedControlRes.json() as {
+        control: { status: string; revision: number; resumeEligibleCount: number }
+      }
+      expect(pausedControlBody.control).toMatchObject({
+        status: 'paused',
+        resumeEligibleCount: 1,
+      })
+
+      const wbPaused = await (await fetch(`${baseUrl}/api/teams/session/${encodeURIComponent(sessionId)}/workbench`)).json() as {
+        snapshots: Array<{ team: { members: Array<{ name?: string; activity?: string }> } }>
+      }
+      expect(wbPaused.snapshots[0]!.team.members.find(m => m.name === 'reader')?.activity).toBe('stopped')
+      expect(wbPaused.snapshots[0]!.team.members.find(m => m.name === 'monitor')?.activity).toBe('stopped')
+
+      // Resume via runtime-control API -> restarts agy acp with session/resume and sends coordinator resume prompt
+      const resumeRes = await fetch(`${baseUrl}/api/teams/${encodeURIComponent(teamName)}/runtime-control/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadSessionId: sessionId,
+          incarnationId,
+          expectedRevision: pausedControlBody.control.revision,
+          requestId: 'req-e2e-swarm-resume-1',
+        }),
+      })
+      expect(resumeRes.status).toBe(200)
+      const resumeBody = await resumeRes.json() as { control: { status: string } }
+      expect(resumeBody.control.status).toBe('running')
+
+      // Verify a fresh agy acp process resumed native-session-1 and received the resume prompt naming @reader and @monitor resume
+      await waitUntil(() => conversationService.hasSession(sessionId) && !conversationService.isAntigravityResponding(sessionId))
+      const wireAfterResume = await fake.readWire()
+      expect(wireAfterResume.filter(w => w.method === 'session/resume').at(-1)?.params?.sessionId).toBe(nativeSessionId)
+      const lastPrompt = wireAfterResume.filter(w => w.method === 'session/prompt').at(-1)
+      const promptBlocks = (lastPrompt?.params?.prompt ?? []) as Array<{ text?: string }>
+      const promptText = promptBlocks.map(b => b.text ?? '').join('\n')
+      expect(promptText).toContain('@reader')
+      expect(promptText).toContain('@monitor resume')
+
+      ws.close()
+    } finally {
+      server.stop(true)
+      forgetAntigravitySwarmSessionMapping(nativeSessionId)
+      resetAntigravitySwarmControlStateForTests()
+      if (prevAppData === undefined) delete process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR
+      else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
+    }
+  }, 20_000)
 })
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
+async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise(resolve => setTimeout(resolve, 15))
   }
   throw new Error('Timed out waiting for condition')

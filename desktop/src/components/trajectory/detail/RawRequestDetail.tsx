@@ -288,7 +288,7 @@ function MessageList({ messages }: { messages: NormalizedMessage[] }) {
       <button
         type="button"
         onClick={() => setShowAll(true)}
-        className="v6c-pressable rounded-[var(--radius-control)] border border-dashed border-[var(--color-border)] px-3 py-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+        className="v6c-pressable rounded-[var(--radius-control)] border border-dashed border-[var(--color-border)] px-3 py-2 text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
       >
         {t('trace.detail.earlierMessages', { count: hiddenCount })}
       </button>
@@ -324,7 +324,7 @@ function ContextInjectionList({ injections }: { injections: LocatedInjection[] }
               type="button"
               onClick={() => setExpanded((current) => (current === key ? null : key))}
               aria-expanded={open}
-              className="flex min-h-[30px] w-full min-w-0 items-center gap-2 rounded-[var(--radius-card-inner)] px-2.5 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+              className="flex min-h-[30px] w-full min-w-0 items-center gap-2 rounded-[var(--radius-card-inner)] px-2.5 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <span className="shrink-0 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-tertiary)]">
                 {t(CONTEXT_KIND_LABEL[injection.kind])}
@@ -361,7 +361,7 @@ function ToolDefinitions({ tools }: { tools: Array<{ name: string; description?:
             onClick={() => setExpanded((current) => current === tool.name ? null : tool.name)}
             aria-pressed={expanded === tool.name}
             {...(tool.description ? { title: tool.description } : {})}
-            className={`rounded-[var(--radius-sm)] border px-2 py-0.5 font-mono text-[12px] transition-colors ${
+            className={`rounded-[var(--radius-sm)] border px-2 py-0.5 font-mono text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
               expanded === tool.name
                 ? 'v6c-raised border-[var(--color-outline)] text-[var(--color-text-primary)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'

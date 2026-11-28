@@ -25,6 +25,7 @@ import {
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
+  SettingsSwitchRow,
 } from '@/components/settings/SettingsSection'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -60,7 +61,7 @@ const NOTICE_ICONS: Record<NoticeTone, typeof CircleAlert> = {
 function Notice({ tone, children }: { tone: NoticeTone; children: ReactNode }) {
   const Icon = NOTICE_ICONS[tone]
   return (
-    <div className={`flex items-start gap-2 rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.5] ${NOTICE_CLASSES[tone]}`}>
+    <div className={`flex items-start gap-2 rounded-[var(--radius-card-inner)] px-3 py-2 text-xs leading-[1.5] ${NOTICE_CLASSES[tone]}`}>
       <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
       <div className="min-w-0 flex-1">{children}</div>
     </div>
@@ -361,7 +362,7 @@ export function BrowserUseSettings() {
           >
             <div className="flex items-center gap-2">
               <StatusDot tone={status.workspaceAvailable ? 'success' : 'warning'} size="sm" />
-              <Badge tone={status.workspaceAvailable ? 'success' : 'warning'} size="xs">
+              <Badge tone={status.workspaceAvailable ? 'success' : 'warning'} size="xs" pill={false}>
                 {status.workspaceAvailable
                   ? t('settings.browserUse.workspaceReadyBadge')
                   : t('settings.browserUse.workspaceUnavailableBadge')}
@@ -380,26 +381,18 @@ export function BrowserUseSettings() {
               size="sm"
             />
           </SettingsRow>
-          <SettingsRow
+          <SettingsSwitchRow
             title={t('settings.browserUse.showCursorOverlayTitle')}
             description={t('settings.browserUse.showCursorOverlayDesc')}
-          >
-            <Switch
-              checked={config.showCursorOverlay}
-              onChange={(showCursorOverlay) => { void patchConfig({ showCursorOverlay }) }}
-              label={t('settings.browserUse.showCursorOverlayTitle')}
-            />
-          </SettingsRow>
-          <SettingsRow
+            checked={config.showCursorOverlay}
+            onChange={(showCursorOverlay) => { void patchConfig({ showCursorOverlay }) }}
+          />
+          <SettingsSwitchRow
             title={t('settings.browserUse.autoOpenPanelTitle')}
             description={t('settings.browserUse.autoOpenPanelDesc')}
-          >
-            <Switch
-              checked={config.autoOpenWorkspacePanel}
-              onChange={(autoOpenWorkspacePanel) => { void patchConfig({ autoOpenWorkspacePanel }) }}
-              label={t('settings.browserUse.autoOpenPanelTitle')}
-            />
-          </SettingsRow>
+            checked={config.autoOpenWorkspacePanel}
+            onChange={(autoOpenWorkspacePanel) => { void patchConfig({ autoOpenWorkspacePanel }) }}
+          />
         </SettingsGroup>
       </SettingsSection>
 
@@ -429,7 +422,7 @@ export function BrowserUseSettings() {
           >
             <div className="flex items-center gap-2">
               <StatusDot tone={chromeBadgeTone} size="sm" pulse={awaitingApproval} />
-              <Badge tone={chromeBadgeTone} size="xs">{chromeBadgeLabel}</Badge>
+              <Badge tone={chromeBadgeTone} size="xs" pill={false}>{chromeBadgeLabel}</Badge>
               {chromeConnected ? (
                 <Button
                   variant="secondary"
@@ -462,12 +455,13 @@ export function BrowserUseSettings() {
                       <button
                         key={browser.id}
                         type="button"
+                        aria-pressed={selected}
                         onClick={() => setSelectedBrowserId(browser.id)}
                         data-testid={`detected-browser-${browser.id}`}
-                        className={`flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                        className={`v6c-pressable flex items-center justify-between gap-2 rounded-[var(--radius-card-inner)] border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                           selected
-                            ? 'border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)]'
-                            : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)]'
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
+                            : 'v6c-raised border-[var(--color-border)] hover:border-[var(--color-outline)]'
                         }`}
                       >
                         <div className="flex min-w-0 items-center gap-2">
@@ -476,7 +470,7 @@ export function BrowserUseSettings() {
                             {browser.name}
                           </span>
                         </div>
-                        <Badge tone={browser.hasDevToolsActivePort ? 'success' : 'neutral'} size="xs">
+                        <Badge tone={browser.hasDevToolsActivePort ? 'success' : 'neutral'} size="xs" pill={false}>
                           {browser.hasDevToolsActivePort
                             ? t('settings.browserUse.debugPortReady')
                             : t('settings.browserUse.debugPortOff')}
@@ -515,7 +509,7 @@ export function BrowserUseSettings() {
               {wizardOpen ? (
                 <div
                   data-testid="chrome-live-attach-wizard"
-                  className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5"
+                  className="space-y-3 rounded-[var(--radius-card-inner)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5"
                 >
                   <div className="space-y-1.5">
                     <div className="text-xs font-semibold text-[var(--color-text-primary)]">
@@ -544,7 +538,7 @@ export function BrowserUseSettings() {
                             {t('settings.browserUse.copiedInspectUrl')}
                           </span>
                         )}
-                        className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                        className="v6c-raised v6c-pressable inline-flex h-7 items-center rounded-[var(--radius-control)] border border-[var(--color-border)] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                       />
                     </div>
                   </div>

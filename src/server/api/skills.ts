@@ -9,6 +9,7 @@ import { isLeanCompatibleSkill } from '../../utils/agentProfile.js'
  * GET /api/skills/mentions     — Composer @ candidates (?cwd=&providerId=)
  */
 
+import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { parseFrontmatter } from '../../utils/frontmatterParser.js'
@@ -20,6 +21,7 @@ import {
   type SkillRoot,
   type SkillRootFlavor,
 } from '../../skills/skillRoots.js'
+import { walkProjectDirsUpToHome } from '../../utils/markdownConfigLoader.js'
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
 import {
   isWithinPluginRoot,
@@ -30,6 +32,10 @@ import { clearSkillCaches, getSkillDirCommands } from '../../skills/loadSkillsDi
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  getAntigravityDiscoveredCommands,
+} from '../services/antigravityAcp.js'
 import { readMarketMeta } from '../services/market/marketService.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -671,6 +677,144 @@ export async function listSkillSlashCommands(
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+const ANTIGRAVITY_BUILTIN_COMMAND_NAMES = new Set([
+  'swarm',
+  'plan',
+  'boost',
+  'teamwork',
+  'goal',
+  'grill-me',
+  'compact',
+  'browser',
+  'schedule',
+  'learn',
+  'model',
+  'config',
+  'settings',
+  'clear',
+])
+
+const ANTIGRAVITY_PROJECT_SKILL_SUBDIRS = [
+  ['.agents', 'skills'],
+  ['.agent', 'skills'],
+  ['_agents', 'skills'],
+  ['_agent', 'skills'],
+] as const
+
+async function readAntigravitySkillEntry(
+  skillDir: string,
+  fallbackName: string,
+  source: 'user' | 'project',
+): Promise<SkillSlashCommand | null> {
+  let raw: string
+  let skillFile = path.join(skillDir, 'SKILL.md')
+  try {
+    raw = await fs.readFile(skillFile, 'utf-8')
+  } catch {
+    skillFile = path.join(skillDir, 'skill.md')
+    try {
+      raw = await fs.readFile(skillFile, 'utf-8')
+    } catch {
+      return null
+    }
+  }
+
+  const { frontmatter, body } = normalizeFrontmatter(raw, skillFile)
+  if (frontmatter['user-invocable'] === false || frontmatter['disable-slash-command'] === true) {
+    return null
+  }
+
+  const rawName = typeof frontmatter.name === 'string' ? frontmatter.name.trim() : ''
+  const name = rawName || fallbackName
+  if (!name) return null
+
+  const rawDescription = typeof frontmatter.description === 'string' ? frontmatter.description.trim() : ''
+  const description =
+    rawDescription ||
+    body
+      .split('\n')
+      .find((line) => line.trim().length > 0)
+      ?.trim() ||
+    ''
+
+  return {
+    name,
+    description,
+    kind: 'skill',
+    source,
+  }
+}
+
+/**
+ * Discover Antigravity skills from AGY's own project and user customization roots
+ * (plus any global/builtin skills captured during `discoverAntigravity`), without
+ * pulling in Claude-only `.claude/skills`, plugins, or compiled-in Claude commands.
+ */
+function resolveAntigravityHomeDir(): string {
+  const fromEnv =
+    process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME
+  const home = fromEnv !== undefined && fromEnv !== '' ? fromEnv : os.homedir()
+  return path.resolve(home).normalize('NFC')
+}
+
+export async function listAntigravitySkillSlashCommands(
+  cwd?: string,
+): Promise<SkillSlashCommand[]> {
+  const requestedCwd = cwd || getCwd()
+  const homeDir = resolveAntigravityHomeDir()
+
+  const roots: Array<{ path: string; source: 'project' | 'user' }> = []
+  for (const dir of walkProjectDirsUpToHome(requestedCwd)) {
+    for (const parts of ANTIGRAVITY_PROJECT_SKILL_SUBDIRS) {
+      roots.push({ path: path.join(dir, ...parts), source: 'project' })
+    }
+  }
+  roots.push(
+    { path: path.join(homeDir, '.gemini', 'antigravity-cli', 'skills'), source: 'user' },
+    { path: path.join(homeDir, '.gemini', 'config', 'skills'), source: 'user' },
+    { path: path.join(homeDir, '.agents', 'skills'), source: 'user' },
+  )
+
+  const byLowerName = new Map<string, SkillSlashCommand>()
+  for (const root of roots) {
+    let entries: import('fs').Dirent[]
+    try {
+      entries = await fs.readdir(root.path, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if ((!entry.isDirectory() && !entry.isSymbolicLink()) || entry.name.startsWith('.')) {
+        continue
+      }
+      const skill = await readAntigravitySkillEntry(
+        path.join(root.path, entry.name),
+        entry.name,
+        root.source,
+      )
+      if (!skill) continue
+      const key = skill.name.toLowerCase()
+      if (ANTIGRAVITY_BUILTIN_COMMAND_NAMES.has(key) || byLowerName.has(key)) continue
+      byLowerName.set(key, skill)
+    }
+  }
+
+  for (const command of getAntigravityDiscoveredCommands()) {
+    const key = command.name.toLowerCase()
+    if (ANTIGRAVITY_BUILTIN_COMMAND_NAMES.has(key) || byLowerName.has(key)) continue
+    byLowerName.set(key, {
+      name: command.name,
+      description: command.description || '',
+      ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+      kind: 'skill',
+      source: 'user',
+    })
+  }
+
+  return [...byLowerName.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 export async function handleSkillsApi(
@@ -693,6 +837,9 @@ export async function handleSkillsApi(
         if (!path.isAbsolute(cwd) || cwd.includes('\0')) throw ApiError.badRequest('cwd must be an absolute directory path')
         const directory = await fs.stat(cwd).catch(() => null)
         if (!directory?.isDirectory()) throw ApiError.badRequest('cwd must be an existing directory')
+        if (url.searchParams.get('providerId') === ANTIGRAVITY_PROVIDER_ID) {
+          return Response.json({ commands: await listAntigravitySkillSlashCommands(cwd) })
+        }
         const lean = url.searchParams.get('agentProfile') === 'lean'
         return Response.json({ commands: await listSkillSlashCommands(cwd, {
           includeCompiledIn: !lean,

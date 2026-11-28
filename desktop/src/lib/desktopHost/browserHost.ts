@@ -218,10 +218,18 @@ export const browserHost: DesktopHost = {
     async notifyPreferencesChanged() {
       return
     },
+    async getTheme() {
+      return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'white'
+    },
     async onVisibilityChanged() {
       return noopUnlisten
     },
     async onPreferencesChanged() {
+      return noopUnlisten
+    },
+    async onThemeChanged() {
       return noopUnlisten
     },
   },

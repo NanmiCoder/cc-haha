@@ -151,7 +151,7 @@ export function ConversationNavigator({
       data-testid="conversation-navigator"
       data-mode={mode}
       aria-label={t('chat.conversationNavigator.label')}
-      className={`absolute top-1/2 z-30 flex max-h-[64%] -translate-y-1/2 flex-col overflow-visible ${modeStyles.position}`}
+      className={`absolute top-1/2 z-[var(--z-nav)] flex max-h-[64%] -translate-y-1/2 flex-col overflow-visible ${modeStyles.position}`}
     >
       <div
         className={`conversation-navigation-scroll flex max-h-full flex-col items-start gap-px overflow-y-auto overflow-x-hidden py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${modeStyles.lane}`}

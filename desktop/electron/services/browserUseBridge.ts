@@ -25,6 +25,7 @@ export type BrowserUseCursorRect = {
 
 export type BrowserUseBridgeTabInfo = {
   tabId: string
+  sessionId?: string
   url: string
   title: string
   visible: boolean
@@ -46,11 +47,13 @@ export type BrowserUseRendererEvent =
   | {
       type: 'focus-tab'
       tabId: string
+      sessionId?: string
       revealWorkbench?: boolean
     }
   | {
       type: 'close-tab'
       tabId: string
+      sessionId?: string
     }
   | {
       type: 'control-state'
@@ -100,7 +103,7 @@ export type BrowserUseUserActionPayload = {
 }
 
 export type BrowserUseWorkspaceHost = {
-  listPages(): BrowserUseBridgeTabInfo[]
+  listPages(options?: { sessionId?: string }): BrowserUseBridgeTabInfo[]
   getPageInfo(tabId: string): BrowserUseBridgeTabInfo | null
   getPageZoomFactor(tabId: string): number
   getAppZoomFactor(): number
@@ -656,20 +659,32 @@ export class ElectronBrowserBridge {
     context: RpcClientContext,
   ): Promise<unknown> {
     switch (method) {
-      case 'tabs.list':
-        return { tabs: this.workspaceBrowser.listPages() }
+      case 'tabs.list': {
+        const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+          ? params.sessionId.trim()
+          : undefined
+        return { tabs: this.workspaceBrowser.listPages(sessionId ? { sessionId } : undefined) }
+      }
 
       case 'tabs.ensure':
         return await this.rpcTabsEnsure(params)
 
       case 'tabs.focus': {
         const tabId = requireStringParam(params, 'tabId')
-        if (!this.workspaceBrowser.getPageInfo(tabId)) {
+        const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+          ? params.sessionId.trim()
+          : undefined
+        const existing = this.workspaceBrowser.getPageInfo(tabId)
+        if (!existing) {
           throw new Error(`workspace browser tab not open: ${tabId}`)
+        }
+        if (sessionId && existing.sessionId !== sessionId) {
+          throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
         }
         this.emitToRenderer({
           type: 'focus-tab',
           tabId,
+          ...(sessionId ? { sessionId } : {}),
           ...(typeof params.revealWorkbench === 'boolean' ? { revealWorkbench: params.revealWorkbench } : {}),
         })
         return { ok: true, tabId }
@@ -677,9 +692,20 @@ export class ElectronBrowserBridge {
 
       case 'tabs.close': {
         const tabId = requireStringParam(params, 'tabId')
+        const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+          ? params.sessionId.trim()
+          : undefined
+        const existing = this.workspaceBrowser.getPageInfo(tabId)
+        if (sessionId && existing && existing.sessionId !== sessionId) {
+          throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
+        }
         this.activeControlTabs.delete(tabId)
         this.workspaceBrowser.close(tabId)
-        this.emitToRenderer({ type: 'close-tab', tabId })
+        this.emitToRenderer({
+          type: 'close-tab',
+          tabId,
+          ...(sessionId ? { sessionId } : {}),
+        })
         return { ok: true, tabId }
       }
 
@@ -727,15 +753,22 @@ export class ElectronBrowserBridge {
 
       case 'ui.controlState': {
         const tabId = requireStringParam(params, 'tabId')
+        const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+          ? params.sessionId.trim()
+          : undefined
         const state = params.state
         if (state !== 'idle' && state !== 'active' && state !== 'takeover') {
           throw new Error('ui.controlState requires state: idle | active | takeover')
+        }
+        const existing = this.workspaceBrowser.getPageInfo(tabId)
+        if (sessionId && existing?.sessionId && existing.sessionId !== sessionId) {
+          throw new Error(`workspace browser tab belongs to another session: ${tabId}`)
         }
         const active = state === 'active'
         if (active) this.activeControlTabs.add(tabId)
         else this.activeControlTabs.delete(tabId)
         context.markControlledTab(tabId, active)
-        if (this.workspaceBrowser.getPageInfo(tabId)) {
+        if (existing) {
           await this.workspaceBrowser.setAgentControlActive(tabId, active).catch(() => {})
         }
         this.emitToRenderer({
@@ -744,7 +777,7 @@ export class ElectronBrowserBridge {
           state,
           ...(typeof params.actionLabel === 'string' ? { actionLabel: params.actionLabel } : {}),
           ...(typeof params.takeoverReason === 'string' ? { takeoverReason: params.takeoverReason } : {}),
-          ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+          ...(sessionId ? { sessionId } : {}),
           ...(typeof params.showOverlay === 'boolean' ? { showOverlay: params.showOverlay } : {}),
           ...(typeof params.autoReveal === 'boolean' ? { autoReveal: params.autoReveal } : {}),
         })
@@ -810,13 +843,27 @@ export class ElectronBrowserBridge {
     const revealWorkbench = typeof params.revealWorkbench === 'boolean' ? params.revealWorkbench : true
     const createNew = params.createNew === true
 
-    if (!createNew && requestedTabId) {
-      const existing = this.workspaceBrowser.getPageInfo(requestedTabId)
+    let safeRequestedTabId = !createNew ? requestedTabId : undefined
+    if (safeRequestedTabId) {
+      const existing = this.workspaceBrowser.getPageInfo(safeRequestedTabId)
       if (existing) {
-        if (focus) {
-          this.emitToRenderer({ type: 'focus-tab', tabId: requestedTabId, revealWorkbench })
+        if (!sessionId || existing.sessionId === sessionId) {
+          if (focus) {
+            this.emitToRenderer({
+              type: 'focus-tab',
+              tabId: safeRequestedTabId,
+              ...(sessionId ? { sessionId } : {}),
+              revealWorkbench,
+            })
+          }
+          return existing
         }
-        return existing
+        // Never reuse a workspace tab owned by a different session; fall
+        // through to the renderer without the foreign tabId so the caller's
+        // own session workspace gets its tab.
+        if (existing.sessionId && existing.sessionId !== sessionId) {
+          safeRequestedTabId = undefined
+        }
       }
     }
 
@@ -834,7 +881,7 @@ export class ElectronBrowserBridge {
       type: 'ensure-tab',
       requestId,
       ...(sessionId ? { sessionId } : {}),
-      ...(!createNew && requestedTabId ? { tabId: requestedTabId } : {}),
+      ...(safeRequestedTabId ? { tabId: safeRequestedTabId } : {}),
       ...(url ? { url } : {}),
       focus,
       revealWorkbench,

@@ -32,7 +32,7 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
     onChange({ ...value, options })
   }
   return (
-    <section className="space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4">
+    <section className="v6c-glass-card space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4">
       <Input
         label={t('settings.providers.compatibilityBudget')}
         value={value.maxOutputTokens}

@@ -13,7 +13,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from './Text'
 import { KeyboardViewport } from './KeyboardViewport'
-import { type } from './palette'
+import { radius, type } from './palette'
+import { useTheme } from './theme'
 import { useColors } from './kit'
 import { detentHeight, settleDetent, sheetAvailable, type Detent } from './detents'
 
@@ -171,7 +172,7 @@ function Panel({
   background,
   children,
 }: DetentSheetProps & { viewportHeight: number }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   const available = sheetAvailable(viewportHeight, insets.top)
   const [inner, setInner] = useState<Detent>(initialDetent)
@@ -209,10 +210,10 @@ function Panel({
         height,
         maxHeight: '100%',
         backgroundColor: background ?? colors.sheet,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
+        borderTopLeftRadius: radius.sheet,
+        borderTopRightRadius: radius.sheet,
         overflow: 'hidden',
-        boxShadow: '0 -8px 30px rgba(0,0,0,0.12)',
+        boxShadow: shadows.sheetUp,
       }}
     >
       <View {...gesture.responder.panHandlers}>

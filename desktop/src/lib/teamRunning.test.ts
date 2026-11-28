@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { TeamMember, TeamWorkbenchSnapshot } from '../types/team'
-import { areTeamMembersAllStopped, isTeamPlanActive, isTeamRunning } from './teamRunning'
+import {
+  areTeamMembersAllStopped,
+  isAntigravitySwarmPaused,
+  isAntigravitySwarmRunning,
+  isTeamPlanActive,
+  isTeamRunning,
+} from './teamRunning'
 
 const LEAD: TeamMember = { agentId: 'lead', role: 'Lead', status: 'idle', activity: 'idle' }
 
@@ -80,5 +86,64 @@ describe('areTeamMembersAllStopped', () => {
   it('ignores the lead and refuses to judge an empty roster', () => {
     expect(areTeamMembersAllStopped(snapshot().team)).toBe(false)
     expect(areTeamMembersAllStopped(undefined)).toBe(false)
+  })
+})
+
+describe('Antigravity Swarm running and paused detection', () => {
+  function swarmSnapshot(
+    members: TeamMember[],
+    deletedAt?: string,
+  ): Pick<TeamWorkbenchSnapshot, 'team'> & { deletedAt?: string } {
+    return {
+      deletedAt,
+      team: {
+        name: 'agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a',
+        leadAgentId: 'coordinator@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a',
+        leadSessionId: 'lead-session',
+        createdAt: '2026-11-27T00:00:00.000Z',
+        members: [
+          {
+            agentId: 'coordinator@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a',
+            name: 'coordinator',
+            role: 'coordinator',
+            status: 'idle',
+            activity: 'idle',
+          },
+          ...members,
+        ],
+      },
+    }
+  }
+
+  it('treats an Antigravity Swarm with a working worker as running even without a Claude team plan', () => {
+    const snap = swarmSnapshot([worker({ agentId: 'worker@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', status: 'running', activity: 'active' })])
+    expect(isAntigravitySwarmRunning(snap)).toBe(true)
+    expect(isAntigravitySwarmPaused(snap)).toBe(false)
+    expect(isTeamRunning(null, snap)).toBe(true)
+  })
+
+  it('treats a paused Antigravity Swarm (all unfinished workers stopped) as paused and not running', () => {
+    const snap = swarmSnapshot([
+      worker({ agentId: 'worker@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', status: 'idle', activity: 'stopped' }),
+      worker({ agentId: 'done@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', status: 'completed', activity: 'exited' }),
+    ])
+    expect(isAntigravitySwarmRunning(snap)).toBe(false)
+    expect(isAntigravitySwarmPaused(snap)).toBe(true)
+    expect(isTeamRunning(null, snap)).toBe(false)
+  })
+
+  it('does not treat a completed/exited or deleted Antigravity Swarm as running or paused', () => {
+    const exited = swarmSnapshot([
+      worker({ agentId: 'done@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', status: 'completed', activity: 'exited' }),
+    ])
+    expect(isAntigravitySwarmRunning(exited)).toBe(false)
+    expect(isAntigravitySwarmPaused(exited)).toBe(false)
+
+    const deleted = swarmSnapshot(
+      [worker({ agentId: 'worker@agy-swarm-0679f85e-556a-45da-82fa-d22c2c16206a', status: 'running', activity: 'active' })],
+      '2026-11-27T01:00:00.000Z',
+    )
+    expect(isAntigravitySwarmRunning(deleted)).toBe(false)
+    expect(isAntigravitySwarmPaused(deleted)).toBe(false)
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, Lock, Server, Unplug, UserRound } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '@/i18n'
 import { useUIStore } from '@/stores/uiStore'
@@ -11,8 +11,21 @@ import { ProviderSettings } from './ProviderSettings'
 import { H5GeneralSettings } from './H5GeneralSettings'
 import { ActivitySettings } from '../ActivitySettings'
 
-type DetailPage = 'providers' | 'activity' | null
-const detailPage = (tab: string | null): DetailPage => tab === 'providers' || tab === 'activity' ? tab : null
+export type H5SettingsSubpage = 'providers' | 'activity' | null
+
+export type H5SettingsShellBridge = {
+  subpage: H5SettingsSubpage
+  setSubpage: (page: H5SettingsSubpage) => void
+}
+
+/**
+ * Provided by `MobileShell` so settings subpages (`providers` / `activity`)
+ * share the shell's single `MobileTopBar` and system back stack instead of
+ * stacking a second back bar underneath it.
+ */
+export const H5SettingsShellContext = createContext<H5SettingsShellBridge | null>(null)
+
+const detailPage = (tab: string | null): H5SettingsSubpage => tab === 'providers' || tab === 'activity' ? tab : null
 
 /**
  * The settings a computer keeps that a phone can see but not change: they
@@ -39,8 +52,14 @@ const DESKTOP_ONLY_SETTINGS: TranslationKey[] = [
  * model provider opens its own page, the preferences a phone may change
  * follow, and the computer-only ones close the list, read-only.
  */
-export function H5Settings() {
+type Props = {
+  /** Suppresses the inline subpage back bar when an outer shell top bar owns back navigation. */
+  hideSubpageBackBar?: boolean
+}
+
+export function H5Settings({ hideSubpageBackBar = false }: Props = {}) {
   const t = useTranslation()
+  const shellBridge = useContext(H5SettingsShellContext)
   const pending = useUIStore((state) => state.pendingSettingsTab)
   const providerName = useProviderStore((state) => (
     state.providers.find((provider) => provider.id === state.activeId)?.name ?? null
@@ -51,19 +70,25 @@ export function H5Settings() {
   // kept here rather than in the remembered settings tab, so coming back to
   // Settings later starts from the list again. An explicit link still lands
   // directly on the requested page.
-  const [page, setPage] = useState<DetailPage>(() => detailPage(pending))
+  const [localPage, setLocalPage] = useState<H5SettingsSubpage>(() => detailPage(pending))
+  const page = shellBridge ? shellBridge.subpage : localPage
+  const setPage = useCallback((next: H5SettingsSubpage) => {
+    if (shellBridge) shellBridge.setSubpage(next)
+    else setLocalPage(next)
+  }, [shellBridge])
 
   useEffect(() => {
     if (!pending) return
     setPage(detailPage(pending))
     useUIStore.getState().setPendingSettingsTab(null)
-  }, [pending])
+  }, [pending, setPage])
 
   useEffect(() => {
     void fetchProviders().catch(() => undefined)
   }, [fetchProviders])
 
   const openList = () => setPage(null)
+  const showSubpageBackBar = !hideSubpageBackBar && !shellBridge
 
   if (page) {
     return (
@@ -71,16 +96,21 @@ export function H5Settings() {
         data-testid="h5-settings-subpage"
         className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]"
       >
-        <div className="shrink-0 border-b border-[var(--color-border)] px-1 py-1 md:px-4 md:py-2">
-          <Button
-            variant="ghost"
-            size="lg"
-            icon={<ChevronLeft size={18} strokeWidth={1.75} aria-hidden="true" />}
-            onClick={openList}
+        {showSubpageBackBar && (
+          <div
+            data-testid="h5-settings-subpage-backbar"
+            className="shrink-0 border-b border-[var(--color-border)] px-1 py-1 md:px-4 md:py-2"
           >
-            {t('h5Settings.allSettings')}
-          </Button>
-        </div>
+            <Button
+              variant="ghost"
+              size="lg"
+              icon={<ChevronLeft size={18} strokeWidth={1.75} aria-hidden="true" />}
+              onClick={openList}
+            >
+              {t('h5Settings.allSettings')}
+            </Button>
+          </div>
+        )}
         <div className="scrollbar-autohide min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 md:px-8 md:py-6">
           <div className="mx-auto w-full max-w-[960px]">
             {page === 'providers' ? <ProviderSettings browserMode /> : <ActivitySettings browserMode />}
@@ -117,7 +147,7 @@ export function H5Settings() {
           <button
             type="button"
             onClick={() => setPage('activity')}
-            className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
+            className="v6c-pressable flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
           >
             <UserRound size={22} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
             <span className="min-w-0 flex-1">
@@ -149,7 +179,7 @@ export function H5Settings() {
               type="button"
               data-testid="h5-settings-providers"
               onClick={() => setPage('providers')}
-              className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
+              className="v6c-pressable flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
             >
               <Server size={18} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
               <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-text-primary)]">{t('h5Settings.activeProvider')}</span>

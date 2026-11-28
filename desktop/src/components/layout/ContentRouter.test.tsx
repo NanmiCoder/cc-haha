@@ -52,6 +52,10 @@ vi.mock('../../pages/SubagentRunPage', () => ({
 import { ContentRouter } from './ContentRouter'
 import { MARKET_TAB_ID, SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { browserHost } from '../../lib/desktopHost/browserHost'
+import type { WorkspaceBrowserEvent } from '../../lib/desktopHost/types'
+import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
 
 describe('ContentRouter tab surfaces', () => {
   afterEach(() => {
@@ -416,4 +420,59 @@ it('routes the independent connectors tab', () => {
   useTabStore.setState({ tabs: [{ sessionId: '__connectors__', title: 'Connectors', type: 'connectors', status: 'idle' }], activeTabId: '__connectors__' })
   render(<ContentRouter />)
   expect(screen.getByTestId('extension-market-page')).toBeInTheDocument()
+})
+
+it('keeps applying workspace browser state events while Settings is active', async () => {
+  let handler: ((event: WorkspaceBrowserEvent) => void) | null = null
+  window.desktopHost = {
+    ...browserHost,
+    kind: 'electron',
+    isDesktop: true,
+    capabilities: { ...browserHost.capabilities, workspaceBrowser: true },
+    browser: {
+      ...browserHost.browser,
+      onEvent: async (listener) => {
+        handler = listener
+        return () => { handler = null }
+      },
+    },
+  }
+  try {
+    useWorkspaceStore.setState({ bySession: {} })
+    const tabId = useWorkspaceStore.getState().openTarget('session-1', { kind: 'browser' })!
+    const browserTabId = (useWorkspaceStore.getState().getTab('session-1', tabId) as WorkspaceBrowserTab).browserTabId
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: SETTINGS_TAB_ID,
+    })
+
+    render(<ContentRouter />)
+    await act(async () => { await Promise.resolve() })
+    expect(handler).not.toBeNull()
+
+    act(() => {
+      handler!({
+        type: 'state',
+        tabId: browserTabId,
+        url: 'https://modeldial.com/subscriptions',
+        title: 'ModelDial',
+        canGoBack: false,
+        canGoForward: false,
+        loading: false,
+        navigationId: 1,
+        navigationOutcome: 'succeeded',
+      })
+    })
+
+    expect(useWorkspaceStore.getState().getTab('session-1', tabId)).toMatchObject({
+      url: 'https://modeldial.com/subscriptions',
+      title: 'ModelDial',
+    })
+  } finally {
+    useWorkspaceStore.setState({ bySession: {} })
+    Reflect.deleteProperty(window, 'desktopHost')
+  }
 })

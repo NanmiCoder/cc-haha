@@ -741,7 +741,7 @@ export function ComponentGallery() {
 
       <Section
         title="V6C surfaces"
-        note="Calm Liquid Glass utilities from globals.css: the ambient wall, paper canvas, frosted sidebar, glass card, raised/field/track controls, menu highlight, active bar, status rings and the terracotta send key. No colored outer glow anywhere."
+        note="V6C Pure Neutral surface utilities from globals.css: the neutral shell wall, paper canvas, frosted sidebar, glass card, raised/field/track controls, menu highlight, active bar, status rings and the monochrome send key. No colored outer glow anywhere."
       >
         <div className="v6c-ambient-shell grid gap-3 rounded-[var(--radius-2xl)] p-4 sm:grid-cols-[180px_1fr]">
           <div className="v6c-sidebar-glass flex flex-col gap-1 rounded-[var(--radius-xl)] p-2">

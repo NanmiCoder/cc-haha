@@ -25,7 +25,7 @@ test('ChatComposer and RunToggles hide team controls and pill when onTeam is omi
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({
       Button: 'Button', Icon: 'Icon', Mono: 'Mono', Sheet: 'Sheet', Spinner: 'Spinner', Switch: 'Switch', useColors: () => ({}),
     }))
-    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String }))
+    mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String, useTheme: () => ({ colors: {}, shadows: {}, dark: false, scheme: 'light' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/BringSheet'))}, () => ({ BringSheet: 'BringSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('./compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))

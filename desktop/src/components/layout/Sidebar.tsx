@@ -24,7 +24,6 @@ import { SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT } from '../../lib/sessionListPagi
 import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
 import { ArchivedSessionsPanel } from '@/components/layout/ArchivedSessionsPanel'
 import { SidebarMenuItem } from '@/components/layout/SidebarMenuItem'
-import { SidebarUsageWidget } from '@/components/usage/SidebarUsageWidget'
 import { ApiError } from '@/api/client'
 import {
   buildSidebarTaskGroups,
@@ -1282,7 +1281,7 @@ export function Sidebar({
         <>
           <div
             data-testid="sidebar-search-controls-section"
-            className="sidebar-section sidebar-section--visible relative z-20 flex-none px-2 pb-1.5 pt-1"
+            className="sidebar-section sidebar-section--visible relative z-[var(--z-sticky)] flex-none px-2 pb-1.5 pt-1"
             style={{ overflow: 'visible' }}
           >
             <div className="flex h-8 items-center gap-1">
@@ -1475,6 +1474,7 @@ export function Sidebar({
                 const isProjectPinned = pinnedProjectKeys.has(project.key)
                 const dropBefore = projectDropTarget?.key === project.key && projectDropTarget.position === 'before'
                 const dropAfter = projectDropTarget?.key === project.key && projectDropTarget.position === 'after'
+                const isHighlightedProject = highlightedProject?.key === project.key
                 return (
                   <section
                     key={project.key}
@@ -1490,7 +1490,7 @@ export function Sidebar({
                     className={`group/project relative mb-2 transition-opacity ${isProjectDragging ? 'opacity-50' : ''}`}
                   >
                     {dropBefore && (
-                      <div className="pointer-events-none absolute -top-1 left-1 right-1 z-10 h-0.5 rounded-full bg-[var(--color-brand)]" />
+                      <div className="pointer-events-none absolute -top-1 left-1 right-1 z-[var(--z-raised)] h-0.5 rounded-full bg-[var(--color-brand)]" />
                     )}
                     <div className="flex items-center gap-0.5">
                       <button
@@ -1501,10 +1501,10 @@ export function Sidebar({
                         onDragEnd={clearProjectDragState}
                         onClick={() => toggleProjectCollapsed(project.key)}
                         data-state={projectCollapsed ? 'closed' : 'open'}
-                        className={`flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-control)] px-2 text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-                          highlightedProject?.key === project.key
-                            ? 'v6c-raised v6c-active-bar pl-3 text-[var(--color-text-primary)]'
-                            : ''
+                        className={`flex h-7 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-control)] text-left transition-colors active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                          isHighlightedProject
+                            ? 'v6c-raised v6c-active-bar pl-3 pr-2 text-[var(--color-text-primary)]'
+                            : 'px-2'
                         }`}
                         aria-expanded={!projectCollapsed}
                         aria-label={t(projectCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { project: project.title })}
@@ -1521,7 +1521,13 @@ export function Sidebar({
                             <FolderOpen size={15} strokeWidth={ICON_STROKE} aria-hidden="true" />
                           )}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[var(--color-text-secondary)]">
+                        <span
+                          className={`min-w-0 flex-1 truncate text-[12px] font-semibold ${
+                            isHighlightedProject
+                              ? 'text-[var(--color-text-primary)]'
+                              : 'text-[var(--color-text-secondary)]'
+                          }`}
+                        >
                           {project.title}
                         </span>
                         {isProjectPinned && (
@@ -1660,7 +1666,7 @@ export function Sidebar({
                       </div>
                     )}
                     {dropAfter && (
-                      <div className="pointer-events-none absolute -bottom-1 left-1 right-1 z-10 h-0.5 rounded-full bg-[var(--color-brand)]" />
+                      <div className="pointer-events-none absolute -bottom-1 left-1 right-1 z-[var(--z-raised)] h-0.5 rounded-full bg-[var(--color-brand)]" />
                     )}
                   </section>
                 )
@@ -1708,8 +1714,6 @@ export function Sidebar({
           </span>
         </div>
       )}
-
-      <SidebarUsageWidget collapsed={!expanded} />
 
       <div
         data-testid="sidebar-settings-dock"

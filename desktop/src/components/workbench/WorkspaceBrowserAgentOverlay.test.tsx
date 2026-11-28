@@ -227,18 +227,18 @@ describe('WorkspaceBrowserAgentOverlay', () => {
     })
   })
 
-  it('clamps duration to 160-380ms and curves long trajectories with bezier', () => {
-    expect(computeCursorDurationMs(50)).toBeGreaterThanOrEqual(160)
-    expect(computeCursorDurationMs(2000)).toBeLessThanOrEqual(380)
+  it('clamps duration to 220-460ms and curves long trajectories with bezier', () => {
+    expect(computeCursorDurationMs(50)).toBeGreaterThanOrEqual(220)
+    expect(computeCursorDurationMs(2000)).toBeLessThanOrEqual(460)
 
     const shortMid = interpolateCursorPosition({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5)
-    expect(shortMid.y).toBe(0) // straight scoot for <= 196px
+    expect(shortMid.y).toBe(0) // straight scoot for <= 160px
 
     const longMid = interpolateCursorPosition({ x: 0, y: 0 }, { x: 400, y: 0 }, 0.5)
-    expect(longMid.y).not.toBe(0) // curved bezier arc for > 196px
+    expect(longMid.y).not.toBe(0) // curved bezier arc for > 160px
   })
 
-  it('animates cursor with rAF, shows target highlight + click ripple, fades on idle, and supports fallback timer & buttons', () => {
+  it('animates cursor with curved SVG trail, action tag, 520ms target highlight, click ripple, and resting state', () => {
     vi.useFakeTimers()
     const rafCallbacks: FrameRequestCallback[] = []
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
@@ -270,7 +270,7 @@ describe('WorkspaceBrowserAgentOverlay', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(sendUserAction).toHaveBeenCalledWith({ tabId: 'tab-agent', action: 'stop' })
 
-    // Move cursor with targetRect -> animated via rAF -> target highlight + idle fade
+    // Move cursor with targetRect -> animated via rAF with visible trail, cursor tag, & immediate highlight
     act(() => {
       useBrowserUseStore.getState().applyHostEvent({
         type: 'move-cursor',
@@ -278,21 +278,25 @@ describe('WorkspaceBrowserAgentOverlay', () => {
         moveId: 'move-anim-1',
         x: 240,
         y: 160,
-        durationMs: 200,
+        durationMs: 240,
+        label: 'Click "Pay"',
         targetRect: { x: 220, y: 140, width: 40, height: 40 },
       })
     })
+    expect(screen.getByTestId('browser-agent-target-highlight')).toBeInTheDocument()
 
-    // Intermediate frame sets cursorPos & renders cursor, then completion frame settles move
+    // Intermediate frame renders cursor, floating label, and SVG trajectory trail
     act(() => {
       const start = performance.now()
-      rafCallbacks.shift()?.(start + 100)
+      rafCallbacks.shift()?.(start + 120)
     })
     expect(screen.getByTestId('browser-agent-virtual-cursor')).toBeInTheDocument()
+    expect(screen.getByTestId('browser-agent-cursor-label')).toHaveTextContent('Click "Pay"')
+    expect(screen.getByTestId('browser-agent-cursor-trail')).toBeInTheDocument()
 
     act(() => {
       const start = performance.now()
-      rafCallbacks.shift()?.(start + 250)
+      rafCallbacks.shift()?.(start + 300)
     })
     expect(reportCursorArrived).toHaveBeenCalledWith({
       moveId: 'move-anim-1',
@@ -301,13 +305,14 @@ describe('WorkspaceBrowserAgentOverlay', () => {
     })
     expect(screen.getByTestId('browser-agent-target-highlight')).toBeInTheDocument()
 
-    // Highlight clears after 80ms; cursor fades after 2000ms
-    act(() => { vi.advanceTimersByTime(90) })
+    // Highlight holds for 520ms; trail fades and clears; cursor rests visibly (dims, does not vanish) during thinking gaps
+    act(() => { vi.advanceTimersByTime(600) })
     expect(screen.queryByTestId('browser-agent-target-highlight')).not.toBeInTheDocument()
-    act(() => { vi.advanceTimersByTime(2000) })
-    expect(screen.queryByTestId('browser-agent-virtual-cursor')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('browser-agent-cursor-trail')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2500) })
+    expect(screen.getByTestId('browser-agent-virtual-cursor')).toHaveAttribute('data-resting', 'true')
 
-    // Safety fallback timer settles move even if rAF never fires
+    // Safety fallback timer settles move and draws sampled trajectory even if rAF never fires
     act(() => {
       useBrowserUseStore.getState().applyHostEvent({
         type: 'move-cursor',
@@ -315,17 +320,18 @@ describe('WorkspaceBrowserAgentOverlay', () => {
         moveId: 'move-fallback-1',
         x: 400,
         y: 300,
-        durationMs: 180,
+        durationMs: 220,
       })
     })
-    act(() => { vi.advanceTimersByTime(300) })
+    act(() => { vi.advanceTimersByTime(340) })
     expect(reportCursorArrived).toHaveBeenCalledWith({
       moveId: 'move-fallback-1',
       tabId: 'tab-agent',
       skipped: false,
     })
+    expect(screen.getByTestId('browser-agent-cursor-trail')).toBeInTheDocument()
 
-    // Click ripple renders and clears after 420ms
+    // Click ripple renders and clears after 520ms
     act(() => {
       useBrowserUseStore.getState().applyHostEvent({
         type: 'click-ripple',
@@ -336,7 +342,7 @@ describe('WorkspaceBrowserAgentOverlay', () => {
       })
     })
     expect(screen.getByTestId('browser-agent-click-ripple')).toBeInTheDocument()
-    act(() => { vi.advanceTimersByTime(450) })
+    act(() => { vi.advanceTimersByTime(550) })
     expect(screen.queryByTestId('browser-agent-click-ripple')).not.toBeInTheDocument()
 
     // Takeover Cancel without sessionId falls back to IPC
@@ -411,5 +417,46 @@ describe('WorkspaceBrowserAgentOverlay', () => {
       skipped: true,
     })
     vi.unstubAllGlobals()
+  })
+
+  it('uses V6C glass chrome, soft status rings, reduced-motion guards, and valid shield ARIA role', () => {
+    placeWorkspaceBrowserGuest('tab-agent', stage, true)
+    useBrowserUseStore.getState().applyHostEvent({
+      type: 'control-state',
+      tabId: 'tab-agent',
+      state: 'active',
+      actionLabel: 'Click "Submit"',
+    })
+
+    render(<WorkspaceBrowserAgentOverlay tabId="tab-agent" />)
+
+    const shield = screen.getByTestId('browser-agent-takeover-shield')
+    expect(shield).toHaveAttribute('role', 'region')
+    expect(shield).toHaveAttribute('aria-label', 'Click or press Esc to take over browser control')
+
+    const frame = screen.getByTestId('browser-agent-viewport-frame')
+    expect(frame.className).toContain('v6c-ring-running')
+    expect(frame.className).toContain('motion-reduce:transition-none')
+    expect(frame.className).not.toContain('border-2')
+
+    const pill = screen.getByTestId('browser-agent-control-pill')
+    expect(pill.className).toContain('dropdown-glass')
+    expect(pill.className).toContain('rounded-[var(--radius-xl)]')
+    expect(pill.className).toContain('z-[var(--z-sticky)]')
+    expect(pill.className).not.toContain('rounded-full')
+    expect(pill.className).not.toContain('backdrop-blur-md')
+
+    act(() => {
+      useBrowserUseStore.getState().applyHostEvent({
+        type: 'control-state',
+        tabId: 'tab-agent',
+        state: 'takeover',
+        takeoverReason: 'Sign in',
+      })
+    })
+    expect(frame.className).toContain('v6c-ring-waiting')
+    expect(pill.className).toContain('dropdown-glass')
+    expect(pill.className).toContain('v6c-ring-waiting')
+    expect(pill.className).not.toContain('bg-[var(--color-warning-container)]')
   })
 })

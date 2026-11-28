@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Animated, PanResponder, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Text } from '../Text'
-import { useColors } from '../kit'
+import { useTheme } from '../theme'
 import { effortStopAt, effortStopX } from './runLogic'
 
 // 滑块比轨道大一圈（和 Codex 一样），轨道两端的圆头始终能被滑块盖住。
@@ -125,7 +125,7 @@ export function EffortSlider({
   disabled?: boolean
   onChange(value: string): void
 }) {
-  const colors = useColors()
+  const { colors, shadows } = useTheme()
   const [width, setWidth] = useState(0)
   // 拖动中手指下最近的那一档，用来高亮标签；没在拖时为 null。
   const [dragIndex, setDragIndex] = useState<number | null>(null)
@@ -225,8 +225,8 @@ export function EffortSlider({
                 width: THUMB,
                 height: THUMB,
                 borderRadius: THUMB / 2,
-                backgroundColor: colors.card,
-                boxShadow: `0 0 0 0.5px ${colors.hair}, 0 1px 2px rgba(28,25,23,0.18), 0 3px 10px rgba(28,25,23,0.16)`,
+                backgroundColor: colors.cardRaised,
+                boxShadow: shadows.thumb,
                 transform: [{ translateX: Animated.subtract(gesture.x, THUMB / 2) }],
               }}
             />
