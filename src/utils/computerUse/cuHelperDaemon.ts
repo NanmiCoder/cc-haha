@@ -6,7 +6,7 @@ import path from 'node:path'
 import { getSessionId } from '../../bootstrap/state.js'
 import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
-import { ensureInstalledHelper } from './cuHelperInstall.js'
+import { ensureInstalledHelperAsync } from './cuHelperInstall.js'
 import { attestDaemonSocketPeer } from './cuHelperPeerAttestation.js'
 import { getRuntimePaths } from './pythonBridge.js'
 import { NativeCommandError } from '../../vendor/computer-use-mcp/nativeError.js'
@@ -467,11 +467,11 @@ async function startDaemon(generation: number): Promise<DaemonState> {
   // (`open -n`). This is load-bearing for Screen Recording: macOS resolves the
   // SR TCC *subject* to the OUTERMOST `.app` on the binary's path, so a helper
   // NESTED inside the host (app.asar.unpacked) is attributed to the HOST and
-  // granting the helper does nothing. ensureInstalledHelper() relocates the
+  // granting the helper does nothing. ensureInstalledHelperAsync() relocates the
   // helper OUT to a stable host-independent path, where it is its OWN SR subject
   // — so the user's grant of the helper actually takes effect. (Dev/standalone
   // builds are used in place.) See cuHelperInstall.ts.
-  const installed = ensureInstalledHelper()
+  const installed = await ensureInstalledHelperAsync()
   if (!installed) throw new Error('cu-helper .app bundle not found')
   const appBundle = installed.appBundle
 

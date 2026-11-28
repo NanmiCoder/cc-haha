@@ -19,8 +19,9 @@ import {
 import {
   callCuHelper,
   isMacosComputerUseRuntimeSupported,
-  resolveCuHelperLaunchStatus,
-  resolveLaunchableCuHelperBinary,
+  resolveCuHelperLaunchStatusAsync,
+  resolveLaunchableCuHelperBinaryAsync,
+  type CuHelperLaunchStatus,
 } from '../../utils/computerUse/cuHelperBridge.js'
 import type { CuHelperUnavailableReason } from '../../utils/computerUse/cuHelperInstall.js'
 const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
@@ -321,7 +322,7 @@ async function openNativePermissionCard(): Promise<{
   }
   // Launch from the standalone-installed helper so the card drags the same `.app`
   // the daemon runs from (its own Screen Recording subject). See cuHelperInstall.ts.
-  const bin = resolveLaunchableCuHelperBinary()
+  const bin = await resolveLaunchableCuHelperBinaryAsync()
   if (!bin) {
     return { ok: false, reason: 'helper-missing', accessibility: null, screenRecording: null }
   }
@@ -411,7 +412,7 @@ type CheckStatusDependencies = {
   arch?: string
   detectMacosProductVersion?: () => Promise<string | null>
   isMacosRuntimeSupported?: (platform: string) => boolean
-  resolveCuHelper?: typeof resolveCuHelperLaunchStatus
+  resolveCuHelper?: () => CuHelperLaunchStatus | Promise<CuHelperLaunchStatus>
   checkPermissions?: typeof checkCuHelperPermissions
   getAgentDesktopStatus?: typeof getAgentDesktopStatus
 }
@@ -431,7 +432,7 @@ export async function checkStatus(
       ? isVersionAtLeast(systemVersion, MIN_MACOS_COMPUTER_USE_VERSION)
       : kernelVersionEligible)
   const helper = macosEligible
-    ? (dependencies.resolveCuHelper ?? resolveCuHelperLaunchStatus)()
+    ? await (dependencies.resolveCuHelper ?? resolveCuHelperLaunchStatusAsync)()
     : null
   const capability = resolveComputerUseCapability(
     platform,
@@ -447,8 +448,18 @@ export async function checkStatus(
   // macOS has a self-contained native runtime. Its status must never wait for
   // a stale custom Python executable or expose the retired setup flow.
   if (platform === 'darwin') {
+    // Reuse the just-verified helper binary for `check_permissions` instead of
+    // running a duplicate round of codesign attestations inside the same poll.
+    const verifiedBinary = helper?.binary ?? null
     const permissions = capability.cuHelper.available
-      ? await (dependencies.checkPermissions ?? checkCuHelperPermissions)()
+      ? await (
+          dependencies.checkPermissions
+            ? dependencies.checkPermissions()
+            : checkCuHelperPermissions(
+                <T>(command: string, payload?: Record<string, unknown>) =>
+                  callCuHelper<T>(command, payload, undefined, () => verifiedBinary),
+              )
+        )
       : { accessibility: null, screenRecording: null, error: null }
     return {
       platform,
@@ -746,6 +757,19 @@ export function __resetInstalledAppPathCacheForTests(): void {
 // Route handler
 // ============================================================================
 
+let inFlightStatusProbe: Promise<EnvStatus> | null = null
+
+export function checkStatusCoalesced(
+  probe: () => Promise<EnvStatus> = () => checkStatus(),
+): Promise<EnvStatus> {
+  if (inFlightStatusProbe) return inFlightStatusProbe
+  const request = probe().finally(() => {
+    if (inFlightStatusProbe === request) inFlightStatusProbe = null
+  })
+  inFlightStatusProbe = request
+  return request
+}
+
 export async function handleComputerUseApi(
   req: Request,
   url: URL,
@@ -754,7 +778,7 @@ export async function handleComputerUseApi(
   const action = segments[2]
 
   if (action === 'status' && req.method === 'GET') {
-    const status = await checkStatus()
+    const status = await checkStatusCoalesced()
     return Response.json(status)
   }
 

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { logForDebugging } from '../debug.js'
-import { resolveLaunchableCuHelperBinary } from './cuHelperBridge.js'
+import { resolveLaunchableCuHelperBinaryAsync } from './cuHelperBridge.js'
 
 /**
  * Auto-present the native macOS permission card (`cu-helper request-access`)
@@ -35,7 +35,7 @@ export function maybeShowNativePermissionCard(
   perms?: OsPermissions,
   deps: {
     platform?: NodeJS.Platform
-    resolveBin?: () => string | null
+    resolveBin?: () => string | null | Promise<string | null>
     spawnFn?: SpawnFn
     now?: () => number
   } = {},
@@ -47,48 +47,59 @@ export function maybeShowNativePermissionCard(
   if (cardInFlight) return
   if (now - lastShownAt < COOLDOWN_MS) return
 
+  const doSpawn = deps.spawnFn ?? spawn
+  const launch = (bin: string | null) => {
+    if (!bin) {
+      cardInFlight = false
+      return
+    }
+    cardInFlight = true
+    lastShownAt = now
+    try {
+      const child = doSpawn(bin, ['request-access'], {
+        stdio: 'ignore',
+        detached: false,
+      })
+      child.on('exit', () => {
+        cardInFlight = false
+      })
+      child.on('error', (err: unknown) => {
+        cardInFlight = false
+        logForDebugging(`cu-helper request-access failed to launch: ${String(err)}`, {
+          level: 'warn',
+        })
+      })
+      // Don't let the card window keep the CLI's event loop alive.
+      child.unref?.()
+      if (perms) {
+        logForDebugging(
+          `shown native permission card (accessibility=${perms.accessibility}, screenRecording=${perms.screenRecording})`,
+          { level: 'debug' },
+        )
+      }
+    } catch (err) {
+      cardInFlight = false
+      logForDebugging(`cu-helper request-access spawn threw: ${String(err)}`, {
+        level: 'warn',
+      })
+    }
+  }
+
   // Launch the card from the STANDALONE-INSTALLED helper so its drag subject
   // (Bundle.main.bundleURL) is the same standalone `.app` the daemon runs from —
   // dragging THAT into Screen Recording grants the helper's own SR subject, and
   // dragging it into Accessibility grants the helper too. One identity, both
   // permissions. (See cuHelperInstall.ts.)
-  const resolveBin = deps.resolveBin ?? resolveLaunchableCuHelperBinary
-  const bin = resolveBin()
-  if (!bin) return
-
-  const doSpawn = deps.spawnFn ?? spawn
-
-  cardInFlight = true
-  lastShownAt = now
-
-  try {
-    const child = doSpawn(bin, ['request-access'], {
-      stdio: 'ignore',
-      detached: false,
-    })
-    child.on('exit', () => {
-      cardInFlight = false
-    })
-    child.on('error', (err: unknown) => {
-      cardInFlight = false
-      logForDebugging(`cu-helper request-access failed to launch: ${String(err)}`, {
-        level: 'warn',
-      })
-    })
-    // Don't let the card window keep the CLI's event loop alive.
-    child.unref?.()
-    if (perms) {
-      logForDebugging(
-        `shown native permission card (accessibility=${perms.accessibility}, screenRecording=${perms.screenRecording})`,
-        { level: 'debug' },
-      )
-    }
-  } catch (err) {
-    cardInFlight = false
-    logForDebugging(`cu-helper request-access spawn threw: ${String(err)}`, {
-      level: 'warn',
-    })
+  const resolved = (deps.resolveBin ?? resolveLaunchableCuHelperBinaryAsync)()
+  if (resolved && typeof (resolved as Promise<string | null>).then === 'function') {
+    cardInFlight = true
+    void (resolved as Promise<string | null>).then(
+      (bin) => launch(bin),
+      () => { cardInFlight = false },
+    )
+    return
   }
+  launch(resolved as string | null)
 }
 
 /** Test hook: reset debounce / cooldown state. */

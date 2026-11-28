@@ -6,10 +6,12 @@ import path from 'node:path'
 import {
   __resetInstalledHelperCache,
   ensureInstalledHelper,
+  ensureInstalledHelperAsync,
   installedHelperAppBundle,
   installedHelperRoot,
   isNestedInHostApp,
   prepareInstalledHelper,
+  prepareInstalledHelperAsync,
 } from './cuHelperInstall.js'
 
 afterEach(() => __resetInstalledHelperCache())
@@ -356,5 +358,109 @@ describe('ensureInstalledHelper', () => {
       ...deps,
       verifyPackagedSignatures: () => ++verifications === 1,
     })).toEqual({ helper: null, reason: 'helper_signature_invalid' })
+  })
+
+  test('async helper installation mirrors sync verification, tamper repair, rollback, and stays non-blocking', async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'cc-haha-cu-install-async-'))
+    try {
+      const sourceApp = path.join(
+        tempRoot,
+        'Host.app',
+        'Contents',
+        'Resources',
+        'cc-haha-computer-use.app',
+      )
+      const configHome = path.join(tempRoot, 'config')
+      const fixtureFiles = [
+        INNER,
+        path.join('Contents', 'Info.plist'),
+        path.join('Contents', '_CodeSignature', 'CodeResources'),
+      ]
+      for (const relative of fixtureFiles) {
+        const target = path.join(sourceApp, relative)
+        mkdirSync(path.dirname(target), { recursive: true })
+        writeFileSync(target, `async fixture: ${relative}`)
+      }
+
+      let copyCount = 0
+      let timerTicksDuringVerify = 0
+      const deps = {
+        sourceApp,
+        configHome,
+        copyApp: async (src: string, dest: string) => {
+          copyCount += 1
+          cpSync(src, dest, { recursive: true })
+        },
+        verifyPackagedSignatures: async () => {
+          await new Promise(resolve => setTimeout(resolve, 25))
+          return true
+        },
+      }
+      const destApp = installedHelperAppBundle(configHome)
+      const destInfo = path.join(destApp, 'Contents', 'Info.plist')
+
+      const tickTimer = setInterval(() => { timerTicksDuringVerify += 1 }, 5)
+      try {
+        expect((await ensureInstalledHelperAsync(deps))?.appBundle).toBe(destApp)
+        expect((await ensureInstalledHelperAsync(deps))?.appBundle).toBe(destApp)
+      } finally {
+        clearInterval(tickTimer)
+      }
+      expect(copyCount).toBe(1)
+      expect(timerTicksDuringVerify).toBeGreaterThan(0)
+
+      // Tampering triggers async repair
+      writeFileSync(destInfo, 'tampered async destination')
+      expect((await ensureInstalledHelperAsync(deps))?.appBundle).toBe(destApp)
+      expect(copyCount).toBe(2)
+      expect(readFileSync(destInfo, 'utf8')).toBe('async fixture: Contents/Info.plist')
+
+      // Post-replacement signature rejection rolls back cleanly and reports helper_signature_invalid
+      writeFileSync(destInfo, 'last working async plist')
+      let verifyAttempts = 0
+      const rejected = await prepareInstalledHelperAsync({
+        sourceApp,
+        configHome,
+        copyApp: async (src: string, dest: string) => { cpSync(src, dest, { recursive: true }) },
+        verifyPackagedSignatures: async (_source, candidate) => {
+          verifyAttempts += 1
+          return candidate.includes('.staging-')
+        },
+      })
+      expect(rejected).toEqual({ helper: null, reason: 'helper_signature_invalid' })
+      expect(verifyAttempts).toBeGreaterThanOrEqual(2)
+      expect(readFileSync(destInfo, 'utf8')).toBe('last working async plist')
+
+      // Concurrent async installs in the same process serialize cleanly without lock timeout
+      rmSync(destApp, { recursive: true, force: true })
+      let concurrentCopies = 0
+      const [first, second] = await Promise.all([
+        ensureInstalledHelperAsync({
+          sourceApp,
+          configHome,
+          copyApp: async (src: string, dest: string) => {
+            concurrentCopies += 1
+            await new Promise(resolve => setTimeout(resolve, 25))
+            cpSync(src, dest, { recursive: true })
+          },
+          verifyPackagedSignatures: async () => true,
+        }),
+        ensureInstalledHelperAsync({
+          sourceApp,
+          configHome,
+          copyApp: async (src: string, dest: string) => {
+            concurrentCopies += 1
+            await new Promise(resolve => setTimeout(resolve, 25))
+            cpSync(src, dest, { recursive: true })
+          },
+          verifyPackagedSignatures: async () => true,
+        }),
+      ])
+      expect(first?.appBundle).toBe(destApp)
+      expect(second?.appBundle).toBe(destApp)
+      expect(concurrentCopies).toBe(1)
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true })
+    }
   })
 })

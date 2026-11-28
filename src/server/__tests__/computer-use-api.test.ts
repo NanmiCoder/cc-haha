@@ -875,4 +875,55 @@ describe('checkCuHelperPermissions failure reporting', () => {
       spy.mockRestore()
     }
   })
+
+  it('supports async resolveCuHelper and coalesces concurrent status probes without caching stale results', async () => {
+    const { checkStatus, checkStatusCoalesced } = await importComputerUseApi()
+
+    let resolveHelperCount = 0
+    const status = await checkStatus({
+      platform: 'darwin',
+      arch: 'arm64',
+      detectMacosProductVersion: async () => '15.2',
+      isMacosRuntimeSupported: () => true,
+      resolveCuHelper: async () => {
+        resolveHelperCount += 1
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { binary: '/fixture/cu-helper', reason: null }
+      },
+      checkPermissions: async () => ({ accessibility: true, screenRecording: true, error: null }),
+    })
+    expect(resolveHelperCount).toBe(1)
+    expect(status.cuHelper.available).toBe(true)
+
+    let probeCalls = 0
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const makeStatus = (accessibility: boolean) => ({
+      ...status,
+      permissions: { accessibility, screenRecording: true, error: null },
+    })
+
+    const p1 = checkStatusCoalesced(async () => {
+      probeCalls += 1
+      await firstGate
+      return makeStatus(false)
+    })
+    const p2 = checkStatusCoalesced(async () => {
+      probeCalls += 1
+      return makeStatus(true)
+    })
+    releaseFirst()
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(probeCalls).toBe(1)
+    expect(r1.permissions.accessibility).toBe(false)
+    expect(r2.permissions.accessibility).toBe(false)
+
+    // Subsequent poll after settlement runs fresh instead of returning stale permissions
+    const r3 = await checkStatusCoalesced(async () => {
+      probeCalls += 1
+      return makeStatus(true)
+    })
+    expect(probeCalls).toBe(2)
+    expect(r3.permissions.accessibility).toBe(true)
+  })
 })

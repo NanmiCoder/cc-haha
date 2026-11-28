@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
@@ -13,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { logForDebugging } from '../debug.js'
@@ -428,6 +429,380 @@ export function prepareInstalledHelper(deps: InstallDeps = {}): HelperInstallRes
       })
     }
     if (exists(destInner) && destinationVerified) {
+      return { helper: { appBundle: destApp, binary: destInner }, reason: null }
+    }
+    throw new Error('installed cu-helper is missing or failed verification')
+  } catch (err) {
+    logForDebugging(
+      `cu-helper standalone install failed; refusing nested helper because Screen Recording would target the host: ${String(err)}`,
+      { level: 'error' },
+    )
+    return {
+      helper: null,
+      reason: err instanceof HelperSignatureError ? 'helper_signature_invalid' : 'helper_prepare_failed',
+    }
+  }
+}
+
+type AsyncInstallDeps = {
+  /** Source `.app` bundle. Defaults to `resolveCuHelperAppBundle()`. */
+  sourceApp?: string | null
+  configHome?: string
+  exists?: (p: string) => boolean | Promise<boolean>
+  readFileBytes?: (p: string) => Buffer | Promise<Buffer>
+  /** Copy `src` `.app` to (non-existent) `dest`; throws/rejects on failure. */
+  copyApp?: (src: string, dest: string) => void | Promise<void>
+  rm?: (p: string) => void | Promise<void>
+  mkdir?: (p: string) => void | Promise<void>
+  writeMarker?: (p: string, v: string) => void | Promise<void>
+  readMarker?: (p: string) => string | null | Promise<string | null>
+  verifyPackagedSignatures?: (sourceApp: string, destApp: string) => boolean | Promise<boolean>
+  replaceApp?: (
+    stagingApp: string,
+    destApp: string,
+    verifyInstalled: () => Promise<boolean>,
+  ) => void | Promise<void>
+  withInstallLock?: <T>(lockPath: string, operation: () => Promise<T>) => Promise<T>
+  stagingApp?: string
+}
+
+function execFileAsync(
+  command: string,
+  args: string[],
+): Promise<{ ok: boolean; status: number | null; stdout: string; stderr: string; error?: Error }> {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      args,
+      { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        const status = error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === 'number'
+          ? (error as unknown as { code: number }).code
+          : error
+            ? null
+            : 0
+        resolve({
+          ok: !error,
+          status,
+          stdout: stdout ?? '',
+          stderr: stderr ?? '',
+          ...(error ? { error } : {}),
+        })
+      },
+    )
+  })
+}
+
+async function pathExistsAsync(target: string): Promise<boolean> {
+  try {
+    await fsPromises.access(target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function dittoNoQuarantineAsync(src: string, dest: string): Promise<void> {
+  const command = copyAppCommand(src, dest)
+  const r = await execFileAsync(command.command, command.args)
+  if (!r.ok) {
+    throw new Error(`ditto --noqtn failed (status ${String(r.status)}): ${r.error?.message ?? 'unknown'}`)
+  }
+}
+
+const inProcessInstallLocks = new Map<string, Promise<void>>()
+
+async function withInProcessInstallLock<T>(
+  lockPath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = path.resolve(lockPath)
+  const previous = inProcessInstallLocks.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const tail = previous.then(() => gate)
+  inProcessInstallLocks.set(key, tail)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (inProcessInstallLocks.get(key) === tail) {
+      inProcessInstallLocks.delete(key)
+    }
+  }
+}
+
+async function withExclusiveInstallLockAsync<T>(
+  lockPath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return withInProcessInstallLock(lockPath, async () => {
+    const deadline = Date.now() + 5_000
+    const ownerToken = `${process.pid}:${Date.now()}:${randomUUID()}`
+    let handle: fsPromises.FileHandle | null = null
+    while (handle === null) {
+      try {
+        handle = await fsPromises.open(lockPath, 'wx', 0o600)
+        await handle.writeFile(`${ownerToken}\n`, 'utf8')
+      } catch (error) {
+        if (handle) {
+          await handle.close().catch(() => {})
+          handle = null
+        }
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'EEXIST') throw error
+        try {
+          const [st, ownerRaw] = await Promise.all([
+            fsPromises.stat(lockPath),
+            fsPromises.readFile(lockPath, 'utf8'),
+          ])
+          const oldEnough = Date.now() - st.mtimeMs > 30_000
+          const ownerPid = Number.parseInt(ownerRaw.trim().split(':', 1)[0] ?? '', 10)
+          let ownerAlive = Number.isFinite(ownerPid) && ownerPid > 0
+          if (ownerAlive) {
+            try {
+              process.kill(ownerPid, 0)
+            } catch (probeError) {
+              ownerAlive = (probeError as NodeJS.ErrnoException).code === 'EPERM'
+            }
+          }
+          if (oldEnough && !ownerAlive) {
+            const stalePath = `${lockPath}.stale-${process.pid}-${randomUUID()}`
+            await fsPromises.rename(lockPath, stalePath)
+            await fsPromises.rm(stalePath, { force: true })
+          }
+        } catch {}
+        if (Date.now() >= deadline) {
+          throw new Error('timed out waiting for the cu-helper install lock')
+        }
+        await new Promise<void>(resolve => setTimeout(resolve, 50))
+      }
+    }
+    try {
+      return await operation()
+    } finally {
+      await handle.close().catch(() => {})
+      try {
+        if ((await fsPromises.readFile(lockPath, 'utf8')).trim() === ownerToken) {
+          await fsPromises.unlink(lockPath)
+        }
+      } catch {}
+    }
+  })
+}
+
+async function replaceAppRecoverablyAsync(
+  stagingApp: string,
+  destApp: string,
+  verifyInstalled: () => Promise<boolean>,
+): Promise<void> {
+  const backupApp = `${destApp}.previous-${process.pid}`
+  await fsPromises.rm(backupApp, { recursive: true, force: true })
+  const hadDestination = await pathExistsAsync(destApp)
+  if (hadDestination) await fsPromises.rename(destApp, backupApp)
+  try {
+    await fsPromises.rename(stagingApp, destApp)
+    if (!(await verifyInstalled())) {
+      throw new Error('installed cu-helper failed post-replacement verification')
+    }
+    await fsPromises.rm(backupApp, { recursive: true, force: true })
+  } catch (error) {
+    await fsPromises.rm(destApp, { recursive: true, force: true })
+    if (hadDestination && (await pathExistsAsync(backupApp))) {
+      await fsPromises.rename(backupApp, destApp)
+    }
+    throw error
+  }
+}
+
+async function signedBundleFingerprintAsync(
+  appBundle: string,
+  readBytes: (p: string) => Buffer | Promise<Buffer>,
+): Promise<string> {
+  const buffers = await Promise.all(
+    SIGNED_FINGERPRINT_FILES.map(relative => Promise.resolve(readBytes(path.join(appBundle, relative)))),
+  )
+  const hash = createHash('sha256')
+  for (let i = 0; i < SIGNED_FINGERPRINT_FILES.length; i++) {
+    hash.update(SIGNED_FINGERPRINT_FILES[i]!)
+    hash.update('\0')
+    hash.update(buffers[i]!)
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+async function codesignOutputAsync(args: string[]): Promise<{ ok: boolean; output: string }> {
+  const result = await execFileAsync('/usr/bin/codesign', args)
+  return {
+    ok: result.ok,
+    output: `${result.stdout}${result.stderr}`,
+  }
+}
+
+async function leafCertificateFingerprintAsync(target: string): Promise<string | undefined> {
+  const tempRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'cc-haha-cu-signature-'))
+  try {
+    const prefix = path.join(tempRoot, 'cert-')
+    const extracted = await codesignOutputAsync([
+      '-d', `--extract-certificates=${prefix}`, target,
+    ])
+    if (!extracted.ok) return undefined
+    return createHash('sha256').update(await fsPromises.readFile(`${prefix}0`)).digest('hex')
+  } catch {
+    return undefined
+  } finally {
+    await fsPromises.rm(tempRoot, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function codeIdentityAsync(target: string): Promise<CodeIdentity | null> {
+  const [details, leaf] = await Promise.all([
+    codesignOutputAsync(['-dv', '--verbose=4', target]),
+    leafCertificateFingerprintAsync(target),
+  ])
+  if (!details.ok) return null
+  const rawTeam = details.output.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim()
+  return {
+    identifier: details.output.match(/^Identifier=(.+)$/m)?.[1]?.trim(),
+    authority: details.output.match(/^Authority=(.+)$/m)?.[1]?.trim(),
+    team: rawTeam && rawTeam !== 'not set' ? rawTeam : undefined,
+    leaf,
+  }
+}
+
+async function verifyPackagedHelperSignaturesAsync(sourceApp: string, destApp: string): Promise<boolean> {
+  if (process.platform !== 'darwin') return false
+  const [sourceStrict, destStrict, sidecarStrict] = await Promise.all([
+    codesignOutputAsync(['--verify', '--deep', '--strict', '--verbose=2', sourceApp]),
+    codesignOutputAsync(['--verify', '--deep', '--strict', '--verbose=2', destApp]),
+    codesignOutputAsync(['--verify', '--strict', '--verbose=2', process.execPath]),
+  ])
+  if (!sourceStrict.ok || !destStrict.ok || !sidecarStrict.ok) return false
+
+  const [source, dest, sidecar] = await Promise.all([
+    codeIdentityAsync(sourceApp),
+    codeIdentityAsync(destApp),
+    codeIdentityAsync(process.execPath),
+  ])
+  return Boolean(
+    source
+      && dest
+      && sidecar
+      && source.identifier === HELPER_IDENTIFIER
+      && dest.identifier === HELPER_IDENTIFIER
+      && sidecar.identifier === SIDECAR_IDENTIFIER
+      && sameSigner(source, dest)
+      && sameSigner(source, sidecar),
+  )
+}
+
+/**
+ * Non-blocking counterpart to `ensureInstalledHelper()` for async server routes
+ * and helper invocations. Runs the same sealed-file SHA-256 and `codesign`
+ * attestation checks without stalling the Node/Bun event loop.
+ */
+export async function ensureInstalledHelperAsync(
+  deps: AsyncInstallDeps = {},
+): Promise<InstalledHelper | null> {
+  return (await prepareInstalledHelperAsync(deps)).helper
+}
+
+/** Non-blocking counterpart to `prepareInstalledHelper()`. */
+export async function prepareInstalledHelperAsync(
+  deps: AsyncInstallDeps = {},
+): Promise<HelperInstallResult> {
+  const exists = deps.exists ?? pathExistsAsync
+  const sourceApp = deps.sourceApp !== undefined ? deps.sourceApp : resolveCuHelperAppBundle()
+  if (!sourceApp) return { helper: null, reason: 'helper_missing' }
+  const sourceInner = path.join(sourceApp, INNER_REL)
+
+  if (!isNestedInHostApp(sourceApp)) {
+    return { helper: { appBundle: sourceApp, binary: sourceInner }, reason: null }
+  }
+
+  try {
+    const configHome = deps.configHome ?? getClaudeConfigHomeDir()
+    const root = installedHelperRoot(configHome)
+    const destApp = installedHelperAppBundle(configHome)
+    const destInner = path.join(destApp, INNER_REL)
+    const markerPath = path.join(root, '.installed-version')
+
+    const readBytes = deps.readFileBytes ?? ((p: string) => fsPromises.readFile(p))
+    const verifySignatures = deps.verifyPackagedSignatures ?? verifyPackagedHelperSignaturesAsync
+    const readMarker =
+      deps.readMarker ??
+      (async (p: string) => {
+        try {
+          return (await fsPromises.readFile(p, 'utf8')).trim()
+        } catch {
+          return null
+        }
+      })
+
+    const srcHash = await signedBundleFingerprintAsync(sourceApp, readBytes)
+
+    let destinationVerified = false
+    const verifyDestination = async (): Promise<boolean> => {
+      if (!(await exists(destInner)) || (await readMarker(markerPath)) !== srcHash) return false
+      try {
+        const fingerprintMatches = (await signedBundleFingerprintAsync(destApp, readBytes)) === srcHash
+        destinationVerified = fingerprintMatches
+          && Boolean(await verifySignatures(sourceApp, destApp))
+        return fingerprintMatches && destinationVerified
+      } catch {
+        destinationVerified = false
+        return false
+      }
+    }
+
+    const upToDate = await verifyDestination()
+    if (!upToDate) {
+      const rm = deps.rm ?? ((p: string) => fsPromises.rm(p, { recursive: true, force: true }))
+      const mkdir = deps.mkdir ?? ((p: string) => fsPromises.mkdir(p, { recursive: true, mode: 0o700 }))
+      const copyApp = deps.copyApp ?? dittoNoQuarantineAsync
+      const writeMarker = deps.writeMarker ?? ((p: string, v: string) => fsPromises.writeFile(p, `${v}\n`, 'utf8'))
+      const replaceApp = deps.replaceApp ?? replaceAppRecoverablyAsync
+      const withInstallLock = deps.withInstallLock ?? withExclusiveInstallLockAsync
+      const stagingApp = deps.stagingApp
+        ?? path.join(root, `.${APP_NAME}.staging-${process.pid}`)
+      await mkdir(root)
+      await withInstallLock(path.join(root, '.install.lock'), async () => {
+        if (await verifyDestination()) return
+        await rm(stagingApp)
+        try {
+          await copyApp(sourceApp, stagingApp)
+          if ((await signedBundleFingerprintAsync(stagingApp, readBytes)) !== srcHash) {
+            throw new Error('copied cu-helper bundle fingerprint does not match source')
+          }
+          if (!(await verifySignatures(sourceApp, stagingApp))) {
+            throw new HelperSignatureError('copied cu-helper signature does not match the packaged sidecar')
+          }
+          const verifyInstalled = async (): Promise<boolean> => {
+            try {
+              if ((await signedBundleFingerprintAsync(destApp, readBytes)) !== srcHash) return false
+            } catch {
+              return false
+            }
+            if (!(await verifySignatures(sourceApp, destApp))) {
+              throw new HelperSignatureError('installed cu-helper signature does not match the packaged sidecar')
+            }
+            return true
+          }
+          await replaceApp(stagingApp, destApp, verifyInstalled)
+          destinationVerified = await verifyInstalled()
+          if (!destinationVerified) {
+            throw new Error('installed cu-helper bundle fingerprint does not match source')
+          }
+          await writeMarker(markerPath, srcHash)
+          logForDebugging(`installed cu-helper to standalone path: ${destApp}`, { level: 'debug' })
+        } finally {
+          await rm(stagingApp)
+        }
+      })
+    }
+    if ((await exists(destInner)) && destinationVerified) {
       return { helper: { appBundle: destApp, binary: destInner }, reason: null }
     }
     throw new Error('installed cu-helper is missing or failed verification')

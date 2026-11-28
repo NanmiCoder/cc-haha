@@ -82,4 +82,23 @@ describe('maybeShowNativePermissionCard', () => {
     maybeShowNativePermissionCard(undefined, { ...base, now: () => 1000 + 20_000 }) // after cooldown
     expect(spawned).toBe(2)
   })
+
+  test('supports async binary resolution and debounces concurrent triggers while resolving', async () => {
+    let spawned = 0
+    let resolveBinPromise!: (value: string | null) => void
+    const binPromise = new Promise<string | null>(resolve => { resolveBinPromise = resolve })
+    const deps = {
+      platform: 'darwin' as const,
+      resolveBin: () => binPromise,
+      now: () => 1000,
+      spawnFn: (() => { spawned++; return fakeChild() }) as never,
+    }
+    maybeShowNativePermissionCard(undefined, deps)
+    maybeShowNativePermissionCard(undefined, deps)
+    expect(spawned).toBe(0)
+    resolveBinPromise('/x/cu-helper')
+    await binPromise
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(spawned).toBe(1)
+  })
 })

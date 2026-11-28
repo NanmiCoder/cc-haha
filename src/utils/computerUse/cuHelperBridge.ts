@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs'
 import { release } from 'node:os'
 import path from 'node:path'
 import { execFileNoThrow } from '../execFileNoThrow.js'
-import { prepareInstalledHelper, isNestedInHostApp, type CuHelperUnavailableReason } from './cuHelperInstall.js'
+import {
+  prepareInstalledHelper,
+  prepareInstalledHelperAsync,
+  isNestedInHostApp,
+  type CuHelperUnavailableReason,
+} from './cuHelperInstall.js'
 import { getRuntimePaths } from './pythonBridge.js'
 
 /**
@@ -189,6 +194,28 @@ export function resolveCuHelperLaunchStatus(
   return binary ? { binary, reason: null } : { binary: null, reason: installed.reason }
 }
 
+/** Non-blocking counterpart to `resolveCuHelperLaunchStatus()` for async callers. */
+export async function resolveCuHelperLaunchStatusAsync(
+  runtimeSupported: boolean = isMacosComputerUseRuntimeSupported(),
+): Promise<CuHelperLaunchStatus> {
+  if (!runtimeSupported) return { binary: null, reason: 'helper_missing' }
+  const installed = await prepareInstalledHelperAsync()
+  if (installed.helper) return { binary: installed.helper.binary, reason: null }
+  const sourceApp = resolveCuHelperAppBundle()
+  if (sourceApp && isNestedInHostApp(sourceApp)) {
+    return { binary: null, reason: installed.reason }
+  }
+  const binary = resolveCuHelperBinary()
+  return binary ? { binary, reason: null } : { binary: null, reason: installed.reason }
+}
+
+/** Non-blocking counterpart to `resolveLaunchableCuHelperBinary()` for async callers. */
+export async function resolveLaunchableCuHelperBinaryAsync(
+  runtimeSupported: boolean = isMacosComputerUseRuntimeSupported(),
+): Promise<string | null> {
+  return (await resolveCuHelperLaunchStatusAsync(runtimeSupported)).binary
+}
+
 /**
  * Invoke one `cu-helper` CLI command. Mirrors `callPythonHelper`'s parsing of
  * the `{ ok, result?, error? }` envelope exactly, so callers can't tell which
@@ -198,7 +225,7 @@ export async function callCuHelper<T>(
   command: string,
   payload: Record<string, unknown> = {},
   exec: typeof execFileNoThrow = execFileNoThrow,
-  resolveBin: () => string | null = resolveLaunchableCuHelperBinary,
+  resolveBin: () => string | null | Promise<string | null> = resolveLaunchableCuHelperBinaryAsync,
 ): Promise<T> {
   // Prefer the STANDALONE-INSTALLED helper (same path the daemon + card use) so a
   // CLI-fallback screenshot's Screen Recording subject is the helper, not the
@@ -206,7 +233,7 @@ export async function callCuHelper<T>(
   // have failed because its bytes/signer did not match, and launching it would
   // also re-attribute Screen Recording to the outer Electron app. Bare dev/test
   // overrides remain valid because they have no nested `.app` source bundle.
-  const bin = resolveBin()
+  const bin = await resolveBin()
   if (!bin) {
     throw new Error(
       'cu-helper standalone installation failed or binary was not found. Build it: native/cu-helper/build.sh',
