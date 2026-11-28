@@ -181,6 +181,10 @@ export function computerNote(input: { supported: boolean | null; reason?: string
   if (input.reason) return input.reason
   return input.supported === false ? '这台电脑暂不支持' : '允许 Agent 操作这台电脑的屏幕和应用'
 }
+export function browserNote(input: { available: boolean | null; reason?: string }) {
+  if (input.reason) return input.reason
+  return input.available === false ? '请更新电脑端 cc-haha 后使用' : '允许 Agent 操作电脑上的内置浏览器或 Chrome'
+}
 
 /** 模型一行：`供应商 · 模型`，缺哪个就只显示另一个。 */
 export function modelRowLabel(input: { source?: string; model?: string }): string {

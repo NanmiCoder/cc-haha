@@ -23,7 +23,7 @@ test('ChatComposer and RunToggles hide team controls and pill when onTeam is omi
     mock.module(${JSON.stringify(import.meta.resolve('expo-linear-gradient'))}, () => ({ LinearGradient: 'LinearGradient' }))
     mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({
-      Button: 'Button', Icon: 'Icon', Mono: 'Mono', Sheet: 'Sheet', Spinner: 'Spinner', Switch: 'Switch', useColors: () => ({}),
+      Button: 'Button', Icon: 'Icon', InlineError: 'InlineError', Mono: 'Mono', Segmented: 'Segmented', Sheet: 'Sheet', Spinner: 'Spinner', Switch: 'Switch', useColors: () => ({}),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String, useTheme: () => ({ colors: {}, shadows: {}, dark: false, scheme: 'light' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
@@ -40,6 +40,10 @@ test('ChatComposer and RunToggles hide team controls and pill when onTeam is omi
     mock.module(${JSON.stringify(import.meta.resolve('./ComputerUseControl'))}, () => ({
       ComputerUseRow: 'ComputerUseRow',
       ComputerUseConsent: 'ComputerUseConsent',
+    }))
+    mock.module(${JSON.stringify(import.meta.resolve('./BrowserUseControl'))}, () => ({
+      BrowserUseRow: 'BrowserUseRow',
+      BrowserUseConsent: 'BrowserUseConsent',
     }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const { RunToggles } = require(${JSON.stringify(import.meta.resolve('./compose/RunToggles'))})
@@ -202,6 +206,8 @@ test('Antigravity chat sessions expose team toggle and format armed prompts as /
     mock.module(${JSON.stringify(import.meta.resolve('../state/AppContext'))}, () => ({ useApp: () => ({ drafts: new Map([['fixture:ag-chat', 'inspect repo']]) }), useConnection: () => ({ client: null, host: { id: 'fixture', name: 'Fixture', auth: 'lan' } }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../state/DashboardContext'))}, () => ({ useDashboard: () => ({ snapshot: null }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../core/useComputerUse'))}, () => ({ useComputerUse: () => ({ enabled: false }) }))
+    let browserState = { enabled: true, available: true, preferredTarget: 'workspace', refresh() {} }
+    mock.module(${JSON.stringify(import.meta.resolve('../core/useBrowserUse'))}, () => ({ useBrowserUse: () => browserState }))
     mock.module(${JSON.stringify(import.meta.resolve('../core/sessionActivity'))}, () => ({ teamMembersAllStopped: () => true, useSessionActivity: () => ({ runningCount: 0 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({
       ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner', 'Toast'].map(name => [name, name])),
@@ -251,9 +257,34 @@ test('Antigravity chat sessions expose team toggle and format armed prompts as /
     assert.ok(tree && composer)
     assert.equal(composer.props.team, true, 'Antigravity chat preserves armed team state across renders')
     assert.equal(typeof composer.props.onTeam, 'function', 'Antigravity chat exposes onTeam')
+    assert.equal(typeof composer.props.onBrowserUse, 'function', 'Antigravity chat exposes onBrowserUse')
     assert.equal(composer.props.onSend(), true)
     assert.equal(sent.length, 1)
     assert.equal(sent[0].content, '/swarm inspect repo', 'Antigravity armed team must send /swarm instead of Claude Agent Team envelope')
+
+    // Browser Use arming sends <browser-use-request target="workspace"> on Antigravity too
+    composer.props.onDraft('check modeldial.com')
+    composer.props.onBrowserUse(true)
+    cursor = 0
+    const screen3 = Chat()
+    const composer3 = find(screen3.type(screen3.props), 'ChatComposer')
+    assert.equal(composer3.props.browserUse, true)
+    assert.equal(composer3.props.onSend(), true)
+    assert.equal(sent.length, 2)
+    assert.ok(sent[1].content.includes('<browser-use-request target="workspace">'))
+    assert.ok(sent[1].content.endsWith('\\n\\ncheck modeldial.com'))
+
+    // If desktop later disables Browser Use (enabled=false), armed browserUse is disarmed before send
+    composer3.props.onDraft('plain follow-up')
+    composer3.props.onBrowserUse(true)
+    browserState = { enabled: false, available: true, preferredTarget: 'workspace', refresh() {} }
+    cursor = 0
+    const screen4 = Chat()
+    const composer4 = find(screen4.type(screen4.props), 'ChatComposer')
+    assert.equal(composer4.props.browserUse, false, 'disabled desktop Browser Use must disarm composer state')
+    assert.equal(composer4.props.onSend(), true)
+    assert.equal(sent.length, 3)
+    assert.equal(sent[2].content, 'plain follow-up')
   `
   try {
     execFileSync(process.execPath, ['--no-env-file', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -294,6 +325,8 @@ test('NewSession keeps onTeam when Antigravity engine is selected and formats ar
     }))
     mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText: String }))
     mock.module(${JSON.stringify(import.meta.resolve('../core/useComputerUse'))}, () => ({ useComputerUse: () => ({ enabled: false }) }))
+    let browserState = { enabled: true, available: true, preferredTarget: 'workspace', refresh() {} }
+    mock.module(${JSON.stringify(import.meta.resolve('../core/useBrowserUse'))}, () => ({ useBrowserUse: () => browserState }))
     const client = {
       host: { id: 'fixture', auth: 'lan' },
       async get(path) {

@@ -1,18 +1,33 @@
 import { parseUserMessageSegments, type UserMessageSegment } from '../../../src/shared/userMessageCapabilities'
-import { visibleMessageText } from './chatComposer'
+import { browserUsePillLabel, type BrowserPreferredTarget } from './browserUse'
+import { stripComposerRequestEnvelopes } from './chatComposer'
 
 export type UserMessageCapability = {
-  kind: 'team' | 'computer' | 'skill' | 'plugin' | 'command'
+  kind: 'team' | 'browser' | 'computer' | 'skill' | 'plugin' | 'command'
   id: string
   label: string
 }
 
 /** Read the existing prompt format, including old transcripts, without changing what was sent. */
-export function userMessageDisplay(text: string, teamRequested = false) {
-  const unwrapped = visibleMessageText(text)
-  const capabilities: UserMessageCapability[] = teamRequested || unwrapped !== text
-    ? [{ kind: 'team', id: 'agent-team', label: 'Agent 团队' }]
-    : []
+export function userMessageDisplay(
+  text: string,
+  teamRequested = false,
+  browserTarget?: BrowserPreferredTarget
+) {
+  const envelopes = stripComposerRequestEnvelopes(text)
+  const unwrapped = envelopes.content
+  const capabilities: UserMessageCapability[] = []
+  if (teamRequested || envelopes.team) {
+    capabilities.push({ kind: 'team', id: 'agent-team', label: 'Agent 团队' })
+  }
+  const effectiveBrowserTarget = browserTarget ?? envelopes.browserTarget
+  if (effectiveBrowserTarget) {
+    capabilities.push({
+      kind: 'browser',
+      id: 'browser-use',
+      label: browserUsePillLabel(effectiveBrowserTarget),
+    })
+  }
   const addCapability = (segment: Exclude<UserMessageSegment, { type: 'text' }>) => {
     if (segment.type === 'command') {
       capabilities.push({ kind: 'command', id: segment.name, label: segment.name })

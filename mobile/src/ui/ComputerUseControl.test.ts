@@ -15,7 +15,7 @@ test('computer selection uses existing authorization and remains selected when t
     mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({ View: 'View', Pressable: 'Pressable', TextInput: 'TextInput' }))
     mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({
-      ...Object.fromEntries(['Button', 'Callout', 'Dot', 'Icon', 'InlineError', 'Mono', 'Sheet', 'Spinner', 'Switch'].map(name => [name, name])), useColors: () => ({}),
+      ...Object.fromEntries(['Button', 'Callout', 'Dot', 'Icon', 'InlineError', 'Mono', 'Segmented', 'Sheet', 'Spinner', 'Switch'].map(name => [name, name])), useColors: () => ({}),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('./DetentSheet'))}, () => ({ DetentSheet: 'DetentSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('./ConnectorIcon'))}, () => ({ ConnectorIcon: 'ConnectorIcon' }))

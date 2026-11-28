@@ -69,6 +69,17 @@ describe('real mobile composition', () => {
         '<browser-use-request target="workspace">\nUse Browser Use for this request.\n</browser-use-request>\n\nOpen page'
       )
     ).toBe('Open page')
+    const browserMsg = buildComposerMessage('Open page', [], false, { antigravity: true, browserUse: 'workspace' })
+    expect(browserMsg.content).toContain('<browser-use-request target="workspace">')
+    expect(browserMsg.content).toContain('Open page')
+    expect(visibleMessageText(browserMsg.content)).toBe('Open page')
+    const swarmAndBrowser = buildComposerMessage('Open page', [], true, { antigravity: true, browserUse: 'chrome' })
+    expect(swarmAndBrowser.content.startsWith('/swarm <browser-use-request target="chrome">')).toBe(true)
+    const explicitSwarmAndBrowser = buildComposerMessage('/swarm Open page', [], true, { antigravity: true, browserUse: 'chrome' })
+    expect(explicitSwarmAndBrowser.content.startsWith('/swarm <browser-use-request target="chrome">')).toBe(true)
+    expect(explicitSwarmAndBrowser.content.endsWith('\n\nOpen page')).toBe(true)
+    const quotedInBody = buildComposerMessage('Check why <browser-use-request>foo</browser-use-request> appeared', [], false, { browserUse: 'workspace' })
+    expect(visibleMessageText(quotedInBody.content)).toBe('Check why <browser-use-request>foo</browser-use-request> appeared')
     expect(buildComposerMessage('Next', [], false).content).toBe('Next')
     expect(
       withSkill('review this', {

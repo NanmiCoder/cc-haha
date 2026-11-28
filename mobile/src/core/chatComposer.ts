@@ -1,4 +1,9 @@
 import type { AttachmentRef } from '../../../src/server/ws/events'
+import {
+  stripBrowserUseRequest,
+  withBrowserUseRequest,
+  type BrowserPreferredTarget,
+} from './browserUse'
 import type { ChatItem, ClientMessage, Host } from './types'
 
 export type ComposerAttachment = AttachmentRef & {
@@ -16,16 +21,51 @@ export type SkillCommand = {
 }
 const teamBlock =
   '<agent-team-request>\nUse an Agent Team for this request: create a team, split the goal below into tasks with clear owners, and coordinate the teammates until the goal is done.\n</agent-team-request>'
+const TEAM_REQUEST_BLOCK = /<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/
 export const attachmentOnlyPlaceholder = (text: string) =>
   text === 'Please analyze the attached files.' ||
   text === 'Please analyze the attached image.'
+export function stripAgentTeamRequest(text: string): {
+  content: string
+  requested: boolean
+} {
+  if (!text.includes('<agent-team-request>')) return { content: text, requested: false }
+  const next = text.replace(TEAM_REQUEST_BLOCK, '')
+  return { content: next, requested: next !== text }
+}
+export function stripComposerRequestEnvelopes(text: string): {
+  content: string
+  team: boolean
+  browserTarget?: BrowserPreferredTarget
+} {
+  let content = text
+  let team = false
+  let browserTarget: BrowserPreferredTarget | undefined
+  // Strip each envelope at most once in either order so quoted tags inside user text survive.
+  for (let pass = 0; pass < 2; pass++) {
+    if (!team) {
+      const teamResult = stripAgentTeamRequest(content)
+      if (teamResult.requested) {
+        team = true
+        content = teamResult.content
+      }
+    }
+    if (!browserTarget) {
+      const browserResult = stripBrowserUseRequest(content)
+      if (browserResult.requested) {
+        browserTarget = browserResult.target ?? 'auto'
+        content = browserResult.content
+      }
+    }
+  }
+  return {
+    content,
+    team,
+    ...(browserTarget ? { browserTarget } : {}),
+  }
+}
 export function visibleMessageText(text: string) {
-  return text
-    .replace(/<agent-team-request>[\s\S]*?<\/agent-team-request>\n*/, '')
-    .replace(
-      /<browser-use-request(?:\s+target="(?:auto|workspace|chrome)")?>[\s\S]*?<\/browser-use-request>\n*/,
-      ''
-    )
+  return stripComposerRequestEnvelopes(text).content
 }
 // Same generated formats as desktop/src/stores/chatStore.ts. These are only
 // consumed with a real history image or an optimistic image attachment.
@@ -118,18 +158,26 @@ export function buildComposerMessage(
   text: string,
   attachments: ComposerAttachment[],
   team: boolean,
-  options?: { antigravity?: boolean }
+  options?: { antigravity?: boolean; browserUse?: BrowserPreferredTarget | false }
 ): Extract<ClientMessage, { type: 'user_message' }> {
   const content = text.trim()
   if (!content && !attachments.length)
     throw new Error('请先写下消息或添加材料。')
+  const antigravitySwarm = team && options?.antigravity
+  const body =
+    antigravitySwarm && options?.browserUse && LEADING_SWARM_COMMAND.test(content)
+      ? content.replace(/^\/swarm(?:\s+|$)/i, '')
+      : content
+  const withBrowser = options?.browserUse
+    ? withBrowserUseRequest(body, options.browserUse)
+    : body
   return {
     type: 'user_message',
     content: team
       ? (options?.antigravity
-          ? withAntigravitySwarmRequest(content)
-          : `${teamBlock}${content ? `\n\n${content}` : ''}`)
-      : content,
+          ? withAntigravitySwarmRequest(withBrowser)
+          : `${teamBlock}${withBrowser ? `\n\n${withBrowser}` : ''}`)
+      : withBrowser,
     ...(attachments.length
       ? {
           attachments: attachments.map(

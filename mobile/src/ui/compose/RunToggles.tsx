@@ -3,16 +3,18 @@ import { View } from 'react-native'
 import { Text } from '../Text'
 import { Button, Sheet, Switch, useColors } from '../kit'
 import type { ApiClient } from '../../core/client'
+import type { BrowserUse } from '../../core/useBrowserUse'
 import type { ComputerUse } from '../../core/useComputerUse'
+import { BrowserUseConsent, BrowserUseRow } from '../BrowserUseControl'
 import { ComputerUseConsent, ComputerUseRow } from '../ComputerUseControl'
 import { runSheetReasons, teamNote } from './runLogic'
 import { useTeamsSetting } from './useTeamsSetting'
 
 /**
- * 「＋」里「运行方式」那一组：Agent 团队和操作电脑都选择进下一条消息。
- * 操作电脑的全局授权只在首次启用时确认，与本条选择独立。
- * 和桌面端一致，这两个开关属于「这次带什么」，不放在模型和权限的底单里。
- * `visible` 为真时重新读取电脑上的团队设置和电脑授权状态。
+ * 「＋」里「运行方式」那一组：Agent 团队、操作浏览器和操作电脑都选择进下一条消息。
+ * 操作浏览器和操作电脑的全局授权只在首次启用时确认，与本条选择独立。
+ * 和桌面端一致，这些开关属于「这次带什么」，不放在模型和权限的底单里。
+ * `visible` 为真时重新读取电脑上的团队、浏览器和电脑授权状态。
  */
 export function RunToggles({
   visible,
@@ -21,6 +23,10 @@ export function RunToggles({
   onTeam,
   lean,
   antigravity = false,
+  browser,
+  browserSelected = false,
+  onBrowserSelected,
+  renderBrowserConsent = true,
   computer,
   computerSelected,
   onComputerSelected,
@@ -33,6 +39,11 @@ export function RunToggles({
   onTeam?(value: boolean): void
   lean: boolean
   antigravity?: boolean
+  browser?: BrowserUse
+  browserSelected?: boolean
+  onBrowserSelected?(value: boolean): void
+  /** 在 DetentSheet 内嵌 overlay 渲染确认单时传 false，避免嵌套原生 Modal。 */
+  renderBrowserConsent?: boolean
   computer: ComputerUse
   computerSelected: boolean
   onComputerSelected(value: boolean): void
@@ -50,9 +61,13 @@ export function RunToggles({
     if (visible) setEpoch(epoch + 1)
   }
   const { refresh } = computer
+  const refreshBrowser = browser?.refresh
   useEffect(() => {
-    if (visible) refresh()
-  }, [visible, refresh])
+    if (visible) {
+      refresh()
+      refreshBrowser?.()
+    }
+  }, [visible, refresh, refreshBrowser])
   const disarm = useCallback(() => onTeam?.(false), [onTeam])
   // Antigravity runs native `/swarm` without depending on Claude Code's experimental Agent Teams flag.
   const claudeTeams = useTeamsSetting(onTeam && !antigravity ? client : null, epoch, Boolean(onTeam && !antigravity && team), disarm)
@@ -81,6 +96,12 @@ export function RunToggles({
             <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
           </>
         ) : null}
+        {browser && onBrowserSelected ? (
+          <>
+            <BrowserUseRow browser={browser} selected={browserSelected} onSelected={onBrowserSelected} />
+            <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
+          </>
+        ) : null}
         <ComputerUseRow computer={computer} selected={computerSelected} onSelected={onComputerSelected} />
       </View>
       {onTeam ? (
@@ -99,6 +120,7 @@ export function RunToggles({
           <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
         </Sheet>
       ) : null}
+      {browser && renderBrowserConsent ? <BrowserUseConsent browser={browser} /> : null}
       <ComputerUseConsent computer={computer} />
     </>
   )

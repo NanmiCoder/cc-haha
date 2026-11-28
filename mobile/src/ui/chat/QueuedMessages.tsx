@@ -56,6 +56,7 @@ export function QueuedMessages({
               {paused ? '排队中 · 暂停' : '排队中 · 这一轮结束后发送'}
               {item.attachments.length ? ` · ${item.attachments.length} 个材料` : ''}
               {item.team ? ' · 团队' : ''}
+              {item.browserUse ? ' · 浏览器' : ''}
             </Text>
             <Text numberOfLines={1} style={{ fontSize: 14, lineHeight: 20, color: colors.ink }}>
               {item.text || item.references?.map((reference) => `@${reference.displayName || reference.name}`).join(' ') || '（只有材料）'}

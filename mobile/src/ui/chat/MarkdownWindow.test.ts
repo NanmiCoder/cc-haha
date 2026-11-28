@@ -33,7 +33,10 @@ function run(body: string, texts: Record<string, string> = {}) {
     mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({
       useTheme: () => ({ colors: {}, shadows: {}, dark: false, scheme: 'light' }),
     }))
-    mock.module(${JSON.stringify(import.meta.resolve('../../core/chatComposer'))}, () => ({ visibleMessageText: text => text }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../core/chatComposer'))}, () => ({
+      visibleMessageText: text => text,
+      stripComposerRequestEnvelopes: text => ({ content: text, team: false }),
+    }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/userMessageDisplay'))}, () => ({ userMessageDisplay: () => ({ capabilities: [], text: '' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./ImagePreview'))}, () => ({ ImagePreview: 'ImagePreview' }))
     mock.module(${JSON.stringify(import.meta.resolve('./attachmentPreview'))}, () => ({ attachmentImageSelection() {}, attachmentImageUri() {} }))

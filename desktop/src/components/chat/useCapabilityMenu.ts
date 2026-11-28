@@ -6,7 +6,6 @@ import { connectorsApi } from '@/api/connectors'
 import { marketApi } from '@/api/market'
 import { workflowsApi } from '@/api/workflows'
 import { useTranslation } from '@/i18n'
-import { getDesktopHost } from '@/lib/desktopHost'
 import { COMPUTER_USE_ENABLE_REQUEST, needsComputerUsePermissionCard } from '@/lib/computerUseEnable'
 import { dismissAgentTeamsNotice, isAgentTeamsNoticeDismissed } from '@/lib/agentTeamsNotice'
 import { readRecentSkills } from '@/lib/recentSkills'
@@ -106,6 +105,16 @@ const EMPTY_DATA: CapabilityMenuData = {
 
 const SAFE_SECURITY = new Set(['verified', 'benign'])
 
+function isPermanentBrowserUseError(error: unknown): boolean {
+  const status =
+    error && typeof error === 'object' && 'status' in error
+      ? (error as { status?: unknown }).status
+      : undefined
+  if (status === 403 || status === 404) return true
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /\b(?:403|404)\b|desktop-only/i.test(message)
+}
+
 /**
  * Curated skills to suggest: installable, cleanly scanned, usable right after
  * the one-click install (no API key to set up), editor picks first.
@@ -172,7 +181,6 @@ export function useCapabilityMenu(options: {
   const browserUseFetchFailedRef = useRef(false)
   const browserUseFetchInFlightRef = useRef(false)
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
-  const isDesktop = getDesktopHost().isDesktop
   const browserUseConfig = useBrowserUseStore(state => state.config)
   const browserUseLoaded = useBrowserUseStore(state => state.loaded)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
@@ -181,30 +189,30 @@ export function useCapabilityMenu(options: {
   // on Claude Code's experimental Agent Teams flag in Settings.
   const agentTeamAvailable = antigravity || agentTeamsEnabled
   const agentTeamArmed = armed && agentTeamAvailable && !lean
-  const browserUseAvailable = isDesktop && !browserUseUnavailable && Boolean(browserUseConfig?.enabled) && !lean
+  const browserUseAvailable = !browserUseUnavailable && Boolean(browserUseConfig?.enabled) && !lean
   const browserUseArmed = browserArmed && browserUseAvailable
   const profileValue = agentProfile?.value
   const profileLocked = agentProfile ? !agentProfile.onChange : undefined
 
-  // Hydrate Browser Use config once on desktop so the composer and `+` menu
-  // reflect Settings immediately. On non-desktop / remote H5 (or after a
-  // 403/error), do not loop-fetch or render a broken toggle.
+  // Hydrate Browser Use config once so the composer and `+` menu reflect
+  // Settings immediately on desktop and remote H5. After a 403/error (e.g.
+  // older server), stop re-fetching and fall back cleanly.
   useEffect(() => {
-    if (lean || !isDesktop || browserUseLoaded || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
+    if (lean || browserUseLoaded || browserUseFetchFailedRef.current || browserUseFetchInFlightRef.current) return
     let active = true
     browserUseFetchInFlightRef.current = true
     void browserUseApi.getConfig().then(config => {
       if (!active) return
       setBrowserUseUnavailable(false)
       useBrowserUseStore.setState({ config, loaded: true })
-    }).catch(() => {
-      browserUseFetchFailedRef.current = true
+    }).catch((error: unknown) => {
+      if (isPermanentBrowserUseError(error)) browserUseFetchFailedRef.current = true
       if (active) setBrowserUseUnavailable(true)
     }).finally(() => {
       browserUseFetchInFlightRef.current = false
     })
     return () => { active = false }
-  }, [lean, isDesktop, browserUseLoaded])
+  }, [lean, browserUseLoaded])
 
   useEffect(() => {
     if (!open || lean) return
@@ -228,15 +236,15 @@ export function useCapabilityMenu(options: {
         if (active) setPopularSkills(items)
       }).catch(() => {})
     }
-    if (isDesktop && !browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
+    if (!browserUseFetchFailedRef.current && !browserUseFetchInFlightRef.current) {
       browserUseFetchInFlightRef.current = true
       void browserUseApi.getConfig().then(config => {
         if (active) {
           setBrowserUseUnavailable(false)
           useBrowserUseStore.setState({ config, loaded: true })
         }
-      }).catch(() => {
-        browserUseFetchFailedRef.current = true
+      }).catch((error: unknown) => {
+        if (isPermanentBrowserUseError(error)) browserUseFetchFailedRef.current = true
         if (active) setBrowserUseUnavailable(true)
       }).finally(() => {
         browserUseFetchInFlightRef.current = false
@@ -260,7 +268,7 @@ export function useCapabilityMenu(options: {
     })()
 
     return () => { active = false }
-  }, [open, cwd, lean, antigravity, isDesktop])
+  }, [open, cwd, lean, antigravity])
 
   const sections = useMemo(() => buildCapabilitySections({
     antigravity,
@@ -274,12 +282,12 @@ export function useCapabilityMenu(options: {
     workflows: data.workflows,
     agentTeam: { enabled: agentTeamAvailable, armed: agentTeamArmed },
     computerUse: data.computerUse,
-    browserUse: isDesktop && !browserUseUnavailable && browserUseConfig
+    browserUse: !browserUseUnavailable && browserUseConfig
       ? { enabled: browserUseConfig.enabled, armed: browserUseArmed, preferredTarget: browserUseConfig.preferredTarget }
       : null,
     agentProfile: profileValue && !antigravity ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamAvailable, agentTeamArmed, isDesktop, browserUseUnavailable, browserUseConfig, browserUseArmed, profileValue, profileLocked, t])
+  }), [antigravity, references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamAvailable, agentTeamArmed, browserUseUnavailable, browserUseConfig, browserUseArmed, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }

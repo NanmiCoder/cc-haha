@@ -35,7 +35,9 @@ import {
   type ConnectorSection,
   type Range,
 } from './bringModel'
+import type { BrowserUse } from '../../core/useBrowserUse'
 import type { ComputerUse } from '../../core/useComputerUse'
+import { BrowserUseConsent } from '../BrowserUseControl'
 import { RunToggles } from './RunToggles'
 
 export type MaterialKind = 'photos' | 'camera' | 'file'
@@ -409,6 +411,9 @@ export function BringSheet({
   onApply,
   team,
   onTeam,
+  browser,
+  browserUse = false,
+  onBrowserUse,
   computer,
   onComputerSelected,
 }: {
@@ -427,9 +432,12 @@ export function BringSheet({
   onPick(kind: MaterialKind): void
   /** 选好了：新的草稿文字和技能引用。 */
   onApply(next: { draft: string; references: ComposerReference[] }): void
-  /** 「运行方式」一组：Agent 团队（只对下一条消息生效）和操作电脑。 */
+  /** 「运行方式」一组：Agent 团队、操作浏览器和操作电脑。 */
   team: boolean
   onTeam?(value: boolean): void
+  browser?: BrowserUse
+  browserUse?: boolean
+  onBrowserUse?(value: boolean): void
   computer: ComputerUse
   onComputerSelected(value: boolean): void
 }) {
@@ -461,8 +469,15 @@ export function BringSheet({
       setSelected(start)
     }
   }
+  const browserRef = useRef(browser)
   useEffect(() => {
-    if (!visible) return
+    browserRef.current = browser
+  }, [browser])
+  useEffect(() => {
+    if (!visible) {
+      browserRef.current?.cancelConsent()
+      return
+    }
     let alive = true
     recentRepository.load().then((value) => alive && setRecents(value)).catch(() => {})
     return () => {
@@ -527,6 +542,9 @@ export function BringSheet({
       detent={detent}
       onDetentChange={setDetent}
       title={page !== 'root' ? bringEntryTitle[page] : undefined}
+      overlayOpen={Boolean(browser?.consentOpen)}
+      onOverlayClose={() => browser?.cancelConsent()}
+      overlay={browser ? <BrowserUseConsent inline browser={browser} /> : undefined}
       left={
         page !== 'root' ? (
           <Pressable
@@ -725,6 +743,10 @@ export function BringSheet({
                 onTeam={onTeam}
                 lean={lean}
                 antigravity={antigravity}
+                browser={browser}
+                browserSelected={browserUse}
+                onBrowserSelected={onBrowserUse}
+                renderBrowserConsent={false}
                 computer={computer}
                 computerSelected={selected.some((item) => item.reference && isComputerUseReference(item.reference))}
                 onComputerSelected={(value) => {

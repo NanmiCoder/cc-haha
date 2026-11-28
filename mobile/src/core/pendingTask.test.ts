@@ -58,5 +58,11 @@ test('a team task keeps its marker for sending but drafts only the user text', (
     text: '普通任务',
     team: false,
   })
+  const browser = buildComposerMessage('打开网页', [], false, { browserUse: 'workspace' }).content
+  expect(pendingTaskDraft({ content: browser, attachments: [] })).toEqual({
+    text: '打开网页',
+    team: false,
+    browserUse: true,
+  })
   clearPendingTask('host', 'team')
 })

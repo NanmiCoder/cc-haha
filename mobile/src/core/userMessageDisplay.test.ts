@@ -46,3 +46,21 @@ test('deduplicates repeated references without merging different kinds and handl
   ])
   expect(userMessageDisplay('没有闭合的 <agent-team-request> 原文').text).toBe('没有闭合的 <agent-team-request> 原文')
 })
+
+test('recovers Browser Use without fabricating an Agent Team badge and handles combined envelopes', () => {
+  const browserOnly = buildComposerMessage('打开 modeldial.com', [], false, { browserUse: 'workspace' }).content
+  expect(userMessageDisplay(browserOnly)).toEqual({
+    text: '打开 modeldial.com',
+    capabilities: [
+      { kind: 'browser', id: 'browser-use', label: '浏览器 · 工作区' },
+    ],
+  })
+  const combined = buildComposerMessage('并行检查页面', [], true, { browserUse: 'chrome' }).content
+  expect(userMessageDisplay(combined)).toEqual({
+    text: '并行检查页面',
+    capabilities: [
+      { kind: 'team', id: 'agent-team', label: 'Agent 团队' },
+      { kind: 'browser', id: 'browser-use', label: '浏览器 · Chrome' },
+    ],
+  })
+})

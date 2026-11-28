@@ -8,6 +8,9 @@ export type ApiRequestContext = { remoteBrowser?: boolean; remoteDeviceId?: stri
 // on the extra per-turn request stays a desktop-only decision.
 const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'nextPromptSuggestionsEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language', 'maxOutputTokensEscalationMode']
 const WRITE_SETTINGS = new Set(['language', 'chatSendBehavior', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'outputStyle', 'autoQuestion'])
+const REMOTE_BROWSER_USE_WRITE_KEYS = new Set(['enabled', 'preferredTarget', 'consentAcceptedAt'])
+const REMOTE_BROWSER_USE_TARGETS = new Set(['auto', 'workspace', 'chrome'])
+const REMOTE_BROWSER_USE_PUBLIC_KEYS = ['enabled', 'preferredTarget', 'consentAcceptedAt', 'updatedAt'] as const
 const RESERVED_PROVIDER_PATHS = new Set(['settings', 'cc-switch', 'test', 'models', 'presets', 'auth-status', 'official', 'reorder'])
 const REMOTE_COMPATIBILITY_KEYS = new Set(['maxOutputTokens', 'outputTokenLimit', 'outputTokenField', 'serviceTier', 'sampling', 'reasoning', 'parallelTools', 'structuredOutput'])
 
@@ -34,6 +37,28 @@ export function remoteProviderRouteAllowed(parts: string[], method: string): boo
 
 export function remoteSettingsRouteAllowed(parts: string[], method: string): boolean {
   return parts.length === 3 && parts[2] === 'user' && ['GET', 'PUT'].includes(method)
+}
+
+export function remoteBrowserUseRouteAllowed(parts: string[], method: string): boolean {
+  return parts.length === 3 && parts[2] === 'config' && (method === 'GET' || method === 'PUT')
+}
+
+export function hasOnlyRemoteBrowserUsePatchKeys(input: Record<string, unknown>): boolean {
+  return Object.keys(input).every((key) => REMOTE_BROWSER_USE_WRITE_KEYS.has(key))
+}
+
+export function validateRemoteBrowserUseConfigPatch(input: Record<string, unknown>): boolean {
+  return Object.entries(input).every(([key, value]) => {
+    if (!REMOTE_BROWSER_USE_WRITE_KEYS.has(key)) return false
+    if (key === 'enabled') return typeof value === 'boolean'
+    if (key === 'preferredTarget') return typeof value === 'string' && REMOTE_BROWSER_USE_TARGETS.has(value)
+    if (key === 'consentAcceptedAt') return typeof value === 'string' && value.length <= 80
+    return false
+  })
+}
+
+export function projectRemoteBrowserUseConfig(config: Record<string, unknown>) {
+  return pickScalars(config, REMOTE_BROWSER_USE_PUBLIC_KEYS)
 }
 
 export function projectRemoteSettings(settings: Record<string, unknown>) {

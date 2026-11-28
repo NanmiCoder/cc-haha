@@ -138,6 +138,7 @@ export function startFixtureServer({
     agentTeamsEnabled: true,
   }
   let computerUse = { enabled: false, authorizedApps: [], grantFlags: { clipboardRead: false, clipboardWrite: false, systemKeyCombos: false } }
+  let browserUse = { enabled: false, preferredTarget: 'auto' as 'auto' | 'workspace' | 'chrome', consentAcceptedAt: '' }
   const scheduledTasks = new Map<string, ScheduledTask>()
   const scheduledRuns: TaskRun[] = []
   const scheduledSnapshot = (task: ScheduledTask): ScheduledTask => ({
@@ -1465,6 +1466,16 @@ export function startFixtureServer({
           return json({ ok: true })
         }
         return json(computerUse)
+      }
+      if (path === '/api/browser-use/config') {
+        if (method === 'PUT') {
+          if (typeof body.enabled === 'boolean') browserUse.enabled = body.enabled
+          if (body.preferredTarget === 'auto' || body.preferredTarget === 'workspace' || body.preferredTarget === 'chrome') {
+            browserUse.preferredTarget = body.preferredTarget
+          }
+          if (typeof body.consentAcceptedAt === 'string') browserUse.consentAcceptedAt = body.consentAcceptedAt
+        }
+        return json(browserUse)
       }
       const taskListMatch = path.match(/^\/api\/tasks\/lists\/([^/]+)$/)
       const fixtureTasks = (id: string) => [

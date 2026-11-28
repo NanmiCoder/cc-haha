@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflowRunDetail, projectRemoteWorkflowRuns, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflowRunDetail, projectRemoteWorkflowRuns, projectRemoteWorkflows, remoteBrowserUseRouteAllowed, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 import { parseResumeRequest } from './ws/resumableStreams.js'
 import type { TunnelGateway } from './p2p/mux.js'
@@ -105,6 +105,7 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       (parts[2] === 'authorized-apps' && (method === 'GET' || method === 'PUT')) ||
       (parts[2] === 'open-permission-card' && method === 'POST')
   }
+  if (parts[1] === 'browser-use') return remoteBrowserUseRouteAllowed(parts, method)
   if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || ((parts[3] === 'test' || parts[3] === 'pull') && method === 'POST'))
   if (parts[1] === 'mobile-update') {
     if (url.pathname === '/api/mobile-update/android/latest') {

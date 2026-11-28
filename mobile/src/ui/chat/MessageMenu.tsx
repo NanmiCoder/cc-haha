@@ -3,7 +3,7 @@ import { Modal, Pressable, ScrollView, View, useWindowDimensions } from 'react-n
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../Text'
 import type { ChatItem } from '../../core/types'
-import { visibleMessageText } from '../../core/chatComposer'
+import { stripComposerRequestEnvelopes } from '../../core/chatComposer'
 import { Icon, Spinner, type IconName } from '../kit'
 import { radius } from '../palette'
 import { useTheme } from '../theme'
@@ -46,7 +46,8 @@ export function MessageMenu({
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
   if (!item || !layout) return null
   const user = item.type === 'user'
-  const text = visibleMessageText(item.text)
+  const envelopes = stripComposerRequestEnvelopes(item.text)
+  const text = envelopes.content
   const menuHeight = actions.reduce(
     (total, action, index) => total + itemHeight(action) + (index ? (action.group ? 6 : 0.5) : 0),
     0
@@ -92,7 +93,7 @@ export function MessageMenu({
         >
           <ScrollView scrollEnabled={layout.height > bubbleHeight} bounces={false}>
             {user ? (
-              <UserBubble item={item} text={text} team={text !== item.text} />
+              <UserBubble item={item} text={text} team={envelopes.team} browser={envelopes.browserTarget} />
             ) : (
               <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
                 {/* 浮起的副本和列表里用同一个挂载上限，超长消息不会整条再挂一遍。 */}
