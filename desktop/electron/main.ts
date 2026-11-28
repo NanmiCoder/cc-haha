@@ -487,6 +487,7 @@ function resolveMainRendererServerAccess(): PreviewLocalAccess | null {
 
 function getUpdaterService() {
   const smokeUpdater = createUpdateSmokeUpdaterFromEnv(process.env)
+  const diagnosticsFile = electronHostDiagnosticsFile(process.env)
   updaterService ??= new ElectronUpdaterService(smokeUpdater ?? autoUpdater, {
     async apply(proxy) {
       // Update traffic runs on electron-updater's own session partition;
@@ -495,6 +496,9 @@ function getUpdaterService() {
     },
   }, {
     updateConfigPath: !smokeUpdater && app.isPackaged ? path.join(process.resourcesPath, 'app-update.yml') : undefined,
+    log: message => {
+      if (diagnosticsFile) appendHostDiagnostic(diagnosticsFile, `[updater] ${message}`)
+    },
   })
   return updaterService
 }
@@ -1094,9 +1098,17 @@ function registerIpcHandlers() {
     saveDialog(currentWindow(event), payload as Parameters<typeof saveDialog>[1]))
   registerHandler(ELECTRON_IPC_CHANNELS.updateCheck, (_event, payload) =>
     getUpdaterService().checkForUpdates(payload as Parameters<ElectronUpdaterService['checkForUpdates']>[0]))
-  registerHandler(ELECTRON_IPC_CHANNELS.updateDownload, () => getUpdaterService().downloadUpdate(event => {
-    mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.updateDownloadEvent, event)
-  }))
+  registerHandler(ELECTRON_IPC_CHANNELS.updateDownload, event => {
+    const sender = event.sender
+    return getUpdaterService().downloadUpdate(
+      payload => {
+        if (!sender.isDestroyed()) {
+          sender.send(ELECTRON_EVENT_CHANNELS.updateDownloadEvent, payload)
+        }
+      },
+      { subscriberKey: `webContents:${sender.id}` },
+    )
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.updateInstall, () => getUpdaterService().stageDownloadedUpdate())
   registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => {
     await publicAccessManager?.stop()
