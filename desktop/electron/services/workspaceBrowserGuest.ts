@@ -47,6 +47,7 @@ export function applyWorkspaceBrowserAttachPolicy(
     nodeIntegration: false,
     nodeIntegrationInSubFrames: false,
     sandbox: true,
+    backgroundThrottling: true,
     webSecurity: true,
     allowRunningInsecureContent: false,
     experimentalFeatures: false,

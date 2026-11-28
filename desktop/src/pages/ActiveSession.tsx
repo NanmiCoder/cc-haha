@@ -507,6 +507,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     void fetchSessionTasks(activeTabId)
 
     const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       void fetchSessionTasks(activeTabId)
     }, TASK_POLL_INTERVAL_MS)
 

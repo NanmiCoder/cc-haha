@@ -248,6 +248,15 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
     !tab.loadError &&
     Boolean(tab.url)
 
+  // If a hidden background guest was suspended while this component stayed
+  // mounted (e.g. behind the Downloads/History overlay), transparently rebuild
+  // it as soon as the page becomes visible again.
+  useEffect(() => {
+    if (!available || !pageVisible || tab.loadError || ready) return
+    if (lifetimeRef.current?.id === browserTabId && !lifetimeRef.current.ready) return
+    setCreateAttempt((attempt) => attempt + 1)
+  }, [available, browserTabId, page?.registered, pageVisible, ready, tab.loadError])
+
   useLayoutEffect(() => {
     const stage = stageRef.current
     if (!available || !stage) return

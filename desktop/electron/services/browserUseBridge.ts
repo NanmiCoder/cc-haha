@@ -276,6 +276,11 @@ export class ElectronBrowserBridge {
 
   /** Called by the CDP lease manager when a guest emits a CDP event or detaches. */
   pushCdpEvent(event: { tabId: string, method: string, params: Record<string, unknown> }): void {
+    if (event.method === 'Inspector.detached') {
+      for (const client of this.wsClients) {
+        client.leases.delete(event.tabId)
+      }
+    }
     this.broadcastEvent('cdp.event', event)
   }
 

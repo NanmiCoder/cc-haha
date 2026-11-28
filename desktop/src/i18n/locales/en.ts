@@ -1128,6 +1128,7 @@ export const en = {
   'workspace.browser.loadFailed': 'Could not load {url}',
   'workspace.browser.pageCrashed': 'The page stopped responding and was reloaded.',
   'workspace.browser.pageClosed': 'The page was closed by the browser.',
+  'workspace.browser.pageStoppedResourceLimit': 'The page was stopped because it used too much memory or CPU.',
   'workspace.browser.retry': 'Try again',
   'workspace.browser.unavailableTitle': 'The built-in browser needs the desktop app',
   'workspace.browser.unavailableBody': 'This build has no native browser view, so pages open in your system browser instead.',

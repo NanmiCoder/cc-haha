@@ -5,6 +5,7 @@ import { whenDesktopServerReady } from '../lib/desktopRuntime'
 import type { CronTask, TaskRun } from '../types/task'
 
 const POLL_INTERVAL_MS = 30_000
+const POLL_MAX_BACKOFF_MS = 120_000
 const NOTIFIED_RUNS_STORAGE_KEY = 'cc-haha.notifiedDesktopTaskRuns.v1'
 const NOTIFICATION_SCAN_STORAGE_KEY = 'cc-haha.scheduledTaskNotificationScan.v1'
 const MAX_STORED_RUN_IDS = 200
@@ -241,8 +242,9 @@ async function resolveNotificationCandidates(tasks: CronTask[], runs: TaskRun[],
 export function useScheduledTaskDesktopNotifications(): void {
   useEffect(() => {
     let stopped = false
-    let interval: number | undefined
+    let timer: number | undefined
     let pollInFlight = false
+    let consecutiveFailures = 0
 
     const ensureNotificationScanInitialized = (): NotificationScanState => {
       let scanState = readNotificationScanState()
@@ -259,6 +261,7 @@ export function useScheduledTaskDesktopNotifications(): void {
     const poll = async () => {
       if (stopped || pollInFlight) return
       pollInFlight = true
+      let failed = false
       try {
         const scanState = ensureNotificationScanInitialized()
 
@@ -427,12 +430,27 @@ export function useScheduledTaskDesktopNotifications(): void {
           })
         }
       } catch (err) {
+        failed = true
+        consecutiveFailures += 1
         if (typeof console !== 'undefined') {
           console.warn('[scheduledTaskNotifications] failed to poll task runs:', err)
         }
       } finally {
+        if (!failed) consecutiveFailures = 0
         pollInFlight = false
       }
+    }
+
+    const scheduleNext = () => {
+      if (stopped) return
+      if (timer !== undefined) window.clearTimeout(timer)
+      const delay = consecutiveFailures <= 1
+        ? POLL_INTERVAL_MS
+        : Math.min(POLL_MAX_BACKOFF_MS, POLL_INTERVAL_MS * 2 ** Math.min(consecutiveFailures - 1, 2))
+      timer = window.setTimeout(() => {
+        timer = undefined
+        void poll().finally(scheduleNext)
+      }, delay)
     }
 
     ensureNotificationScanInitialized()
@@ -441,15 +459,12 @@ export function useScheduledTaskDesktopNotifications(): void {
     // uninitialized base URL, producing benign "Failed to fetch" warnings.
     void whenDesktopServerReady().then(() => {
       if (stopped) return
-      void poll()
-      interval = window.setInterval(() => {
-        void poll()
-      }, POLL_INTERVAL_MS)
+      void poll().finally(scheduleNext)
     })
 
     return () => {
       stopped = true
-      if (interval !== undefined) window.clearInterval(interval)
+      if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [])
 }

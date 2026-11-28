@@ -294,8 +294,8 @@ export type WorkspaceBrowserEvent =
   | { type: 'history'; tabId: string; entries: WorkspaceBrowserHistoryEntry[] }
   /** The in-page selection agent speaking; payload shape is the legacy one. */
   | { type: 'agent'; tabId: string; message: unknown }
-  /** The page died (crash, host teardown). The tab shows a retry entry point. */
-  | { type: 'destroyed'; tabId: string; reason: 'crashed' | 'closed' }
+  /** The page died (crash, host teardown, idle eviction, or resource guard). */
+  | { type: 'destroyed'; tabId: string; reason: 'crashed' | 'closed' | 'suspended' | 'resource-limit' }
 
 export type BrowserUseControlState = 'idle' | 'active' | 'takeover'
 

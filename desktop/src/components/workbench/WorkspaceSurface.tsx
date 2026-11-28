@@ -349,15 +349,26 @@ export function useWorkspaceBrowserEventBridge(enabled: boolean) {
           })
           break
         case 'destroyed':
-          // A crashed guest still exists and reloads in place. A closed one is
-          // gone, so its retry has to build a new page.
-          if (event.reason === 'closed') forgetLostWorkspaceBrowserGuest(event.tabId)
+          // A crashed guest still exists and reloads in place. Closed,
+          // idle-suspended, and resource-limit guests have no backing webContents,
+          // so drop the DOM element so reactivation or retry builds a fresh one.
+          if (event.reason !== 'crashed') forgetLostWorkspaceBrowserGuest(event.tabId)
+          if (event.reason === 'suspended') {
+            // Normal background idle reclamation: forget volatile page state
+            // without showing an error so switching back reloads transparently.
+            useWorkspaceBrowserStore.getState().forgetTab(event.tabId)
+            break
+          }
           store.updateBrowserTab(owner.sessionId, event.tabId, {
             // A reason code is not a message. It reaches the error overlay, so
             // it has to be a translated sentence in all five languages.
-            loadError: t(event.reason === 'crashed'
-              ? 'workspace.browser.pageCrashed'
-              : 'workspace.browser.pageClosed'),
+            loadError: t(
+              event.reason === 'crashed'
+                ? 'workspace.browser.pageCrashed'
+                : event.reason === 'resource-limit'
+                  ? 'workspace.browser.pageStoppedResourceLimit'
+                  : 'workspace.browser.pageClosed',
+            ),
           })
           break
         case 'new-window':

@@ -81,13 +81,67 @@ export const useSessionDelegationStore = create<SessionDelegationState>((set, ge
   }
 })
 
+const DELEGATION_POLL_BASE_MS = 2_000
+const DELEGATION_POLL_MAX_BACKOFF_MS = 30_000
+
 /** Server state outlives navigation and reload; poll it while the session is on screen. */
 export function useSessionDelegationSync(sessionId: string | null | undefined): void {
   useEffect(() => {
     if (!sessionId) return
-    const { refresh } = useSessionDelegationStore.getState()
-    void refresh(sessionId)
-    const timer = window.setInterval(() => void refresh(sessionId), 2000)
-    return () => window.clearInterval(timer)
+    let cancelled = false
+    let timer: number | null = null
+    let consecutiveFailures = 0
+
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    const scheduleNext = () => {
+      if (cancelled) return
+      clearTimer()
+      const delay = consecutiveFailures === 0
+        ? DELEGATION_POLL_BASE_MS
+        : Math.min(DELEGATION_POLL_MAX_BACKOFF_MS, DELEGATION_POLL_BASE_MS * 2 ** Math.min(consecutiveFailures, 4))
+      timer = window.setTimeout(() => {
+        timer = null
+        void tick()
+      }, delay)
+    }
+
+    const tick = async () => {
+      if (cancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        scheduleNext()
+        return
+      }
+      await useSessionDelegationStore.getState().refresh(sessionId)
+      if (cancelled) return
+      const hasError = Boolean(useSessionDelegationStore.getState().bySession[sessionId]?.error)
+      consecutiveFailures = hasError ? consecutiveFailures + 1 : 0
+      scheduleNext()
+    }
+
+    const onVisibilityChange = () => {
+      if (cancelled || document.visibilityState === 'hidden') return
+      consecutiveFailures = 0
+      clearTimer()
+      void tick()
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+    void tick()
+
+    return () => {
+      cancelled = true
+      clearTimer()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
+    }
   }, [sessionId])
 }

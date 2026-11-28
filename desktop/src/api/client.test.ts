@@ -469,4 +469,34 @@ describe('api diagnostics reporting', () => {
     expect(details.readChars).toBe(truncated.length)
     expect(details.contentType).toBe('application/json')
   })
+
+  it('records responseReadMs in failure diagnostics when a request times out while reading the body', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/api/diagnostics/events')) {
+        return Promise.resolve(new Response(null, { status: 204 }))
+      }
+      const signal = init?.signal
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        text: () => new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        }),
+      } as unknown as Response)
+    })
+
+    const pending = api.get('/api/sessions/stalled/messages', { timeout: 500 }).catch((err: unknown) => err)
+    await vi.advanceTimersByTimeAsync(500)
+    const error = await pending
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('timed out')
+    const diagnosticCall = fetchMock.mock.calls.find(
+      ([url]) => String(url).endsWith('/api/diagnostics/events'),
+    )
+    const details = JSON.parse(String((diagnosticCall?.[1] as RequestInit | undefined)?.body)).details
+    expect(details.responseReadMs).toBeGreaterThanOrEqual(400)
+  })
 })

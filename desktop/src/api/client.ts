@@ -208,8 +208,12 @@ async function request<T>(method: string, path: string, body?: unknown, options?
       return undefined as T
     }
     const responseReadStartedAt = monotonicNow()
-    const parsed = await readJsonBody<T>(res)
-    timing.responseReadMs += monotonicNow() - responseReadStartedAt
+    let parsed: { value: T; readChars: number }
+    try {
+      parsed = await readJsonBody<T>(res)
+    } finally {
+      timing.responseReadMs += monotonicNow() - responseReadStartedAt
+    }
     timing.responseChars = parsed.readChars
     reportSlowApiRequest(method, path, res, timing)
     return parsed.value

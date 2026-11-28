@@ -1,6 +1,7 @@
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
 import { sessionCollaborationApi, type SessionDelegationSnapshot } from '@/api/sessionCollaboration'
-import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore } from './sessionDelegationStore'
+import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore, useSessionDelegationSync } from './sessionDelegationStore'
 
 vi.mock('@/api/sessionCollaboration', () => ({ sessionCollaborationApi: { get: vi.fn() } }))
 
@@ -73,4 +74,32 @@ it('keeps the last snapshot when a poll fails and shares one empty array for ses
   const entry = useSessionDelegationStore.getState().bySession.parent!
   expect(entry.error).toBe('offline')
   expect(entry.rows.map(row => row.title)).toEqual(['A'])
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+it('backs off delegation polling on consecutive failures and skips ticks while hidden', async () => {
+  vi.useFakeTimers()
+  vi.mocked(sessionCollaborationApi.get).mockRejectedValue(new Error('offline'))
+  const { unmount } = renderHook(() => useSessionDelegationSync('backoff-session'))
+
+  // Initial tick runs immediately -> 1st failure schedules next poll at 4s (2s * 2^1).
+  await act(async () => { await Promise.resolve() })
+  expect(sessionCollaborationApi.get).toHaveBeenCalledTimes(1)
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+  expect(sessionCollaborationApi.get).toHaveBeenCalledTimes(1)
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+  expect(sessionCollaborationApi.get).toHaveBeenCalledTimes(2)
+
+  // 2nd failure backs off to 8s.
+  await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+  expect(sessionCollaborationApi.get).toHaveBeenCalledTimes(2)
+  await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+  expect(sessionCollaborationApi.get).toHaveBeenCalledTimes(3)
+
+  unmount()
 })

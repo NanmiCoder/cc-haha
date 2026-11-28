@@ -1131,6 +1131,7 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.browser.loadFailed': '{url}을(를) 불러오지 못했습니다',
   'workspace.browser.pageCrashed': '페이지가 응답하지 않아 다시 불러왔습니다.',
   'workspace.browser.pageClosed': '이 페이지는 브라우저에 의해 닫혔습니다.',
+  'workspace.browser.pageStoppedResourceLimit': '메모리 또는 CPU 사용량이 과도해 페이지를 중지했습니다. 다시 시도로 새로 불러올 수 있습니다.',
   'workspace.browser.retry': '다시 시도',
   'workspace.browser.unavailableTitle': '내장 브라우저는 데스크톱 앱이 필요합니다',
   'workspace.browser.unavailableBody': '이 환경에는 네이티브 브라우저 뷰가 없어 링크가 시스템 브라우저에서 열립니다.',

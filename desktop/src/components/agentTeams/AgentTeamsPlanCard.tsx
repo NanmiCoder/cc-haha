@@ -59,11 +59,20 @@ const STATE_RING: Partial<Record<TeamPlanRecord['state'], string>> = {
 
 const CHEVRON = <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
 
+const PLAN_POLL_BASE_MS = 2_000
+const PLAN_POLL_MAX_BACKOFF_MS = 30_000
+
 /** Durable plan review is independent of a running chat turn or permission request. */
 export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   const t = useTranslation()
   const entry = useTeamPlanStore(state => state.bySession[sessionId])
-  const { refresh, beginEdit, edit, discard, reapply, save, act } = useTeamPlanStore()
+  const refresh = useTeamPlanStore(state => state.refresh)
+  const beginEdit = useTeamPlanStore(state => state.beginEdit)
+  const edit = useTeamPlanStore(state => state.edit)
+  const discard = useTeamPlanStore(state => state.discard)
+  const reapply = useTeamPlanStore(state => state.reapply)
+  const save = useTeamPlanStore(state => state.save)
+  const act = useTeamPlanStore(state => state.act)
   const providers = useProviderStore(state => state.providers)
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
@@ -74,9 +83,61 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   const plan = entry?.plan
 
   useEffect(() => {
-    void refresh(sessionId)
-    const interval = window.setInterval(() => void refresh(sessionId), 2000)
-    return () => window.clearInterval(interval)
+    let cancelled = false
+    let timer: number | null = null
+    let consecutiveFailures = 0
+
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    const scheduleNext = () => {
+      if (cancelled) return
+      clearTimer()
+      const delay = consecutiveFailures === 0
+        ? PLAN_POLL_BASE_MS
+        : Math.min(PLAN_POLL_MAX_BACKOFF_MS, PLAN_POLL_BASE_MS * 2 ** Math.min(consecutiveFailures, 4))
+      timer = window.setTimeout(() => {
+        timer = null
+        void tick()
+      }, delay)
+    }
+
+    const tick = async () => {
+      if (cancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        scheduleNext()
+        return
+      }
+      await refresh(sessionId)
+      if (cancelled) return
+      const hasError = Boolean(useTeamPlanStore.getState().bySession[sessionId]?.error)
+      consecutiveFailures = hasError ? consecutiveFailures + 1 : 0
+      scheduleNext()
+    }
+
+    const onVisibilityChange = () => {
+      if (cancelled || document.visibilityState === 'hidden') return
+      consecutiveFailures = 0
+      clearTimer()
+      void tick()
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+    void tick()
+
+    return () => {
+      cancelled = true
+      clearTimer()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
+    }
   }, [refresh, sessionId])
 
   const approved = plan?.state === 'launching' || plan?.state === 'running'

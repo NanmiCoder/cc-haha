@@ -40,6 +40,29 @@ const VIEWPORT_CAPTURE_TIMEOUT_MS = 5_000
 /** Visit log bound. The native back/forward stack is unaffected by this cap. */
 const MAX_HISTORY_ENTRIES = 200
 
+/**
+ * Default background guest resource guards.
+ *
+ * Every `<webview>` guest shares Chromium's single NetworkService process and
+ * Electron main's IO thread with the desktop app itself, so a single runaway or
+ * leaked background page can starve every desktop API request into timeouts.
+ */
+const DEFAULT_MAX_BACKGROUND_PAGES = 4
+const DEFAULT_BACKGROUND_IDLE_EVICT_MS = 10 * 60_000
+const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 15_000
+const DEFAULT_HIDDEN_MEMORY_LIMIT_KB = 1_536 * 1024 // 1.5 GiB
+const DEFAULT_ACTIVE_MEMORY_LIMIT_KB = 3_072 * 1024 // 3.0 GiB
+const DEFAULT_HARD_MEMORY_LIMIT_KB = 4_096 * 1024 // 4.0 GiB (immediate terminate)
+const DEFAULT_HIDDEN_CPU_LIMIT_PERCENT = 120
+const DEFAULT_MEMORY_STRIKE_THRESHOLD = 2
+const DEFAULT_CPU_STRIKE_THRESHOLD = 3
+
+export type WorkspaceBrowserProcessMetric = {
+  pid: number
+  cpu?: { percentCPUUsage?: number }
+  memory?: { workingSetSize?: number, privateBytes?: number }
+}
+
 export type WorkspaceBrowserPageInfo = {
   tabId: string
   sessionId?: string
@@ -224,6 +247,9 @@ export type WorkspaceBrowserWebContentsLike = {
   goForward?(): void
   setZoomFactor?(factor: number): void
   getZoomFactor?(): number
+  setBackgroundThrottling?(allowed: boolean): void
+  getOSProcessId?(): number
+  forcefullyCrashRenderer?(): void
   capturePage?(): Promise<{ toDataURL(): string }>
   printToPDF?(options: Record<string, unknown>): Promise<Uint8Array>
   debugger?: WorkspaceBrowserDebuggerLike
@@ -273,10 +299,38 @@ export type ElectronWorkspaceBrowserServiceOptions = {
   getAppZoomFactor?: () => number
   /** Optional idle grace period (ms) before detaching an unused CDP debugger. */
   cdpIdleGraceMs?: number
+  /** Optional inactivity timeout (ms) before detaching an idle held CDP lease. */
+  cdpLeaseInactivityTimeoutMs?: number
   /** Optional listener for CDP events forwarded from attached browser guests. */
   onCdpEvent?: (event: CdpEventNotice) => void
   /** Optional resolver for internal loopback ports blocked from guest navigation. */
   getInternalPorts?: () => WorkspaceBrowserInternalPorts
+  /** Clock override for deterministic tests. */
+  now?: () => number
+  /** Maximum live hidden, non-agent-controlled pages kept warm before LRU eviction (`0` disables). */
+  maxBackgroundPages?: number
+  /** Idle duration (ms) before a hidden, non-agent-controlled page is suspended (`0` disables). */
+  backgroundIdleEvictMs?: number
+  /** Periodic interval (ms) for runaway guest checks and idle eviction (`0` disables timer). */
+  healthCheckIntervalMs?: number
+  /** Sustained memory limit (KB) for hidden guests before termination (`0` disables). */
+  hiddenMemoryLimitKb?: number
+  /** Sustained memory limit (KB) for visible/active guests before termination (`0` disables). */
+  activeMemoryLimitKb?: number
+  /** Immediate termination memory ceiling (KB) for any guest (`0` disables). */
+  hardMemoryLimitKb?: number
+  /** Sustained CPU percent limit for hidden guests before termination (`0` disables). */
+  hiddenCpuLimitPercent?: number
+  /** Consecutive samples over soft memory limit before termination. */
+  memoryStrikeThreshold?: number
+  /** Consecutive samples over hidden CPU limit before termination. */
+  cpuStrikeThreshold?: number
+  /** Reads OS process metrics (wired to `app.getAppMetrics()` in Electron main). */
+  getProcessMetrics?: () => WorkspaceBrowserProcessMetric[]
+  /** Returns the main window renderer PID so the watchdog can never touch it. */
+  getHostProcessId?: () => number | null
+  /** Optional diagnostic sink for resource-guard terminations. */
+  onDiagnostic?: (message: string) => void
 }
 
 type WorkspaceBrowserPage = {
@@ -304,6 +358,11 @@ type WorkspaceBrowserPage = {
   navigationUrl: string
   navigationOutcome: 'idle' | 'pending' | 'succeeded' | 'failed'
   navigationCommitted: boolean
+  lastActiveAt: number
+  hiddenSince: number | null
+  activeDownloads: number
+  memoryStrikes: number
+  cpuStrikes: number
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -361,6 +420,20 @@ export class ElectronWorkspaceBrowserService {
   private readonly captureTimeoutMs: number
   private readonly readAppZoomFactor?: () => number
   private readonly readInternalPorts?: () => WorkspaceBrowserInternalPorts
+  private readonly now: () => number
+  private readonly maxBackgroundPages: number
+  private readonly backgroundIdleEvictMs: number
+  private readonly healthCheckIntervalMs: number
+  private readonly hiddenMemoryLimitKb: number
+  private readonly activeMemoryLimitKb: number
+  private readonly hardMemoryLimitKb: number
+  private readonly hiddenCpuLimitPercent: number
+  private readonly memoryStrikeThreshold: number
+  private readonly cpuStrikeThreshold: number
+  private readonly getProcessMetrics?: () => WorkspaceBrowserProcessMetric[]
+  private readonly getHostProcessId?: () => number | null
+  private readonly onDiagnostic?: (message: string) => void
+  private healthMonitorTimer: ReturnType<typeof setInterval> | null = null
   private readonly cdp: DebuggerLeaseManager
   private cdpEventHandler: ((event: CdpEventNotice) => void) | null
   private readonly pageClosedListeners = new Set<(event: WorkspaceBrowserPageClosedEvent) => void>()
@@ -386,6 +459,19 @@ export class ElectronWorkspaceBrowserService {
     this.captureTimeoutMs = options.captureTimeoutMs ?? VIEWPORT_CAPTURE_TIMEOUT_MS
     this.readAppZoomFactor = options.getAppZoomFactor
     this.readInternalPorts = options.getInternalPorts
+    this.now = options.now ?? (() => Date.now())
+    this.maxBackgroundPages = options.maxBackgroundPages ?? DEFAULT_MAX_BACKGROUND_PAGES
+    this.backgroundIdleEvictMs = options.backgroundIdleEvictMs ?? DEFAULT_BACKGROUND_IDLE_EVICT_MS
+    this.healthCheckIntervalMs = options.healthCheckIntervalMs ?? DEFAULT_HEALTH_CHECK_INTERVAL_MS
+    this.hiddenMemoryLimitKb = options.hiddenMemoryLimitKb ?? DEFAULT_HIDDEN_MEMORY_LIMIT_KB
+    this.activeMemoryLimitKb = options.activeMemoryLimitKb ?? DEFAULT_ACTIVE_MEMORY_LIMIT_KB
+    this.hardMemoryLimitKb = options.hardMemoryLimitKb ?? DEFAULT_HARD_MEMORY_LIMIT_KB
+    this.hiddenCpuLimitPercent = options.hiddenCpuLimitPercent ?? DEFAULT_HIDDEN_CPU_LIMIT_PERCENT
+    this.memoryStrikeThreshold = Math.max(1, options.memoryStrikeThreshold ?? DEFAULT_MEMORY_STRIKE_THRESHOLD)
+    this.cpuStrikeThreshold = Math.max(1, options.cpuStrikeThreshold ?? DEFAULT_CPU_STRIKE_THRESHOLD)
+    this.getProcessMetrics = options.getProcessMetrics
+    this.getHostProcessId = options.getHostProcessId
+    this.onDiagnostic = options.onDiagnostic
     this.cdpEventHandler = options.onCdpEvent ?? null
     this.cdp = new DebuggerLeaseManager({
       resolveWebContents: tabId => {
@@ -394,6 +480,7 @@ export class ElectronWorkspaceBrowserService {
         return page.webContents
       },
       idleGraceMs: options.cdpIdleGraceMs,
+      leaseInactivityTimeoutMs: options.cdpLeaseInactivityTimeoutMs,
       onEvent: event => this.cdpEventHandler?.(event),
     })
     if (options.menuFactory) this.menu = new WorkspaceBrowserMenuController(options.menuFactory)
@@ -451,6 +538,15 @@ export class ElectronWorkspaceBrowserService {
     const page = this.pages.get(tabId)
     if (!page || page.closed || page.webContents.isDestroyed?.()) return
     page.agentControlActive = active
+    page.lastActiveAt = this.now()
+    if (active) {
+      page.hiddenSince = null
+      page.cpuStrikes = 0
+      page.webContents.setBackgroundThrottling?.(false)
+    } else {
+      page.webContents.setBackgroundThrottling?.(true)
+      if (!page.presented) page.hiddenSince ??= this.now()
+    }
     if (active && (page.pickerArmed || page.persistentPicker !== null)) {
       page.pickerArmed = false
       page.persistentPicker = null
@@ -576,11 +672,23 @@ export class ElectronWorkspaceBrowserService {
     // Only hide is an idempotent teardown; showing a missing page is still an error.
     if (!visible && !this.pages.has(tabId)) return
     const page = this.requirePage(tabId)
+    const wasPresented = page.presented
     page.presented = visible
     if (!visible) {
+      if (wasPresented) page.lastActiveAt = this.now()
+      if (!page.agentControlActive) {
+        page.hiddenSince ??= this.now()
+        page.webContents.setBackgroundThrottling?.(true)
+      }
       this.menu?.cancel(page.tabId)
+      this.evictExcessBackgroundPages(page.tabId)
       return
     }
+    page.hiddenSince = null
+    page.lastActiveAt = this.now()
+    page.cpuStrikes = 0
+    page.memoryStrikes = 0
+    page.webContents.setBackgroundThrottling?.(!page.agentControlActive)
     // Chromium may have changed this page's zoom while it was off screen (a
     // same-host page zoomed); the controls it shows must read the real value.
     this.emitState(page)
@@ -708,13 +816,86 @@ export class ElectronWorkspaceBrowserService {
     if (!page.webContents.isDestroyed?.()) {
       page.webContents.close?.()
     }
+    if (this.pages.size === 0) this.stopHealthMonitor()
   }
 
   closeAll(): void {
+    this.stopHealthMonitor()
     this.menu?.cancel()
     for (const tabId of [...this.pages.keys()]) this.close(tabId)
     this.cdp.disposeAll()
     this.parent = null
+  }
+
+  /**
+   * Inspects live workspace browser guests for runaway memory/CPU usage and
+   * reclaims idle or excess background guests so a misbehaving page can never
+   * starve Chromium's shared NetworkService or Electron main's IO thread.
+   */
+  runHealthCheck(): void {
+    if (this.pages.size === 0) {
+      this.stopHealthMonitor()
+      return
+    }
+    if (this.getProcessMetrics) {
+      let metrics: WorkspaceBrowserProcessMetric[] = []
+      try {
+        metrics = this.getProcessMetrics()
+      } catch {
+        metrics = []
+      }
+      const metricsByPid = new Map<number, WorkspaceBrowserProcessMetric>()
+      for (const metric of metrics) {
+        if (typeof metric?.pid === 'number' && metric.pid > 0) {
+          metricsByPid.set(metric.pid, metric)
+        }
+      }
+      const hostPid = this.getHostProcessId?.() ?? null
+      for (const page of [...this.pages.values()]) {
+        if (page.closed || page.webContents.isDestroyed?.()) continue
+        const pid = page.webContents.getOSProcessId?.()
+        if (!pid || pid <= 0 || (hostPid !== null && pid === hostPid)) continue
+        const metric = metricsByPid.get(pid)
+        if (!metric) {
+          page.memoryStrikes = 0
+          page.cpuStrikes = 0
+          continue
+        }
+        const memoryKb = Math.max(metric.memory?.privateBytes ?? 0, metric.memory?.workingSetSize ?? 0)
+        const cpuPercent = metric.cpu?.percentCPUUsage ?? 0
+        const isBackground = !page.presented && !page.agentControlActive
+        const softMemoryLimitKb = isBackground ? this.hiddenMemoryLimitKb : this.activeMemoryLimitKb
+
+        if (this.hardMemoryLimitKb > 0 && memoryKb >= this.hardMemoryLimitKb) {
+          this.terminateRunawayPage(page, { pid, memoryKb, cpuPercent, cause: 'hard-memory' })
+          continue
+        }
+
+        if (softMemoryLimitKb > 0 && memoryKb >= softMemoryLimitKb) {
+          page.memoryStrikes += 1
+        } else {
+          page.memoryStrikes = 0
+        }
+
+        if (isBackground && this.hiddenCpuLimitPercent > 0 && cpuPercent >= this.hiddenCpuLimitPercent) {
+          page.cpuStrikes += 1
+        } else {
+          page.cpuStrikes = 0
+        }
+
+        if (page.memoryStrikes >= this.memoryStrikeThreshold) {
+          this.terminateRunawayPage(page, { pid, memoryKb, cpuPercent, cause: 'memory' })
+          continue
+        }
+        if (page.cpuStrikes >= this.cpuStrikeThreshold) {
+          this.terminateRunawayPage(page, { pid, memoryKb, cpuPercent, cause: 'cpu' })
+        }
+      }
+    }
+
+    this.evictIdleBackgroundPages()
+    this.evictExcessBackgroundPages()
+    if (this.pages.size === 0) this.stopHealthMonitor()
   }
 
   /**
@@ -734,6 +915,7 @@ export class ElectronWorkspaceBrowserService {
     webContents: WorkspaceBrowserWebContentsLike,
     sessionId?: string,
   ): WorkspaceBrowserPage {
+    const now = this.now()
     const page: WorkspaceBrowserPage = {
       tabId,
       ...(sessionId ? { sessionId } : {}),
@@ -757,13 +939,21 @@ export class ElectronWorkspaceBrowserService {
       navigationUrl: '',
       navigationOutcome: 'idle',
       navigationCommitted: false,
+      lastActiveAt: now,
+      hiddenSince: now,
+      activeDownloads: 0,
+      memoryStrikes: 0,
+      cpuStrikes: 0,
     }
     this.pages.set(tabId, page)
+    webContents.setBackgroundThrottling?.(true)
     this.installPageListeners(page)
     this.hookSession(webContents.session)
     // The guest attached at its embedder's zoom; a page starts at 100% or at
     // whatever its host was last zoomed to, exactly as a fresh native page did.
     this.restoreNavigationZoom(page)
+    this.ensureHealthMonitor()
+    this.evictExcessBackgroundPages(tabId)
     return page
   }
 
@@ -793,6 +983,7 @@ export class ElectronWorkspaceBrowserService {
       this.cdp.handleTabClosed(page.tabId, 'closed')
       this.notifyPageClosed(page.tabId, 'closed')
       this.emit({ type: 'destroyed', tabId: page.tabId, reason: 'closed' })
+      if (this.pages.size === 0) this.stopHealthMonitor()
     })
 
     webContents.on('before-input-event', (event, input) => {
@@ -924,8 +1115,17 @@ export class ElectronWorkspaceBrowserService {
           },
         })
       }
+      let downloadSettled = false
+      page.activeDownloads += 1
+      const onDone = () => {
+        if (!downloadSettled) {
+          downloadSettled = true
+          page.activeDownloads = Math.max(0, page.activeDownloads - 1)
+        }
+        report()
+      }
       item.on('updated', report)
-      item.on('done', report)
+      item.on('done', onDone)
       report()
     })
   }
@@ -1237,6 +1437,105 @@ export class ElectronWorkspaceBrowserService {
       } catch {
         // Isolate subscriber errors from tab cleanup.
       }
+    }
+  }
+
+  private ensureHealthMonitor(): void {
+    if (this.healthMonitorTimer !== null || this.healthCheckIntervalMs <= 0) return
+    this.healthMonitorTimer = setInterval(() => {
+      this.runHealthCheck()
+    }, this.healthCheckIntervalMs)
+    this.healthMonitorTimer.unref?.()
+  }
+
+  private stopHealthMonitor(): void {
+    if (this.healthMonitorTimer !== null) {
+      clearInterval(this.healthMonitorTimer)
+      this.healthMonitorTimer = null
+    }
+  }
+
+  private isEligibleForBackgroundEviction(page: WorkspaceBrowserPage): boolean {
+    return (
+      !page.closed &&
+      !page.presented &&
+      !page.agentControlActive &&
+      page.activeDownloads === 0 &&
+      this.cdp.getLeaseCount(page.tabId) === 0
+    )
+  }
+
+  private evictIdleBackgroundPages(): void {
+    if (this.backgroundIdleEvictMs <= 0) return
+    const now = this.now()
+    for (const page of [...this.pages.values()]) {
+      if (!this.isEligibleForBackgroundEviction(page)) continue
+      if (page.hiddenSince === null) continue
+      if (now - page.hiddenSince >= this.backgroundIdleEvictMs) {
+        this.suspendBackgroundPage(page)
+      }
+    }
+  }
+
+  private evictExcessBackgroundPages(protectedTabId?: string): void {
+    if (this.maxBackgroundPages <= 0) return
+    const hiddenPages = [...this.pages.values()].filter(page => !page.closed && !page.presented)
+    const excessCount = hiddenPages.length - this.maxBackgroundPages
+    if (excessCount <= 0) return
+    const eligible = hiddenPages
+      .filter(page => page.tabId !== protectedTabId && this.isEligibleForBackgroundEviction(page))
+      .sort((a, b) => a.lastActiveAt - b.lastActiveAt)
+    for (let i = 0; i < excessCount && i < eligible.length; i += 1) {
+      const victim = eligible[i]
+      if (victim) this.suspendBackgroundPage(victim)
+    }
+  }
+
+  private suspendBackgroundPage(page: WorkspaceBrowserPage): void {
+    if (page.closed || this.pages.get(page.tabId) !== page) return
+    this.pages.delete(page.tabId)
+    page.closed = true
+    this.menu?.cancel(page.tabId)
+    this.cdp.handleTabClosed(page.tabId, 'closed')
+    this.notifyPageClosed(page.tabId, 'closed')
+    this.emit({ type: 'destroyed', tabId: page.tabId, reason: 'suspended' })
+    try {
+      if (!page.webContents.isDestroyed?.()) page.webContents.close?.()
+    } catch {
+      // Best-effort teardown
+    }
+  }
+
+  private terminateRunawayPage(
+    page: WorkspaceBrowserPage,
+    detail: { pid: number, memoryKb: number, cpuPercent: number, cause: 'memory' | 'hard-memory' | 'cpu' },
+  ): void {
+    if (page.closed || this.pages.get(page.tabId) !== page) return
+    let urlOrigin = ''
+    try {
+      const rawUrl = page.webContents.getURL()
+      urlOrigin = rawUrl ? new URL(rawUrl).origin : ''
+    } catch {
+      urlOrigin = ''
+    }
+    this.pages.delete(page.tabId)
+    page.closed = true
+    this.menu?.cancel(page.tabId)
+    this.cdp.handleTabClosed(page.tabId, 'crashed')
+    this.notifyPageClosed(page.tabId, 'crashed')
+    this.emit({ type: 'destroyed', tabId: page.tabId, reason: 'resource-limit' })
+    const memoryMiB = Math.round(detail.memoryKb / 1024)
+    const cpuRounded = Math.round(detail.cpuPercent * 10) / 10
+    this.onDiagnostic?.(
+      `[workspace-browser] Terminated runaway guest tab=${page.tabId} pid=${detail.pid} cause=${detail.cause} memoryMiB=${memoryMiB} cpu=${cpuRounded}% origin=${urlOrigin || 'unknown'}`,
+    )
+    try {
+      if (!page.webContents.isDestroyed?.()) {
+        page.webContents.forcefullyCrashRenderer?.()
+        page.webContents.close?.()
+      }
+    } catch {
+      // Best-effort termination
     }
   }
 

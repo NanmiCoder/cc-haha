@@ -149,6 +149,26 @@ it('reloads a crashed page in place but rebuilds a page whose guest was lost', a
   expect(second![1].url).toBe('https://lost.test/')
 })
 
+it('handles suspended and resource-limit destroyed events appropriately', async () => {
+  mocks.isWorkspaceBrowserAvailable.mockReturnValue(true)
+  const tabId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://heavy.test/' })!
+  const browserTabId = (useWorkspaceStore.getState().getTab(SESSION, tabId) as WorkspaceBrowserTab).browserTabId
+  renderSurface()
+  await waitFor(() => expect(screen.getByTestId('workspace-browser-address')).toBeEnabled())
+  renderHook(() => useWorkspaceBrowserEventBridge(true))
+  await act(async () => { await Promise.resolve() })
+  const emitEvent = (event: unknown) => act(() => { mocks.subscribeWorkspaceBrowserEvents.mock.calls[0]![0](event) })
+
+  // Idle suspension disposes the guest without setting a scary loadError.
+  emitEvent({ type: 'destroyed', tabId: browserTabId, reason: 'suspended' })
+  expect(useWorkspaceStore.getState().getTab(SESSION, tabId)).toMatchObject({ loadError: null })
+
+  // Resource-limit termination disposes the guest and displays the resource-limit error with retry.
+  emitEvent({ type: 'destroyed', tabId: browserTabId, reason: 'resource-limit' })
+  expect(screen.getByRole('alert')).toHaveTextContent('memory or CPU')
+  expect(document.querySelectorAll('webview').length).toBe(0)
+})
+
 it('updates downloads after close without resurrecting page state', async () => {
   const tabId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser' })!
   const browserTabId = (useWorkspaceStore.getState().getTab(SESSION, tabId) as WorkspaceBrowserTab).browserTabId

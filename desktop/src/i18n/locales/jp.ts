@@ -1129,6 +1129,7 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.browser.loadFailed': '{url} を読み込めませんでした',
   'workspace.browser.pageCrashed': 'ページが応答しなくなり、再読み込みされました。',
   'workspace.browser.pageClosed': 'このページはブラウザによって閉じられました。',
+  'workspace.browser.pageStoppedResourceLimit': 'メモリまたは CPU の使用量が過大なためページを停止しました。再試行で再読み込みできます。',
   'workspace.browser.retry': '再試行',
   'workspace.browser.unavailableTitle': '内蔵ブラウザにはデスクトップ版が必要です',
   'workspace.browser.unavailableBody': 'この環境にはネイティブのブラウザビューがないため、リンクはシステムのブラウザで開きます。',

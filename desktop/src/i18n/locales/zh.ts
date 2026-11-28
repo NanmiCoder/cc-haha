@@ -1128,6 +1128,7 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.browser.loadFailed': '无法加载 {url}',
   'workspace.browser.pageCrashed': '页面无响应，已被重新加载。',
   'workspace.browser.pageClosed': '该页面已被浏览器关闭。',
+  'workspace.browser.pageStoppedResourceLimit': '该页面因占用过多内存或 CPU 已被暂停，点击重试可重新加载。',
   'workspace.browser.retry': '重试',
   'workspace.browser.unavailableTitle': '内置浏览器需要桌面版',
   'workspace.browser.unavailableBody': '当前环境没有原生浏览器视图，链接会改用系统浏览器打开。',

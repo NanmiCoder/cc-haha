@@ -1393,4 +1393,34 @@ describe('useScheduledTaskDesktopNotifications', () => {
     })))
     expect(completionQueryCount).toBe(2)
   })
+
+  it('backs off polling after consecutive failures and resets to 30s on recovery', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      listMock
+        .mockRejectedValueOnce(new Error('outage-1'))
+        .mockRejectedValueOnce(new Error('outage-2'))
+        .mockResolvedValue({ tasks: [] })
+
+      render(<Harness />)
+      // Initial poll fails (consecutiveFailures = 1) -> next retry at 30s
+      await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1))
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      // Second poll fails (consecutiveFailures = 2) -> next retry backed off to 60s
+      await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(2))
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(listMock).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      // Third poll succeeds -> resets interval back to 30s
+      await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(3))
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(4))
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
 })

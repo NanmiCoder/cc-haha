@@ -36,6 +36,12 @@ export type CdpDetachNotice = {
 export type DebuggerLeaseManagerOptions = {
   resolveWebContents: (tabId: string) => WorkspaceBrowserCdpWebContentsLike | null
   idleGraceMs?: number
+  /**
+   * Maximum time (ms) a held lease may sit without any CDP command before the
+   * host detaches the debugger to prevent orphaned `Network.enable`/`Runtime.enable`
+   * streams from keeping a background guest active indefinitely. `0` disables.
+   */
+  leaseInactivityTimeoutMs?: number
   onEvent?: (event: CdpEventNotice) => void
   onDetached?: (event: CdpDetachNotice) => void
 }
@@ -46,6 +52,7 @@ export type DebuggerLeaseHandle = {
 }
 
 const DEFAULT_IDLE_GRACE_MS = 2_000
+const DEFAULT_LEASE_INACTIVITY_TIMEOUT_MS = 5 * 60_000
 
 const HARD_DENIED_CDP_PREFIXES = [
   'Browser.',
@@ -157,6 +164,7 @@ type TabDebuggerEntry = {
   debuggerApi: WorkspaceBrowserDebuggerLike
   leases: Set<string>
   idleTimer: ReturnType<typeof setTimeout> | null
+  inactivityTimer: ReturnType<typeof setTimeout> | null
   inFlight: Set<PendingCommand>
   cleanupListeners: () => void
 }
@@ -191,6 +199,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 export class DebuggerLeaseManager {
   private readonly resolveWebContents: (tabId: string) => WorkspaceBrowserCdpWebContentsLike | null
   private readonly idleGraceMs: number
+  private readonly leaseInactivityTimeoutMs: number
   private readonly onEvent?: (event: CdpEventNotice) => void
   private readonly onDetached?: (event: CdpDetachNotice) => void
   private readonly entries = new Map<string, TabDebuggerEntry>()
@@ -198,6 +207,7 @@ export class DebuggerLeaseManager {
   constructor(options: DebuggerLeaseManagerOptions) {
     this.resolveWebContents = options.resolveWebContents
     this.idleGraceMs = options.idleGraceMs ?? DEFAULT_IDLE_GRACE_MS
+    this.leaseInactivityTimeoutMs = options.leaseInactivityTimeoutMs ?? DEFAULT_LEASE_INACTIVITY_TIMEOUT_MS
     this.onEvent = options.onEvent
     this.onDetached = options.onDetached
   }
@@ -208,6 +218,7 @@ export class DebuggerLeaseManager {
     this.ensureAttached(entry)
     const leaseId = `cdp-lease-${randomUUID()}`
     entry.leases.add(leaseId)
+    this.resetInactivityTimer(entry)
     return { leaseId, tabId }
   }
 
@@ -221,6 +232,7 @@ export class DebuggerLeaseManager {
       if (!first.done) entry.leases.delete(first.value)
     }
     if (entry.leases.size === 0) {
+      this.cancelInactivityTimer(entry)
       this.scheduleIdleDetach(entry)
     }
   }
@@ -257,12 +269,16 @@ export class DebuggerLeaseManager {
     try {
       const entry = this.ensureEntry(tabId)
       this.cancelIdleTimer(entry)
+      this.cancelInactivityTimer(entry)
       this.ensureAttached(entry)
 
       return await this.runTrackedCommand(entry, method, params)
     } finally {
       if (temporaryLeaseId) {
         this.release(tabId, temporaryLeaseId)
+      } else {
+        const current = this.entries.get(tabId)
+        if (current) this.resetInactivityTimer(current)
       }
     }
   }
@@ -287,6 +303,7 @@ export class DebuggerLeaseManager {
     if (!entry) return
     this.entries.delete(tabId)
     this.cancelIdleTimer(entry)
+    this.cancelInactivityTimer(entry)
     entry.leases.clear()
     this.rejectInFlight(entry, new Error(`CDP target closed on tab ${tabId}: ${reason}`))
     entry.cleanupListeners()
@@ -368,6 +385,7 @@ export class DebuggerLeaseManager {
       debuggerApi,
       leases: new Set(),
       idleTimer: null,
+      inactivityTimer: null,
       inFlight: new Set(),
       cleanupListeners: () => {
         detachEventListener(debuggerApi, 'detach', onDebuggerDetach as (...args: unknown[]) => void)
@@ -423,6 +441,32 @@ export class DebuggerLeaseManager {
       clearTimeout(entry.idleTimer)
       entry.idleTimer = null
     }
+  }
+
+  private cancelInactivityTimer(entry: TabDebuggerEntry): void {
+    if (entry.inactivityTimer !== null) {
+      clearTimeout(entry.inactivityTimer)
+      entry.inactivityTimer = null
+    }
+  }
+
+  private resetInactivityTimer(entry: TabDebuggerEntry): void {
+    this.cancelInactivityTimer(entry)
+    if (this.leaseInactivityTimeoutMs <= 0) return
+    if (entry.leases.size === 0 || entry.inFlight.size > 0) return
+    entry.inactivityTimer = setTimeout(() => {
+      entry.inactivityTimer = null
+      if (this.entries.get(entry.tabId) !== entry) return
+      if (entry.leases.size === 0 || entry.inFlight.size > 0) return
+      this.entries.delete(entry.tabId)
+      this.cancelIdleTimer(entry)
+      entry.leases.clear()
+      entry.cleanupListeners()
+      this.safeDetach(entry)
+      this.onDetached?.({ tabId: entry.tabId, reason: 'idle-timeout' })
+      this.onEvent?.({ tabId: entry.tabId, method: 'Inspector.detached', params: { reason: 'idle-timeout' } })
+    }, this.leaseInactivityTimeoutMs)
+    entry.inactivityTimer.unref?.()
   }
 
   private scheduleIdleDetach(entry: TabDebuggerEntry): void {

@@ -85,6 +85,9 @@ class FakeWebContents implements WorkspaceBrowserWebContentsLike {
   scripts: string[] = []
   zoomFactors: number[] = []
   zoomFactor = 1
+  backgroundThrottlingCalls: boolean[] = []
+  osProcessId = 0
+  forcefullyCrashed = 0
   finds: Array<{ text: string, options?: unknown }> = []
   stopFinds: string[] = []
   reloads: string[] = []
@@ -193,6 +196,18 @@ class FakeWebContents implements WorkspaceBrowserWebContentsLike {
 
   getZoomFactor() {
     return this.zoomFactor
+  }
+
+  setBackgroundThrottling(allowed: boolean) {
+    this.backgroundThrottlingCalls.push(allowed)
+  }
+
+  getOSProcessId() {
+    return this.osProcessId
+  }
+
+  forcefullyCrashRenderer() {
+    this.forcefullyCrashed += 1
   }
 
   close() {
@@ -1615,6 +1630,156 @@ describe('browser use CDP lease integration and agent control hygiene', () => {
     expect(service.listPages({ sessionId: 'sess-a' }).map(p => p.tabId)).toEqual(['wb-a'])
     expect(service.listPages({ sessionId: 'sess-b' }).map(p => p.tabId)).toEqual(['wb-b'])
     expect(service.listPages().map(p => p.tabId).sort()).toEqual(['wb-a', 'wb-b'])
+    service.closeAll()
+  })
+
+  it('throttles background guests, evicts excess/idle hidden pages, and preserves active or downloading pages', async () => {
+    let clock = 1_000
+    const guests: FakeWebContents[] = []
+    const events: WorkspaceBrowserEvent[] = []
+    const service = new ElectronWorkspaceBrowserService({
+      resolveGuest: id => guests.find(g => g.id === id)!,
+      previewScriptPath: previewScript(),
+      emit: event => events.push(event),
+      now: () => clock,
+      maxBackgroundPages: 2,
+      backgroundIdleEvictMs: 60_000,
+      healthCheckIntervalMs: 0,
+    })
+
+    const makeGuest = (id: number, url: string) => {
+      const g = new FakeWebContents()
+      g.id = id
+      g.url = url
+      guests.push(g)
+      return g
+    }
+
+    const g1 = makeGuest(1, 'https://one.test/')
+    const g2 = makeGuest(2, 'https://two.test/')
+    const g3 = makeGuest(3, 'https://three.test/')
+    const g4 = makeGuest(4, 'https://four.test/')
+
+    await service.create(fakeParent(), 'wb-1', { storageId: 's1', webContentsId: 1 })
+    expect(g1.backgroundThrottlingCalls).toEqual([true])
+    clock += 1_000
+    await service.create(fakeParent(), 'wb-2', { storageId: 's2', webContentsId: 2 })
+    clock += 1_000
+    // Start a download on wb-1 so LRU skips it and evicts wb-2 instead when wb-3 exceeds maxBackgroundPages=2.
+    const dl = new FakeDownloadItem('report.pdf', 100)
+    g1.session.startDownload(dl, g1)
+    await service.create(fakeParent(), 'wb-3', { storageId: 's3', webContentsId: 3 })
+
+    expect(service.getPageInfo('wb-1')).not.toBeNull()
+    expect(service.getPageInfo('wb-2')).toBeNull()
+    expect(service.getPageInfo('wb-3')).not.toBeNull()
+    expect(g2.closed).toBeGreaterThan(0)
+    expect(events).toContainEqual({ type: 'destroyed', tabId: 'wb-2', reason: 'suspended' })
+
+    // Agent control temporarily disables throttling and protects wb-3 from both LRU and idle eviction.
+    await service.setAgentControlActive('wb-3', true)
+    expect(g3.backgroundThrottlingCalls.at(-1)).toBe(false)
+    clock += 1_000
+    await service.create(fakeParent(), 'wb-4', { storageId: 's4', webContentsId: 4 })
+    // Neither wb-1 (downloading), wb-3 (agent-controlled), nor wb-4 (just created) is eligible yet.
+    expect(service.getPageInfo('wb-1')).not.toBeNull()
+    expect(service.getPageInfo('wb-3')).not.toBeNull()
+    expect(service.getPageInfo('wb-4')).not.toBeNull()
+
+    dl.advance(100, 'completed')
+    clock += 65_000
+    service.runHealthCheck()
+
+    expect(service.getPageInfo('wb-3')).not.toBeNull()
+    expect(service.getPageInfo('wb-1')).toBeNull()
+    expect(service.getPageInfo('wb-4')).toBeNull()
+    expect(events).toContainEqual({ type: 'destroyed', tabId: 'wb-1', reason: 'suspended' })
+    expect(events).toContainEqual({ type: 'destroyed', tabId: 'wb-4', reason: 'suspended' })
+
+    await service.setAgentControlActive('wb-3', false)
+    expect(g3.backgroundThrottlingCalls.at(-1)).toBe(true)
+    expect(g4.closed).toBeGreaterThan(0)
+    service.closeAll()
+  })
+
+  it('terminates runaway memory or sustained hidden CPU guests without ever touching the host process', async () => {
+    const guests: FakeWebContents[] = []
+    const events: WorkspaceBrowserEvent[] = []
+    const diagnostics: string[] = []
+    let metrics: Array<{ pid: number, cpu?: { percentCPUUsage?: number }, memory?: { workingSetSize?: number, privateBytes?: number } }> = []
+    const service = new ElectronWorkspaceBrowserService({
+      resolveGuest: id => guests.find(g => g.id === id)!,
+      previewScriptPath: previewScript(),
+      emit: event => events.push(event),
+      healthCheckIntervalMs: 0,
+      maxBackgroundPages: 10,
+      backgroundIdleEvictMs: 0,
+      hiddenMemoryLimitKb: 1_000_000,
+      activeMemoryLimitKb: 2_000_000,
+      hardMemoryLimitKb: 3_500_000,
+      hiddenCpuLimitPercent: 120,
+      memoryStrikeThreshold: 2,
+      cpuStrikeThreshold: 3,
+      getProcessMetrics: () => metrics,
+      getHostProcessId: () => 9000,
+      onDiagnostic: msg => diagnostics.push(msg),
+    })
+
+    const memGuest = new FakeWebContents()
+    memGuest.id = 1
+    memGuest.osProcessId = 8001
+    memGuest.url = 'http://127.0.0.1:1429/'
+    const cpuGuest = new FakeWebContents()
+    cpuGuest.id = 2
+    cpuGuest.osProcessId = 8002
+    cpuGuest.url = 'https://spinner.test/'
+    const hardGuest = new FakeWebContents()
+    hardGuest.id = 3
+    hardGuest.osProcessId = 8003
+    hardGuest.url = 'https://leak.test/'
+    const hostSamePidGuest = new FakeWebContents()
+    hostSamePidGuest.id = 4
+    hostSamePidGuest.osProcessId = 9000
+    hostSamePidGuest.url = 'https://safe.test/'
+    guests.push(memGuest, cpuGuest, hardGuest, hostSamePidGuest)
+
+    await service.create(fakeParent(), 'wb-mem', { storageId: 'm', webContentsId: 1 })
+    await service.create(fakeParent(), 'wb-cpu', { storageId: 'c', webContentsId: 2 })
+    await service.create(fakeParent(), 'wb-hard', { storageId: 'h', webContentsId: 3 })
+    await service.create(fakeParent(), 'wb-host', { storageId: 'x', webContentsId: 4 })
+
+    // Sample 1: hardGuest exceeds hard ceiling -> killed immediately; memGuest gets 1 strike; cpuGuest gets 1 strike; host PID ignored.
+    metrics = [
+      { pid: 8001, memory: { workingSetSize: 1_200_000 }, cpu: { percentCPUUsage: 10 } },
+      { pid: 8002, memory: { workingSetSize: 100_000 }, cpu: { percentCPUUsage: 180 } },
+      { pid: 8003, memory: { privateBytes: 4_000_000 }, cpu: { percentCPUUsage: 20 } },
+      { pid: 9000, memory: { workingSetSize: 9_000_000 }, cpu: { percentCPUUsage: 400 } },
+    ]
+    service.runHealthCheck()
+    expect(service.getPageInfo('wb-hard')).toBeNull()
+    expect(hardGuest.forcefullyCrashed).toBe(1)
+    expect(service.getPageInfo('wb-mem')).not.toBeNull()
+    expect(service.getPageInfo('wb-cpu')).not.toBeNull()
+    expect(service.getPageInfo('wb-host')).not.toBeNull()
+
+    // Sample 2: memGuest hits 2 strikes -> terminated; cpuGuest hits 2 strikes -> still alive.
+    service.runHealthCheck()
+    expect(service.getPageInfo('wb-mem')).toBeNull()
+    expect(memGuest.forcefullyCrashed).toBe(1)
+    expect(service.getPageInfo('wb-cpu')).not.toBeNull()
+
+    // Sample 3: cpuGuest hits 3 strikes -> terminated; host PID still untouched.
+    service.runHealthCheck()
+    expect(service.getPageInfo('wb-cpu')).toBeNull()
+    expect(cpuGuest.forcefullyCrashed).toBe(1)
+    expect(service.getPageInfo('wb-host')).not.toBeNull()
+    expect(hostSamePidGuest.forcefullyCrashed).toBe(0)
+
+    expect(events.filter(e => e.type === 'destroyed' && e.reason === 'resource-limit').map(e => e.tabId))
+      .toEqual(['wb-hard', 'wb-mem', 'wb-cpu'])
+    expect(diagnostics.length).toBe(3)
+    expect(diagnostics[1]).toContain('cause=memory')
+    expect(diagnostics[2]).toContain('cause=cpu')
     service.closeAll()
   })
 })

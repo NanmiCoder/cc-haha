@@ -711,6 +711,13 @@ function getWorkspaceBrowserService() {
         : 1
     ),
     getInternalPorts: () => collectInternalLoopbackPorts(),
+    getProcessMetrics: () => app.getAppMetrics(),
+    getHostProcessId: () => (
+      mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()
+        ? mainWindow.webContents.getOSProcessId()
+        : null
+    ),
+    onDiagnostic: message => appendHostDiagnostic(electronHostDiagnosticsFile(process.env), message),
     writePdf: async ({ data, filename }) => {
       return saveWorkspaceBrowserPdf(data, async () => {
         if (!mainWindow || mainWindow.isDestroyed()) return null

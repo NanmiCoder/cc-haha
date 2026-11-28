@@ -278,4 +278,43 @@ describe('DebuggerLeaseManager', () => {
     expect(wc.debugger.attachCalls).toBe(0)
     expect(wc.debugger.sent).toEqual([])
   })
+
+  it('auto-detaches an idle held lease after leaseInactivityTimeoutMs and resets on activity', async () => {
+    vi.useFakeTimers()
+    const wc = new FakeWebContents()
+    const events: CdpEventNotice[] = []
+    const detaches: CdpDetachNotice[] = []
+    const manager = new DebuggerLeaseManager({
+      resolveWebContents: () => wc,
+      idleGraceMs: 1_000,
+      leaseInactivityTimeoutMs: 10_000,
+      onEvent: event => events.push(event),
+      onDetached: notice => detaches.push(notice),
+    })
+
+    const lease = manager.acquire('tab-idle')
+    expect(wc.debugger.isAttached()).toBe(true)
+
+    // Activity at 8s resets the 10s inactivity timer.
+    vi.advanceTimersByTime(8_000)
+    await manager.sendCommand('tab-idle', 'Page.getLayoutMetrics', undefined, { leaseId: lease.leaseId })
+    expect(wc.debugger.isAttached()).toBe(true)
+
+    // 8s more (16s total, 8s since last command): still attached.
+    vi.advanceTimersByTime(8_000)
+    expect(wc.debugger.isAttached()).toBe(true)
+
+    // Past 10s since last command -> auto-detaches cleanly and emits Inspector.detached.
+    vi.advanceTimersByTime(2_000)
+    expect(wc.debugger.isAttached()).toBe(false)
+    expect(manager.getLeaseCount('tab-idle')).toBe(0)
+    expect(detaches).toEqual([{ tabId: 'tab-idle', reason: 'idle-timeout' }])
+    expect(events).toContainEqual({
+      tabId: 'tab-idle',
+      method: 'Inspector.detached',
+      params: { reason: 'idle-timeout' },
+    })
+
+    manager.disposeAll()
+  })
 })
