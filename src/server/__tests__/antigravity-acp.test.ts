@@ -14,6 +14,7 @@ import {
   getAntigravityStatus,
   openAntigravityAcp,
   resetAntigravityStatusForTests,
+  type AntigravityAcp,
 } from '../services/antigravityAcp.js'
 import { listAntigravitySkillSlashCommands } from '../api/skills.js'
 import {
@@ -27,7 +28,7 @@ import { handleProvidersApi } from '../api/providers.js'
 import { startServer } from '../index.js'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
-import { getSessionTurnState, stopSessionTurn, submitSessionTurn, waitForSessionTurnIdle } from '../ws/handler.js'
+import { getSessionTurnState, stopSessionTurn, submitSessionTurn, translateCliMessage, waitForSessionTurnIdle } from '../ws/handler.js'
 import type { ClientMessage, ServerMessage } from '../ws/events.js'
 
 const BANNED_FLAGS = [
@@ -4801,6 +4802,326 @@ describe('Antigravity ACP server core & integration', () => {
       server.stop(true)
     }
   }, 20_000)
+
+  test('bridges async invoke_subagent lifecycle, flushes idle interim text with accurate subagent duration, and preserves detached tool_call turns', async () => {
+    const appDataDir = join(sandboxDir, 'agy-subagent-lifecycle-appdata')
+    const parentSessionId = 'native-subagent-life-1'
+    const childId = 'child-reviewer-life-1'
+    const parentSubagentsDir = join(appDataDir, 'brain', parentSessionId, '.system_generated', 'subagents')
+    const childLogsDir = join(appDataDir, 'brain', childId, '.system_generated', 'logs')
+    await mkdir(parentSubagentsDir, { recursive: true })
+    await mkdir(childLogsDir, { recursive: true })
+
+    await writeFile(
+      join(parentSubagentsDir, `${childId}.json`),
+      JSON.stringify({
+        conversationId: childId,
+        subagentDescriptor: { typeName: 'research', role: 'Independent Code Reviewer' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 10,
+        workspaceUris: ['file:///tmp/fake'],
+      }),
+      'utf8',
+    )
+
+    const childTranscriptPath = join(childLogsDir, 'transcript.jsonl')
+    await writeFile(
+      childTranscriptPath,
+      [
+        JSON.stringify({ step_index: 0, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T07:48:03Z', content: 'Review diff' }),
+        JSON.stringify({
+          step_index: 1,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T07:48:04Z',
+          model: 'gemini-3.5-pro-high',
+          input_tokens: 1000,
+          output_tokens: 100,
+          tool_calls: [{ id: 'c1', name: 'read_file', args: { Path: '"/tmp/a.ts"' } }],
+        }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T07:48:05Z', content: 'Showing lines 1-20' }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: string | number) => void) | undefined
+    let resolvePrompt: ((result: Record<string, unknown>) => void) | undefined
+    const acpStub = {
+      sessionId: parentSessionId,
+      modelId: 'gemini-3.5-pro-high',
+      effortLevel: 'high',
+      permissionMode: 'default',
+      launchedWithBypassPermissions: false,
+      supportsImages: true,
+      initialAvailableCommands: [],
+      isOpen: true,
+      drained: new Promise<void>(() => {}),
+      set onMessage(handler: typeof onMessage) { onMessage = handler },
+      get onMessage() { return onMessage },
+      prompt: () => new Promise<Record<string, unknown>>(resolve => { resolvePrompt = resolve }),
+      cancel: () => true,
+      reply: () => true,
+      end: () => {},
+      close: () => {},
+      syncConfigOptionsFromResponse: () => {},
+    } as unknown as AntigravityAcp
+
+    const emittedCli: Array<Record<string, unknown>> = []
+    const emittedWs: ServerMessage[] = []
+    const persisted: Array<Record<string, unknown>> = []
+    const wsSessionId = 'ws-subagent-life-1'
+    const conv = new AntigravityConversation(
+      acpStub,
+      (msg) => {
+        emittedCli.push(msg)
+        emittedWs.push(...translateCliMessage(msg, wsSessionId))
+      },
+      async (entries) => { persisted.push(...entries) },
+      {
+        antigravityAppDataDir: appDataDir,
+        subagentPollIntervalMs: 30,
+        subagentWaitFlushMs: 80,
+      },
+    )
+
+    // Bad Case 1: invoke_subagent async launch + idle interim text flush + live progress + completion
+    expect(conv.send([{ type: 'text', text: '/ajiang-review' }], 'u-life-1')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_review_sub_1',
+        name: 'invoke_subagent',
+        title: 'Run invoke_subagent',
+        status: 'in_progress',
+        rawInput: { TypeName: 'research', Role: 'Independent Code Reviewer', Prompt: 'Review diff' },
+      },
+    })
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_review_sub_1',
+        status: 'completed',
+        content: [{ type: 'text', text: `Created the following subagent:\n{"conversationId":"${childId}"}` }],
+      },
+    })
+
+    // 1. tool_result marks async launch and immediately emits task_started
+    const launchResult = emittedWs.find(m => m.type === 'tool_result' && m.toolUseId === 'call_review_sub_1') as Extract<ServerMessage, { type: 'tool_result' }> | undefined
+    expect(String(launchResult?.content)).toContain('Async agent launched successfully.')
+    expect(String(launchResult?.content)).toContain(`agentId: ${childId}`)
+    expect(emittedWs.some(m => m.type === 'system_notification' && m.subtype === 'task_started' && (m.data as Record<string, unknown>)?.tool_use_id === 'call_review_sub_1')).toBe(true)
+
+    // 2. Parent sends interim waiting message and goes silent -> poller detects task_progress and flushes chunk with flushStream
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '已交给独立审查 Agent，等待返回。' } },
+    })
+
+    await waitUntil(() => emittedWs.some(m => m.type === 'system_notification' && m.subtype === 'task_progress'))
+    await waitUntil(() => emittedWs.some(m => m.type === 'status' && m.flushStream === true))
+    expect(persisted.some(e => JSON.stringify(e).includes('已交给独立审查 Agent，等待返回。'))).toBe(true)
+
+    // Let subagent wait accumulate before completing on disk
+    await new Promise(resolve => setTimeout(resolve, 120))
+    await writeFile(
+      childTranscriptPath,
+      [
+        JSON.stringify({ step_index: 0, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T07:48:03Z', content: 'Review diff' }),
+        JSON.stringify({
+          step_index: 1,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T07:48:04Z',
+          model: 'gemini-3.5-pro-high',
+          input_tokens: 1000,
+          output_tokens: 100,
+          tool_calls: [{ id: 'c1', name: 'read_file', args: { Path: '"/tmp/a.ts"' } }],
+        }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T07:48:05Z', content: 'Showing lines 1-20' }),
+        JSON.stringify({
+          step_index: 3,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T07:55:12Z',
+          model: 'gemini-3.5-pro-high',
+          input_tokens: 2000,
+          output_tokens: 400,
+          tool_calls: [{ id: 'c2', name: 'send_message', args: { Message: '"Found 1 real issue"', Recipient: `"${parentSessionId}"` } }],
+        }),
+        JSON.stringify({ step_index: 4, type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T07:56:52Z', content: `Message sent to "${parentSessionId}".` }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    await waitUntil(() => emittedWs.some(m => m.type === 'system_notification' && m.subtype === 'task_notification'))
+    const taskNotif = emittedWs.find(m => m.type === 'system_notification' && m.subtype === 'task_notification') as Extract<ServerMessage, { type: 'system_notification' }>
+    const taskNotifData = taskNotif.data as Record<string, unknown>
+    expect(taskNotifData?.status).toBe('completed')
+    expect(taskNotifData?.result).toBe('Found 1 real issue')
+    expect(taskNotifData?.task_id).toBe(childId)
+    expect(typeof taskNotifData?.uuid).toBe('string')
+    // Task notifications are persisted by ws/handler.ts (persistCliTaskNotification), not double-appended here
+    expect(persisted.some(e => e.type === 'cc-haha-task-notification')).toBe(false)
+
+    // Parent wakes up, reads a file, outputs summary, and resolves prompt with aggregated subagent usage
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call_parent_verify', name: 'read_file', title: 'Read a.ts', status: 'in_progress', rawInput: { Path: '/tmp/a.ts' } },
+    })
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_parent_verify', status: 'completed', content: [{ type: 'text', text: 'ok' }] },
+    })
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '核实完成，共 1 个问题。' } },
+    })
+    resolvePrompt?.({ stopReason: 'end_turn', usage: { inputTokens: 8000, outputTokens: 1500 } })
+    await conv.pendingTurnCompletion
+
+    const turn1Result = emittedCli.find(m => m.type === 'result') as { duration_api_ms?: number; decode_ms?: number }
+    // Both duration_api_ms and decode_ms must include the silent background subagent wait (~120ms+)
+    expect(turn1Result.duration_api_ms ?? 0).toBeGreaterThanOrEqual(100)
+    expect(turn1Result.decode_ms ?? 0).toBeGreaterThanOrEqual(100)
+
+    // Bad Case 2: Detached wakeup starting with tool_call must NOT drop tool_use_complete or prematurely close before summary + usage_update
+    const wsBeforeDetached = emittedWs.length
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'tool_call', toolCallId: 'call_detached_read', name: 'read_file', title: 'Read b.ts', status: 'in_progress', rawInput: { Path: '/tmp/b.ts' } },
+    })
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_detached_read', status: 'completed', content: [{ type: 'text', text: 'b contents' }] },
+    })
+    await new Promise(resolve => setTimeout(resolve, 40))
+
+    const wsAfterDetachedRead = emittedWs.slice(wsBeforeDetached)
+    expect(wsAfterDetachedRead.some(m => m.type === 'tool_use_complete' && m.toolUseId === 'call_detached_read')).toBe(true)
+    expect(wsAfterDetachedRead.some(m => m.type === 'tool_result' && m.toolUseId === 'call_detached_read')).toBe(true)
+    expect(wsAfterDetachedRead.some(m => m.type === 'message_complete')).toBe(false)
+    expect(conv.isResponding).toBe(true)
+
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '脱离唤醒核实结论。' } },
+    })
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: { sessionUpdate: 'usage_update', used: 12000, size: 200000 },
+    })
+    await conv.pendingTurnCompletion
+
+    const wsAfterDetachedAll = emittedWs.slice(wsBeforeDetached)
+    expect(wsAfterDetachedAll.filter(m => m.type === 'message_complete')).toHaveLength(1)
+    expect(wsAfterDetachedAll.some(m => m.type === 'content_delta' && m.text === '脱离唤醒核实结论。')).toBe(true)
+
+    // Review regressions: late childId keeps task_id immutable AND recoverable mid-run GENERIC ERROR does not fail an ALIVE subagent
+    const lateChildId = 'child-late-recover-2'
+    const lateChildLogsDir = join(appDataDir, 'brain', lateChildId, '.system_generated', 'logs')
+    await mkdir(lateChildLogsDir, { recursive: true })
+    const lateChildTranscriptPath = join(lateChildLogsDir, 'transcript.jsonl')
+    const emittedBeforeLate = emittedWs.length
+
+    expect(conv.send([{ type: 'text', text: 'Run second review' }], 'u-life-2')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_late_sub_2',
+        name: 'invoke_subagent',
+        title: 'Run invoke_subagent',
+        status: 'in_progress',
+        rawInput: { TypeName: 'research', Role: 'Recovery Reviewer', Prompt: 'Check recovery' },
+      },
+    })
+    // Completes before registry file exists -> task_id falls back to toolUseId ('call_late_sub_2')
+    onMessage?.('session/update', {
+      sessionId: parentSessionId,
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_late_sub_2',
+        status: 'completed',
+        content: [],
+      },
+    })
+
+    // Registry and mid-run transcript with a recoverable GENERIC ERROR appear after launch
+    await writeFile(
+      join(parentSubagentsDir, `${lateChildId}.json`),
+      JSON.stringify({
+        conversationId: lateChildId,
+        subagentDescriptor: { typeName: 'research', role: 'Recovery Reviewer' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 20,
+        workspaceUris: ['file:///tmp/fake'],
+      }),
+      'utf8',
+    )
+    await writeFile(
+      lateChildTranscriptPath,
+      [
+        JSON.stringify({ step_index: 0, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T08:00:00Z', content: 'Check recovery' }),
+        JSON.stringify({
+          step_index: 1,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T08:00:01Z',
+          tool_calls: [{ id: 'rc1', name: 'run_command', args: { CommandLine: '"rg missing"' } }],
+        }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'ERROR', created_at: '2026-11-28T08:00:02Z', content: 'Command exited with code 1.' }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    await waitUntil(() => emittedWs.slice(emittedBeforeLate).some(m => m.type === 'system_notification' && m.subtype === 'task_progress'))
+    // Must NOT have failed on the recoverable GENERIC ERROR while SUBAGENT_STATE_ALIVE
+    expect(emittedWs.slice(emittedBeforeLate).some(m => m.type === 'system_notification' && m.subtype === 'task_notification')).toBe(false)
+
+    // Subagent recovers and finishes via send_message
+    await writeFile(
+      lateChildTranscriptPath,
+      [
+        JSON.stringify({ step_index: 0, type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T08:00:00Z', content: 'Check recovery' }),
+        JSON.stringify({
+          step_index: 1,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T08:00:01Z',
+          tool_calls: [{ id: 'rc1', name: 'run_command', args: { CommandLine: '"rg missing"' } }],
+        }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'ERROR', created_at: '2026-11-28T08:00:02Z', content: 'Command exited with code 1.' }),
+        JSON.stringify({
+          step_index: 3,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T08:00:03Z',
+          tool_calls: [{ id: 'sm2', name: 'send_message', args: { Message: '"Recovered cleanly"', Recipient: `"${parentSessionId}"` } }],
+        }),
+        JSON.stringify({ step_index: 4, type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T08:00:04Z', content: `Message sent to "${parentSessionId}".` }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    await waitUntil(() => emittedWs.slice(emittedBeforeLate).some(m => m.type === 'system_notification' && m.subtype === 'task_notification'))
+    const lateEvents = emittedWs.slice(emittedBeforeLate)
+    const lateStarted = lateEvents.find(m => m.type === 'system_notification' && m.subtype === 'task_started') as Extract<ServerMessage, { type: 'system_notification' }>
+    const lateProgress = lateEvents.find(m => m.type === 'system_notification' && m.subtype === 'task_progress') as Extract<ServerMessage, { type: 'system_notification' }>
+    const lateDone = lateEvents.find(m => m.type === 'system_notification' && m.subtype === 'task_notification') as Extract<ServerMessage, { type: 'system_notification' }>
+    // Immutable task_id across all lifecycle events prevents activeBackgroundTaskIds leaks on reconnect
+    expect((lateStarted.data as Record<string, unknown>)?.task_id).toBe('call_late_sub_2')
+    expect((lateProgress.data as Record<string, unknown>)?.task_id).toBe('call_late_sub_2')
+    expect((lateDone.data as Record<string, unknown>)?.task_id).toBe('call_late_sub_2')
+    expect((lateDone.data as Record<string, unknown>)?.status).toBe('completed')
+    expect((lateDone.data as Record<string, unknown>)?.result).toBe('Recovered cleanly')
+
+    resolvePrompt?.({ stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } })
+    await conv.pendingTurnCompletion
+  })
 })
 
 async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {

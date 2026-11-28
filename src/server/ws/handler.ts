@@ -3648,6 +3648,20 @@ async function requestStopTrackedAgentTask(
     return
   }
 
+  const isAntigravityUnsupportedStop =
+    controlError instanceof AntigravityError && controlError.code === 'ANTIGRAVITY_UNSUPPORTED'
+  if (isAntigravityUnsupportedStop) {
+    current.stopRequested = false
+    current.stopIntent = false
+    if (shouldForceStopLatchedAgent(sessionId)) {
+      // Stop Generation cancels the Antigravity ACP turn gracefully via sendInterrupt();
+      // do not force-kill the shared ACP subprocess before cancel() settles its subagents.
+      return
+    }
+    reportAgentStopFailure(sessionId, ws, current, controlError)
+    return
+  }
+
   if (
     shouldForceStopLatchedAgent(sessionId) &&
     conversationService.hasSession(sessionId)
@@ -5329,6 +5343,14 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         // 选择器就会一直卡在"计划模式"。
         if (isPermissionMode(cliMsg.permissionMode)) {
           return [{ type: 'permission_mode_changed', mode: cliMsg.permissionMode }]
+        }
+        if (cliMsg.status === 'waiting_subagent') {
+          return [{
+            type: 'status',
+            state: 'tool_executing',
+            verb: typeof cliMsg.verb === 'string' && cliMsg.verb.trim() ? cliMsg.verb.trim() : 'Waiting for subagent',
+            flushStream: true,
+          }]
         }
         if (cliMsg.status == null) {
           return [{ type: 'status', state: 'thinking', verb: 'Thinking' }]

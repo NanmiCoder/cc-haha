@@ -392,4 +392,73 @@ describe('antigravityTranscriptAdapter', () => {
       prompt: 'List files',
     })
   })
+
+  it('keeps mid-loop subagent transcripts in running status until send_message or a terminal reply completes', () => {
+    const midRunLines = [
+      {
+        step_index: 0,
+        source: 'SYSTEM',
+        type: 'SYSTEM_MESSAGE',
+        status: 'DONE',
+        created_at: '2026-11-28T07:48:03Z',
+        content: 'Review the diff',
+      },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-28T07:48:04Z',
+        model: 'gemini-3.5-pro-high',
+        tool_calls: [{ name: 'read_file', args: { Path: '"/repo/a.ts"' } }],
+      },
+      {
+        step_index: 2,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-28T07:48:05Z',
+        content: 'Showing lines 1-40 of 40',
+      },
+    ].map((e) => JSON.stringify(e)).join('\n')
+
+    const midRun = parseAntigravityTranscriptContent('conv-mid-run', midRunLines)
+    expect(midRun.status).toBe('running')
+    expect(midRun.toolUses).toBe(1)
+    expect(midRun.lastToolName).toBe('read_file')
+
+    const completedWithBoilerplate = [
+      midRunLines,
+      JSON.stringify({
+        step_index: 3,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-28T07:55:12Z',
+        tool_calls: [{ name: 'send_message', args: { Message: '"Detailed review findings"', Recipient: '"parent-1"' } }],
+      }),
+      JSON.stringify({
+        step_index: 4,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'DONE',
+        created_at: '2026-11-28T07:56:52Z',
+        content: 'Message sent to "parent-1".',
+      }),
+      JSON.stringify({
+        step_index: 5,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: '2026-11-28T07:56:53Z',
+        content: 'Review complete; all findings have been sent via send_message.',
+      }),
+    ].join('\n')
+
+    const done = parseAntigravityTranscriptContent('conv-mid-run', completedWithBoilerplate)
+    expect(done.status).toBe('completed')
+    expect(done.toolUses).toBe(2)
+    expect(done.lastToolName).toBe('send_message')
+    expect(done.finalResult).toBe('Detailed review findings')
+  })
 })

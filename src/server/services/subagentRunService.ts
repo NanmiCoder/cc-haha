@@ -388,8 +388,11 @@ export function parseCanonicalNestedAgentToolRef(
 }
 
 function isAsyncAgentLaunchResult(text: string): boolean {
-  return text.includes('Async agent launched successfully.') &&
-    text.includes('The agent is working in the background.')
+  return (
+    (text.includes('Async agent launched successfully.') &&
+      text.includes('The agent is working in the background.')) ||
+    text.includes('Created the following subagent:')
+  )
 }
 
 function cleanedAgentResultText(text: string): string | undefined {
@@ -792,16 +795,22 @@ function deriveAntigravitySubagentStatus(
   transcriptStatus: 'running' | 'completed' | 'failed' | 'unknown',
   hasFinalResult: boolean,
   registryState: string | undefined,
+  lastStepIsToolError = false,
 ): SubagentRunStatus {
   if (resolution?.isError) return 'failed'
   if (notification?.status) return notification.status
-  if (transcriptStatus === 'failed') return 'failed'
+  if (transcriptStatus === 'failed') {
+    // A mid-run tool error (GENERIC ERROR) while the subagent is still ALIVE
+    // is recoverable on the next planner turn; do not lock the run as failed.
+    if (lastStepIsToolError && registryState === 'SUBAGENT_STATE_ALIVE') return 'running'
+    return 'failed'
+  }
   if (transcriptStatus === 'running') return 'running'
-  if (resolution?.hasResult && !resolution.isAsyncLaunch) return 'completed'
   if (transcriptStatus === 'completed' && hasFinalResult) return 'completed'
   if (registryState === 'SUBAGENT_STATE_KILLED') return 'stopped'
-  if (transcriptStatus === 'completed') return 'completed'
   if (registryState === 'SUBAGENT_STATE_ALIVE') return 'running'
+  if (resolution?.hasResult && !resolution.isAsyncLaunch) return 'completed'
+  if (transcriptStatus === 'completed') return 'completed'
   return 'unknown'
 }
 
@@ -928,6 +937,7 @@ async function buildAntigravitySubagentResponse(params: {
     transcript?.status ?? 'unknown',
     Boolean(transcript?.finalResult),
     registryRecord?.state,
+    transcript?.lastStepIsToolError === true,
   )
   const updatedAt = latestTimestamp(
     resolution?.updatedAt,
@@ -938,7 +948,9 @@ async function buildAntigravitySubagentResponse(params: {
   const description = resolution?.description
     ?? registryRecord?.role
     ?? registryRecord?.typeName
-  const result = notification?.result ?? resolution?.result ?? transcript?.finalResult
+  const result = notification?.result
+    ?? (resolution?.isAsyncLaunch ? undefined : resolution?.result)
+    ?? transcript?.finalResult
 
   return {
     sessionId,
@@ -1184,8 +1196,8 @@ export async function getSubagentRunByTool(
     const directCandidates = [
       resolution.agentId,
       childIdFromToolRef,
-      safeLiveTaskId,
-      notification?.taskId,
+      safeLiveTaskId && safeLiveTaskId !== toolUseId ? safeLiveTaskId : undefined,
+      notification?.taskId && notification.taskId !== toolUseId ? notification.taskId : undefined,
     ]
     let childConversationId: string | null = directCandidates.find(
       (candidate): candidate is string => isSafeAntigravityId(candidate),

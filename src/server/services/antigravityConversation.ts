@@ -27,8 +27,17 @@ import {
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
 import { AntigravityTurnFileTracker } from './antigravityFileSnapshot.js'
+import {
+  antigravityTranscriptPath,
+  readAntigravitySubagentRegistry,
+  readAntigravityTranscript,
+} from './antigravityTranscriptAdapter.js'
 
 const CANCEL_TIMEOUT_MS = 3_000
+const DEFAULT_SUBAGENT_POLL_INTERVAL_MS = 1_000
+const DEFAULT_SUBAGENT_WAIT_FLUSH_MS = 1_500
+const ASYNC_SUBAGENT_LAUNCH_HEADER =
+  'Async agent launched successfully.\nThe agent is working in the background. You will be notified automatically when it completes.'
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024
 const TRANSCRIPT_TAIL_MAX_READ_BYTES = 4 * 1024 * 1024
@@ -165,6 +174,7 @@ type Turn = {
   usedSubagent: boolean
   subagentPhaseStart?: number
   subagentDurationMs: number
+  subagentWaitNotified: boolean
   transcriptByteOffset: number
   transcriptPendingLine: string
   transcriptDecoder: StringDecoder
@@ -194,6 +204,8 @@ export type AntigravityConversationOptions = {
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   onConfigOptionsUpdated?: (config: { modelId?: string; effortLevel?: string; permissionMode?: string; runtimeChanged: boolean }) => void
   antigravityAppDataDir?: string
+  subagentPollIntervalMs?: number
+  subagentWaitFlushMs?: number
   pendingForkSeedContext?: string
   onForkSeedConsumed?: () => Promise<void> | void
   sessionId?: string
@@ -792,6 +804,52 @@ function resolveDefaultAppDataDir(): string {
   return join(homedir(), '.gemini', 'antigravity-cli')
 }
 
+type TrackedSubagent = {
+  readonly taskId: string
+  toolUseId: string
+  childId?: string
+  description: string
+  prompt?: string
+  typeName?: string
+  role?: string
+  startedAt: number
+  lastToolUses: number
+  lastToolName?: string
+  lastTranscriptSize?: number
+  lastTranscriptMtimeMs?: number
+  lastTranscriptStatus?: 'running' | 'completed' | 'failed' | 'unknown'
+  lastFinalResult?: string
+  lastTotalTokens?: number
+  completed: boolean
+}
+
+function projectSubagentLastToolName(rawName: string | undefined): string | undefined {
+  if (!rawName) return undefined
+  switch (rawName) {
+    case 'read_file':
+    case 'view_file':
+      return 'Read'
+    case 'run_command':
+      return 'Bash'
+    case 'edit_file':
+    case 'replace_file_content':
+    case 'multi_replace_file_content':
+      return 'Edit'
+    case 'write_file':
+    case 'write_to_file':
+      return 'Write'
+    case 'list_dir':
+    case 'find_by_name':
+      return 'Glob'
+    case 'grep_search':
+      return 'Grep'
+    case 'search_web':
+      return 'WebSearch'
+    default:
+      return rawName
+  }
+}
+
 /** 把外部 Agent 的回合及后续后台输出投影到实时消息与会话历史。 */
 export class AntigravityConversation {
   private turn?: Turn
@@ -820,6 +878,11 @@ export class AntigravityConversation {
   }
   private readonly subagentNameCache = new Map<string, string>()
   private readonly claimedSubagentIds = new Set<string>()
+  private readonly activeSubagents = new Map<string, TrackedSubagent>()
+  private subagentPollTimer?: ReturnType<typeof setInterval>
+  private subagentPollPromise?: Promise<void>
+  private readonly subagentPollIntervalMs: number
+  private readonly subagentWaitFlushMs: number
   private readonly computerUseBridge?: AntigravityComputerUseBridge | null
   private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
@@ -841,6 +904,8 @@ export class AntigravityConversation {
     this.onAvailableCommands = options.onAvailableCommands
     this.onConfigOptionsUpdated = options.onConfigOptionsUpdated
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
+    this.subagentPollIntervalMs = Math.max(20, options.subagentPollIntervalMs ?? DEFAULT_SUBAGENT_POLL_INTERVAL_MS)
+    this.subagentWaitFlushMs = Math.max(0, options.subagentWaitFlushMs ?? DEFAULT_SUBAGENT_WAIT_FLUSH_MS)
     this.pendingForkSeedContext = options.pendingForkSeedContext?.trim() || undefined
     this.onForkSeedConsumed = options.onForkSeedConsumed
     if (options.sessionId?.trim() && options.workDir?.trim()) {
@@ -1204,6 +1269,8 @@ export class AntigravityConversation {
   async waitForExit(): Promise<void> {
     await this.acp.drained
     this.listening = false
+    this.stopSubagentPoller()
+    this.settleRemainingSubagentsAsStopped()
     this.tools.clear()
     this.toolStartedAt.clear()
     void this.computerUseBridge?.releaseLock()
@@ -1221,6 +1288,8 @@ export class AntigravityConversation {
     // 不依赖子进程确认取消或主动关闭 stdout；只等本地受控的历史写入。
     if (this.turn || [...this.tools.values()].some(tool => tool?.status === 'in_progress')) this.cancel()
     this.listening = false
+    this.stopSubagentPoller()
+    this.settleRemainingSubagentsAsStopped()
     this.acp.end()
     void this.computerUseBridge?.releaseLock()
     void this.browserUseBridge?.cleanupAfterTurn()
@@ -1319,12 +1388,16 @@ export class AntigravityConversation {
     const turn = this.turn
     if (turn?.cancelled) return true
     this.listening = false
+    this.stopSubagentPoller()
     this.tools.clear()
     this.toolStartedAt.clear()
     this.computerUseBridge?.abortCurrentTurn()
     this.browserUseBridge?.abortCurrentTurn()
     const sent = this.acp.cancel()
-    if (!turn) return sent
+    this.settleRemainingSubagentsAsStopped()
+    if (!turn) {
+      return sent
+    }
     this.pauseModelPhase(turn)
     this.flushSubagentPhase(turn)
     turn.cancelled = true
@@ -1765,6 +1838,7 @@ export class AntigravityConversation {
       liveTranscriptUsage: createEmptyUsage(),
       usedSubagent: false,
       subagentDurationMs: 0,
+      subagentWaitNotified: false,
       transcriptByteOffset: this.getCurrentTranscriptByteSize(),
       transcriptPendingLine: '',
       transcriptDecoder: new StringDecoder('utf8'),
@@ -1832,6 +1906,7 @@ export class AntigravityConversation {
   }
 
   private recordModelChunk(turn: Turn, now = Date.now()): void {
+    turn.subagentWaitNotified = false
     if (turn.modelPhaseStart === undefined) {
       this.startModelPhase(turn, now)
     }
@@ -1844,9 +1919,328 @@ export class AntigravityConversation {
     turn.lastChunkAt = now
   }
 
+  private stopSubagentPoller(): void {
+    if (this.subagentPollTimer !== undefined) {
+      clearInterval(this.subagentPollTimer)
+      this.subagentPollTimer = undefined
+    }
+  }
+
+  private ensureSubagentPoller(): void {
+    if (this.subagentPollTimer !== undefined || this.activeSubagents.size === 0) return
+    const timer = setInterval(() => {
+      void this.pollActiveSubagents()
+    }, this.subagentPollIntervalMs)
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer && typeof timer.unref === 'function') {
+      timer.unref()
+    }
+    this.subagentPollTimer = timer
+  }
+
+  private registerActiveSubagent(
+    toolUseId: string,
+    childId: string | undefined,
+    tool: Frame,
+    startedAt: number,
+  ): void {
+    if (this.activeSubagents.has(toolUseId)) return
+    const rawInput = acpObject(tool.rawInput) ?? acpObject(tool.args) ?? {}
+    const role = firstString(rawInput.Role, rawInput.role)
+    const typeName = firstString(rawInput.TypeName, rawInput.typeName)
+    const description = firstString(role, typeName, tool.title) ?? 'Subagent'
+    const prompt = firstString(rawInput.Prompt, rawInput.prompt)
+    const taskId = childId ?? toolUseId
+    const tracked: TrackedSubagent = {
+      taskId,
+      toolUseId,
+      ...(childId ? { childId } : {}),
+      description,
+      ...(prompt ? { prompt } : {}),
+      ...(typeName ? { typeName } : {}),
+      ...(role ? { role } : {}),
+      startedAt,
+      lastToolUses: 0,
+      completed: false,
+    }
+    this.activeSubagents.set(toolUseId, tracked)
+    this.emit({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      task_type: 'local_agent',
+      description,
+      ...(prompt ? { prompt } : {}),
+    })
+    this.ensureSubagentPoller()
+  }
+
+  private completeTrackedSubagent(
+    tracked: TrackedSubagent,
+    status: 'completed' | 'failed' | 'stopped',
+    details?: {
+      result?: string
+      toolUses?: number
+      totalTokens?: number
+    },
+  ): void {
+    if (tracked.completed) return
+    tracked.completed = true
+    this.activeSubagents.delete(tracked.toolUseId)
+    const nowIso = new Date().toISOString()
+    const durationMs = Math.max(0, Date.now() - tracked.startedAt)
+    const taskId = tracked.taskId
+    const resultText = details?.result ?? tracked.lastFinalResult
+    const toolUses = details?.toolUses ?? (tracked.lastToolUses > 0 ? tracked.lastToolUses : undefined)
+    const totalTokens = details?.totalTokens ?? tracked.lastTotalTokens
+    const summary = status === 'completed'
+      ? `${tracked.description} completed`
+      : status === 'failed'
+        ? `${tracked.description} failed`
+        : `${tracked.description} stopped`
+    const usage: Frame = {
+      duration_ms: durationMs,
+      ...(typeof toolUses === 'number' ? { tool_uses: toolUses } : {}),
+      ...(typeof totalTokens === 'number' ? { total_tokens: totalTokens } : {}),
+    }
+    this.emit({
+      type: 'system',
+      subtype: 'task_notification',
+      uuid: crypto.randomUUID(),
+      task_id: taskId,
+      tool_use_id: tracked.toolUseId,
+      task_type: 'local_agent',
+      status,
+      description: tracked.description,
+      summary,
+      ...(resultText ? { result: resultText } : {}),
+      usage,
+      timestamp: nowIso,
+    })
+    if (this.activeSubagents.size === 0) {
+      this.stopSubagentPoller()
+    }
+  }
+
+  private settleRemainingSubagentsAsStopped(): void {
+    for (const tracked of [...this.activeSubagents.values()]) {
+      this.completeTrackedSubagent(tracked, 'stopped')
+    }
+    this.stopSubagentPoller()
+  }
+
+  private maybeFlushIdleChunkForSubagentWait(now = Date.now()): void {
+    const turn = this.turn
+    if (
+      !turn
+      || turn.cancelled
+      || turn.finishing
+      || turn.nativeEnd
+      || this.activeSubagents.size === 0
+      || turn.permissions.size > 0
+      || this.hasActiveNonDaemonWork(turn)
+    ) {
+      return
+    }
+    const idleSince = turn.lastChunkAt ?? turn.modelPhaseStart
+    if (idleSince === undefined || now - idleSince < this.subagentWaitFlushMs) return
+
+    const firstTracked = this.activeSubagents.values().next().value as TrackedSubagent | undefined
+    const waitVerb = firstTracked?.description ?? 'Subagent'
+    if (turn.chunk) {
+      this.flushChunk(turn)
+      if (turn.entries.length > 0) {
+        void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
+      }
+      turn.subagentWaitNotified = true
+      this.emit({
+        type: 'system',
+        subtype: 'status',
+        status: 'waiting_subagent',
+        verb: waitVerb,
+      })
+    } else if (!turn.subagentWaitNotified) {
+      turn.subagentWaitNotified = true
+      this.emit({
+        type: 'system',
+        subtype: 'status',
+        status: 'waiting_subagent',
+        verb: waitVerb,
+      })
+    }
+    if (turn.modelPhaseStart !== undefined) {
+      this.pauseModelPhase(turn, idleSince)
+    }
+    if (turn.subagentPhaseStart === undefined) {
+      turn.subagentPhaseStart = idleSince
+    }
+  }
+
+  private async runSubagentPollPass(): Promise<void> {
+    if (this.activeSubagents.size === 0) {
+      this.stopSubagentPoller()
+      return
+    }
+
+    this.maybeFlushIdleChunkForSubagentWait()
+
+    const registry = await readAntigravitySubagentRegistry(this.acp.sessionId, {
+      appDataDir: this.antigravityAppDataDir,
+    }).catch(() => [])
+    const registryById = new Map(registry.map(entry => [entry.conversationId, entry]))
+
+    for (const tracked of [...this.activeSubagents.values()]) {
+      if (tracked.completed) continue
+      if (!tracked.childId) {
+        const eligible = registry.filter(record => (
+          !this.claimedSubagentIds.has(record.conversationId)
+          && record.state !== 'SUBAGENT_STATE_KILLED'
+          && !(record.typeName === 'worker' && record.role?.startsWith('Swarm Worker'))
+          && (!tracked.typeName || record.typeName === tracked.typeName)
+          && (!tracked.role || record.role === tracked.role)
+        ))
+        const candidate = eligible.find(record => record.state === 'SUBAGENT_STATE_ALIVE') ?? eligible[0]
+        if (candidate) {
+          tracked.childId = candidate.conversationId
+          this.claimedSubagentIds.add(candidate.conversationId)
+        }
+      }
+      const childId = tracked.childId
+      if (!childId) continue
+
+      const registryRecord = registryById.get(childId)
+      const transcriptPath = antigravityTranscriptPath(childId, this.antigravityAppDataDir)
+      let transcriptStat: { size: number; mtimeMs: number } | null = null
+      if (transcriptPath) {
+        try {
+          const st = statSync(transcriptPath)
+          if (st.isFile()) transcriptStat = { size: st.size, mtimeMs: st.mtimeMs }
+        } catch {
+          transcriptStat = null
+        }
+      }
+
+      const fileChanged = transcriptStat !== null && (
+        transcriptStat.size !== tracked.lastTranscriptSize
+        || transcriptStat.mtimeMs !== tracked.lastTranscriptMtimeMs
+      )
+
+      if (fileChanged) {
+        const parsed = await readAntigravityTranscript(childId, {
+          appDataDir: this.antigravityAppDataDir,
+        }).catch(() => null)
+        if (tracked.completed) continue
+        if (parsed?.exists) {
+          tracked.lastTranscriptSize = transcriptStat!.size
+          tracked.lastTranscriptMtimeMs = transcriptStat!.mtimeMs
+          tracked.lastTranscriptStatus = parsed.status
+          if (parsed.finalResult) tracked.lastFinalResult = parsed.finalResult
+          if (parsed.usage?.totalTokens !== undefined) tracked.lastTotalTokens = parsed.usage.totalTokens
+
+          const projectedLastTool = projectSubagentLastToolName(parsed.lastToolName)
+          const nextToolUses = parsed.toolUses ?? tracked.lastToolUses
+          if (parsed.status === 'completed') {
+            this.completeTrackedSubagent(tracked, 'completed', {
+              result: parsed.finalResult,
+              toolUses: nextToolUses > 0 ? nextToolUses : undefined,
+              totalTokens: parsed.usage?.totalTokens,
+            })
+            continue
+          }
+          if (parsed.status === 'failed') {
+            if (parsed.lastStepIsToolError && registryRecord?.state === 'SUBAGENT_STATE_ALIVE') {
+              // Recoverable mid-run tool error (e.g. non-zero command exit); keep polling.
+              tracked.lastTranscriptStatus = 'running'
+            } else {
+              this.completeTrackedSubagent(tracked, 'failed', {
+                result: parsed.finalResult,
+                toolUses: nextToolUses > 0 ? nextToolUses : undefined,
+                totalTokens: parsed.usage?.totalTokens,
+              })
+              continue
+            }
+          }
+          if (nextToolUses !== tracked.lastToolUses || projectedLastTool !== tracked.lastToolName) {
+            tracked.lastToolUses = nextToolUses
+            tracked.lastToolName = projectedLastTool
+            this.emit({
+              type: 'system',
+              subtype: 'task_progress',
+              task_id: tracked.taskId,
+              tool_use_id: tracked.toolUseId,
+              description: tracked.description,
+              ...(projectedLastTool ? { last_tool_name: projectedLastTool } : {}),
+              usage: {
+                duration_ms: Math.max(0, Date.now() - tracked.startedAt),
+                ...(nextToolUses > 0 ? { tool_uses: nextToolUses } : {}),
+                ...(parsed.usage?.totalTokens !== undefined ? { total_tokens: parsed.usage.totalTokens } : {}),
+              },
+            })
+          }
+        }
+      }
+
+      if (registryRecord?.state === 'SUBAGENT_STATE_KILLED') {
+        this.completeTrackedSubagent(tracked, 'stopped')
+      }
+    }
+
+    if (this.activeSubagents.size === 0) {
+      this.stopSubagentPoller()
+    }
+  }
+
+  private pollActiveSubagents(): Promise<void> {
+    if (this.subagentPollPromise) return this.subagentPollPromise
+    const promise = this.runSubagentPollPass().finally(() => {
+      if (this.subagentPollPromise === promise) {
+        this.subagentPollPromise = undefined
+      }
+    })
+    this.subagentPollPromise = promise
+    return promise
+  }
+
+  private async hasActiveDiskEvidence(tracked: TrackedSubagent): Promise<boolean> {
+    if (!tracked.childId) return false
+    const registry = await readAntigravitySubagentRegistry(this.acp.sessionId, {
+      appDataDir: this.antigravityAppDataDir,
+    }).catch(() => [])
+    const entry = registry.find(record => record.conversationId === tracked.childId)
+    if (entry?.state === 'SUBAGENT_STATE_ALIVE') return true
+    if (tracked.lastTranscriptStatus === 'running') return true
+    return false
+  }
+
+  private async settleSubagentsOnTurnFinish(turn: Turn, failed: boolean): Promise<void> {
+    if (this.activeSubagents.size === 0) return
+    if (this.subagentPollPromise) {
+      await this.subagentPollPromise.catch(() => undefined)
+    }
+    if (!turn.cancelled && this.activeSubagents.size > 0) {
+      await this.pollActiveSubagents().catch(() => undefined)
+    }
+    if (this.activeSubagents.size === 0) return
+    if (turn.cancelled) {
+      this.settleRemainingSubagentsAsStopped()
+      return
+    }
+    if (failed) return
+    for (const tracked of [...this.activeSubagents.values()]) {
+      if (tracked.completed) continue
+      const stillRunningOnDisk = await this.hasActiveDiskEvidence(tracked)
+      if (!stillRunningOnDisk) {
+        this.completeTrackedSubagent(tracked, 'completed')
+      }
+    }
+    if (this.activeSubagents.size === 0) {
+      this.stopSubagentPoller()
+    }
+  }
+
   private maybeResumeModelPhase(turn: Turn, now = Date.now()): void {
     if (turn.cancelled || turn.finishing || turn.nativeEnd) return
-    if (turn.permissions.size === 0 && this.hasActiveSubagentTool()) {
+    if (turn.permissions.size === 0 && (this.hasActiveSubagentTool() || (this.activeSubagents.size > 0 && turn.subagentWaitNotified))) {
       if (turn.modelPhaseStart === undefined && turn.subagentPhaseStart === undefined) {
         turn.subagentPhaseStart = now
       }
@@ -2015,6 +2409,8 @@ export class AntigravityConversation {
       if (!turn.isCompact && this.fileTracker) {
         await this.finalizeActiveFileSnapshot()
       }
+      await this.settleSubagentsOnTurnFinish(turn, Boolean(!turn.cancelled && error))
+      await this.appendChain.catch(() => undefined)
       if (turn.isCompact && !turn.cancelled && !error) {
         const compactUuid = crypto.randomUUID()
         const compactTimestamp = new Date().toISOString()
@@ -2127,12 +2523,21 @@ export class AntigravityConversation {
     turn.resolve()
   }
 
-  private assistant(turn: Turn, content: Frame): void {
+  private assistant(turn: Turn, content: Frame, options?: { streamed?: boolean }): void {
     turn.hasOutput = true
+    const uuid = crypto.randomUUID()
     const message = {
-      type: 'assistant', uuid: crypto.randomUUID(),
+      type: 'assistant', uuid,
       timestamp: new Date().toISOString(),
-      message: { role: 'assistant', model: this.acp.modelId ?? 'Antigravity', content: [content] },
+      message: {
+        // Non-streamed blocks (e.g. tool_use) must carry an explicit message id so
+        // ws/handler.ts does not treat a detached turn's opening `message_start` as
+        // a matching stream and silently drop the first `tool_use_complete`.
+        ...(options?.streamed === false ? { id: `agy_tool_${uuid}` } : {}),
+        role: 'assistant',
+        model: this.acp.modelId ?? 'Antigravity',
+        content: [content],
+      },
     }
     turn.entries.push(message)
     this.emit(message)
@@ -2210,6 +2615,7 @@ export class AntigravityConversation {
     const projected = this.projectTool(tool)
     const id = tool.toolCallId
     if (typeof id !== 'string' || this.tools.has(id)) return projected
+    turn.subagentWaitNotified = false
     if (tool.status === 'pending') {
       this.recordFileToolPath(projected, 'pending')
     }
@@ -2225,11 +2631,11 @@ export class AntigravityConversation {
       id,
       name: effectiveName,
       input: effectiveInput,
-    })
+    }, { streamed: false })
     if (projected.isSubagentInvoke && turn.entries.length > 0) {
       // Flush invoke_subagent tool_use immediately so clicking an in-progress subagent card
       // resolves from session history before the parent turn completes.
-      void this.enqueueAppend(turn.entries.splice(0))
+      void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
     }
     this.projectToolState(turn, id, tool)
     return projected
@@ -2242,6 +2648,9 @@ export class AntigravityConversation {
       this.tools.set(id, tool)
       if (acpObject(tool.rawInput)?.IsDaemon !== true) {
         this.pauseModelPhase(turn)
+        if (!isSubagent) {
+          this.flushSubagentPhase(turn)
+        }
       }
       if (isSubagent && turn.permissions.size === 0 && turn.modelPhaseStart === undefined && turn.subagentPhaseStart === undefined) {
         turn.subagentPhaseStart = Date.now()
@@ -2266,6 +2675,7 @@ export class AntigravityConversation {
     const answer = turn.promptAnswer?.toolUseId === id ? turn.promptAnswer : undefined
     if (answer) turn.promptAnswer = undefined
     let content: unknown
+    let launchedSubagentChildId: string | undefined
     if (resolvedQuestion && (tool.status === 'completed' || resolvedQuestion.handedOff)) {
       content = resolvedQuestion.handedOff
         ? { handedOff: true, message: resolvedQuestion.handoffMessage ?? ASK_USER_QUESTION_CLARIFY_MESSAGE }
@@ -2278,11 +2688,15 @@ export class AntigravityConversation {
       content = { answers: { [answer.question]: answer.label } }
     } else if (tool.name === 'invoke_subagent') {
       const childId = this.resolveChildConversationIdForInvoke(tool)
+      launchedSubagentChildId = childId
       const body = toolContent(tool)
       const bodyText = toolContentText(body)
-      content = childId
+      const detail = childId
         ? (bodyText && bodyText !== 'Run invoke_subagent' ? `agentId: ${childId}\n${bodyText}` : `agentId: ${childId}`)
-        : body
+        : bodyText
+      content = tool.status === 'failed'
+        ? (detail || body)
+        : (detail ? `${ASYNC_SUBAGENT_LAUNCH_HEADER}\n${detail}` : ASYNC_SUBAGENT_LAUNCH_HEADER)
     } else {
       content = toolContent(tool)
     }
@@ -2295,6 +2709,12 @@ export class AntigravityConversation {
     turn.hasOutput = true
     turn.entries.push(message)
     this.emit(message)
+    if (tool.name === 'invoke_subagent' && tool.status === 'completed') {
+      if (turn.entries.length > 0) {
+        void this.enqueueAppend(turn.entries.splice(0)).catch(() => undefined)
+      }
+      this.registerActiveSubagent(id, launchedSubagentChildId, tool, startedAt ?? Date.now())
+    }
     this.maybeResumeModelPhase(turn)
   }
 
@@ -2431,6 +2851,13 @@ export class AntigravityConversation {
         // interaction_*（含 <childConvId>:interaction_*）等权限 RPC；ask_question 等 elicitation/create 或旧版终端回退。
         if (typeof update.toolCallId !== 'string' || isInteractionToolCallId(update.toolCallId) || this.tools.has(update.toolCallId)) return
         turn ??= this.beginTurn(true)
+        if (
+          turn.nativeEnd
+          && !parseSubagentToolCallPrefix(update.toolCallId)
+          && acpObject(update.rawInput)?.IsDaemon !== true
+        ) {
+          turn.replyOpen = true
+        }
         if (turn.pendingAskTools.has(update.toolCallId) || turn.promptQuestion?.tool.toolCallId === update.toolCallId) return
         if (update.name === 'ask_question' && !toolHasFinished(update) && !turn.nativeEnd) {
           this.flushChunk(turn)
@@ -2489,7 +2916,7 @@ export class AntigravityConversation {
           id: syntheticId,
           name: 'TodoWrite',
           input: { todos, antigravityToolName: 'plan' },
-        })
+        }, { streamed: false })
         const resultMsg = {
           type: 'user',
           uuid: crypto.randomUUID(),

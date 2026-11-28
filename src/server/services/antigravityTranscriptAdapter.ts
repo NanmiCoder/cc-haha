@@ -40,7 +40,10 @@ export type AntigravityTranscriptResult = {
   model?: string
   effort?: string
   status: AntigravityTranscriptStatus
+  lastStepIsToolError?: boolean
   finalResult?: string
+  toolUses?: number
+  lastToolName?: string
   updatedAt?: string
   truncated: boolean
   historyComplete: boolean
@@ -218,14 +221,44 @@ function looksLikeErrorStep(step: RawTranscriptStep, content: string): boolean {
   return false
 }
 
-function deriveTranscriptStatus(lastStep: RawTranscriptStep | undefined): AntigravityTranscriptStatus {
+function deriveTranscriptStatus(
+  lastStep: RawTranscriptStep | undefined,
+  context: {
+    lastResolvedToolName?: string
+    lastStepToolCallCount: number
+    hasPendingToolCalls: boolean
+  },
+): AntigravityTranscriptStatus {
   if (!lastStep) return 'unknown'
   const status = typeof lastStep.status === 'string' ? lastStep.status.toUpperCase() : ''
   if (status === 'RUNNING' || status === 'PENDING' || status === 'IN_PROGRESS' || status === 'WAITING') {
     return 'running'
   }
   if (status === 'ERROR' || status === 'FAILED') return 'failed'
-  if (status === 'DONE' || status === 'COMPLETED' || status === 'SUCCESS') return 'completed'
+  if (status === 'DONE' || status === 'COMPLETED' || status === 'SUCCESS') {
+    const stepType = typeof lastStep.type === 'string' ? lastStep.type.toUpperCase() : ''
+    // A delivered input or a PLANNER_RESPONSE that requested tools means the
+    // subagent loop has more work to execute and is still actively running.
+    if (stepType === 'SYSTEM_MESSAGE' || stepType === 'USER_INPUT') return 'running'
+    if (stepType === 'PLANNER_RESPONSE') {
+      return context.lastStepToolCallCount > 0 ? 'running' : 'completed'
+    }
+    if (stepType === 'GENERIC') {
+      if (
+        (context.lastResolvedToolName === 'send_message' || context.lastResolvedToolName === 'post_message')
+        && !context.hasPendingToolCalls
+      ) {
+        return 'completed'
+      }
+      // If the transcript was tail-truncated before the preceding PLANNER_RESPONSE,
+      // fall back to the send_message completion envelope text.
+      if (!context.lastResolvedToolName && typeof lastStep.content === 'string' && /^Message sent to /i.test(lastStep.content.trim())) {
+        return 'completed'
+      }
+      return 'running'
+    }
+    return 'completed'
+  }
   return 'unknown'
 }
 
@@ -255,6 +288,11 @@ export function parseAntigravityTranscriptContent(
   let latestModel: string | undefined
   let latestTimestamp: string | undefined
   let finalResult: string | undefined
+  let sentMessageResult: string | undefined
+  let toolUses = 0
+  let lastToolName: string | undefined
+  let lastResolvedToolName: string | undefined
+  let lastStepToolCallCount = 0
   let lastStep: RawTranscriptStep | undefined
   let fallbackIndex = 0
 
@@ -322,11 +360,15 @@ export function parseAntigravityTranscriptContent(
       }
 
       const rawToolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : []
+      let stepToolCalls = 0
       rawToolCalls.forEach((rawTool, toolIndex) => {
         if (!isRecord(rawTool)) return
         const tool = rawTool as RawToolCall
         const name = nonEmptyString(tool.name)
         if (!name) return
+        stepToolCalls += 1
+        toolUses += 1
+        lastToolName = name
         const toolId = nonEmptyString(tool.id)
           ?? nonEmptyString(tool.call_id)
           ?? `ag-${idPrefix}-s${stepIndex}-t${toolIndex}`
@@ -341,11 +383,15 @@ export function parseAntigravityTranscriptContent(
 
         // Antigravity subagents report back via `send_message`, swarm workers via `post_message`.
         if (name === 'send_message' && typeof input.Message === 'string' && input.Message.trim()) {
-          finalResult = input.Message.trim()
+          sentMessageResult = input.Message.trim()
+          finalResult = sentMessageResult
         } else if (name === 'post_message' && typeof input.text === 'string' && input.text.trim()) {
-          finalResult = input.text.trim()
+          sentMessageResult = input.text.trim()
+          finalResult = sentMessageResult
         }
       })
+      lastStepToolCallCount = stepToolCalls
+      lastResolvedToolName = undefined
 
       if (blocks.length > 0) {
         messages.push({
@@ -367,6 +413,8 @@ export function parseAntigravityTranscriptContent(
           ? JSON.stringify(step.content)
           : ''
       const pending = pendingToolCalls.shift()
+      lastResolvedToolName = pending?.name
+      lastStepToolCallCount = 0
       if (pending) {
         const isError = looksLikeErrorStep(step, content)
         messages.push({
@@ -392,6 +440,9 @@ export function parseAntigravityTranscriptContent(
     }
 
     if (stepType === 'USER_INPUT' || stepSource === 'USER_EXPLICIT') {
+      sentMessageResult = undefined
+      lastResolvedToolName = undefined
+      lastStepToolCallCount = 0
       const content = typeof step.content === 'string' ? step.content : ''
       if (content.trim()) {
         messages.push({
@@ -405,6 +456,9 @@ export function parseAntigravityTranscriptContent(
     }
 
     if (stepType === 'SYSTEM_MESSAGE') {
+      sentMessageResult = undefined
+      lastResolvedToolName = undefined
+      lastStepToolCallCount = 0
       const rawContent = typeof step.content === 'string' ? step.content : ''
       if (!rawContent.trim()) continue
       const parsedEnvelope = parseSystemMessageEnvelope(rawContent)
@@ -425,6 +479,8 @@ export function parseAntigravityTranscriptContent(
     }
 
     // Fallback for any unrecognized future step types carrying content
+    lastResolvedToolName = undefined
+    lastStepToolCallCount = 0
     const fallbackContent = typeof step.content === 'string' ? step.content : ''
     if (fallbackContent.trim()) {
       messages.push({
@@ -448,14 +504,28 @@ export function parseAntigravityTranscriptContent(
       }
     : undefined
 
+  const effectiveFinalResult = sentMessageResult ?? finalResult
+
+  const lastStepType = typeof lastStep?.type === 'string' ? lastStep.type.toUpperCase() : ''
+  const lastStepStatus = typeof lastStep?.status === 'string' ? lastStep.status.toUpperCase() : ''
+  const lastStepIsToolError =
+    lastStepType === 'GENERIC' && (lastStepStatus === 'ERROR' || lastStepStatus === 'FAILED')
+
   return {
     conversationId,
     messages,
     ...(usage ? { usage } : {}),
     ...(latestModel ? { model: latestModel } : {}),
     ...(parseAntigravityModelEffort(latestModel) ? { effort: parseAntigravityModelEffort(latestModel) } : {}),
-    status: deriveTranscriptStatus(lastStep),
-    ...(finalResult ? { finalResult } : {}),
+    status: deriveTranscriptStatus(lastStep, {
+      lastResolvedToolName,
+      lastStepToolCallCount,
+      hasPendingToolCalls: pendingToolCalls.length > 0,
+    }),
+    ...(lastStepIsToolError ? { lastStepIsToolError: true } : {}),
+    ...(effectiveFinalResult ? { finalResult: effectiveFinalResult } : {}),
+    ...(toolUses > 0 ? { toolUses } : {}),
+    ...(lastToolName ? { lastToolName } : {}),
     ...(latestTimestamp ? { updatedAt: latestTimestamp } : {}),
     truncated: options.truncated === true,
     historyComplete: options.historyComplete !== false,

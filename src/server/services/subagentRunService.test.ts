@@ -2385,4 +2385,149 @@ describe('getSubagentRunByAgentId', () => {
       launchSpy.mockRestore()
     }
   })
+
+  it('keeps an ALIVE Antigravity subagent in running status between DONE tool steps before send_message arrives', async () => {
+    await setupTmpConfigDir()
+    const agyAppData = path.join(tmpDir!, 'agy-app-data-midrun')
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-000000000009'
+    const nativeSessionId = 'native-midrun-parent'
+    const childId = 'child-midrun-reviewer'
+    const projectDir = '-tmp-agy-midrun'
+
+    await writeSessionFile(projectDir, sessionId, [
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'call_midrun_review',
+            name: 'Agent',
+            input: {
+              Prompt: 'Review uncommitted diff',
+              Role: 'Independent Code Reviewer',
+              TypeName: 'research',
+              description: 'Independent Code Reviewer',
+              subagent_type: 'research',
+              antigravityToolName: 'invoke_subagent',
+            },
+          }],
+        },
+        uuid: 'midrun-u1',
+        timestamp: '2026-11-28T07:48:01Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'call_midrun_review',
+            content: `Async agent launched successfully.\nThe agent is working in the background. You will be notified automatically when it completes.\nagentId: ${childId}\nCreated the following subagent:\n{"conversationId":"${childId}"}`,
+          }],
+        },
+        uuid: 'midrun-r1',
+        timestamp: '2026-11-28T07:48:03Z',
+      },
+    ])
+
+    const subagentsDir = path.join(agyAppData, 'brain', nativeSessionId, '.system_generated', 'subagents')
+    await fs.mkdir(subagentsDir, { recursive: true })
+    await fs.writeFile(
+      path.join(subagentsDir, `${childId}.json`),
+      JSON.stringify({
+        conversationId: childId,
+        subagentDescriptor: { typeName: 'research', role: 'Independent Code Reviewer' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 10,
+        workspaceUris: ['file:///tmp/agy-midrun'],
+      }),
+      'utf8',
+    )
+
+    const logDir = path.join(agyAppData, 'brain', childId, '.system_generated', 'logs')
+    await fs.mkdir(logDir, { recursive: true })
+    await fs.writeFile(
+      path.join(logDir, 'transcript.jsonl'),
+      [
+        { step_index: 0, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T07:48:03Z', content: 'Review diff' },
+        {
+          step_index: 1,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: '2026-11-28T07:48:04Z',
+          model: 'gemini-3.5-pro-high',
+          tool_calls: [{ name: 'read_file', args: { Path: '"/tmp/agy-midrun/a.ts"' } }],
+        },
+        { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T07:48:05Z', content: 'Showing lines 1-20' },
+      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
+      'utf8',
+    )
+
+    const launchSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`),
+      projectDir,
+      workDir: '/tmp/agy-midrun',
+      transcriptMessageCount: 2,
+      customTitle: null,
+      runtimeProviderId: 'antigravity-acp',
+      nativeSessionId,
+    } as Awaited<ReturnType<typeof sessionService.getSessionLaunchInfo>>)
+
+    try {
+      // Passing liveTaskId === toolUseId must NOT shadow resolveAntigravityChildFromParent
+      const run = await getSubagentRunByTool(sessionId, 'call_midrun_review', 'call_midrun_review', { appDataDir: agyAppData })
+      expect(run).not.toBeNull()
+      expect(run?.agentId).toBe(childId)
+      expect(run?.status).toBe('running')
+      // Async launch banner must NOT be surfaced as the run's result
+      expect(run?.result).toBeUndefined()
+
+      // Recoverable mid-run tool error (GENERIC ERROR while ALIVE) must stay running
+      await fs.writeFile(
+        path.join(logDir, 'transcript.jsonl'),
+        [
+          { step_index: 0, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T07:48:03Z', content: 'Review diff' },
+          {
+            step_index: 1,
+            source: 'MODEL',
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: '2026-11-28T07:48:04Z',
+            model: 'gemini-3.5-pro-high',
+            tool_calls: [{ name: 'run_command', args: { CommandLine: '"rg missing"' } }],
+          },
+          { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'ERROR', created_at: '2026-11-28T07:48:05Z', content: 'Command exited with code 1.' },
+        ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
+        'utf8',
+      )
+      const afterToolErr = await getSubagentRunByTool(sessionId, 'call_midrun_review', 'call_midrun_review', { appDataDir: agyAppData })
+      expect(afterToolErr?.status).toBe('running')
+
+      // Once send_message finishes without a persisted task_notification, transcript.finalResult surfaces instead of the async launch banner
+      await fs.writeFile(
+        path.join(logDir, 'transcript.jsonl'),
+        [
+          { step_index: 0, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-11-28T07:48:03Z', content: 'Review diff' },
+          {
+            step_index: 1,
+            source: 'MODEL',
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: '2026-11-28T07:48:04Z',
+            model: 'gemini-3.5-pro-high',
+            tool_calls: [{ name: 'send_message', args: { Message: '"Verified review report"', Recipient: `"${nativeSessionId}"` } }],
+          },
+          { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-11-28T07:48:05Z', content: `Message sent to "${nativeSessionId}".` },
+        ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
+        'utf8',
+      )
+      const completed = await getSubagentRunByTool(sessionId, 'call_midrun_review', 'call_midrun_review', { appDataDir: agyAppData })
+      expect(completed?.status).toBe('completed')
+      expect(completed?.result).toBe('Verified review report')
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
 })

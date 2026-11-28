@@ -2309,6 +2309,12 @@ export class ConversationService {
         const sent = activeSession.antigravity.send([{ type: 'text', text }], replayUuid)
         return sent ? { status: 'queued' } : { status: 'busy' }
       }
+      if (request.subtype === 'stop_task') {
+        throw new AntigravityError(
+          'ANTIGRAVITY_UNSUPPORTED',
+          'Stopping an individual subagent is not supported in Antigravity sessions. Stop the active turn instead.',
+        )
+      }
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'This Claude Code action is unavailable in an Antigravity session.')
     }
 

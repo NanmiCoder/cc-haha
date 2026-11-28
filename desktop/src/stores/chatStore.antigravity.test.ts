@@ -386,4 +386,63 @@ describe('chatStore Antigravity runtime preservation & permission classification
     expect(taskState.tasks[0]).toMatchObject({ subject: 'Audit ACP adapter', status: 'completed' })
     expect(taskState.tasks[1]).toMatchObject({ subject: 'Run E2E suite', status: 'in_progress' })
   })
+
+  it('flushes interim streaming text on status(flushStream=true) while waiting for a background Antigravity subagent', () => {
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'system_notification',
+      subtype: 'task_started',
+      message: 'Independent Code Reviewer',
+      data: {
+        task_id: 'child-ag-1',
+        tool_use_id: 'call_review_1',
+        task_type: 'local_agent',
+        description: 'Independent Code Reviewer',
+      },
+    })
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'content_start',
+      blockType: 'text',
+    })
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'content_delta',
+      text: '已交给独立审查 Agent，等待返回。',
+    })
+
+    // Normal status without flushStream keeps streamingText intact
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'status',
+      state: 'tool_executing',
+      verb: 'Independent Code Reviewer',
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.chatState).toBe('streaming')
+
+    // Explicit flushStream settles the interim message and clears the blinking streaming cursor
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'status',
+      state: 'tool_executing',
+      verb: 'Independent Code Reviewer',
+      flushStream: true,
+    })
+
+    const session = useChatStore.getState().sessions[SESSION_ID]!
+    expect(session.chatState).toBe('tool_executing')
+    expect(session.streamingText).toBe('')
+    expect(session.activeThinkingId).toBeNull()
+    expect(session.messages.some(m => m.type === 'assistant_text' && m.content === '已交给独立审查 Agent，等待返回。')).toBe(true)
+    expect(session.backgroundAgentTasks?.['child-ag-1']?.status).toBe('running')
+
+    // Also clears activeThinkingId if thinking was active when flushStream arrives
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'thinking',
+      text: 'Waiting on reviewer...',
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.activeThinkingId).not.toBeNull()
+    useChatStore.getState().handleServerMessage(SESSION_ID, {
+      type: 'status',
+      state: 'tool_executing',
+      verb: 'Independent Code Reviewer',
+      flushStream: true,
+    })
+    expect(useChatStore.getState().sessions[SESSION_ID]?.activeThinkingId).toBeNull()
+  })
 })

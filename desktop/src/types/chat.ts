@@ -150,6 +150,8 @@ export type ServerMessage =
       attemptStart?: boolean
       /** Re-sent about once a second while a compaction summary streams; absent on the first `compacting` status. */
       compactProgress?: CompactProgress
+      /** Explicitly flush any open streaming text block into a settled assistant message. */
+      flushStream?: boolean
     }
   | {
       type: 'runtime_config_applied'

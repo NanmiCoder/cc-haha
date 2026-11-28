@@ -5535,7 +5535,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         // retried, so its task bar change is no longer undoable.
         if (msg.attemptStart) taskBarBeforeAttemptBySession.delete(sessionId)
         update((session) => {
-          const bufferedThinking = (msg.state === 'idle' || msg.state === 'compacting')
+          const bufferedThinking = (msg.state === 'idle' || msg.state === 'compacting' || msg.flushStream === true)
             ? consumePendingThinkingDelta(sessionId)
             : ''
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
@@ -5545,8 +5545,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           // streaming one markdown reply. Keep that turn intact so we do not
           // split formatting markers (for example backticks/strong markers)
           // across separate bubbles.
-          const preserveStreamingTurn = hasPendingStreamText && msg.state !== 'idle' && msg.state !== 'compacting'
-          const shouldFlush = hasPendingStreamText && (msg.state === 'idle' || msg.state === 'compacting')
+          const preserveStreamingTurn =
+            hasPendingStreamText && msg.state !== 'idle' && msg.state !== 'compacting' && msg.flushStream !== true
+          const shouldFlush =
+            hasPendingStreamText && (msg.state === 'idle' || msg.state === 'compacting' || msg.flushStream === true)
           let nextMessages = applyPendingThinkingDeltaToMessages(session.messages, bufferedThinking)
           if (shouldFlush) {
             nextMessages = appendAssistantTextMessage(nextMessages, pendingText, Date.now())
@@ -5583,7 +5585,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               : msg.verb && msg.verb !== 'Thinking'
                 ? msg.verb
                 : '',
-            ...(msg.state === 'idle' ? { activeThinkingId: null, awaitingStopIdle: false } : {}),
+            ...(msg.state === 'idle' ? { activeThinkingId: null, awaitingStopIdle: false } : msg.flushStream === true ? { activeThinkingId: null } : {}),
             ...(msg.state === 'idle' ? { apiRetry: null, streamingFallback: null } : {}),
             // Any new model activity makes the previous turn's prediction stale.
             ...(msg.state !== 'idle' && session.promptSuggestion ? { promptSuggestion: null } : {}),
