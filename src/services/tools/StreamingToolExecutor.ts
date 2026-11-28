@@ -9,6 +9,7 @@ import { findToolByName, type Tools, type ToolUseContext } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { createChildAbortController } from '../../utils/abortController.js'
+import { createDuplicateToolResult, toolUseSignature } from './duplicateToolUse.js'
 import { runToolUse } from './toolExecution.js'
 
 type MessageUpdate = {
@@ -46,6 +47,9 @@ export class StreamingToolExecutor {
   // so sibling subprocesses die immediately instead of running to completion.
   // Aborting this does NOT abort the parent — query.ts won't end the turn.
   private siblingAbortController: AbortController
+  // Signature → first tool_use id. A repeated verbatim call arrived before any
+  // result could reach the model, so later copies must not run again.
+  private seenToolUseSignatures = new Map<string, string>()
   private discarded = false
   // Signal to wake up getRemainingResults when progress is available
   private progressAvailableResolve?: () => void
@@ -101,6 +105,21 @@ export class StreamingToolExecutor {
       })
       return
     }
+
+    const signature = toolUseSignature(block)
+    if (this.seenToolUseSignatures.has(signature)) {
+      this.tools.push({
+        id: block.id,
+        block,
+        assistantMessage,
+        status: 'completed',
+        isConcurrencySafe: true,
+        pendingProgress: [],
+        results: [createDuplicateToolResult(block, assistantMessage)],
+      })
+      return
+    }
+    this.seenToolUseSignatures.set(signature, block.id)
 
     const parsedInput = toolDefinition.inputSchema.safeParse(block.input)
     const isConcurrencySafe = parsedInput?.success
