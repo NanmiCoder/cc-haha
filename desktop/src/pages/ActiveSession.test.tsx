@@ -3631,7 +3631,7 @@ describe('ActiveSession delegated sessions', () => {
     expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(panelStaysOpen)
   })
 
-  it('hides Side Chat action for Antigravity ACP sessions', () => {
+  it('shows Side Chat action for Antigravity ACP sessions', () => {
     const agId = 'ag-active-session'
     useSettingsStore.setState({ locale: 'en' })
     useTabStore.setState({ activeTabId: agId, tabs: [{ sessionId: agId, title: 'AG', type: 'session', status: 'idle' }] })
@@ -3662,7 +3662,7 @@ describe('ActiveSession delegated sessions', () => {
     })
 
     render(<ActiveSession />)
-    expect(screen.queryByRole('button', { name: /side chat/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /side chat/i })).toBeInTheDocument()
   })
 
   it('uses a 44px touch target for the mobile side-chat button and shows the workspace-unavailable banner on mobile', () => {

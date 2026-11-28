@@ -7,9 +7,13 @@ const OLDER_TOOL_RESULT_MAX_CHARS = 320
 const TOOL_ARGS_MAX_CHARS = 240
 const RECENT_TAIL_ENTRY_COUNT = 8
 const CLOSING_WRAPPER_TAG = '</forked_conversation_history>'
+const SIDE_CHAT_CLOSING_WRAPPER_TAG = '</side_chat_parent_history>'
 
 export const ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND =
   'When the first user message begins with a <forked_conversation_history> block, treat it as the established prior conversation history from before this branch was forked and continue directly from the latest user request without repeating or mentioning the wrapper.'
+
+export const ANTIGRAVITY_SIDE_CHAT_SYSTEM_PROMPT_APPEND =
+  'When the first user message begins with a <side_chat_parent_history> block, treat it strictly as a read-only reference snapshot of the parent conversation at the moment this side chat opened. Do not continue the parent conversation\'s pending tasks, plans, tool calls, approvals, edits, or subagents; respond only to the new user message in this side chat without repeating or mentioning the wrapper.'
 
 type RawContentBlock = Record<string, unknown>
 
@@ -23,10 +27,10 @@ function truncateText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n... [truncated ${omitted} chars]`
 }
 
-function escapeClosingWrapperTag(text: string): string {
-  return text.includes(CLOSING_WRAPPER_TAG)
-    ? text.replaceAll(CLOSING_WRAPPER_TAG, '<\\/forked_conversation_history>')
-    : text
+function escapeClosingTag(text: string, closingTag: string): string {
+  if (!text.includes(closingTag)) return text
+  const escaped = `<\\/${closingTag.slice(2)}`
+  return text.replaceAll(closingTag, escaped)
 }
 
 function summarizeToolInput(input: unknown): string {
@@ -180,8 +184,19 @@ function wrapForkHistory(body: string): string {
     'This session was forked from an earlier conversation at a chosen checkpoint.',
     'Continue seamlessly from this prior transcript as established context; do not mention this wrapper unless asked.',
     '',
-    escapeClosingWrapperTag(body),
+    escapeClosingTag(body, CLOSING_WRAPPER_TAG),
     CLOSING_WRAPPER_TAG,
+  ].join('\n')
+}
+
+function wrapSideChatHistory(body: string): string {
+  return [
+    '<side_chat_parent_history>',
+    'Reference-only snapshot of the parent conversation at the moment this independent side conversation was opened.',
+    'Do not continue the parent conversation\'s tasks, plans, tool calls, approvals, edits, or subagents; answer only the new message below and do not mention this wrapper unless asked.',
+    '',
+    escapeClosingTag(body, SIDE_CHAT_CLOSING_WRAPPER_TAG),
+    SIDE_CHAT_CLOSING_WRAPPER_TAG,
   ].join('\n')
 }
 
@@ -197,7 +212,7 @@ function hasCompactSummaryAfter(entries: Record<string, unknown>[], boundaryInde
   return false
 }
 
-export function buildAntigravityForkSeedContext(
+function buildBudgetedSeedBody(
   entries: Record<string, unknown>[],
   options: { maxChars?: number } = {},
 ): string | undefined {
@@ -227,11 +242,11 @@ export function buildAntigravityForkSeedContext(
 
   const fullBody = rendered.map((item) => item.text).join('\n\n')
   if (fullBody.length <= maxChars) {
-    return wrapForkHistory(fullBody)
+    return fullBody
   }
 
   if (rendered.length === 1) {
-    return wrapForkHistory(truncateText(rendered[0]!.text, maxChars))
+    return truncateText(rendered[0]!.text, maxChars)
   }
 
   // Budgeted trimming: preserve the opening user goal + the most recent tail,
@@ -304,7 +319,57 @@ export function buildAntigravityForkSeedContext(
     sections.push(tailParts.join('\n\n'))
   }
 
-  return wrapForkHistory(sections.join('\n\n'))
+  return sections.join('\n\n')
+}
+
+export function buildAntigravityForkSeedContext(
+  entries: Record<string, unknown>[],
+  options: { maxChars?: number } = {},
+): string | undefined {
+  const body = buildBudgetedSeedBody(entries, options)
+  return body ? wrapForkHistory(body) : undefined
+}
+
+export function buildAntigravitySideChatSeedContext(
+  entries: Record<string, unknown>[],
+  options: { maxChars?: number } = {},
+): string | undefined {
+  const body = buildBudgetedSeedBody(entries, options)
+  return body ? wrapSideChatHistory(body) : undefined
+}
+
+export type AntigravitySideChatSnapshot = {
+  resumeAt: string
+  seedContext: string
+}
+
+export async function extractAntigravitySideChatSnapshot(
+  filePath: string,
+  options: { maxChars?: number } = {},
+): Promise<AntigravitySideChatSnapshot | null> {
+  if (!filePath) return null
+  let content: Buffer
+  try {
+    content = await readFile(filePath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  const entries = parseJSONL<Record<string, unknown>>(content)
+  let resumeAt: string | undefined
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]
+    if (!entry || entry.isSidechain === true || entry.isMeta === true) continue
+    if (entry.type !== 'user' && entry.type !== 'assistant') continue
+    if (typeof entry.uuid === 'string' && entry.uuid.trim()) {
+      resumeAt = entry.uuid
+      break
+    }
+  }
+  if (!resumeAt) return null
+  const seedContext = buildAntigravitySideChatSeedContext(entries, options)
+  if (!seedContext) return null
+  return { resumeAt, seedContext }
 }
 
 export type LoadAntigravityForkSeedResult =

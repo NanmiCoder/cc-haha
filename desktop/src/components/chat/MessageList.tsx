@@ -496,9 +496,6 @@ function SelectableChatMessage({
   children: ReactNode
 }) {
   const isLean = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.agentProfile === 'lean'))
-  const isAntigravityRuntime = useSessionRuntimeStore(state => Boolean(sessionId && state.selections[sessionId]?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID))
-  const isAntigravitySession = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID))
-  const isAntigravity = isAntigravityRuntime || isAntigravitySession
   const rootRef = useRef<HTMLDivElement>(null)
   const selectionMenuRef = useRef<HTMLDivElement>(null)
   const lastSelectionPointerRef = useRef<SelectionPointer | null>(null)
@@ -667,7 +664,7 @@ function SelectableChatMessage({
       }}
     >
       {children}
-      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean || isAntigravity ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
+      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
     </div>
   )
 }

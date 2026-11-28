@@ -2144,4 +2144,67 @@ describe('controlled runtime pickers outside the composer', () => {
 
     expect(screen.queryByRole('button', { name: /Low|Medium|High|X-High/ })).not.toBeInTheDocument()
   })
+
+  it('does not overwrite persisted Antigravity last selection when switching model or effort inside a side chat', async () => {
+    localStorage.setItem('cc-haha-antigravity-last-selection', JSON.stringify({ modelId: 'gemini-4-neon', effortLevel: 'high' }))
+    try {
+      useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+      useProviderStore.setState({
+        hasLoadedProviders: true,
+        antigravityDiscovering: false,
+        antigravity: {
+          id: 'antigravity-acp',
+          kind: 'acp',
+          status: 'ready',
+          models: [
+            { id: 'gemini-4-neon', name: 'Gemini 4 Neon', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+            { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+          ],
+          currentModelId: 'gemini-4-neon',
+          currentEffortLevel: 'high',
+        },
+      })
+      useSessionRuntimeStore.getState().setSelection('side-agy-ephemeral', {
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-4-neon',
+        effortLevel: 'high',
+      })
+
+      const onRuntimeSelectionChange = vi.fn()
+      render(
+        <ModelSelector
+          runtimeKey="side-agy-ephemeral"
+          lockedProviderId="antigravity-acp"
+          onRuntimeSelectionChange={onRuntimeSelectionChange}
+        />,
+      )
+
+      // Switch model inside side chat (high is supported by Flash, so effort is preserved)
+      await clickByRole('Gemini 4 Neon, Antigravity')
+      fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /Gemini 3\.8 Flash/ }))
+      expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'high',
+      })
+
+      // Switch effort inside side chat
+      await clickByRole(/High/)
+      const effortPopover = within(screen.getByTestId('reasoning-effort-popover'))
+      fireEvent.keyDown(effortPopover.getByRole('slider'), { key: 'Home' })
+      expect(onRuntimeSelectionChange).toHaveBeenLastCalledWith({
+        providerId: 'antigravity-acp',
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+      })
+
+      // Global persisted Antigravity default must remain untouched
+      expect(JSON.parse(localStorage.getItem('cc-haha-antigravity-last-selection') ?? '{}')).toEqual({
+        modelId: 'gemini-4-neon',
+        effortLevel: 'high',
+      })
+    } finally {
+      localStorage.removeItem('cc-haha-antigravity-last-selection')
+    }
+  })
 })

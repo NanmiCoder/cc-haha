@@ -55,6 +55,7 @@ import {
 import { AntigravityConversation } from './antigravityConversation.js'
 import {
   ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND,
+  ANTIGRAVITY_SIDE_CHAT_SYSTEM_PROMPT_APPEND,
   loadAntigravityForkSeedContext,
 } from './antigravityForkContext.js'
 import {
@@ -794,7 +795,7 @@ export class ConversationService {
     const additionalDirectories = (options?.teamWorker
       ? (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.additionalDirectories
       : launchInfo?.additionalDirectories) ?? []
-    if (isAntigravity && (!launchInfo || side || options?.teamWorker || launchInfo.agentProfile === 'lean' || launchInfo.repository?.worktree)) {
+    if (isAntigravity && (!launchInfo || (side && side.launchInfo.runtimeProviderId !== ANTIGRAVITY_PROVIDER_ID) || options?.teamWorker || launchInfo.agentProfile === 'lean' || launchInfo.repository?.worktree)) {
       throw new AntigravityError('ANTIGRAVITY_UNSUPPORTED', 'Antigravity requires a standard chat in the original checkout.')
     }
     if (isAntigravity && !sessionService.shouldPersistSession()) {
@@ -1168,23 +1169,27 @@ export class ConversationService {
     additionalDirectories: string[],
     options?: SessionStartOptions,
   ): Promise<void> {
+    const side = getSideChat(sessionId)
+    const isSideChat = Boolean(side)
     const modelId = options?.model ?? launchInfo.runtimeModelId ?? ANTIGRAVITY_DEFAULT_MODEL
     const effortLevel = options?.effort ?? launchInfo.effortLevel
     const permissionMode = options?.permissionMode ?? launchInfo.permissionMode ?? 'default'
-    const forkSeedPending = launchInfo.antigravityForkSeedPending === true
-    // While fork context seeding is still pending, never try to `session/resume`
-    // an unprompted native session (e.g. after restart or permission-mode recycle);
-    // always open a clean `session/new` so the first prompt seeds the conversation.
-    const nativeId = forkSeedPending ? undefined : launchInfo.nativeSessionId
-    if (!nativeId && launchInfo.transcriptMessageCount > 0 && !forkSeedPending) {
+    const forkSeedPending = !isSideChat && launchInfo.antigravityForkSeedPending === true
+    // While fork context seeding is still pending — or for an ephemeral side chat —
+    // never try to `session/resume` a parent or unprompted native session; always
+    // open a clean `session/new` so the first prompt seeds the conversation.
+    const nativeId = isSideChat || forkSeedPending ? undefined : launchInfo.nativeSessionId
+    if (!isSideChat && !nativeId && launchInfo.transcriptMessageCount > 0 && !forkSeedPending) {
       throw new AntigravityError('ANTIGRAVITY_RESUME_FAILED', 'This history is not linked to an Antigravity session. Start a new chat for Antigravity.')
     }
     const loadedForkSeed = forkSeedPending
       ? await loadAntigravityForkSeedContext(launchInfo.filePath)
       : undefined
-    const pendingForkSeedContext = loadedForkSeed?.status === 'loaded'
-      ? loadedForkSeed.context
-      : undefined
+    const pendingForkSeedContext = isSideChat
+      ? side?.antigravitySeedContext
+      : loadedForkSeed?.status === 'loaded'
+        ? loadedForkSeed.context
+        : undefined
     const retainForkSeedPending = forkSeedPending && loadedForkSeed?.status !== 'empty'
 
     const bridge = await createAntigravityComputerUseBridge(sessionId)
@@ -1208,7 +1213,10 @@ export class ConversationService {
     const systemPromptParts = [
       bridge?.systemPromptAppend,
       browserUseBridge?.systemPromptAppend,
-      ...(pendingForkSeedContext ? [ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND] : []),
+      ...(isSideChat ? [SIDE_CHAT_BOUNDARY] : []),
+      ...(pendingForkSeedContext
+        ? [isSideChat ? ANTIGRAVITY_SIDE_CHAT_SYSTEM_PROMPT_APPEND : ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND]
+        : []),
     ].filter((part): part is string => Boolean(part))
     const systemPromptAppend = systemPromptParts.length > 0 ? systemPromptParts.join('\n\n') : undefined
 
@@ -1231,6 +1239,9 @@ export class ConversationService {
     const effectiveEffortLevel = acp.hasEffortConfig ? effortLevel : undefined
     const assertSessionAvailable = () => {
       migrationMaintenance.assertAvailable()
+      if (side && (side.closed || side.started)) {
+        throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
+      }
       if (this.deletedSessions.has(sessionId)) throw new ConversationStartupError('Session was deleted before startup completed', 'SESSION_DELETED')
     }
     try {
@@ -1244,7 +1255,7 @@ export class ConversationService {
         workDir,
         repository,
         permissionMode: acp.permissionMode,
-        nativeSessionId: acp.sessionId,
+        ...(isSideChat ? {} : { nativeSessionId: acp.sessionId }),
         runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
         runtimeModelId: modelId,
         ...(effectiveEffortLevel ? { effortLevel: effectiveEffortLevel } : {}),
@@ -1306,39 +1317,46 @@ export class ConversationService {
     }
     const ownsSession = () => this.sessions.get(sessionId) === session
     const current = () => ownsSession() && !session.controlRevoked
+    if (side) {
+      side.started = true
+      side.antigravitySeedContext = undefined
+    }
     this.sessions.set(sessionId, session)
     session.antigravity = new AntigravityConversation(
       acp,
       message => {
         if (current()) this.handleSdkPayload(sessionId, JSON.stringify(message))
       },
-      messages => sessionService.appendAntigravityMessages(
-        sessionId,
-        acp.sessionId,
-        messages,
-        () => ownsSession() && (!session.controlRevoked || session.antigravityHistoryDraining === true),
-      ),
+      isSideChat
+        ? async () => {}
+        : messages => sessionService.appendAntigravityMessages(
+            sessionId,
+            acp.sessionId,
+            messages,
+            () => ownsSession() && (!session.controlRevoked || session.antigravityHistoryDraining === true),
+          ),
       {
         computerUseBridge: bridge,
         browserUseBridge,
         ...(pendingForkSeedContext ? {
           pendingForkSeedContext,
-          onForkSeedConsumed: async () => {
-            if (!ownsSession() || session.controlRevoked) return
-            await sessionService.appendSessionMetadata(sessionId, {
-              workDir,
-              repository,
-              permissionMode: acp.permissionMode,
-              nativeSessionId: acp.sessionId,
-              runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
-              runtimeModelId: acp.modelId ?? modelId,
-              ...(acp.effortLevel ? { effortLevel: acp.effortLevel } : {}),
-              antigravityForkSeedPending: false,
-            })
-          },
+          ...(!isSideChat ? {
+            onForkSeedConsumed: async () => {
+              if (!ownsSession() || session.controlRevoked) return
+              await sessionService.appendSessionMetadata(sessionId, {
+                workDir,
+                repository,
+                permissionMode: acp.permissionMode,
+                nativeSessionId: acp.sessionId,
+                runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+                runtimeModelId: acp.modelId ?? modelId,
+                ...(acp.effortLevel ? { effortLevel: acp.effortLevel } : {}),
+                antigravityForkSeedPending: false,
+              })
+            },
+          } : {}),
         } : {}),
-        sessionId,
-        workDir,
+        ...(!isSideChat ? { sessionId, workDir } : {}),
         onAvailableCommands: (commands: AntigravitySlashCommand[]) => {
           session.initMessage = {
             ...session.initMessage,
@@ -1385,7 +1403,7 @@ export class ConversationService {
         },
       },
     )
-    rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
+    if (!isSideChat) rememberAntigravitySwarmSessionMapping(acp.sessionId, sessionId)
     void acp.proc.exited.then(async () => {
       await session.antigravity!.waitForExit()
       await Promise.allSettled([
@@ -1450,6 +1468,7 @@ export class ConversationService {
    * and injected system prompts before the next user turn.
    */
   needsAntigravityCapabilityRestart(sessionId: string): boolean {
+    if (isSideChatId(sessionId)) return false
     const session = this.sessions.get(sessionId)
     if (!session?.antigravity || session.controlRevoked) return false
     if (Boolean(session.antigravityBrowserUseBridge) !== isBrowserUseEnabled()) return true
@@ -2879,6 +2898,10 @@ export class ConversationService {
     this.clearSessionAutoAnswerWaits(session)
     session.pendingPermissionRequests.clear()
     if (!options?.requireExit) this.sessions.delete(sessionId)
+    if (session.antigravity && isSideChatId(sessionId)) {
+      session.antigravity.cancel()
+      await session.antigravity.acp.closeSession(1_000)
+    }
     await this.stopProcessAndWait(sessionId, session, timeoutMs, options?.requireExit)
     await Promise.allSettled([
       session.antigravityBridge?.close(),
@@ -2986,7 +3009,13 @@ export class ConversationService {
   }
 
   markSessionDeleted(sessionId: string): void {
-    for (const childId of closeSideChatsForParent(sessionId)) this.stopSession(childId)
+    for (const childId of closeSideChatsForParent(sessionId)) {
+      if (this.sessions.get(childId)?.antigravity) {
+        void this.stopSessionAndWait(childId)
+      } else {
+        this.stopSession(childId)
+      }
+    }
     this.deletedSessions.add(sessionId)
     this.stopSession(sessionId)
   }

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { sideChatsApi, type SideChatSession } from '@/api/sideChats'
+import { ANTIGRAVITY_ACP_DEFAULT_MODEL_ID, ANTIGRAVITY_ACP_PROVIDER_ID } from '@/constants/antigravityAcp'
 import { registerSideChatSession, unregisterSideChatSession } from '@/lib/sideChatSessions'
 import { resolveDefaultRuntimeSelection } from '@/lib/runtimeSelection'
 import { useChatStore } from '@/stores/chatStore'
@@ -32,13 +33,53 @@ export const useSideChatStore = create<SideChatStore>((set, get) => ({
           const parent = useSessionStore.getState().sessions.find(session => session.id === parentSessionId)
           const settings = useSettingsStore.getState()
           const providers = useProviderStore.getState()
-          const selection = useSessionRuntimeStore.getState().selections[parentSessionId]
-            ?? (parent?.runtimeModelId ? { providerId: parent.runtimeProviderId ?? null, modelId: parent.runtimeModelId, effortLevel: parent.effortLevel }
-              : resolveDefaultRuntimeSelection(providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id))
+          const parentSelection = useSessionRuntimeStore.getState().selections[parentSessionId]
+          const antigravityParentSelection = parentSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID
+            ? parentSelection
+            : undefined
+          const isAntigravityChild =
+            child.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID ||
+            (child.runtimeProviderId === undefined && (
+              antigravityParentSelection !== undefined ||
+              parent?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
+            ))
+          const selection = isAntigravityChild
+            ? (() => {
+                const hasResolvedChildModel = Boolean(child.runtimeModelId && child.runtimeModelId !== ANTIGRAVITY_ACP_DEFAULT_MODEL_ID)
+                const modelId = hasResolvedChildModel
+                  ? child.runtimeModelId!
+                  : antigravityParentSelection?.modelId
+                    ?? child.runtimeModelId
+                    ?? parent?.runtimeModelId
+                    ?? providers.antigravity?.currentModelId
+                    ?? ANTIGRAVITY_ACP_DEFAULT_MODEL_ID
+                const effortLevel = child.effortLevel !== undefined
+                  ? child.effortLevel
+                  : hasResolvedChildModel
+                    ? undefined
+                    : antigravityParentSelection?.effortLevel ?? parent?.effortLevel
+                return {
+                  providerId: ANTIGRAVITY_ACP_PROVIDER_ID,
+                  modelId,
+                  ...(effortLevel ? { effortLevel } : {}),
+                }
+              })()
+            : parentSelection
+              ?? (child.runtimeModelId || parent?.runtimeModelId
+                ? {
+                    providerId: child.runtimeProviderId !== undefined ? child.runtimeProviderId : (parent?.runtimeProviderId ?? null),
+                    modelId: child.runtimeModelId ?? parent!.runtimeModelId!,
+                    effortLevel: child.effortLevel ?? parent?.effortLevel,
+                  }
+                : resolveDefaultRuntimeSelection(providers.activeId, settings.activeProviderName, providers.providers, settings.currentModel?.id))
           registerSideChatSession(child.sessionId, parentSessionId)
           useSessionRuntimeStore.getState().setSelection(child.sessionId, { ...selection })
           set(state => ({ entries: { ...state.entries, [child.sessionId]: {
-            ...child, permissionMode: child.permissionMode ?? parent?.permissionMode as SideChatSession['permissionMode'],
+            ...child,
+            permissionMode: child.permissionMode ?? parent?.permissionMode as SideChatSession['permissionMode'],
+            runtimeProviderId: child.runtimeProviderId !== undefined ? child.runtimeProviderId : selection.providerId,
+            runtimeModelId: child.runtimeModelId ?? selection.modelId,
+            effortLevel: child.effortLevel ?? selection.effortLevel,
           } } }))
           useChatStore.getState().connectToSession(child.sessionId, { prewarm: false, applyRuntimeSelection: false })
           return child.sessionId

@@ -4607,9 +4607,109 @@ describe('ChatInput file mentions', () => {
     await waitFor(() => {
       expect(screen.getByText('/swarm')).toBeInTheDocument()
       expect(screen.getByText('/plan')).toBeInTheDocument()
+      expect(screen.getByText('/btw')).toBeInTheDocument()
     })
-    expect(screen.queryByText('/btw')).not.toBeInTheDocument()
     expect(screen.queryByText('/doctor')).not.toBeInTheDocument()
+  })
+
+  it('lists /btw in non-empty Antigravity sessions, hides it when empty, and routes /btw to side chat without interrupting main turns', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Antigravity Session',
+        createdAt: '2026-11-27T00:00:00.000Z',
+        modifiedAt: '2026-11-27T00:00:00.000Z',
+        messageCount: 0,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-4-neon',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(sessionId, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-neon',
+      effortLevel: 'high',
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().sessions[sessionId]!,
+          messages: [],
+          chatState: 'idle',
+          slashCommands: [],
+        },
+      },
+    })
+
+    render(<ChatInput sessionId={sessionId} />)
+
+    const btwOptions = () => screen.queryAllByRole('option').filter(option => option.textContent?.startsWith('/btw'))
+    setComposerText('/bt', 3)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(btwOptions()).toEqual([])
+
+    act(() => {
+      useChatStore.setState(state => ({
+        sessions: {
+          [sessionId]: {
+            ...state.sessions[sessionId]!,
+            chatState: 'streaming',
+            messages: [{ id: 'agy-1', type: 'user_text', content: 'build auth', timestamp: 1 }],
+          },
+        },
+      }))
+    })
+    setComposerText('', 0)
+    setComposerText('/bt', 3)
+    await waitFor(() => expect(btwOptions()).toHaveLength(1))
+    expect(btwOptions()[0]!.textContent).toContain('[question]')
+
+    setComposerText('/btw Why did we choose JWT?', 27)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    await waitFor(() => expect(mocks.sideOpen).toHaveBeenCalledWith(sessionId, { question: 'Why did we choose JWT?', submit: true }))
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    expect(useChatStore.getState().sessions[sessionId]?.queuedUserMessages ?? []).toEqual([])
+    expect(getComposerText()).toBe('')
+  })
+
+  it('locks ModelSelector to Antigravity and limits permission modes inside an Antigravity side chat composer', async () => {
+    const childId = 'side-agy-composer'
+    useSideChatStore.setState({
+      entries: {
+        [childId]: {
+          sessionId: childId,
+          parentSessionId: sessionId,
+          workDir: '/repo',
+          title: 'Side chat',
+          ephemeral: true,
+          runtimeProviderId: 'antigravity-acp',
+          runtimeModelId: 'gemini-4-neon',
+          effortLevel: 'high',
+        },
+      },
+    })
+    useChatStore.setState(state => ({
+      sessions: {
+        ...state.sessions,
+        [childId]: {
+          ...useChatStore.getState().getSession(childId),
+          messages: [{ id: 'side-m1', type: 'user_text', content: 'Side Q1', timestamp: 1 }],
+        },
+      },
+    }))
+
+    render(<ChatInput sessionId={childId} compact />)
+
+    expect(screen.getByTestId('model-selector-shell')).toHaveAttribute('data-locked-provider-id', 'antigravity-acp')
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-allowed-modes', 'default,acceptEdits,auto,plan,bypassPermissions')
+
+    // Typing /btw inside a side chat stays aligned with Claude Code and targets the parent session (reusing this side chat)
+    setComposerText('/btw Follow-up', 14)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    await waitFor(() => expect(mocks.sideOpen).toHaveBeenCalledWith(sessionId, { question: 'Follow-up', submit: true }))
   })
 
   it('merges Antigravity built-in commands with cold-start AGY skills and inserts plain /skill text instead of Claude mentions', async () => {

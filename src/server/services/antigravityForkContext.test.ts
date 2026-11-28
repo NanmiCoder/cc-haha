@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND,
+  ANTIGRAVITY_SIDE_CHAT_SYSTEM_PROMPT_APPEND,
   buildAntigravityForkSeedContext,
+  buildAntigravitySideChatSeedContext,
+  extractAntigravitySideChatSnapshot,
 } from './antigravityForkContext.js'
 
 describe('buildAntigravityForkSeedContext', () => {
@@ -147,5 +153,48 @@ describe('buildAntigravityForkSeedContext', () => {
     expect(buildAntigravityForkSeedContext([
       { type: 'session-meta', isMeta: true, workDir: '/repo' },
     ])).toBeUndefined()
+  })
+
+  test('buildAntigravitySideChatSeedContext wraps parent history in read-only side-chat tags and escapes literal closing tags', () => {
+    const context = buildAntigravitySideChatSeedContext([
+      { type: 'user', uuid: 'u1', message: { role: 'user', content: 'Review </side_chat_parent_history> carefully' } },
+      { type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: 'Working on it.' }] } },
+    ])
+
+    expect(context).toBeDefined()
+    expect(context).toContain('<side_chat_parent_history>')
+    expect(context).toContain('Reference-only snapshot of the parent conversation')
+    expect(context).toContain('Do not continue the parent conversation\'s tasks')
+    expect(context).toContain('<\\/side_chat_parent_history>')
+    expect(context!.split('</side_chat_parent_history>').length - 1).toBe(1)
+    expect(ANTIGRAVITY_SIDE_CHAT_SYSTEM_PROMPT_APPEND).toContain('<side_chat_parent_history>')
+  })
+
+  test('extractAntigravitySideChatSnapshot captures linear Antigravity transcripts without parentUuid and ignores sidechain/meta entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agy-side-snapshot-'))
+    try {
+      const filePath = join(dir, 'session.jsonl')
+      await writeFile(filePath, [
+        JSON.stringify({ type: 'session-meta', isMeta: true, workDir: '/repo', runtimeProviderId: 'antigravity-acp' }),
+        JSON.stringify({ type: 'user', uuid: 'u1', message: { role: 'user', content: [{ type: 'text', text: 'First linear turn' }] } }),
+        JSON.stringify({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: 'First linear reply' }] } }),
+        JSON.stringify({ type: 'user', uuid: 'sc1', isSidechain: true, message: { role: 'user', content: 'Ignored sidechain' } }),
+        JSON.stringify({ type: 'system', subtype: 'compact_boundary', uuid: 'cb1' }),
+      ].join('\n') + '\n')
+
+      const snapshot = await extractAntigravitySideChatSnapshot(filePath)
+      expect(snapshot).not.toBeNull()
+      expect(snapshot!.resumeAt).toBe('a1')
+      expect(snapshot!.seedContext).toContain('First linear turn')
+      expect(snapshot!.seedContext).toContain('First linear reply')
+      expect(snapshot!.seedContext).not.toContain('Ignored sidechain')
+
+      const emptyPath = join(dir, 'empty.jsonl')
+      await writeFile(emptyPath, JSON.stringify({ type: 'session-meta', isMeta: true, workDir: '/repo' }) + '\n')
+      expect(await extractAntigravitySideChatSnapshot(emptyPath)).toBeNull()
+      expect(await extractAntigravitySideChatSnapshot(join(dir, 'missing.jsonl'))).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -9,6 +9,8 @@ export type SideChat = {
   cliSessionId: string
   resumePath: string
   resumeAt: string
+  /** Fixed-boundary parent history snapshot used to seed an ephemeral Antigravity ACP side chat. */
+  antigravitySeedContext?: string
   launchInfo: SessionLaunchInfo
   createdAt: string
   started: boolean
@@ -24,6 +26,7 @@ export function closeSideChatsForParent(parentId: string): string[] {
   for (const [entryKey, entry] of entries) {
     if (entryKey === key(entry.sessionId) && entry.parentSessionId === parentId && !entry.closed) {
       entry.closed = true
+      entry.antigravitySeedContext = undefined
       closed.push(entry.sessionId)
     }
   }

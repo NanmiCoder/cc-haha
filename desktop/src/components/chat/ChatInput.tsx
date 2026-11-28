@@ -324,7 +324,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const activeSession = listedSession ?? (sideChat ? { ...sideChat, id: sideChat.sessionId, workDirExists: true, workspaceState: 'available' as const, messageCount: 1, projectRoot: sideChat.workDir } : null)
   const isLean = listedSession?.agentProfile === 'lean'
   const isAntigravity = runtimeSelection?.providerId === ANTIGRAVITY_ACP_PROVIDER_ID ||
-    listedSession?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
+    listedSession?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID ||
+    sideChat?.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -461,7 +462,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
   const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
-  const sideChatAvailable = !isLean && !isAntigravity && (Boolean(sideChat) || messageCount > 0)
+  const sideChatAvailable = !isLean && (Boolean(sideChat) || messageCount > 0)
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -909,25 +910,33 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
     if (isAntigravity) {
       // Antigravity sessions use the ACP-reported `slashCommands` authoritatively,
-      // plus host UI commands (`/model`, `/config`, `/clear`) without Claude fallbacks.
+      // plus host UI commands (`/model`, `/config`, `/clear`, and `/btw` once a
+      // conversation exists) without Claude fallbacks.
       // Before ACP reports its command list (e.g. cold-start or reopened history
       // sessions where `/slash-commands` returns disk-scanned AGY skills or `[]`),
       // merge Antigravity's built-in draft commands with those AGY skills.
       const localized = getLocalizedFallbackCommands(t)
       const localizedByName = new Map(localized.map((cmd) => [cmd.name, cmd.description]))
+      const localizedBtw = localized.find((cmd) => cmd.name.toLowerCase() === 'btw')
       const hostFallbacks = localized.filter((cmd) =>
-        ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(cmd.name.toLowerCase()),
+        ANTIGRAVITY_HOST_UI_SLASH_COMMANDS.has(cmd.name.toLowerCase()) ||
+        (sideChatAvailable && cmd.name.toLowerCase() === 'btw'),
       )
       const hasAuthoritativeAcpCommands = slashCommands.some((cmd) => cmd.kind !== 'skill')
-      if (!hasAuthoritativeAcpCommands) {
-        const draftBuiltIns: SlashCommandOption[] = ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd) => ({
-          name: cmd.name,
-          description: localizedByName.get(cmd.name) ?? cmd.description,
-          kind: 'command',
-        }))
-        return mergeSlashCommands(draftBuiltIns, slashCommands)
-      }
-      return mergeSlashCommands(slashCommands, hostFallbacks)
+      const merged = !hasAuthoritativeAcpCommands
+        ? mergeSlashCommands(
+            [
+              ...ANTIGRAVITY_DRAFT_SLASH_COMMANDS.map((cmd): SlashCommandOption => ({
+                name: cmd.name,
+                description: localizedByName.get(cmd.name) ?? cmd.description,
+                kind: 'command',
+              })),
+              ...(sideChatAvailable && localizedBtw ? [localizedBtw] : []),
+            ],
+            slashCommands,
+          )
+        : mergeSlashCommands(slashCommands, hostFallbacks)
+      return merged.filter((cmd) => sideChatAvailable || cmd.name.toLowerCase() !== 'btw')
     }
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommands, getLocalizedFallbackCommands(t)), agentSlashCommands)
     const names = new Set(commands.map(command => command.name.toLowerCase()))
@@ -1183,7 +1192,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     // Immediate local command: never enter the main turn, launch flow or queue.
-    const sideQuestion = !isMemberSession && !isAntigravity ? parseSideQuestionCommand(text) : null
+    const sideQuestion = !isMemberSession ? parseSideQuestionCommand(text) : null
     if (sideQuestion !== null && activeTabId) {
       promptHistory.recordSubmission({ text: input, mentions })
       void openSideChat(sideChat?.parentSessionId ?? activeTabId, { question: sideQuestion || undefined, submit: true })

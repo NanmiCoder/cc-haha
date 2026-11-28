@@ -229,6 +229,14 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         send({ id: rpc.id, error: { code: -32603, message: 'Backend exploded' } })
         break
       }
+      if (mode === 'slow-new') {
+        const delayedSessionId = sessionId
+        setTimeout(() => {
+          update(delayedSessionId, 'available_commands_update', { availableCommands: initialCommands })
+          reply(rpc.id, { sessionId: delayedSessionId, configOptions: buildConfigOptions(), tier })
+        }, 250)
+        break
+      }
       if (mode !== 'late-commands') {
         update(sessionId, 'available_commands_update', { availableCommands: initialCommands })
       }
@@ -5416,6 +5424,321 @@ describe('Antigravity ACP server core & integration', () => {
       result: 'Could not save the Antigravity response.',
     })
   })
+
+  test('supports ephemeral Antigravity side chats (/btw) with fixed-boundary context snapshot, in-process model/effort updates, isolation, and session/close cleanup', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-side-chat')
+    await mkdir(workDir, { recursive: true })
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    const openWs = async (sessionId: string) => {
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      const received: ServerMessage[] = []
+      ws.onmessage = (e) => received.push(JSON.parse(String(e.data)) as ServerMessage)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error(`WS failed for ${sessionId}`))
+      })
+      await waitUntil(() => received.some(m => m.type === 'connected'))
+      return { ws, received }
+    }
+
+    try {
+      // 1. Create parent Antigravity session. Empty session cannot open a side chat yet.
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          launchProviderId: ANTIGRAVITY_PROVIDER_ID,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId: parentId } = await createRes.json() as { sessionId: string }
+
+      const emptySideRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}/side-chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      expect(emptySideRes.status).toBe(409)
+
+      // 2. Run Turn 1 on parent so it establishes native session & transcript history.
+      const parent = await openWs(parentId)
+      parent.ws.send(JSON.stringify({ type: 'user_message', content: 'Parent Turn 1: design JWT rotation' }))
+      await waitUntil(() => parent.received.some(m => m.type === 'message_complete'))
+
+      // 3. Open side chat at Turn 1 boundary.
+      const sideRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}/side-chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      expect(sideRes.status).toBe(200)
+      const side = await sideRes.json() as {
+        sessionId: string
+        parentSessionId: string
+        workDir: string
+        ephemeral: boolean
+        runtimeProviderId: string
+        runtimeModelId: string
+        effortLevel?: string
+      }
+      expect(side.sessionId.startsWith('side-')).toBe(true)
+      expect(side.parentSessionId).toBe(parentId)
+      expect(side.ephemeral).toBe(true)
+      expect(side.runtimeProviderId).toBe(ANTIGRAVITY_PROVIDER_ID)
+      expect(side.runtimeModelId).toBe('gemini-4-neon')
+      expect(side.effortLevel).toBe('high')
+
+      // 4. Parent runs Turn 2 AFTER the side chat opened — must NOT leak into child's snapshot.
+      const parentCompletedBefore = parent.received.filter(m => m.type === 'message_complete').length
+      parent.ws.send(JSON.stringify({ type: 'user_message', content: 'Parent Turn 2: secret later turn excluded' }))
+      await waitUntil(() => parent.received.filter(m => m.type === 'message_complete').length > parentCompletedBefore)
+
+      const parentLaunchBefore = await sessionService.getSessionLaunchInfo(parentId)
+      const parentTranscriptBefore = await readFile(parentLaunchBefore!.filePath, 'utf8')
+
+      // 5. Connect to child side chat. Switching an unstarted Antigravity side chat to Claude Code must fail,
+      // and selecting a valid Antigravity runtime clears the rejection before Turn 1.
+      const child = await openWs(side.sessionId)
+      child.ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: null,
+        modelId: 'claude-sonnet-4-5',
+      }))
+      await waitUntil(() => child.received.some(m => m.type === 'error' && m.code === 'ANTIGRAVITY_UNSUPPORTED'))
+      child.ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-4-neon',
+        effortLevel: 'high',
+      }))
+      await waitUntil(() => child.received.some(m => m.type === 'runtime_config_applied'))
+
+      // 6. Send Turn 1 in the Antigravity side chat.
+      const wireCountBeforeChild = (await fake.readWire()).length
+      child.ws.send(JSON.stringify({ type: 'user_message', content: 'Why did we pick JWT rotation?' }))
+      await waitUntil(() => child.received.some(m => m.type === 'message_complete'))
+
+      const wireAfterChildTurn1 = (await fake.readWire()).slice(wireCountBeforeChild)
+      const childSessionNew = wireAfterChildTurn1.find(w => w.method === 'session/new')
+      expect(childSessionNew).toBeDefined()
+      expect(wireAfterChildTurn1.some(w => w.method === 'session/resume')).toBe(false)
+      const appendPrompt = (childSessionNew?.params?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined)
+        ?.antigravity?.systemPrompt?.append ?? ''
+      expect(appendPrompt).toContain('reference context only')
+      expect(appendPrompt).toContain('<side_chat_parent_history>')
+
+      const childPrompt1 = wireAfterChildTurn1.find(w => w.method === 'session/prompt')
+      const childPrompt1Text = ((childPrompt1?.params?.prompt ?? []) as Array<{ text?: string }>).map(b => b.text ?? '').join('\n')
+      expect(childPrompt1Text).toContain('<side_chat_parent_history>')
+      expect(childPrompt1Text).toContain('Parent Turn 1: design JWT rotation')
+      expect(childPrompt1Text).not.toContain('Parent Turn 2: secret later turn excluded')
+      expect(childPrompt1Text).toContain('Why did we pick JWT rotation?')
+
+      // Child UI events must not leak the wrapper; parent UI events must not receive child traffic.
+      expect(JSON.stringify(child.received)).not.toContain('<side_chat_parent_history>')
+      expect(JSON.stringify(parent.received)).not.toContain('Why did we pick JWT rotation?')
+
+      // 7. In-process model + effort switch works on a live Antigravity side chat without restart.
+      const appliedBefore = child.received.filter(m => m.type === 'runtime_config_applied').length
+      child.ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+      }))
+      await waitUntil(() => child.received.filter(m => m.type === 'runtime_config_applied').length > appliedBefore)
+      expect(conversationService.getSessionRuntimeSelection(side.sessionId)).toMatchObject({
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+      })
+
+      // Cross-provider switch on a started side chat must be rejected safely without killing the child.
+      child.ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: null,
+        modelId: 'claude-sonnet-4-5',
+      }))
+      await waitUntil(() => child.received.some(m => m.type === 'error' && m.code === 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE'))
+      expect(conversationService.hasSession(side.sessionId)).toBe(true)
+
+      // Toggling Browser Use mid-session must never schedule a capability restart for an ephemeral side chat.
+      await saveBrowserUseConfig({ enabled: true })
+      invalidateBrowserUseConfigCache()
+      expect(conversationService.needsAntigravityCapabilityRestart(side.sessionId)).toBe(false)
+
+      // 8. Turn 2 on child must NOT re-inject the parent history wrapper.
+      const wireCountBeforeChildTurn2 = (await fake.readWire()).length
+      const childCompletedBefore = child.received.filter(m => m.type === 'message_complete').length
+      child.ws.send(JSON.stringify({ type: 'user_message', content: 'And what about refresh tokens?' }))
+      await waitUntil(() => child.received.filter(m => m.type === 'message_complete').length > childCompletedBefore)
+      const wireAfterChildTurn2 = (await fake.readWire()).slice(wireCountBeforeChildTurn2)
+      const childPrompt2 = wireAfterChildTurn2.find(w => w.method === 'session/prompt')
+      const childPrompt2Text = ((childPrompt2?.params?.prompt ?? []) as Array<{ text?: string }>).map(b => b.text ?? '').join('\n')
+      expect(childPrompt2Text).toBe('And what about refresh tokens?')
+      expect(childPrompt2Text).not.toContain('<side_chat_parent_history>')
+
+      // 9. Ephemeral guarantees: no transcript messages, no checkpoints, absent from session list, parent untouched.
+      expect((await (await fetch(`${baseUrl}/api/sessions/${side.sessionId}/messages`)).json() as { messages: unknown[] }).messages).toEqual([])
+      expect(await (await fetch(`${baseUrl}/api/sessions/${side.sessionId}/turn-checkpoints`)).json()).toEqual({ checkpoints: [] })
+      const listed = await (await fetch(`${baseUrl}/api/sessions`)).json() as { sessions: Array<{ id: string }> }
+      expect(listed.sessions.some(s => s.id === side.sessionId)).toBe(false)
+      expect(await readFile(parentLaunchBefore!.filePath, 'utf8')).toBe(parentTranscriptBefore)
+
+      // 10. Closing side chat sends session/close, stops only the child, and prevents restart.
+      const wireCountBeforeClose = (await fake.readWire()).length
+      const deleteSideRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}/side-chats/${encodeURIComponent(side.sessionId)}`, {
+        method: 'DELETE',
+      })
+      expect(deleteSideRes.status).toBe(200)
+      expect(conversationService.hasSession(side.sessionId)).toBe(false)
+      expect(conversationService.hasSession(parentId)).toBe(true)
+      const wireAfterClose = (await fake.readWire()).slice(wireCountBeforeClose)
+      expect(wireAfterClose.some(w => w.method === 'session/close')).toBe(true)
+
+      await expect(
+        conversationService.startSession(side.sessionId, workDir, 'ws://127.0.0.1:1/sdk/expired', {
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          model: 'gemini-4-neon',
+        }),
+      ).rejects.toThrow('expired')
+
+      // 11. Deleting parent session stops any remaining Antigravity side chat.
+      const secondSideRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}/side-chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      expect(secondSideRes.status).toBe(200)
+      const secondSide = await secondSideRes.json() as { sessionId: string }
+      const child2 = await openWs(secondSide.sessionId)
+      child2.ws.send(JSON.stringify({ type: 'user_message', content: 'Quick check before parent delete' }))
+      await waitUntil(() => child2.received.some(m => m.type === 'message_complete'))
+      expect(conversationService.hasSession(secondSide.sessionId)).toBe(true)
+
+      const delParentRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}`, { method: 'DELETE' })
+      expect(delParentRes.status).toBe(200)
+      expect(conversationService.hasSession(secondSide.sessionId)).toBe(false)
+
+      parent.ws.close()
+      child.ws.close()
+      child2.ws.close()
+    } finally {
+      await saveBrowserUseConfig({ enabled: false })
+      invalidateBrowserUseConfigCache()
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+  }, 25_000)
+
+  test('ignores prewarm_session, handles set_runtime_config during Turn 1 startup in-process, and rejects /clear without killing a live Antigravity side chat', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'v1518')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'ws-side-chat-edge')
+    await mkdir(workDir, { recursive: true })
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsBaseUrl = `ws://127.0.0.1:${server.port}`
+
+    const openWs = async (sessionId: string) => {
+      const ws = new WebSocket(`${wsBaseUrl}/ws/${sessionId}`)
+      const received: ServerMessage[] = []
+      ws.onmessage = (e) => received.push(JSON.parse(String(e.data)) as ServerMessage)
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error(`WS failed for ${sessionId}`))
+      })
+      await waitUntil(() => received.some(m => m.type === 'connected'))
+      return { ws, received }
+    }
+
+    try {
+      // Seed parent Antigravity session with one completed turn
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          launchProviderId: ANTIGRAVITY_PROVIDER_ID,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-4-neon',
+          effortLevel: 'high',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId: parentId } = await createRes.json() as { sessionId: string }
+
+      const parent = await openWs(parentId)
+      parent.ws.send(JSON.stringify({ type: 'user_message', content: 'Parent Turn 1 seed' }))
+      await waitUntil(() => parent.received.some(m => m.type === 'message_complete'))
+
+      const sideRes = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(parentId)}/side-chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      expect(sideRes.status).toBe(200)
+      const { sessionId: sideId } = await sideRes.json() as { sessionId: string }
+
+      const child = await openWs(sideId)
+
+      // 1. prewarm_session must be a no-op for an unstarted side chat (must not spawn ACP or burn side.started)
+      const wireCountBeforePrewarm = (await fake.readWire()).length
+      child.ws.send(JSON.stringify({ type: 'prewarm_session' }))
+      await new Promise(resolve => setTimeout(resolve, 120))
+      expect(conversationService.hasSession(sideId)).toBe(false)
+      expect((await fake.readWire()).slice(wireCountBeforePrewarm)).toEqual([])
+
+      // 2. Send set_runtime_config while Turn 1 session/new is still in flight (pendingStartup race)
+      await writeFile(fake.modeFile, 'slow-new', 'utf8')
+      child.ws.send(JSON.stringify({ type: 'user_message', content: 'First side question' }))
+      await new Promise(resolve => setTimeout(resolve, 40))
+      child.ws.send(JSON.stringify({
+        type: 'set_runtime_config',
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+      }))
+
+      await waitUntil(() =>
+        child.received.some(m => m.type === 'message_complete') &&
+        child.received.some(m => m.type === 'runtime_config_applied' && m.modelId === 'gemini-3.8-flash'),
+      )
+      expect(child.received.filter(m => m.type === 'error')).toEqual([])
+      expect(conversationService.hasSession(sideId)).toBe(true)
+      expect(conversationService.getSessionRuntimeSelection(sideId)).toMatchObject({
+        providerId: ANTIGRAVITY_PROVIDER_ID,
+        modelId: 'gemini-3.8-flash',
+        effortLevel: 'low',
+      })
+
+      // 3. /clear on a started Antigravity side chat must fail cleanly WITHOUT killing the live side chat
+      child.ws.send(JSON.stringify({ type: 'user_message', content: '/clear' }))
+      await waitUntil(() => child.received.some(m => m.type === 'error' && m.code === 'SESSION_CLEAR_FAILED'))
+      expect(conversationService.hasSession(sideId)).toBe(true)
+
+      // Follow-up turn still succeeds on the same live side chat
+      const completesBeforeTurn2 = child.received.filter(m => m.type === 'message_complete').length
+      child.ws.send(JSON.stringify({ type: 'user_message', content: 'Still alive after /clear' }))
+      await waitUntil(() => child.received.filter(m => m.type === 'message_complete').length > completesBeforeTurn2)
+      expect(conversationService.hasSession(sideId)).toBe(true)
+
+      parent.ws.close()
+      child.ws.close()
+    } finally {
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+  }, 25_000)
 })
 
 async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {

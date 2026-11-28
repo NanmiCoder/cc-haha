@@ -20,6 +20,7 @@ import {
   OPENAI_OFFICIAL_PROVIDER_ID,
 } from '../../constants/openaiOfficialProvider'
 import { writeAntigravityLastSelection } from '../../lib/antigravityPreferences'
+import { isSideChatSession } from '../../lib/sideChatSessions'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
@@ -893,7 +894,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       provider ? getBundledPresetReasoningProviderKind(provider.presetId) : undefined,
     )
     if (effortLocked) normalizedSelection.effortLevel = activeRuntimeSelection?.effortLevel
-    if (normalizedSelection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID) {
+    if (normalizedSelection.providerId === ANTIGRAVITY_ACP_PROVIDER_ID && !(runtimeKey && isSideChatSession(runtimeKey))) {
       writeAntigravityLastSelection({
         modelId: normalizedSelection.modelId,
         ...(normalizedSelection.effortLevel ? { effortLevel: normalizedSelection.effortLevel } : {}),

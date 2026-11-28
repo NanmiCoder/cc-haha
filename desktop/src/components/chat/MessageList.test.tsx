@@ -41,6 +41,7 @@ import {
   DEFAULT_SELECTION_MENU_PLACEMENT,
   useSelectionMenuPlacementStore,
 } from '../../stores/selectionMenuPlacementStore'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSideChatStore } from '../../stores/sideChatStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -4031,6 +4032,58 @@ describe('MessageList nested tool calls', () => {
     } })
     expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []).toEqual([])
     expect(window.getSelection()?.toString()).toBe('')
+  })
+
+  it('offers Ask in side chat for selected text in Antigravity ACP sessions', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: ACTIVE_TAB,
+        title: 'Antigravity session',
+        createdAt: '2026-11-27T00:00:00.000Z',
+        modifiedAt: '2026-11-27T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/repo',
+        projectRoot: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-4-neon',
+      }],
+    })
+    useSessionRuntimeStore.getState().setSelection(ACTIVE_TAB, {
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-4-neon',
+      effortLevel: 'high',
+    })
+    try {
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSessionState({
+            messages: [{
+              id: 'agy-assistant-side',
+              type: 'assistant_text',
+              content: 'Explain this Antigravity selection.',
+              timestamp: 1,
+            }],
+          }),
+        },
+      })
+      render(<MessageList />)
+      await selectMessageText(screen.getByText('Explain this Antigravity selection.'), 'Antigravity selection')
+      fireEvent.click(screen.getByRole('button', { name: 'Ask in side chat' }))
+      expect(openSideChat).toHaveBeenCalledWith(ACTIVE_TAB, {
+        reference: {
+          kind: 'chat-selection',
+          path: 'chat://assistant/agy-assistant-side',
+          name: 'Assistant message',
+          quote: 'Antigravity selection',
+          sourceRole: 'assistant',
+          messageId: 'agy-assistant-side',
+        },
+      })
+    } finally {
+      useSessionRuntimeStore.getState().clearSelection(ACTIVE_TAB)
+    }
   })
 
   it('adds selected user message text to the composer context', async () => {

@@ -5,7 +5,7 @@ import { isSideChatSession } from '@/lib/sideChatSessions'
 import { useWorkspaceChatContextStore } from './workspaceChatContextStore'
 const mocks = vi.hoisted(() => ({
   chat: { sessions: {} as Record<string, { chatState: string }>, connectToSession: vi.fn(), disconnectSession: vi.fn(), markSessionCompletionRead: vi.fn(), stopGeneration: vi.fn(), sendMessage: vi.fn(), queueUserMessage: vi.fn(), queueComposerInsertion: vi.fn(), queueComposerPrefill: vi.fn() },
-  runtime: { selections: { parent: { providerId: 'provider-a', modelId: 'model-a' } }, setSelection: vi.fn(), clearSelection: vi.fn() },
+  runtime: { selections: { parent: { providerId: 'provider-a', modelId: 'model-a' } } as Record<string, { providerId: string | null; modelId: string; effortLevel?: string }>, setSelection: vi.fn(), clearSelection: vi.fn() },
 }))
 vi.mock('@/api/sideChats', () => ({ sideChatsApi: { create: vi.fn(), discard: vi.fn() } }))
 vi.mock('@/stores/chatStore', () => ({ useChatStore: { getState: () => mocks.chat } }))
@@ -19,6 +19,7 @@ beforeEach(() => {
   useSideChatStore.setState({ entries: {} })
   useWorkspaceChatContextStore.setState({ referencesBySession: {} })
   mocks.chat.sessions = {}
+  mocks.runtime.selections = { parent: { providerId: 'provider-a', modelId: 'model-a' } }
   vi.mocked(sideChatsApi.create).mockResolvedValue({ sessionId: 'side-child', parentSessionId: 'parent', workDir: '/repo', title: 'Side chat', ephemeral: true })
   vi.mocked(sideChatsApi.discard).mockResolvedValue({})
 })
@@ -84,4 +85,76 @@ it('focuses a selected-text child without replacing its draft; question drafts u
   expect(mocks.chat.queueComposerPrefill).toHaveBeenCalledWith('side-child', { text: '', mode: 'append' })
   await useSideChatStore.getState().open('parent', { question: 'Draft question' })
   expect(mocks.chat.queueComposerInsertion).toHaveBeenCalledWith('side-child', { text: 'Draft question' })
+})
+
+it('inherits Antigravity runtime metadata when opening a side chat without a cached parent runtime selection', async () => {
+  vi.mocked(sideChatsApi.create).mockResolvedValueOnce({
+    sessionId: 'side-agy',
+    parentSessionId: 'parent-agy',
+    workDir: '/repo',
+    title: 'Side chat',
+    ephemeral: true,
+    permissionMode: 'acceptEdits',
+    runtimeProviderId: 'antigravity-acp',
+    runtimeModelId: 'gemini-4-neon',
+    effortLevel: 'high',
+  })
+  const child = await useSideChatStore.getState().open('parent-agy')
+  expect(child).toBe('side-agy')
+  expect(mocks.runtime.setSelection).toHaveBeenCalledWith('side-agy', {
+    providerId: 'antigravity-acp',
+    modelId: 'gemini-4-neon',
+    effortLevel: 'high',
+  })
+  expect(useSideChatStore.getState().entries['side-agy']).toMatchObject({
+    runtimeProviderId: 'antigravity-acp',
+    runtimeModelId: 'gemini-4-neon',
+    effortLevel: 'high',
+    permissionMode: 'acceptEdits',
+  })
+})
+
+it('prefers server-authoritative Antigravity child runtime over placeholder or stale cached parent selections', async () => {
+  mocks.runtime.selections['parent-agy-default'] = {
+    providerId: 'antigravity-acp',
+    modelId: 'agent-default',
+  }
+  vi.mocked(sideChatsApi.create).mockResolvedValueOnce({
+    sessionId: 'side-agy-resolved',
+    parentSessionId: 'parent-agy-default',
+    workDir: '/repo',
+    title: 'Side chat',
+    ephemeral: true,
+    runtimeProviderId: 'antigravity-acp',
+    runtimeModelId: 'gemini-3.8-flash',
+    effortLevel: 'low',
+  })
+  const resolvedChild = await useSideChatStore.getState().open('parent-agy-default')
+  expect(resolvedChild).toBe('side-agy-resolved')
+  expect(mocks.runtime.setSelection).toHaveBeenCalledWith('side-agy-resolved', {
+    providerId: 'antigravity-acp',
+    modelId: 'gemini-3.8-flash',
+    effortLevel: 'low',
+  })
+
+  // Even if cached parent selection holds a non-Antigravity provider, server Antigravity wins
+  mocks.runtime.selections['parent-agy-stale'] = {
+    providerId: 'provider-a',
+    modelId: 'claude-sonnet-4-5',
+  }
+  vi.mocked(sideChatsApi.create).mockResolvedValueOnce({
+    sessionId: 'side-agy-orch',
+    parentSessionId: 'parent-agy-stale',
+    workDir: '/repo',
+    title: 'Side chat',
+    ephemeral: true,
+    runtimeProviderId: 'antigravity-acp',
+    runtimeModelId: 'gemini-pro-orchestrator-neon',
+  })
+  const orchChild = await useSideChatStore.getState().open('parent-agy-stale')
+  expect(orchChild).toBe('side-agy-orch')
+  expect(mocks.runtime.setSelection).toHaveBeenCalledWith('side-agy-orch', {
+    providerId: 'antigravity-acp',
+    modelId: 'gemini-pro-orchestrator-neon',
+  })
 })

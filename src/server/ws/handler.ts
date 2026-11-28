@@ -2175,6 +2175,14 @@ function applyDeferredRuntimeRestartAfterActiveTurn(
       })
       if (applied) return
     }
+    if (isSideChatId(sessionId)) {
+      sendMessage(ws, {
+        type: 'error',
+        code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE',
+        message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change provider or reasoning effort.',
+      })
+      return
+    }
     await restartSessionWithRuntimeConfig(ws, sessionId)
   })
 }
@@ -2254,10 +2262,19 @@ async function applyInProcessAntigravityConfig(
 async function handleDesktopClearCommand(
   ws: SessionConnection,
 ) {
-  cancelQueuedUserAdmissions(ws.data.sessionId)
-  const turnToCancel = activeUserTurns.get(ws.data.sessionId)
+  const { sessionId } = ws.data
+  if (isSideChatId(sessionId)) {
+    sendToSession(sessionId, {
+      type: 'error',
+      message: 'Open a new side chat to clear temporary history',
+      code: 'SESSION_CLEAR_FAILED',
+    })
+    return
+  }
+  cancelQueuedUserAdmissions(sessionId)
+  const turnToCancel = activeUserTurns.get(sessionId)
   if (turnToCancel) turnToCancel.cancelled = true
-  await enqueueRuntimeTransition(ws.data.sessionId, () =>
+  await enqueueRuntimeTransition(sessionId, () =>
     performDesktopClearCommand(ws, turnToCancel),
   )
 }
@@ -2358,6 +2375,9 @@ async function performDesktopClearCommand(
 
 async function handlePrewarmSession(ws: SessionConnection) {
   const { sessionId } = ws.data
+  if (isSideChatId(sessionId)) {
+    return
+  }
   if (conversationService.hasSession(sessionId) || sessionStartupPromises.has(sessionId)) {
     return
   }
@@ -2626,16 +2646,23 @@ async function handlePlanApprovalWithRuntimeOverride(
     return
   }
 
-  if (isSideChatId(sessionId) && (currentProviderId !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== currentEffort) || (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false))) {
+  const canSwitchAntigravityInProcess =
+    conversationService.hasSession(sessionId) &&
+    currentProviderId === ANTIGRAVITY_PROVIDER_ID &&
+    nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID
+
+  if (isSideChatId(sessionId) && !canSwitchAntigravityInProcess && (currentProviderId !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== currentEffort) || (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false))) {
     sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'Open a new side chat to change provider or reasoning effort.', permissionRequestId: message.requestId })
     return
   }
 
   const canSwitchInProcess =
-    conversationService.hasSession(sessionId) &&
-    currentProviderId === nextOverride.providerId &&
-    (nextOverride.effort === undefined || nextOverride.effort === currentEffort) &&
-    (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
+    canSwitchAntigravityInProcess || (
+      conversationService.hasSession(sessionId) &&
+      currentProviderId === nextOverride.providerId &&
+      (nextOverride.effort === undefined || nextOverride.effort === currentEffort) &&
+      (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
+    )
 
   if (canSwitchInProcess) {
     // Same provider: the CLI is blocked on this very permission request, so a
@@ -2644,10 +2671,28 @@ async function handlePlanApprovalWithRuntimeOverride(
     // On failure the transition rejects, the catch in handlePermissionResponse
     // reports it, and the permission stays pending (override untouched).
     await enqueueRuntimeTransition(sessionId, async () => {
-      if (!await conversationService.setModel(sessionId, nextOverride.modelId)) throw new Error('The planning runtime is no longer available.')
-      const appliedOverride = nextOverride.effort === undefined && currentEffort
-        ? { ...nextOverride, effort: currentEffort, requestedConfig: nextOverride.requestedConfig ?? message.runtimeOverride }
-        : nextOverride
+      let appliedOverride: RuntimeOverride
+      if (canSwitchAntigravityInProcess) {
+        if (!await conversationService.setAntigravityConfig(sessionId, {
+          modelId: nextOverride.modelId,
+          effortLevel: nextOverride.effort,
+        })) throw new Error('The planning runtime is no longer available.')
+        const afterLive = conversationService.getSessionRuntimeSelection(sessionId)
+        appliedOverride = {
+          ...nextOverride,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: afterLive?.modelId ?? nextOverride.modelId,
+          ...(afterLive?.effortLevel ? { effort: afterLive.effortLevel } : { effort: undefined }),
+        }
+        if (!appliedOverride.effort) delete appliedOverride.effort
+      } else {
+        if (!await conversationService.setModel(sessionId, nextOverride.modelId)) {
+          throw new Error('The planning runtime is no longer available.')
+        }
+        appliedOverride = nextOverride.effort === undefined && currentEffort
+          ? { ...nextOverride, effort: currentEffort, requestedConfig: nextOverride.requestedConfig ?? message.runtimeOverride }
+          : nextOverride
+      }
       rejectedRuntimeConfigs.delete(sessionId)
       runtimeOverrides.set(sessionId, appliedOverride)
       runtimeOverrideVersions.set(
@@ -2960,11 +3005,12 @@ async function handleSetRuntimeConfig(
     const previous = currentSelection ? currentSelection.providerId : launch?.runtimeProviderId
     const selectingAntigravity = nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID
     const changingAgent = selectingAntigravity !== (previous === ANTIGRAVITY_PROVIDER_ID)
-    const workspaceUnsupported = selectingAntigravity && (!launch || isSideChatId(sessionId) || launch.agentProfile === 'lean' || launch.repository?.worktree || !sessionService.shouldPersistSession())
+    const workspaceUnsupported = selectingAntigravity && (!launch || launch.agentProfile === 'lean' || launch.repository?.worktree || !sessionService.shouldPersistSession())
     const lockedToAnotherAgent = changingAgent && (
       conversationService.hasSession(sessionId) ||
       Boolean(launch?.nativeSessionId) ||
-      (launch?.transcriptMessageCount ?? 0) > 0
+      (launch?.transcriptMessageCount ?? 0) > 0 ||
+      isSideChatId(sessionId)
     )
     if (workspaceUnsupported || lockedToAnotherAgent) {
       const detail = workspaceUnsupported
@@ -2978,6 +3024,33 @@ async function handleSetRuntimeConfig(
     if (side?.started) {
       const current = runtimeOverrides.get(sessionId)
       const provider = current?.providerId ?? side.launchInfo.runtimeProviderId ?? null
+      if (provider === ANTIGRAVITY_PROVIDER_ID && nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID) {
+        if (!conversationService.hasSession(sessionId)) {
+          sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change model or reasoning effort.' })
+          return
+        }
+        rejectedRuntimeConfigs.delete(sessionId)
+        const prevOverrideVersion = runtimeOverrideVersions.get(sessionId)
+        runtimeOverrides.set(sessionId, nextOverride)
+        runtimeOverrideVersions.set(sessionId, (prevOverrideVersion ?? 0) + 1)
+        if (deferAntigravityRuntimeRestart(ws, nextOverride)) {
+          await persistSessionRuntimeConfig(sessionId, nextOverride)
+          return
+        }
+        const handled = await applyInProcessAntigravityConfig(ws, sessionId, nextOverride, {
+          prevOverride: current,
+          prevOverrideVersion,
+          persistAndBroadcastOnRollback: true,
+        })
+        if (!handled) {
+          if (current) runtimeOverrides.set(sessionId, current)
+          else runtimeOverrides.delete(sessionId)
+          if (prevOverrideVersion === undefined) runtimeOverrideVersions.delete(sessionId)
+          else runtimeOverrideVersions.set(sessionId, prevOverrideVersion)
+          sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change model or reasoning effort.' })
+        }
+        return
+      }
       const effort = current?.effort ?? side.launchInfo.effortLevel
       if (!conversationService.hasSession(sessionId) || provider !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== effort) || (current?.openAIFastMode ?? side.launchInfo.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false)) {
         sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change provider or reasoning effort.' })
@@ -3047,6 +3120,41 @@ async function handleSetRuntimeConfig(
         (currentOverride.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false) ||
         !conversationService.hasSession(sessionId)
       ) {
+        return
+      }
+      if (
+        nextOverride.providerId === ANTIGRAVITY_PROVIDER_ID &&
+        conversationService.getSessionRuntimeSelection(sessionId)?.providerId === ANTIGRAVITY_PROVIDER_ID
+      ) {
+        if (deferAntigravityRuntimeRestart(ws, nextOverride)) {
+          return
+        }
+        const handled = await applyInProcessAntigravityConfig(ws, sessionId, nextOverride, {
+          prevOverride,
+          prevOverrideVersion,
+          persistAndBroadcastOnRollback: true,
+        })
+        if (handled) return
+      }
+      if (isSideChatId(sessionId)) {
+        const liveRuntime = conversationService.getSessionRuntimeSelection(sessionId)
+        const sameProvider = (liveRuntime?.providerId ?? null) === nextOverride.providerId
+        const sameEffort = nextOverride.effort === undefined || nextOverride.effort === liveRuntime?.effortLevel
+        const sameFast = (liveRuntime?.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
+        if (sameProvider && sameEffort && sameFast && nextOverride.providerId !== ANTIGRAVITY_PROVIDER_ID) {
+          await conversationService.setModel(sessionId, nextOverride.modelId)
+          broadcastAppliedRuntimeConfig(sessionId)
+          return
+        }
+        if (prevOverride) runtimeOverrides.set(sessionId, prevOverride)
+        else runtimeOverrides.delete(sessionId)
+        if (prevOverrideVersion === undefined) runtimeOverrideVersions.delete(sessionId)
+        else runtimeOverrideVersions.set(sessionId, prevOverrideVersion)
+        sendMessage(ws, {
+          type: 'error',
+          code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE',
+          message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change provider or reasoning effort.',
+        })
         return
       }
       await restartSessionWithRuntimeConfig(ws, sessionId)
@@ -6430,10 +6538,10 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
     ? launchInfo?.permissionMode ?? await getSessionPermissionMode(sessionId)
     : undefined
   const persistedRuntimeOverride =
-    launchInfo?.runtimeModelId
+    launchInfo?.runtimeModelId || launchInfo?.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID
       ? {
           providerId: launchInfo.runtimeProviderId ?? null,
-          modelId: launchInfo.runtimeModelId,
+          modelId: launchInfo.runtimeModelId ?? ANTIGRAVITY_DEFAULT_MODEL,
           ...(launchInfo.effortLevel ? { effort: launchInfo.effortLevel } : {}),
           openAIFastMode: launchInfo.openAIFastMode === true,
         }

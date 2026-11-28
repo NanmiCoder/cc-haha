@@ -899,7 +899,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               dock="side"
               cwd={getSessionTerminalCwd(session) ?? ''}
               reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
-              sideChatAvailable={!isEmpty && !isLean && !isAntigravity}
+              sideChatAvailable={!isEmpty && !isLean}
               visible={active}
             />
           </aside>
@@ -912,7 +912,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             or fork, so it gets neither.
           */}
           {isMobileLayout && !isEmpty && (
-            (session && getSessionWorkspaceState(session) !== 'available') || (!isLean && !isAntigravity)
+            (session && getSessionWorkspaceState(session) !== 'available') || !isLean
           ) && (
             <div
               data-testid="mobile-session-subbar"
@@ -942,7 +942,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   </span>
                 </div>
               )}
-              {!isLean && !isAntigravity && (
+              {!isLean && (
                 <IconButton
                   icon={<MessageCircleQuestion size={20} strokeWidth={1.75} aria-hidden="true" />}
                   label={t('sideChat.title')}
@@ -992,7 +992,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   metadata={headerMetadata}
                   actions={<>
                     {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
-                    {!isLean && !isAntigravity && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
+                    {!isLean && <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                       pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
                   </>}
                 >

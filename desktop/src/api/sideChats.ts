@@ -1,5 +1,5 @@
 import { api } from '@/api/client'
-import type { PermissionMode } from '@/types/settings'
+import type { PermissionMode, ReasoningEffortLevel } from '@/types/settings'
 
 export type SideChatSession = {
   sessionId: string
@@ -8,6 +8,9 @@ export type SideChatSession = {
   title: string
   ephemeral: true
   permissionMode?: PermissionMode
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: ReasoningEffortLevel
 }
 export const sideChatsApi = {
   create(parentSessionId: string) {
