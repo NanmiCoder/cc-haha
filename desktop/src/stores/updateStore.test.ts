@@ -953,4 +953,268 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().error).toContain('installer failed')
     expect(useUpdateStore.getState().shouldPrompt).toBe(true)
   })
+
+  it('coalesces overlapping checks so a slower check cannot reset downloading back to available or stall installUpdate', async () => {
+    let resolveFirstCheck!: (value: unknown) => void
+    let emitProgress: ((event: unknown) => void) | undefined
+    let finishDownload!: () => void
+    const download = vi.fn(
+      (onEvent?: (event: unknown) => void) =>
+        new Promise<void>((resolve) => {
+          emitProgress = onEvent
+          finishDownload = resolve
+        }),
+    )
+    const install = vi.fn().mockResolvedValue(undefined)
+    const firstUpdate = {
+      version: '0.9.0',
+      body: 'Release notes',
+      download,
+      install,
+      close: vi.fn().mockResolvedValue(undefined),
+    }
+
+    check.mockImplementationOnce(() => new Promise((resolve) => { resolveFirstCheck = resolve }))
+    invoke.mockResolvedValue(undefined)
+    relaunch.mockResolvedValue(undefined)
+
+    vi.resetModules()
+    const { useUpdateStore } = await import('./updateStore')
+
+    const silentCheck = useUpdateStore.getState().checkForUpdates({ silent: true })
+    const manualCheck = useUpdateStore.getState().checkForUpdates()
+
+    resolveFirstCheck(firstUpdate)
+    await Promise.all([silentCheck, manualCheck])
+    emitProgress?.({ event: 'Started', data: { contentLength: 200 } })
+    emitProgress?.({ event: 'Progress', data: { chunkLength: 80 } })
+
+    expect(check).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('downloading')
+    expect(useUpdateStore.getState().progressPercent).toBe(40)
+
+    const installing = useUpdateStore.getState().installUpdate()
+    expect(useUpdateStore.getState().status).toBe('downloading')
+
+    emitProgress?.({ event: 'Progress', data: { chunkLength: 120 } })
+    emitProgress?.({ event: 'Finished' })
+    finishDownload()
+    await installing
+
+    expect(download).toHaveBeenCalledTimes(1)
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('restarting')
+  })
+
+  it('does not re-run automatic startup checks when About mounts after a completed check or download', async () => {
+    vi.useFakeTimers()
+    try {
+      const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
+        onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+        onEvent?.({ event: 'Finished' })
+      })
+      check.mockResolvedValue({
+        version: '0.9.0',
+        body: 'Notes',
+        download,
+        install: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      })
+
+      vi.resetModules()
+      const { useUpdateStore } = await import('./updateStore')
+
+      const firstInit = useUpdateStore.getState().initialize()
+      await vi.advanceTimersByTimeAsync(5000)
+      await firstInit
+      expect(useUpdateStore.getState().status).toBe('downloaded')
+      expect(check).toHaveBeenCalledTimes(1)
+
+      // Mounting AboutSettings calls initialize() again.
+      const secondInit = useUpdateStore.getState().initialize()
+      await vi.advanceTimersByTimeAsync(5000)
+      await secondInit
+
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(useUpdateStore.getState().status).toBe('downloaded')
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('restores downloading status and deduplicates rapid clicks when installUpdate joins an in-flight download', async () => {
+    let finishDownload!: () => void
+    const download = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDownload = resolve
+        }),
+    )
+    const install = vi.fn().mockResolvedValue(undefined)
+    check.mockResolvedValue({
+      version: '0.9.0',
+      body: 'Notes',
+      download,
+      install,
+      close: vi.fn().mockResolvedValue(undefined),
+    })
+    invoke.mockResolvedValue(undefined)
+    relaunch.mockResolvedValue(undefined)
+
+    vi.resetModules()
+    const { useUpdateStore } = await import('./updateStore')
+
+    await useUpdateStore.getState().checkForUpdates()
+    expect(useUpdateStore.getState().status).toBe('downloading')
+
+    // Simulate UI state drifting back to available while the background download is still active.
+    useUpdateStore.setState({ status: 'available' })
+
+    const click1 = useUpdateStore.getState().installUpdate()
+    const click2 = useUpdateStore.getState().installUpdate()
+
+    expect(useUpdateStore.getState().status).toBe('downloading')
+
+    finishDownload()
+    await Promise.all([click1, click2])
+
+    expect(download).toHaveBeenCalledTimes(1)
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('restarting')
+  })
+
+  it('completes a new-proxy download and install instead of stalling in downloading when proxy switches mid-download', async () => {
+    let emitOldProgress: ((event: unknown) => void) | undefined
+    let finishOldDownload!: () => void
+    const oldDownload = vi.fn(
+      (onEvent?: (event: unknown) => void) =>
+        new Promise<void>((resolve) => {
+          emitOldProgress = onEvent
+          finishOldDownload = resolve
+        }),
+    )
+    const newDownload = vi.fn(async (onEvent?: (event: unknown) => void) => {
+      onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+      onEvent?.({ event: 'Progress', data: { chunkLength: 100 } })
+      onEvent?.({ event: 'Finished' })
+    })
+    const newInstall = vi.fn().mockResolvedValue(undefined)
+
+    check
+      .mockResolvedValueOnce({
+        version: '0.9.0',
+        body: 'Old proxy update',
+        download: oldDownload,
+        install: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      })
+      .mockResolvedValueOnce({
+        version: '0.9.0',
+        body: 'Manual proxy update',
+        download: newDownload,
+        install: newInstall,
+        close: vi.fn().mockResolvedValue(undefined),
+      })
+    invoke.mockResolvedValue(undefined)
+    relaunch.mockResolvedValue(undefined)
+
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    const { useUpdateStore } = await import('./updateStore')
+
+    await useUpdateStore.getState().checkForUpdates()
+    expect(useUpdateStore.getState().status).toBe('downloading')
+
+    // Switch proxy while oldDownload is still running, then click Update now.
+    useSettingsStore.setState({
+      updateProxy: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+    })
+    const installing = useUpdateStore.getState().installUpdate()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Late progress from the superseded old download must not pollute the new download state.
+    emitOldProgress?.({ event: 'Started', data: { contentLength: 500 } })
+    emitOldProgress?.({ event: 'Progress', data: { chunkLength: 250 } })
+    expect(useUpdateStore.getState().downloadedBytes).toBe(0)
+
+    finishOldDownload()
+    await installing
+
+    expect(newDownload).toHaveBeenCalledTimes(1)
+    expect(newInstall).toHaveBeenCalledTimes(1)
+    expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('restarting')
+  })
+
+  it('ignores stale cross-proxy check completion or failure so it cannot overwrite a newer proxy download', async () => {
+    let rejectStaleCheck!: (error: Error) => void
+    let finishNewDownload!: () => void
+    const newDownload = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishNewDownload = resolve
+        }),
+    )
+
+    check
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStaleCheck = reject }))
+      .mockResolvedValueOnce({
+        version: '0.9.0',
+        body: 'Via manual proxy',
+        download: newDownload,
+        install: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      })
+
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    const { useUpdateStore } = await import('./updateStore')
+
+    // Start slow silent check on system proxy.
+    const staleCheck = useUpdateStore.getState().checkForUpdates({ silent: true })
+
+    // Switch to manual proxy and manually check; this succeeds and starts downloading.
+    useSettingsStore.setState({
+      updateProxy: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+    })
+    await useUpdateStore.getState().checkForUpdates()
+    expect(useUpdateStore.getState().status).toBe('downloading')
+
+    // Now the older system-proxy check fails late; it must not reset downloading back to available or error.
+    rejectStaleCheck(new Error('system proxy timeout'))
+    await staleCheck
+
+    expect(useUpdateStore.getState().status).toBe('downloading')
+    expect(useUpdateStore.getState().error).toBeNull()
+
+    finishNewDownload()
+    await Promise.resolve()
+    expect(useUpdateStore.getState().status).toBe('downloaded')
+  })
+
+  it('skips the delayed silent startup check if the user already ran a manual check within the 5s window', async () => {
+    vi.useFakeTimers()
+    try {
+      check.mockResolvedValue(null)
+      vi.resetModules()
+      const { useUpdateStore } = await import('./updateStore')
+
+      const startup = useUpdateStore.getState().initialize()
+      await useUpdateStore.getState().checkForUpdates()
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(useUpdateStore.getState().status).toBe('up-to-date')
+
+      await vi.advanceTimersByTimeAsync(5000)
+      await startup
+
+      expect(check).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
 })

@@ -98,6 +98,8 @@ export type CreateSessionBranchOptions = {
   sourceWorkDir?: string | null
   sourceRepository?: unknown
   sourceWorktreeSession?: PersistedWorktreeSession | null
+  /** Strip native external session linkage (e.g. Antigravity ACP) and mark fork seed pending. */
+  detachNativeSession?: boolean
 }
 
 export class SessionBranchingError extends Error {
@@ -283,14 +285,29 @@ export async function getUniqueForkName(
   return `${baseName} (Branch ${nextNumber})`
 }
 
+function sanitizeSessionMetaForBranch(
+  entry: SessionMetaEntry,
+  detachNativeSession: boolean,
+): SessionMetaEntry {
+  if (!detachNativeSession) return entry
+  const {
+    nativeSessionId: _nativeSessionId,
+    antigravitySessionId: _antigravitySessionId,
+    antigravityForkSeedPending: _antigravityForkSeedPending,
+    ...rest
+  } = entry
+  return rest
+}
+
 function buildPreservedMetadataEntries(
   sourceEntries: RawEntry[],
   copiedMessageIds: Set<string>,
   forkSessionId: UUID,
+  detachNativeSession = false,
 ): RawEntry[] {
   return sourceEntries.flatMap((entry) => {
     if (isSessionMetaEntry(entry)) {
-      return [entry]
+      return [sanitizeSessionMetaForBranch(entry, detachNativeSession)]
     }
 
     if (isWorktreeStateEntry(entry) && entry.worktreeSession) {
@@ -376,6 +393,7 @@ export async function createSessionBranch(
     sourceWorkDir,
     sourceRepository,
     sourceWorktreeSession,
+    detachNativeSession = false,
   } = options
 
   const projectDirPath = path.dirname(sourceTranscriptPath)
@@ -400,8 +418,32 @@ export async function createSessionBranch(
     )
   }
 
-  const activeChain = buildConversationChain(transcript.messages, activeLeaf)
+  let activeChain = buildConversationChain(transcript.messages, activeLeaf)
     .filter((message) => !message.isSidechain)
+
+  // External ACP runtimes (e.g. Antigravity) persist linear transcripts without
+  // parentUuid links (including newly appended turns after an earlier fork).
+  // Use file order when detaching a native session or when no parent links exist
+  // so both initial forks and nested forks preserve every historical turn.
+  const hasAnyParentLink = [...transcript.messages.values()].some(
+    (message) => !message.isSidechain && typeof message.parentUuid === 'string' && message.parentUuid.length > 0,
+  )
+  if (detachNativeSession || !hasAnyParentLink) {
+    const orderedIds: UUID[] = []
+    const seenIds = new Set<UUID>()
+    for (const entry of sourceEntries) {
+      if (!isTranscriptEntry(entry) || entry.isSidechain === true) continue
+      if (seenIds.has(entry.uuid)) continue
+      seenIds.add(entry.uuid)
+      orderedIds.push(entry.uuid)
+    }
+    const linearChain = orderedIds
+      .map((uuid) => transcript.messages.get(uuid))
+      .filter((message): message is TranscriptMessage => Boolean(message))
+    if (linearChain.length > 0) {
+      activeChain = linearChain
+    }
+  }
 
   if (activeChain.length === 0) {
     throw new SessionBranchingError(
@@ -499,12 +541,30 @@ export async function createSessionBranch(
     sourceEntries,
     copiedMessageIds,
     forkSessionId,
+    detachNativeSession,
   )
   metadataEntries = ensureSyntheticSessionMeta(
     metadataEntries,
     sourceWorkDir ?? null,
     sourceRepository,
   )
+  if (detachNativeSession) {
+    const lastMetaIndex = metadataEntries.findLastIndex(isSessionMetaEntry)
+    if (lastMetaIndex >= 0) {
+      metadataEntries[lastMetaIndex] = {
+        ...(metadataEntries[lastMetaIndex] as SessionMetaEntry),
+        antigravityForkSeedPending: true,
+      }
+    } else {
+      metadataEntries.push({
+        type: 'session-meta',
+        isMeta: true,
+        ...(sourceWorkDir ? { workDir: sourceWorkDir } : {}),
+        antigravityForkSeedPending: true,
+        timestamp: new Date().toISOString(),
+      })
+    }
+  }
   metadataEntries = ensureSyntheticWorktreeState(
     metadataEntries,
     forkSessionId,

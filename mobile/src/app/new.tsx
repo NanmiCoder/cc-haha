@@ -2,6 +2,7 @@ import { clearParkedComposer, parkComposer, parkedComposer } from '../ui/chat/qu
 import { ChatComposer } from '../ui/ChatComposer'
 import { RunSheet } from '../ui/compose/RunSheet'
 import { runCapsule } from '../ui/compose/runLogic'
+import { useBrowserUse } from '../core/useBrowserUse'
 import { useComputerUse } from '../core/useComputerUse'
 import { isComputerUseReference } from '../core/computerUse'
 import { WherePage } from '../ui/newtask/WherePage'
@@ -92,6 +93,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const standardRuntime = useRef<{ config: RuntimeConfig; name: string } | undefined>(undefined)
   const antigravityRuntime = useRef<{ config: RuntimeConfig; name: string } | undefined>(undefined)
   const [team, setTeam] = useState(parked?.team ?? false)
+  const [browserUse, setBrowserUse] = useState(parked?.browserUse ?? false)
   const [worktree, setWorktree] = useState(false)
   const [repo, setRepo] = useState<RepositoryContext | null>(null)
   const [branch, setBranch] = useState<string | null>(null)
@@ -99,12 +101,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const [busy, setBusy] = useState(false)
   const [whereOpen, setWhereOpen] = useState(false)
   const [runOpen, setRunOpen] = useState(false)
+  const browser = useBrowserUse(client)
   const computer = useComputerUse(client)
   const [creation] = useState(() => new FocusedRequests())
   // A directory passed from the home filter is an explicit choice, like picking one here.
   const submitted = useRef(false)
-  const leaving = useRef({ attachments, references, team })
-  useEffect(() => { leaving.current = { attachments, references, team } }, [attachments, references, team])
+  const leaving = useRef({ attachments, references, team, browserUse })
+  useEffect(() => { leaving.current = { attachments, references, team, browserUse } }, [attachments, references, team, browserUse])
   useEffect(() => {
     clearParkedComposer(draftKey)
     return () => { if (!submitted.current) parkComposer(draftKey, leaving.current) }
@@ -207,6 +210,9 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const isAntigravity = engine === 'antigravity' && antigravityInstalled
   const lean = !isAntigravity && profile === 'lean'
   const teamOn = team && !lean
+  const browserDisallowed = browser.available === false || (browser.available === true && !browser.enabled)
+  const browserOn = browserUse && !lean && !browserDisallowed
+  if (browserUse && browserDisallowed) setBrowserUse(false)
   const effectiveWorktree = !isAntigravity && worktree
   const antigravityBlocked =
     isAntigravity &&
@@ -287,6 +293,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     setProfile(value)
     if (value !== 'lean') return
     setTeam(false)
+    setBrowserUse(false)
     if (mode === 'plan') changeMode('default')
   }
   function changeContent(value: string) {
@@ -317,7 +324,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         serializeComposer(content, isAntigravity ? [] : references),
         attachments,
         teamOn,
-        { antigravity: isAntigravity }
+        { antigravity: isAntigravity, browserUse: browserOn ? browser.preferredTarget : false }
       )
       validateMessageSize(message, client.host.auth)
       // Refresh at submission: a checkout may have changed while this draft was open.
@@ -499,6 +506,9 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
           onAttachments={setAttachments}
           team={teamOn}
           onTeam={setTeam}
+          browser={browser}
+          browserUse={browserOn}
+          onBrowserUse={setBrowserUse}
           computer={computer}
           lean={lean}
           empty

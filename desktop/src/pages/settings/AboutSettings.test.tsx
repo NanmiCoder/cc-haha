@@ -109,3 +109,19 @@ it('no longer offers the user group QR entry while keeping repo and feedback lin
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(document.querySelector('img[src*="wechat-group-qr"]')).toBeNull()
 })
+
+it('shows downloading label and disabled loading state before progress bytes arrive', async () => {
+  useUpdateStore.setState({
+    status: 'downloading',
+    availableVersion: '0.9.0',
+    downloadedBytes: 0,
+    totalBytes: null,
+    progressPercent: 0,
+  })
+  await renderAboutSettings()
+
+  const actionButton = screen.getByRole('button', { name: '下载中...' })
+  expect(actionButton).toBeDisabled()
+  expect(actionButton).toHaveAttribute('aria-busy', 'true')
+  expect(screen.queryByText(/已下载 0 B/)).not.toBeInTheDocument()
+})

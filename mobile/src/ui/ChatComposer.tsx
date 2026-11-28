@@ -23,6 +23,8 @@ import {
 } from '../core/composerReferences'
 import { BringSheet, type MaterialKind } from './compose/BringSheet'
 import { Glyph } from './compose/glyphs'
+import { browserUsePillLabel } from '../core/browserUse'
+import type { BrowserUse } from '../core/useBrowserUse'
 import type { ComputerUse } from '../core/useComputerUse'
 import { isComputerUseReference, withComputerUseReference } from '../core/computerUse'
 import {
@@ -323,6 +325,9 @@ export function ChatComposer({
   onAttachments,
   team,
   onTeam,
+  browser,
+  browserUse = false,
+  onBrowserUse,
   computer,
   lean,
   empty,
@@ -352,6 +357,9 @@ export function ChatComposer({
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
   onTeam?(value: boolean): void
+  browser?: BrowserUse
+  browserUse?: boolean
+  onBrowserUse?(value: boolean): void
   /** Computer authorization; the current message's selection lives in references. */
   computer: ComputerUse
   lean: boolean
@@ -561,7 +569,8 @@ export function ChatComposer({
   }
 
   const teamActive = team && Boolean(onTeam)
-  const chips = attachments.length > 0 || references.length > 0 || teamActive
+  const browserActive = browserUse && Boolean(onBrowserUse) && Boolean(browser)
+  const chips = attachments.length > 0 || references.length > 0 || teamActive || browserActive
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -640,6 +649,14 @@ export function ChatComposer({
                 accessibilityLabel="关闭这条消息的 Agent 团队"
                 onPress={() => onTeam(false)}
                 icon={<Icon name="users" size={14} color={colors.brandInk} strokeWidth={2} />}
+              />
+            ) : null}
+            {browserActive && onBrowserUse && browser ? (
+              <Pill
+                label={browserUsePillLabel(browser.preferredTarget)}
+                accessibilityLabel="关闭这条消息的操作浏览器"
+                onPress={() => onBrowserUse(false)}
+                icon={<Icon name="globe" size={14} color={colors.brandInk} strokeWidth={2} />}
               />
             ) : null}
           </ScrollView>
@@ -772,6 +789,9 @@ export function ChatComposer({
         onPick={(kind) => void pick(kind)}
         team={teamActive}
         onTeam={onTeam}
+        browser={browser}
+        browserUse={browserActive}
+        onBrowserUse={onBrowserUse}
         computer={computer}
         onComputerSelected={(value) => {
           const current = referenceState.current

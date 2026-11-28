@@ -11,6 +11,7 @@ export type QueuedMessage = {
   text: string
   attachments: ComposerAttachment[]
   team: boolean
+  browserUse?: boolean
   references?: ComposerReference[]
   message: ClientMessage
 }
@@ -69,6 +70,7 @@ export type ComposerQueueState = {
   draft: string
   attachments: ComposerAttachment[]
   team: boolean
+  browserUse?: boolean
   references?: ComposerReference[]
 }
 
@@ -83,11 +85,13 @@ export function withdrawQueuedComposer(
   ids?: string[]
 ): ComposerQueueState {
   const taken = current.queue.filter((item) => !ids || ids.includes(item.id))
+  const nextBrowserUse = Boolean(current.browserUse || taken.some((item) => item.browserUse))
   const next = taken.length ? {
     queue: current.queue.filter((item) => !taken.includes(item)),
     draft: queueToDraft(current.draft, taken),
     attachments: queueAttachments(taken, current.attachments),
     team: current.team || taken.some((item) => item.team),
+    ...(nextBrowserUse ? { browserUse: true } : {}),
     ...(current.references?.length || taken.some((item) => item.references?.length) ? { references: mergeComposerReferences(...taken.map((item) => item.references), current.references) } : {}),
   } : current
   if (next.draft) drafts.set(key, next.draft)
@@ -97,15 +101,20 @@ export function withdrawQueuedComposer(
 }
 
 /**
- * 离开会话页时，排队消息里的材料和团队开关先存在内存里（文字进草稿），
+ * 离开会话页时，排队消息里的材料和团队/浏览器开关先存在内存里（文字进草稿），
  * 回来时还给输入框。和草稿一样只在这次打开 App 期间有效，不落盘。
  */
-type Parked = { attachments: ComposerAttachment[]; team: boolean; references?: ComposerReference[] }
+type Parked = { attachments: ComposerAttachment[]; team: boolean; browserUse?: boolean; references?: ComposerReference[] }
 const parked = new Map<string, Parked>()
 
 export function parkComposer(key: string, value: Parked) {
-  if (!value.attachments.length && !value.team && !value.references?.length) parked.delete(key)
-  else parked.set(key, { attachments: [...value.attachments], team: value.team, ...(value.references?.length ? { references: [...value.references] } : {}) })
+  if (!value.attachments.length && !value.team && !value.browserUse && !value.references?.length) parked.delete(key)
+  else parked.set(key, {
+    attachments: [...value.attachments],
+    team: value.team,
+    ...(value.browserUse ? { browserUse: true } : {}),
+    ...(value.references?.length ? { references: [...value.references] } : {}),
+  })
 }
 
 /** 只读不取走：React 开发模式可能把初始化函数调用两次。挂载后再 clear。 */

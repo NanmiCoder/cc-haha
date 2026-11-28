@@ -156,7 +156,7 @@ describe('image generation protocol settings', () => {
     fireEvent.click(dialog.getByRole('button', { name: 'AruHub' }))
     expect(dialog.getByRole('combobox', { name: 'Image API protocol' })).toHaveValue('xai_images')
     expect(dialog.getByRole('textbox', { name: /Image model/ })).toHaveValue('grok-image-fixture')
-    fireEvent.click(dialog.getByRole('button', { name: 'Atlas Cloud' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Modelflare' }))
     expect(dialog.getByRole('switch', { name: 'Enable image generation' })).not.toBeChecked()
     fireEvent.click(dialog.getByRole('switch', { name: 'Enable image generation' }))
     expect(dialog.getByRole('combobox', { name: 'Image API protocol' })).toHaveValue('openai_images')
@@ -187,10 +187,10 @@ describe('active sponsor providers', () => {
     const dialog = within(screen.getByRole('dialog'))
     const sponsor = dialog.getByRole('button', { name: 'AruHub' })
     expect(sponsor.parentElement?.firstElementChild).toBe(sponsor)
-    expect(sponsor.parentElement).toBe(dialog.getByRole('button', { name: 'Atlas Cloud' }).parentElement)
+    expect(sponsor.parentElement).toBe(dialog.getByRole('button', { name: 'Modelflare' }).parentElement)
     expect(within(sponsor).getByText('New')).toBeInTheDocument()
     expect(within(sponsor).getByLabelText('Sponsor')).toBeInTheDocument()
-    expect(within(dialog.getByRole('button', { name: 'Atlas Cloud' })).queryByLabelText('Sponsor')).not.toBeInTheDocument()
+    expect(dialog.queryByRole('button', { name: 'Atlas Cloud' })).not.toBeInTheDocument()
     fireEvent.click(sponsor)
     expect(dialog.getByDisplayValue('https://agent.aruhub.com')).toBeInTheDocument()
     expect(dialog.getAllByDisplayValue('claude-opus-5-5')).toHaveLength(2)
@@ -253,12 +253,12 @@ describe('active sponsor providers', () => {
     const dialog = within(screen.getByRole('dialog'))
     const sponsor = dialog.getByRole('button', { name: 'Modelflare' })
     expect(sponsor.previousElementSibling).toBe(dialog.getByRole('button', { name: 'AruHub' }))
-    expect(sponsor.nextElementSibling).toBe(dialog.getByRole('button', { name: 'Atlas Cloud' }))
+    expect(sponsor.nextElementSibling).toBeNull()
     expect(within(sponsor).getByText('New')).toBeInTheDocument()
     expect(within(sponsor).getByLabelText('Sponsor')).toBeInTheDocument()
     expect(sponsor.querySelector('img')?.getAttribute('src')).toContain('modelflare-logo')
     expect(dialog.getByRole('button', { name: 'AruHub' }).querySelector('img')?.getAttribute('src')).toContain('aruhub-logo')
-    expect(dialog.getByRole('button', { name: 'Atlas Cloud' }).querySelector('img')).toBeNull()
+    expect(dialog.queryByRole('button', { name: 'Atlas Cloud' })).not.toBeInTheDocument()
     expect(dialog.queryByRole('button', { name: 'ApiSmart' })).not.toBeInTheDocument()
 
     fireEvent.click(sponsor)
@@ -325,13 +325,33 @@ describe('active sponsor providers', () => {
   })
 
   it('does not warn about the endpoint while a preset keeps its own protocol', async () => {
-    render(<ProviderSettings />)
-    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
-    const dialog = within(screen.getByRole('dialog'))
-    fireEvent.click(dialog.getByRole('button', { name: 'Atlas Cloud' }))
+    const originalPresets = useProviderStore.getState().presets
+    useProviderStore.setState({
+      presets: [
+        ...BUNDLED_PROVIDER_PRESETS,
+        {
+          id: 'openai-chat-fixture',
+          name: 'OpenAI Chat Fixture',
+          baseUrl: 'https://openai-fixture.invalid',
+          apiFormat: 'openai_chat',
+          defaultModels: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
+          needsApiKey: true,
+          websiteUrl: '',
+        },
+      ],
+    })
+    try {
+      render(<ProviderSettings />)
+      fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+      const dialog = within(screen.getByRole('dialog'))
+      fireEvent.click(dialog.getByRole('button', { name: 'OpenAI Chat Fixture' }))
 
-    expect(dialog.getByRole('button', { name: /OpenAI Chat Completions \(proxy\)/ })).toBeInTheDocument()
-    expect(dialog.queryByText(/point the base URL at an endpoint that serves it/)).not.toBeInTheDocument()
+      expect(dialog.getByRole('button', { name: /OpenAI Chat Completions \(proxy\)/ })).toBeInTheDocument()
+      expect(dialog.queryByText(/point the base URL at an endpoint that serves it/)).not.toBeInTheDocument()
+    } finally {
+      cleanup()
+      useProviderStore.setState({ presets: originalPresets })
+    }
   })
 
   it('preserves image generation disabled on an older saved ApiSmart provider', async () => {
@@ -356,8 +376,30 @@ describe('active sponsor providers', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
     const dialog = within(screen.getByRole('dialog'))
-    expect(dialog.getByRole('button', { name: 'Atlas Cloud' })).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: 'Modelflare' })).toBeInTheDocument()
+    expect(dialog.queryByRole('button', { name: 'Atlas Cloud' })).not.toBeInTheDocument()
     expect(dialog.queryByRole('button', { name: 'ApiSmart' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a saved Atlas Cloud provider editable while no longer offering it as a new provider', async () => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{
+      ...savedProviders[0]!, id: 'old-atlascloud', presetId: 'atlascloud', name: 'Atlas Cloud',
+      baseUrl: 'https://api.atlascloud.ai', apiFormat: 'openai_chat',
+    }], activeId: null })
+    render(<ProviderSettings />)
+    const card = await screen.findByTestId('provider-old-atlascloud')
+    expect(card).toHaveTextContent('Atlas Cloud')
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    const editDialog = within(screen.getByRole('dialog'))
+    expect(editDialog.getByDisplayValue('https://api.atlascloud.ai')).toBeInTheDocument()
+    expect(editDialog.queryByRole('button', { name: /Get API Key/ })).not.toBeInTheDocument()
+    fireEvent.click(editDialog.getByRole('button', { name: 'Cancel' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    const addDialog = within(screen.getByRole('dialog'))
+    expect(addDialog.getByRole('button', { name: 'Modelflare' })).toBeInTheDocument()
+    expect(addDialog.queryByRole('button', { name: 'Atlas Cloud' })).not.toBeInTheDocument()
   })
 })
 
@@ -461,7 +503,8 @@ describe('retired sponsor providers', () => {
     for (const provider of savedProviders) {
       expect(dialog.queryByRole('button', { name: provider.name })).not.toBeInTheDocument()
     }
-    expect(dialog.getByRole('button', { name: 'Atlas Cloud' })).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: 'Modelflare' })).toBeInTheDocument()
+    expect(dialog.queryByRole('button', { name: 'Atlas Cloud' })).not.toBeInTheDocument()
     expect(dialog.getByRole('button', { name: 'Custom API' })).toBeInTheDocument()
   })
 

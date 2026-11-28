@@ -40,7 +40,7 @@ import { handleWorkflowsApi } from './api/workflows.js'
 import { handleVoiceApi } from './api/voice.js'
 import { apiPerformanceMonitor } from './services/apiPerformanceMonitor.js'
 
-import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, projectRemoteProvider, projectRemoteSettings, replaceRemoteCompatibility, validateRemoteSettingsPatch, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { hasOnlyRemoteBrowserUsePatchKeys, projectRemoteBrowserUseConfig, projectRemoteProvider, projectRemoteSettings, remoteBrowserUseRouteAllowed, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, replaceRemoteCompatibility, validateRemoteBrowserUseConfigPatch, validateRemoteSettingsPatch, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import { ProviderService } from './services/providerService.js'
 import type { SavedProvider } from './types/provider.js'
 import { remoteProviderNeedsCredentials } from './remoteProviderCredentials.js'
@@ -60,22 +60,35 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
   if (mobileParts[1] === 'sessions' && mobileParts[2] === 'mobile-push') return handleMobilePushApi(req, mobileParts, context)
   if (!context.remoteBrowser) return routeApiRequest(req, url)
   const parts = url.pathname.split('/').filter(Boolean)
-  if (parts[1] === 'browser-use' || parts[1] === 'usage-summary') {
+  if (parts[1] === 'usage-summary') {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
   const isProvider = parts[1] === 'providers'
   const isSettings = parts[1] === 'settings'
-  if (!isProvider && !isSettings) return routeApiRequest(req, url)
-  if ((isProvider && !remoteProviderRouteAllowed(parts, req.method)) || (isSettings && !remoteSettingsRouteAllowed(parts, req.method))) {
+  const isBrowserUse = parts[1] === 'browser-use'
+  if (!isProvider && !isSettings && !isBrowserUse) return routeApiRequest(req, url)
+  if (
+    (isProvider && !remoteProviderRouteAllowed(parts, req.method)) ||
+    (isSettings && !remoteSettingsRouteAllowed(parts, req.method)) ||
+    (isBrowserUse && !remoteBrowserUseRouteAllowed(parts, req.method))
+  ) {
     return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   }
   try {
     const createsProvider = isProvider && parts.length === 2 && req.method === 'POST'
-    if (createsProvider || (req.method === 'PUT' && (isSettings || (isProvider && parts.length === 3 && parts[2] !== 'reorder')))) {
+    if (createsProvider || (req.method === 'PUT' && (isSettings || isBrowserUse || (isProvider && parts.length === 3 && parts[2] !== 'reorder')))) {
       const body: unknown = await req.json()
       if (!body || typeof body !== 'object' || Array.isArray(body)) return Response.json({ error: 'Object required' }, { status: 400 })
       const input = { ...body } as Record<string, unknown>
       if (isSettings && !validateRemoteSettingsPatch(input)) return Response.json({ error: 'Unsupported General setting' }, { status: 400 })
+      if (isBrowserUse) {
+        if (!hasOnlyRemoteBrowserUsePatchKeys(input)) {
+          return Response.json({ error: 'Only Browser Use enablement and target can be changed remotely' }, { status: 403 })
+        }
+        if (!validateRemoteBrowserUseConfigPatch(input)) {
+          return Response.json({ error: 'Invalid Browser Use configuration patch' }, { status: 400 })
+        }
+      }
       if (isProvider) {
         const saved = createsProvider ? undefined : await new ProviderService().getProvider(parts[2]!)
         if (saved && remoteProviderNeedsCredentials(saved, input)) {
@@ -101,6 +114,7 @@ async function handleApiRequestWithoutPerformance(req: Request, url: URL, contex
     if (!response.ok) return response
     const body = await response.json() as Record<string, unknown>
     if (isSettings && req.method === 'GET') return Response.json(projectRemoteSettings(body))
+    if (isBrowserUse) return Response.json(projectRemoteBrowserUseConfig(body), { status: response.status })
     if (isProvider) {
       if (Array.isArray(body.providers)) body.providers = (body.providers as SavedProvider[]).map(projectRemoteProvider)
       if (body.provider && typeof body.provider === 'object') body.provider = projectRemoteProvider(body.provider as SavedProvider)

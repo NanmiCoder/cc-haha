@@ -2178,6 +2178,25 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             the trailing group (`min-w-0 flex-1`) gives up model-name width
             cleanly via ellipsis when horizontal space tightens.
           */}
+          {isMobileComposer && !isMemberSession && !dictationLive && (capabilityMenu.agentTeamArmed || capabilityMenu.browserUse.armed) ? (
+            <div
+              data-testid="chat-input-mobile-chips"
+              className="flex flex-wrap items-center gap-1.5 pt-1.5"
+            >
+              {capabilityMenu.agentTeamArmed ? (
+                <AgentTeamChip touch onRemove={capabilityMenu.disarmAgentTeam} />
+              ) : null}
+              {capabilityMenu.browserUse.armed ? (
+                <BrowserUseTargetPill
+                  target={capabilityMenu.browserUse.preferredTarget}
+                  onChange={capabilityMenu.browserUse.setPreferredTarget}
+                  onRemove={capabilityMenu.browserUse.disarm}
+                  touch
+                />
+              ) : null}
+            </div>
+          ) : null}
+
           <div
             data-testid="chat-input-toolbar"
             className={`flex min-w-0 items-center justify-between pt-1.5 ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
@@ -2243,16 +2262,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                   </div>
 
-                  {capabilityMenu.agentTeamArmed && !isMemberSession ? (
-                    <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                  {!isMobileComposer && capabilityMenu.agentTeamArmed && !isMemberSession ? (
+                    <AgentTeamChip onRemove={capabilityMenu.disarmAgentTeam} />
                   ) : null}
 
-                  {capabilityMenu.browserUse.armed && !isMemberSession ? (
+                  {!isMobileComposer && capabilityMenu.browserUse.armed && !isMemberSession ? (
                     <BrowserUseTargetPill
                       target={capabilityMenu.browserUse.preferredTarget}
                       onChange={capabilityMenu.browserUse.setPreferredTarget}
                       onRemove={capabilityMenu.browserUse.disarm}
-                      touch={isMobileComposer}
                     />
                   ) : null}
 

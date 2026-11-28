@@ -111,6 +111,11 @@ export type BranchSessionResponse = {
   workDir: string | null
   sourceSessionId: string
   targetMessageId: string
+  messageCount?: number
+  runtimeProviderId?: SessionListItem['runtimeProviderId']
+  runtimeModelId?: SessionListItem['runtimeModelId']
+  effortLevel?: SessionListItem['effortLevel']
+  permissionMode?: SessionListItem['permissionMode']
 }
 export type RepositoryBranchInfo = {
   name: string

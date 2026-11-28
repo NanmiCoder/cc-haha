@@ -26,6 +26,7 @@ import {
   isAntigravityComputerUseToolName,
   type AntigravityComputerUseBridge,
 } from './antigravityComputerUseBridge.js'
+import { AntigravityTurnFileTracker } from './antigravityFileSnapshot.js'
 
 const CANCEL_TIMEOUT_MS = 3_000
 const TRANSCRIPT_BASELINE_SCAN_BYTES = 128 * 1024
@@ -154,6 +155,8 @@ type Turn = {
   isCompact: boolean
   preCompactTokens: number
   compactCommandXml?: string
+  usedForkSeed?: boolean
+  hasOutput: boolean
   userUuid?: string
   detached: boolean
   promptSeq: number
@@ -191,6 +194,10 @@ export type AntigravityConversationOptions = {
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   onConfigOptionsUpdated?: (config: { modelId?: string; effortLevel?: string; permissionMode?: string; runtimeChanged: boolean }) => void
   antigravityAppDataDir?: string
+  pendingForkSeedContext?: string
+  onForkSeedConsumed?: () => Promise<void> | void
+  sessionId?: string
+  workDir?: string
 }
 
 type ContextUsageState = {
@@ -207,6 +214,8 @@ type CumulativeUsageState = {
   totalDecodeDuration: number
   totalTtftDuration: number
   totalDuration: number
+  totalLinesAdded: number
+  totalLinesRemoved: number
 }
 
 type ContextCategory = {
@@ -241,6 +250,14 @@ function countUserContentChars(userContent: Frame[]): number {
     }
   }
   return chars
+}
+
+function prependForkSeedToPrompt(seedContext: string, prompt: Frame[]): Frame[] {
+  const first = prompt[0]
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    return [{ ...first, text: `${seedContext}\n\n${first.text}` }, ...prompt.slice(1)]
+  }
+  return [{ type: 'text', text: seedContext }, ...prompt]
 }
 
 function buildContextGridRows(
@@ -798,6 +815,8 @@ export class AntigravityConversation {
     totalDecodeDuration: 0,
     totalTtftDuration: 0,
     totalDuration: 0,
+    totalLinesAdded: 0,
+    totalLinesRemoved: 0,
   }
   private readonly subagentNameCache = new Map<string, string>()
   private readonly claimedSubagentIds = new Set<string>()
@@ -807,6 +826,9 @@ export class AntigravityConversation {
   private readonly onConfigOptionsUpdated?: (config: { modelId?: string; effortLevel?: string; permissionMode?: string; runtimeChanged: boolean }) => void
   private readonly antigravityAppDataDir: string
   private lastProjectedPlanSignature?: string
+  private pendingForkSeedContext?: string
+  private readonly onForkSeedConsumed?: () => Promise<void> | void
+  private readonly fileTracker?: AntigravityTurnFileTracker
 
   constructor(
     readonly acp: AntigravityAcp,
@@ -819,6 +841,11 @@ export class AntigravityConversation {
     this.onAvailableCommands = options.onAvailableCommands
     this.onConfigOptionsUpdated = options.onConfigOptionsUpdated
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
+    this.pendingForkSeedContext = options.pendingForkSeedContext?.trim() || undefined
+    this.onForkSeedConsumed = options.onForkSeedConsumed
+    if (options.sessionId?.trim() && options.workDir?.trim()) {
+      this.fileTracker = new AntigravityTurnFileTracker(options.sessionId.trim(), options.workDir.trim())
+    }
     acp.onMessage = (method, params, id) => this.receive(method, params, id)
     if (acp.initialAvailableCommands.length > 0) {
       this.availableCommands = acp.initialAvailableCommands
@@ -995,6 +1022,8 @@ export class AntigravityConversation {
       totalDecodeDuration: this.cumulativeUsage.totalDecodeDuration + (inFlightOutput > 0 ? turn.decodeDurationMs : 0),
       totalTtftDuration: this.cumulativeUsage.totalTtftDuration + (inFlightOutput > 0 ? (turn.ttftMs ?? 0) : 0),
       totalDuration: this.cumulativeUsage.totalDuration + Math.max(0, Date.now() - turn.started),
+      totalLinesAdded: this.cumulativeUsage.totalLinesAdded,
+      totalLinesRemoved: this.cumulativeUsage.totalLinesRemoved,
     }
   }
 
@@ -1145,8 +1174,8 @@ export class AntigravityConversation {
       totalDecodeDuration: totals.totalDecodeDuration,
       totalTtftDuration: totals.totalTtftDuration,
       totalDuration: totals.totalDuration,
-      totalLinesAdded: 0,
-      totalLinesRemoved: 0,
+      totalLinesAdded: totals.totalLinesAdded,
+      totalLinesRemoved: totals.totalLinesRemoved,
       totalInputTokens: totals.inputTokens,
       totalOutputTokens: totals.outputTokens,
       totalCacheReadInputTokens: totals.cacheReadTokens,
@@ -1233,21 +1262,28 @@ export class AntigravityConversation {
     }
     const compactCommand = parseManualCompactPrompt(userContent)
     const preCompactTokens = compactCommand ? (this.contextUsage?.used ?? 0) : 0
+    const forkSeedContext = !compactCommand ? this.pendingForkSeedContext : undefined
+    const wirePrompt = forkSeedContext
+      ? prependForkSeedToPrompt(forkSeedContext, prompt)
+      : prompt
     if (!compactCommand && this.firstTurnBaselineTokens === undefined && this.firstTurnUserChars === undefined) {
-      this.firstTurnUserChars = countUserContentChars(userContent)
+      this.firstTurnUserChars = countUserContentChars(wirePrompt)
     }
     const turn = this.beginTurn(false)
+    if (forkSeedContext) {
+      turn.usedForkSeed = true
+    }
+    turn.userUuid = uuid
     if (compactCommand) {
       turn.isCompact = true
       turn.preCompactTokens = preCompactTokens
       turn.compactCommandXml = formatCompactLocalCommandXml(compactCommand.args)
-      turn.userUuid = uuid
     }
     const seq = ++turn.promptSeq
     void this.run(
       turn,
       seq,
-      prompt,
+      wirePrompt,
       compactCommand
         ? undefined
         : { type: 'user', uuid, timestamp: new Date().toISOString(), message: { role: 'user', content: userContent } },
@@ -1273,8 +1309,9 @@ export class AntigravityConversation {
     // prematurely settling this turn.
     turn.nativeEnd = undefined
     turn.replyOpen = false
+    turn.userUuid = uuid
     const seq = ++turn.promptSeq
-    void this.run(turn, seq, prompt, user, entriesToPersist)
+    void this.run(turn, seq, prompt, user, entriesToPersist, true)
     return true
   }
 
@@ -1678,6 +1715,21 @@ export class AntigravityConversation {
       }
     }
 
+    if (rawName === 'search_web') {
+      const query = firstString(rawInput.query, rawInput.Query, title) ?? ''
+      return {
+        name: 'WebSearch',
+        input: {
+          ...rawInput,
+          ...(query ? { query } : {}),
+        },
+        displayName: title,
+        antigravityToolName: rawName,
+        ...(subagentName ? { subagentName } : {}),
+        ...(subagentId ? { subagentId } : {}),
+      }
+    }
+
     const browserUseToolName = resolveAntigravityBrowserUseToolName(rawName)
     if (browserUseToolName) {
       return {
@@ -1706,7 +1758,7 @@ export class AntigravityConversation {
     const turn: Turn = {
       entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
       nextIndex: 0, started: Date.now(),
-      apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
+      apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0, hasOutput: false,
       detached,
       promptSeq: 0,
       accumulatedUsage: createEmptyUsage(),
@@ -1832,19 +1884,40 @@ export class AntigravityConversation {
     return next
   }
 
+  private async persistTurnSnapshot(snapshot: { snapshotEntry: Frame; insertions: number; deletions: number }): Promise<void> {
+    this.cumulativeUsage.totalLinesAdded += snapshot.insertions
+    this.cumulativeUsage.totalLinesRemoved += snapshot.deletions
+    await this.enqueueAppend([snapshot.snapshotEntry])
+  }
+
+  private async finalizeActiveFileSnapshot(): Promise<void> {
+    if (!this.fileTracker) return
+    const snapshot = await this.fileTracker.completeTurn()
+    if (!snapshot) return
+    await this.persistTurnSnapshot(snapshot)
+  }
+
   private async run(
     turn: Turn,
     seq: number,
     prompt: Frame[],
     user?: Frame,
     entriesToPersist?: Frame[],
+    finalizePreviousSnapshot = false,
   ): Promise<void> {
     let error: AntigravityError | undefined
     let result: Frame = {}
     try {
+      const userUuid = typeof user?.uuid === 'string' ? user.uuid : turn.userUuid
+      const baselinePromise = !turn.isCompact && user && userUuid && this.fileTracker
+        ? (finalizePreviousSnapshot
+            ? this.fileTracker.transitionTurn(userUuid, snapshot => this.persistTurnSnapshot(snapshot))
+            : this.fileTracker.beginTurn(userUuid))
+        : undefined
       if (entriesToPersist) await this.enqueueAppend(entriesToPersist)
       else if (user) await this.enqueueAppend([user])
       else if (turn.isCompact) await this.appendChain.catch(() => undefined)
+      if (baselinePromise) await baselinePromise
       if (!turn.cancelled) {
         if (turn.isCompact) {
           this.emit({
@@ -1939,6 +2012,9 @@ export class AntigravityConversation {
           return
         }
       } while (turn.entries.length || turn.chunk)
+      if (!turn.isCompact && this.fileTracker) {
+        await this.finalizeActiveFileSnapshot()
+      }
       if (turn.isCompact && !turn.cancelled && !error) {
         const compactUuid = crypto.randomUUID()
         const compactTimestamp = new Date().toISOString()
@@ -1978,6 +2054,17 @@ export class AntigravityConversation {
     this.cancelPermissions(turn)
     this.turn = undefined
     const failed = !turn.cancelled && error
+    const forkSeedDelivered = Boolean(
+      turn.usedForkSeed && (turn.hasOutput || turn.replyOpen || (!error && !turn.cancelled)),
+    )
+    if (forkSeedDelivered && this.pendingForkSeedContext) {
+      this.pendingForkSeedContext = undefined
+      try {
+        await this.onForkSeedConsumed?.()
+      } catch {
+        // Best-effort metadata persistence; do not fail a completed turn.
+      }
+    }
     if (turn.isCompact) {
       if (compactBoundaryEvent && !turn.cancelled && !error) {
         this.emit(compactBoundaryEvent)
@@ -2041,6 +2128,7 @@ export class AntigravityConversation {
   }
 
   private assistant(turn: Turn, content: Frame): void {
+    turn.hasOutput = true
     const message = {
       type: 'assistant', uuid: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -2064,6 +2152,7 @@ export class AntigravityConversation {
 
   private chunk(turn: Turn, kind: 'text' | 'thinking', text: string): void {
     if (!text) return
+    turn.hasOutput = true
     if (turn.nativeEnd) turn.replyOpen = true
     if (turn.chunk?.kind !== kind) {
       this.flushChunk(turn)
@@ -2074,10 +2163,56 @@ export class AntigravityConversation {
     this.stream({ type: 'content_block_delta', index: turn.chunk.index, delta: kind === 'text' ? { type: 'text_delta', text } : { type: 'thinking_delta', thinking: text } })
   }
 
+  private recordFileToolPath(projected: ProjectedTool, phase: 'pending' | 'completed'): void {
+    if (!this.fileTracker) return
+    if (projected.name !== 'Edit' && projected.name !== 'Write' && projected.name !== 'MultiEdit') return
+    const filePath = typeof projected.input.file_path === 'string' ? projected.input.file_path : undefined
+    if (!filePath) return
+    if (phase === 'pending') this.fileTracker.recordPendingToolPath(filePath)
+    else this.fileTracker.recordCompletedToolPath(filePath)
+  }
+
+  private enrichTurnToolUseEntry(turn: Turn, toolUseId: string, projected: ProjectedTool): void {
+    if (projected.name !== 'Edit' && projected.name !== 'Write' && projected.name !== 'MultiEdit') return
+    const nextFilePath = typeof projected.input.file_path === 'string' ? projected.input.file_path : ''
+    if (!nextFilePath) return
+    for (let i = turn.entries.length - 1; i >= 0; i--) {
+      const entry = turn.entries[i]
+      if (entry?.type !== 'assistant') continue
+      const message = acpObject(entry.message)
+      if (!Array.isArray(message?.content)) continue
+      for (const block of message.content) {
+        const record = acpObject(block)
+        if (record?.type !== 'tool_use' || record.id !== toolUseId) continue
+        const existingInput = acpObject(record.input) ?? {}
+        const existingPath = typeof existingInput.file_path === 'string' ? existingInput.file_path : ''
+        const existingOld = typeof existingInput.old_string === 'string' ? existingInput.old_string : ''
+        const existingNew = typeof existingInput.new_string === 'string' ? existingInput.new_string : ''
+        const existingContent = typeof existingInput.content === 'string' ? existingInput.content : ''
+        const nextOld = typeof projected.input.old_string === 'string' ? projected.input.old_string : ''
+        const nextNew = typeof projected.input.new_string === 'string' ? projected.input.new_string : ''
+        const nextContent = typeof projected.input.content === 'string' ? projected.input.content : ''
+        const shouldEnrich =
+          !existingPath ||
+          (record.name !== projected.name && (projected.name === 'Edit' || projected.name === 'Write')) ||
+          (projected.name === 'Edit' && !existingOld && !existingNew && (Boolean(nextOld) || Boolean(nextNew))) ||
+          (projected.name === 'Write' && !existingContent && Boolean(nextContent))
+        if (shouldEnrich) {
+          record.name = projected.name
+          record.input = { ...existingInput, ...projected.input }
+        }
+        return
+      }
+    }
+  }
+
   private toolCall(turn: Turn, tool: Frame, overrideName?: string, overrideInput?: Frame): ProjectedTool {
     const projected = this.projectTool(tool)
     const id = tool.toolCallId
     if (typeof id !== 'string' || this.tools.has(id)) return projected
+    if (tool.status === 'pending') {
+      this.recordFileToolPath(projected, 'pending')
+    }
     this.toolStartedAt.set(id, Date.now())
     this.flushChunk(turn)
     const effectiveName = overrideName ?? projected.name
@@ -2117,6 +2252,11 @@ export class AntigravityConversation {
     if (isSubagent && !this.hasActiveSubagentTool()) {
       this.flushSubagentPhase(turn)
     }
+    if (tool.status === 'completed') {
+      const completedProjection = this.projectTool(tool)
+      this.enrichTurnToolUseEntry(turn, id, completedProjection)
+      this.recordFileToolPath(completedProjection, 'completed')
+    }
     const startedAt = this.toolStartedAt.get(id)
     this.toolStartedAt.delete(id)
     const durationMs = typeof startedAt === 'number' ? Math.max(0, Date.now() - startedAt) : undefined
@@ -2152,6 +2292,7 @@ export class AntigravityConversation {
       ...(durationMs !== undefined ? { durationMs } : {}),
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: tool.status === 'failed' }] },
     }
+    turn.hasOutput = true
     turn.entries.push(message)
     this.emit(message)
     this.maybeResumeModelPhase(turn)
@@ -2431,6 +2572,9 @@ export class AntigravityConversation {
       turn.promptQuestion = undefined
     }
     if (turn.nativeEnd) turn.replyOpen = true
+    if (!question) {
+      this.recordFileToolPath(this.projectTool(mergedTool), 'pending')
+    }
     this.publishPermission(turn, mergedTool, { id: rpcId, options, question, toolUseId })
   }
 

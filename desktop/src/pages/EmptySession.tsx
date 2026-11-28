@@ -1788,6 +1788,25 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               />
             </div>
 
+            {isMobileComposer && !dictationLive && (capabilityMenu.agentTeamArmed || capabilityMenu.browserUse.armed) ? (
+              <div
+                data-testid="empty-session-mobile-chips"
+                className="flex flex-wrap items-center gap-1.5 pt-1.5"
+              >
+                {capabilityMenu.agentTeamArmed ? (
+                  <AgentTeamChip touch onRemove={capabilityMenu.disarmAgentTeam} />
+                ) : null}
+                {capabilityMenu.browserUse.armed ? (
+                  <BrowserUseTargetPill
+                    target={capabilityMenu.browserUse.preferredTarget}
+                    onChange={capabilityMenu.browserUse.setPreferredTarget}
+                    onRemove={capabilityMenu.browserUse.disarm}
+                    touch
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
             <div
               data-testid="empty-session-toolbar"
               className={`flex min-w-0 items-center justify-between pt-1.5 ${
@@ -1843,16 +1862,15 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                 </div>
 
-                {capabilityMenu.agentTeamArmed ? (
-                  <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                {!isMobileComposer && capabilityMenu.agentTeamArmed ? (
+                  <AgentTeamChip onRemove={capabilityMenu.disarmAgentTeam} />
                 ) : null}
 
-                {capabilityMenu.browserUse.armed ? (
+                {!isMobileComposer && capabilityMenu.browserUse.armed ? (
                   <BrowserUseTargetPill
                     target={capabilityMenu.browserUse.preferredTarget}
                     onChange={capabilityMenu.browserUse.setPreferredTarget}
                     onRemove={capabilityMenu.browserUse.disarm}
-                    touch={isMobileComposer}
                   />
                 ) : null}
 

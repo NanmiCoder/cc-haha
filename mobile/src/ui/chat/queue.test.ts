@@ -147,3 +147,16 @@ test('withdrawing queued skills restores selection chips and plain draft, not mo
   expect(parkedComposer('skill-restore')?.references).toEqual([reference])
   clearParkedComposer('skill-restore')
 })
+
+test('withdrawing queued browser-use messages restores browserUse and parks it across navigation', () => {
+  const drafts = new Drafts()
+  const key = 'browser-restore'
+  const next = withdrawQueuedComposer(key, {
+    queue: [{ id: 'qb', text: '打开网页检查', attachments: [], team: false, browserUse: true, message: { type: 'user_message', content: '<browser-use-request target="workspace">...</browser-use-request>\n\n打开网页检查' } }],
+    draft: '', attachments: [], team: false,
+  }, drafts)
+  expect(next.draft).toBe('打开网页检查')
+  expect(next.browserUse).toBe(true)
+  expect(parkedComposer(key)?.browserUse).toBe(true)
+  clearParkedComposer(key)
+})

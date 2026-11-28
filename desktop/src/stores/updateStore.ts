@@ -40,12 +40,25 @@ type UpdateStore = {
   dismissPrompt: () => void
 }
 
+type InFlightCheck = {
+  generation: number
+  proxyKey: string
+  showError: boolean
+  allowAutoDownload: boolean
+  promise: Promise<DesktopUpdate | null>
+}
+
 let pendingUpdate: DesktopUpdate | null = null
 let pendingUpdateProxyKey: string | null = null
 let pendingUpdateDownloaded = false
 let downloadPromise: Promise<void> | null = null
+let downloadingUpdateRef: DesktopUpdate | null = null
 let downloadingProxyKey: string | null = null
+let checkGeneration = 0
+let currentCheck: InFlightCheck | null = null
+let installPromise: Promise<void> | null = null
 let startupCheckPromise: Promise<void> | null = null
+let startupCheckCompleted = false
 let relaunchWatchdog: ReturnType<typeof setTimeout> | null = null
 
 function clearRelaunchWatchdog() {
@@ -195,9 +208,21 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
   initialize: async () => {
     if (!getUpdateHost() || !useSettingsStore.getState().autoUpdateEnabled) return
+    const currentStatus = get().status
+    if (
+      startupCheckCompleted
+      || currentStatus === 'downloading'
+      || currentStatus === 'downloaded'
+      || currentStatus === 'installing'
+      || currentStatus === 'restarting'
+    ) {
+      return
+    }
     if (!startupCheckPromise) {
       startupCheckPromise = (async () => {
         await new Promise((resolve) => setTimeout(resolve, 5000))
+        if (startupCheckCompleted || !useSettingsStore.getState().autoUpdateEnabled) return
+        startupCheckCompleted = true
         await get().checkForUpdates({ silent: true })
       })().finally(() => {
         startupCheckPromise = null
@@ -211,30 +236,117 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
     const host = getUpdateHost()
     if (!host) return null
     if (silent && !useSettingsStore.getState().autoUpdateEnabled) return null
-    if (downloadPromise && get().status === 'downloading' && pendingUpdate) return pendingUpdate
+    if (!silent) startupCheckCompleted = true
+    const currentStatus = get().status
+    if ((currentStatus === 'installing' || currentStatus === 'restarting') && pendingUpdate) {
+      return pendingUpdate
+    }
+    const updateProxyKey = getUpdateProxyKey()
+    if (downloadPromise && pendingUpdate && downloadingProxyKey === updateProxyKey) {
+      if (get().status !== 'downloading') {
+        set((state) => ({
+          ...state,
+          status: 'downloading',
+          error: null,
+        }))
+      }
+      return pendingUpdate
+    }
+    if (currentCheck && currentCheck.proxyKey === updateProxyKey) {
+      if (!silent) currentCheck.showError = true
+      if (autoDownload) currentCheck.allowAutoDownload = true
+      return await currentCheck.promise
+    }
     clearRelaunchWatchdog()
 
+    const generation = ++checkGeneration
     set((state) => ({
       ...state,
       status: 'checking',
       error: null,
     }))
 
-    try {
-      const updateProxyKey = getUpdateProxyKey()
-      const update = await host.updates.check(getUpdateCheckOptions())
+    const activeCheck: InFlightCheck = {
+      generation,
+      proxyKey: updateProxyKey,
+      showError: !silent,
+      allowAutoDownload: autoDownload,
+      promise: Promise.resolve(null),
+    }
 
-      if (update && !isUpdateNewerThanCurrent(update.version, await getCurrentAppVersion(host))) {
-        await closeIgnoredUpdate(update)
-        await setPendingUpdate(null, null)
+    const activePromise = (async (): Promise<DesktopUpdate | null> => {
+      try {
+        const update = await host.updates.check(getUpdateCheckOptions())
+        if (activeCheck.generation !== checkGeneration) {
+          return pendingUpdate
+        }
+
+        if (update && !isUpdateNewerThanCurrent(update.version, await getCurrentAppVersion(host))) {
+          if (activeCheck.generation !== checkGeneration) {
+            return pendingUpdate
+          }
+          await closeIgnoredUpdate(update)
+          await setPendingUpdate(null, null)
+
+          const checkedAt = Date.now()
+          writeDismissedUpdateVersion(null)
+          set((state) => ({
+            ...state,
+            status: 'up-to-date',
+            availableVersion: null,
+            releaseNotes: null,
+            progressPercent: 0,
+            downloadedBytes: 0,
+            totalBytes: null,
+            checkedAt,
+            error: null,
+            shouldPrompt: false,
+          }))
+          return null
+        }
+
+        // If a download already started for this same proxy while the check was in flight,
+        // keep the active download intact instead of replacing pendingUpdate or resetting UI state.
+        if (downloadPromise && pendingUpdate && downloadingProxyKey === updateProxyKey) {
+          if (get().status !== 'downloading') {
+            set((state) => ({
+              ...state,
+              status: 'downloading',
+              error: null,
+            }))
+          }
+          return pendingUpdate
+        }
+
+        await setPendingUpdate(update, updateProxyKey)
 
         const checkedAt = Date.now()
-        writeDismissedUpdateVersion(null)
+
+        if (!update) {
+          writeDismissedUpdateVersion(null)
+          set((state) => ({
+            ...state,
+            status: 'up-to-date',
+            availableVersion: null,
+            releaseNotes: null,
+            progressPercent: 0,
+            downloadedBytes: 0,
+            totalBytes: null,
+            checkedAt,
+            error: null,
+            shouldPrompt: false,
+          }))
+          return null
+        }
+
+        const dismissedVersion = readDismissedUpdateVersion()
+        const shouldOffer = dismissedVersion !== update.version
+
         set((state) => ({
           ...state,
-          status: 'up-to-date',
-          availableVersion: null,
-          releaseNotes: null,
+          status: 'available',
+          availableVersion: update.version,
+          releaseNotes: update.body ?? null,
           progressPercent: 0,
           downloadedBytes: 0,
           totalBytes: null,
@@ -242,68 +354,52 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
           error: null,
           shouldPrompt: false,
         }))
+
+        if (activeCheck.allowAutoDownload && useSettingsStore.getState().autoUpdateEnabled && (shouldOffer || activeCheck.showError)) {
+          void get().downloadUpdate().catch(() => {
+            // The store records the failure and keeps the manual install path retryable.
+          })
+        }
+        return update
+      } catch (error) {
+        if (activeCheck.generation !== checkGeneration) {
+          return pendingUpdate
+        }
+        if (downloadPromise && pendingUpdate && downloadingProxyKey === updateProxyKey) {
+          if (get().status !== 'downloading') {
+            set((state) => ({
+              ...state,
+              status: 'downloading',
+            }))
+          }
+          return pendingUpdate
+        }
+        if (activeCheck.showError) {
+          set((state) => ({
+            ...state,
+            status: 'error',
+            error: getErrorMessage(error),
+            checkedAt: Date.now(),
+          }))
+        } else {
+          set((state) => ({
+            ...state,
+            status: state.availableVersion ? 'available' : 'idle',
+            checkedAt: Date.now(),
+          }))
+        }
         return null
       }
+    })()
 
-      await setPendingUpdate(update, updateProxyKey)
-
-      const checkedAt = Date.now()
-
-      if (!update) {
-        writeDismissedUpdateVersion(null)
-        set((state) => ({
-          ...state,
-          status: 'up-to-date',
-          availableVersion: null,
-          releaseNotes: null,
-          progressPercent: 0,
-          downloadedBytes: 0,
-          totalBytes: null,
-          checkedAt,
-          error: null,
-          shouldPrompt: false,
-        }))
-        return null
+    activeCheck.promise = activePromise
+    currentCheck = activeCheck
+    try {
+      return await activePromise
+    } finally {
+      if (currentCheck === activeCheck) {
+        currentCheck = null
       }
-
-      const dismissedVersion = readDismissedUpdateVersion()
-      const shouldOffer = dismissedVersion !== update.version
-
-      set((state) => ({
-        ...state,
-        status: 'available',
-        availableVersion: update.version,
-        releaseNotes: update.body ?? null,
-        progressPercent: 0,
-        downloadedBytes: 0,
-        totalBytes: null,
-        checkedAt,
-        error: null,
-        shouldPrompt: false,
-      }))
-
-      if (autoDownload && useSettingsStore.getState().autoUpdateEnabled && (shouldOffer || !silent)) {
-        void get().downloadUpdate().catch(() => {
-          // The store records the failure and keeps the manual install path retryable.
-        })
-      }
-      return update
-    } catch (error) {
-      if (!silent) {
-        set((state) => ({
-          ...state,
-          status: 'error',
-          error: getErrorMessage(error),
-          checkedAt: Date.now(),
-        }))
-      } else {
-        set((state) => ({
-          ...state,
-          status: state.availableVersion ? 'available' : 'idle',
-          checkedAt: Date.now(),
-        }))
-      }
-      return null
     }
   },
 
@@ -311,181 +407,229 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
     if (!getUpdateHost()) return
     clearRelaunchWatchdog()
 
-    let update = pendingUpdate
-    if (update && pendingUpdateProxyKey !== getUpdateProxyKey()) {
-      await setPendingUpdate(null, null)
-      update = null
-    }
-    if (!update) {
-      update = await get().checkForUpdates({ autoDownload: false })
-      if (!update) return
-    }
-
-    if (pendingUpdateDownloaded) {
-      set((state) => ({
-        ...state,
-        status: 'downloaded',
-        progressPercent: 100,
-        shouldPrompt: shouldPromptForVersion(state.availableVersion),
-      }))
-      return
-    }
-
-    if (downloadPromise) {
-      await downloadPromise
-      return
-    }
-
-    set((state) => ({
-      ...state,
-      status: 'downloading',
-      error: null,
-      shouldPrompt: false,
-      progressPercent: 0,
-      downloadedBytes: 0,
-      totalBytes: null,
-    }))
-
-    const downloadingUpdate = update
-    downloadingProxyKey = pendingUpdateProxyKey
-    const activeDownload = (async () => {
-      let totalBytes: number | null = null
-      let downloadedBytes = 0
-
-      await downloadingUpdate.download((event) => {
-        if (event.event === 'Started') {
-          totalBytes = event.data.contentLength ?? null
-          downloadedBytes = 0
-          set((state) => ({
-            ...state,
-            totalBytes,
-            downloadedBytes: 0,
-            progressPercent: 0,
-          }))
-        } else if (event.event === 'Progress') {
-          downloadedBytes += event.data.chunkLength
-          const progressPercent =
-            totalBytes && totalBytes > 0
-              ? Math.min(Math.round((downloadedBytes / totalBytes) * 100), 100)
-              : 0
-
-          set((state) => ({
-            ...state,
-            downloadedBytes,
-            totalBytes,
-            progressPercent,
-          }))
-        } else if (event.event === 'Finished') {
-          set((state) => ({
-            ...state,
-            progressPercent: 100,
-          }))
-        }
-      })
-
-      if (pendingUpdate !== downloadingUpdate) return
-      if (getUpdateProxyKey() !== downloadingProxyKey) {
+    while (true) {
+      let update = pendingUpdate
+      if (update && pendingUpdateProxyKey !== getUpdateProxyKey()) {
         await setPendingUpdate(null, null)
+        update = null
+      }
+      if (!update) {
+        update = await get().checkForUpdates({ autoDownload: false })
+        if (!update) return
+      }
+
+      if (pendingUpdateDownloaded) {
         set((state) => ({
           ...state,
-          status: 'available',
-          progressPercent: 0,
-          shouldPrompt: false,
+          status: 'downloaded',
+          progressPercent: 100,
+          shouldPrompt: shouldPromptForVersion(state.availableVersion),
         }))
         return
       }
 
-      pendingUpdateDownloaded = true
-      set((state) => ({
-        ...state,
-        status: 'downloaded',
-        error: null,
-        shouldPrompt: shouldPromptForVersion(state.availableVersion),
-        progressPercent: 100,
-      }))
-    })()
-    downloadPromise = activeDownload
+      if (downloadPromise) {
+        const matchesCurrent = downloadingUpdateRef === update && downloadingProxyKey === getUpdateProxyKey()
+        if (matchesCurrent) {
+          const currentStatus = get().status
+          if (currentStatus !== 'downloading' && currentStatus !== 'installing' && currentStatus !== 'restarting') {
+            set((state) => ({
+              ...state,
+              status: 'downloading',
+              error: null,
+              shouldPrompt: false,
+            }))
+          }
+          await downloadPromise
+          return
+        }
 
-    try {
-      await downloadPromise
-    } catch (error) {
-      if (pendingUpdate === downloadingUpdate) {
+        // Wait for the superseded download (e.g. from an older proxy) to settle
+        // before starting the fresh download for the current pending update.
+        const previousDownload = downloadPromise
         set((state) => ({
           ...state,
-          status: 'available',
-          error: getErrorMessage(error),
+          status: 'downloading',
+          error: null,
           shouldPrompt: false,
+          progressPercent: 0,
+          downloadedBytes: 0,
+          totalBytes: null,
         }))
+        await previousDownload.catch(() => undefined)
+        continue
       }
-      throw error
-    } finally {
-      if (downloadPromise === activeDownload) {
-        downloadPromise = null
-        downloadingProxyKey = null
+
+      set((state) => ({
+        ...state,
+        status: 'downloading',
+        error: null,
+        shouldPrompt: false,
+        progressPercent: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+      }))
+
+      const downloadingUpdate = update
+      downloadingUpdateRef = downloadingUpdate
+      downloadingProxyKey = pendingUpdateProxyKey
+      const activeDownload = (async () => {
+        let totalBytes: number | null = null
+        let downloadedBytes = 0
+
+        await downloadingUpdate.download((event) => {
+          if (pendingUpdate !== downloadingUpdate) return
+          if (event.event === 'Started') {
+            totalBytes = event.data.contentLength ?? null
+            downloadedBytes = 0
+            set((state) => ({
+              ...state,
+              totalBytes,
+              downloadedBytes: 0,
+              progressPercent: 0,
+            }))
+          } else if (event.event === 'Progress') {
+            downloadedBytes += event.data.chunkLength
+            const progressPercent =
+              totalBytes && totalBytes > 0
+                ? Math.min(Math.round((downloadedBytes / totalBytes) * 100), 100)
+                : 0
+
+            set((state) => ({
+              ...state,
+              downloadedBytes,
+              totalBytes,
+              progressPercent,
+            }))
+          } else if (event.event === 'Finished') {
+            set((state) => ({
+              ...state,
+              progressPercent: 100,
+            }))
+          }
+        })
+
+        if (pendingUpdate !== downloadingUpdate) return
+        if (getUpdateProxyKey() !== downloadingProxyKey) {
+          await setPendingUpdate(null, null)
+          set((state) => ({
+            ...state,
+            status: 'available',
+            progressPercent: 0,
+            shouldPrompt: false,
+          }))
+          return
+        }
+
+        pendingUpdateDownloaded = true
+        set((state) => ({
+          ...state,
+          status: 'downloaded',
+          error: null,
+          shouldPrompt: shouldPromptForVersion(state.availableVersion),
+          progressPercent: 100,
+        }))
+      })()
+      downloadPromise = activeDownload
+
+      try {
+        await downloadPromise
+      } catch (error) {
+        if (pendingUpdate === downloadingUpdate) {
+          set((state) => ({
+            ...state,
+            status: 'available',
+            error: getErrorMessage(error),
+            shouldPrompt: false,
+          }))
+        }
+        throw error
+      } finally {
+        if (downloadPromise === activeDownload) {
+          downloadPromise = null
+          downloadingUpdateRef = null
+          downloadingProxyKey = null
+        }
       }
+      return
     }
   },
 
   installUpdate: async () => {
     const host = getUpdateHost()
     if (!host) return
-
-    let update = pendingUpdate
-    if (update && pendingUpdateProxyKey !== getUpdateProxyKey()) {
-      await setPendingUpdate(null, null)
-      update = null
-    }
-    if (!update) {
-      update = await get().checkForUpdates({ autoDownload: false })
-      if (!update) return
+    if (installPromise) {
+      await installPromise
+      return
     }
 
-    let prepareInstallAttempted = false
-    try {
-      writeDismissedUpdateVersion(null)
-      if (!pendingUpdateDownloaded) {
-        await get().downloadUpdate()
+    const activeInstall = (async () => {
+      let update = pendingUpdate
+      if (update && pendingUpdateProxyKey !== getUpdateProxyKey()) {
+        await setPendingUpdate(null, null)
+        update = null
       }
-      if (!pendingUpdateDownloaded) return
+      if (!update) {
+        update = await get().checkForUpdates({ autoDownload: false })
+        if (!update) return
+      }
 
-      set((state) => ({
-        ...state,
-        status: 'installing',
-        error: null,
-        shouldPrompt: false,
-        progressPercent: 100,
-      }))
-
-      prepareInstallAttempted = true
-      await host.updates.prepareInstall()
-      await update.install()
-
-      set((state) => ({
-        ...state,
-        status: 'restarting',
-        progressPercent: 100,
-      }))
-
-      scheduleRelaunchWatchdog(host)
-      await host.updates.relaunch()
-    } catch (error) {
-      clearRelaunchWatchdog()
-      if (prepareInstallAttempted) {
-        try {
-          await host.updates.cancelInstall()
-        } catch {
-          // Best effort: keep the update prompt recoverable even if native reset fails.
+      let prepareInstallAttempted = false
+      try {
+        writeDismissedUpdateVersion(null)
+        if (!pendingUpdateDownloaded) {
+          await get().downloadUpdate()
         }
-        // prepareInstall stopped the local runtime; the app stays open, so
-        // bring it back the same way the relaunch watchdog does.
-        void host.runtime.getServerUrl().catch(() => undefined)
+        if (!pendingUpdateDownloaded) return
+
+        set((state) => ({
+          ...state,
+          status: 'installing',
+          error: null,
+          shouldPrompt: false,
+          progressPercent: 100,
+        }))
+
+        prepareInstallAttempted = true
+        await host.updates.prepareInstall()
+        await update.install()
+
+        set((state) => ({
+          ...state,
+          status: 'restarting',
+          progressPercent: 100,
+        }))
+
+        scheduleRelaunchWatchdog(host)
+        await host.updates.relaunch()
+      } catch (error) {
+        clearRelaunchWatchdog()
+        if (prepareInstallAttempted) {
+          try {
+            await host.updates.cancelInstall()
+          } catch {
+            // Best effort: keep the update prompt recoverable even if native reset fails.
+          }
+          // prepareInstall stopped the local runtime; the app stays open, so
+          // bring it back the same way the relaunch watchdog does.
+          void host.runtime.getServerUrl().catch(() => undefined)
+        }
+        set((state) => ({
+          ...state,
+          status: pendingUpdateDownloaded ? 'downloaded' : 'available',
+          error: getErrorMessage(error),
+          shouldPrompt: true,
+        }))
       }
-      set((state) => ({
-        ...state,
-        status: pendingUpdateDownloaded ? 'downloaded' : 'available',
-        error: getErrorMessage(error),
-        shouldPrompt: true,
-      }))
+    })()
+
+    installPromise = activeInstall
+    try {
+      await activeInstall
+    } finally {
+      if (installPromise === activeInstall) {
+        installPromise = null
+      }
     }
   },
 

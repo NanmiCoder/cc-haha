@@ -120,11 +120,18 @@ function createMockService(overrides: Partial<BrowserUseService> = {}) {
 }
 
 describe('Browser Use API routing and security boundaries', () => {
-  test('strictly excludes all /api/browser-use/* routes from publicAccess remote gateway', () => {
-    const routes: Array<[string, string]> = [
+  test('only allows /api/browser-use/config GET/PUT on publicAccess remote gateway and excludes all other routes', () => {
+    expect(
+      isPublicBusinessPathAllowed(new URL('https://remote.example/api/browser-use/config'), 'GET'),
+    ).toBe(true)
+    expect(
+      isPublicBusinessPathAllowed(new URL('https://remote.example/api/browser-use/config'), 'PUT'),
+    ).toBe(true)
+
+    const blockedRoutes: Array<[string, string]> = [
+      ['POST', '/api/browser-use/config'],
+      ['DELETE', '/api/browser-use/config'],
       ['GET', '/api/browser-use/status'],
-      ['GET', '/api/browser-use/config'],
-      ['PUT', '/api/browser-use/config'],
       ['POST', '/api/browser-use/chrome/connect'],
       ['POST', '/api/browser-use/chrome/launch-managed'],
       ['POST', '/api/browser-use/chrome/disconnect'],
@@ -139,7 +146,7 @@ describe('Browser Use API routing and security boundaries', () => {
       ['POST', '/api/browser-use/cleanup'],
     ]
 
-    for (const [method, pathname] of routes) {
+    for (const [method, pathname] of blockedRoutes) {
       expect(
         isPublicBusinessPathAllowed(new URL(`https://remote.example${pathname}`), method),
       ).toBe(false)
@@ -357,11 +364,9 @@ describe('Browser Use API routing and security boundaries', () => {
     }
   })
 
-  test('blocks remoteBrowser (LAN H5) requests to all /api/browser-use/* routes with 403', async () => {
-    const routes: Array<[string, string]> = [
+  test('scopes remoteBrowser (LAN H5 / paired phone) to safe /api/browser-use/config projection and blocks desktop-only fields & routes', async () => {
+    const blockedRoutes: Array<[string, string]> = [
       ['GET', '/api/browser-use/status'],
-      ['GET', '/api/browser-use/config'],
-      ['PUT', '/api/browser-use/config'],
       ['POST', '/api/browser-use/chrome/connect'],
       ['POST', '/api/browser-use/chrome/launch-managed'],
       ['POST', '/api/browser-use/chrome/disconnect'],
@@ -369,7 +374,7 @@ describe('Browser Use API routing and security boundaries', () => {
       ['POST', '/api/browser-use/takeover/abort'],
     ]
 
-    for (const [method, pathname] of routes) {
+    for (const [method, pathname] of blockedRoutes) {
       const url = new URL(`http://127.0.0.1:3456${pathname}`)
       const req = new Request(url, {
         method,
@@ -377,9 +382,88 @@ describe('Browser Use API routing and security boundaries', () => {
           ? { headers: { 'Content-Type': 'application/json' }, body: '{}' }
           : {}),
       })
-    const res = await handleApiRequest(req, url, { remoteBrowser: true })
+      const res = await handleApiRequest(req, url, { remoteBrowser: true })
       expect(res.status).toBe(403)
       expect(await res.json()).toEqual({ error: 'Desktop-only capability' })
+    }
+
+    const tempConfigDir = mkdtempSync(join(tmpdir(), 'cc-haha-remote-browser-use-'))
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempConfigDir
+    try {
+      const configUrl = new URL('http://127.0.0.1:3456/api/browser-use/config')
+
+      // Desktop-only fields are rejected with 403 from remote callers
+      for (const badBody of [
+        { chromeBinaryPath: '/Applications/Google Chrome.app' },
+        { chromeUserDataDir: '/tmp/profile' },
+        { blockedLoopbackPorts: [8080] },
+        { managedChromeHeadless: true },
+        { showCursorOverlay: false },
+      ]) {
+        const res = await handleApiRequest(
+          new Request(configUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(badBody),
+          }),
+          configUrl,
+          { remoteBrowser: true },
+        )
+        expect(res.status).toBe(403)
+      }
+
+      // Invalid target value on allowed field returns 400
+      const invalidTarget = await handleApiRequest(
+        new Request(configUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferredTarget: 'safari' }),
+        }),
+        configUrl,
+        { remoteBrowser: true },
+      )
+      expect(invalidTarget.status).toBe(400)
+
+      // Allowed remote mutation succeeds and projects out desktop-only fields
+      const putRes = await handleApiRequest(
+        new Request(configUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: true,
+            preferredTarget: 'workspace',
+            consentAcceptedAt: '2026-11-28T00:00:00.000Z',
+          }),
+        }),
+        configUrl,
+        { remoteBrowser: true },
+      )
+      expect(putRes.status).toBe(200)
+      const putJson = (await putRes.json()) as Record<string, unknown>
+      expect(putJson.enabled).toBe(true)
+      expect(putJson.preferredTarget).toBe('workspace')
+      expect(putJson.consentAcceptedAt).toBe('2026-11-28T00:00:00.000Z')
+      expect('chromeBinaryPath' in putJson).toBe(false)
+      expect('chromeUserDataDir' in putJson).toBe(false)
+      expect('blockedLoopbackPorts' in putJson).toBe(false)
+      expect('showCursorOverlay' in putJson).toBe(false)
+
+      const getRes = await handleApiRequest(
+        new Request(configUrl, { method: 'GET' }),
+        configUrl,
+        { remoteBrowser: true },
+      )
+      expect(getRes.status).toBe(200)
+      const getJson = (await getRes.json()) as Record<string, unknown>
+      expect(getJson.enabled).toBe(true)
+      expect(getJson.preferredTarget).toBe('workspace')
+      expect('chromeBinaryPath' in getJson).toBe(false)
+      expect('managedChromeHeadless' in getJson).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      rmSync(tempConfigDir, { recursive: true, force: true })
     }
   })
 

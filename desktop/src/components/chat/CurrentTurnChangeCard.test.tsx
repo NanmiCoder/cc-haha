@@ -771,3 +771,44 @@ describe('CurrentTurnChangeCard on a phone', () => {
     expect(await screen.findByText('mobile.diff.empty')).toBeInTheDocument()
   })
 })
+
+describe('CurrentTurnChangeCard – read-only mode (showUndo=false)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('hides the undo button and undo-coverage warning while keeping file expansion and diff review', () => {
+    const checkpoint = makeCheckpoint(['/w/proj/src/app.ts', '/w/proj/src/helper.ts'], false, ['Bash'])
+    function ReadOnlyCard() {
+      const [expanded, setExpanded] = useState(false)
+      return <CurrentTurnChangeCard
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        sessionId="s1"
+        checkpoint={checkpoint}
+        workDir="/w/proj"
+        error={null}
+        isUndoing={false}
+        showUndo={false}
+        isLatest={true}
+        onUndo={vi.fn()}
+      />
+    }
+    render(<ReadOnlyCard />)
+
+    expect(screen.getByText('chat.turnChangesTitle')).toBeInTheDocument()
+    expect(screen.getByText('+10')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).not.toBeInTheDocument()
+    expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /chat.turnChangesExpand/ }))
+    expect(screen.getByText('app.ts')).toBeInTheDocument()
+    expect(screen.getByText('helper.ts')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTitle('src/app.ts'))
+    expect(reviewOpenSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
+      source: { kind: 'turn', turnKey: 'msg-1', userMessageIndex: 0 },
+      path: 'src/app.ts',
+    }))
+  })
+})

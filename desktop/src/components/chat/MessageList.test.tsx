@@ -7038,6 +7038,67 @@ describe('MessageList nested tool calls', () => {
     })
   })
 
+  it('offers and triggers transcript branching for completed Antigravity messages', async () => {
+    const branchSession = vi.fn().mockResolvedValue({
+      sessionId: 'branched-agy-session-1',
+      title: 'Branched Antigravity',
+      workDir: '/tmp/source-project',
+    })
+    const connectToSession = vi.fn()
+    useSessionStore.setState({
+      sessions: [{
+        id: ACTIVE_TAB,
+        title: 'Antigravity session',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        modifiedAt: '2026-05-19T00:00:00.000Z',
+        messageCount: 2,
+        projectPath: '/tmp/source-project',
+        projectRoot: '/tmp/source-project',
+        workDir: '/tmp/source-project',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+      branchSession: branchSession as never,
+    })
+    useChatStore.setState({
+      connectToSession: connectToSession as never,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'agy-user-1',
+              transcriptMessageId: 'transcript-agy-user-1',
+              type: 'user_text',
+              content: 'First Antigravity turn',
+              timestamp: 1,
+            },
+            {
+              id: 'agy-assistant-1',
+              transcriptMessageId: 'transcript-agy-assistant-1',
+              type: 'assistant_text',
+              content: 'First Antigravity reply',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    const branchButtons = screen.getAllByRole('button', { name: 'Fork a new conversation' })
+    expect(branchButtons).toHaveLength(2)
+
+    fireEvent.click(branchButtons[1]!)
+
+    await waitFor(() => {
+      expect(branchSession).toHaveBeenCalledWith(ACTIVE_TAB, 'transcript-agy-assistant-1')
+    })
+    expect(connectToSession).toHaveBeenCalledWith('branched-agy-session-1')
+    expect(useTabStore.getState().activeTabId).toBe('branched-agy-session-1')
+  })
+
   it('hides branch actions while the current session is still running', () => {
     useChatStore.setState({
       sessions: {
@@ -11509,5 +11570,61 @@ describe('MessageList edit and resend', () => {
       { type: 'image', name: 'shot.png', mimeType: 'image/png', data: 'data:image/png;base64,AAAA' },
     ])
     expect(options).toMatchObject({ displayContent: 'How do I stop it?' })
+  })
+
+  it('shows read-only per-turn file change cards for Antigravity ACP sessions without undo or conversation-rewind buttons', async () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: ACTIVE_TAB,
+        title: 'Antigravity Session',
+        messageCount: 6,
+        createdAt: '',
+        modifiedAt: '',
+        projectPath: '/repo',
+        workDir: '/repo',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+    })
+    setup([
+      { id: 'user-1', type: 'user_text', content: 'Turn 1 edit', transcriptMessageId: 'user-1', timestamp: 1 },
+      { id: 'assistant-1', type: 'assistant_text', content: 'Edited app.ts', timestamp: 2 },
+      { id: 'user-2', type: 'user_text', content: 'Turn 2 question', transcriptMessageId: 'user-2', timestamp: 3 },
+      { id: 'assistant-2', type: 'assistant_text', content: 'Answered without edits', timestamp: 4 },
+      { id: 'user-3', type: 'user_text', content: 'Turn 3 edit', transcriptMessageId: 'user-3', timestamp: 5 },
+      { id: 'assistant-3', type: 'assistant_text', content: 'Created helper.ts', timestamp: 6 },
+    ], [
+      checkpoint('user-1', 0, 3, {
+        code: { available: true, filesChanged: ['/repo/src/app.ts'], insertions: 4, deletions: 1 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+      checkpoint('user-2', 1, 3, {
+        code: { available: false, filesChanged: [], insertions: 0, deletions: 0 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+      checkpoint('user-3', 2, 3, {
+        code: { available: true, filesChanged: ['/repo/src/helper.ts', '/repo/src/types.ts'], insertions: 12, deletions: 0 },
+        workDir: '/repo',
+        restoreAvailable: false,
+      }),
+    ])
+
+    render(<MessageList />)
+
+    await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledWith(ACTIVE_TAB, expect.anything()))
+    expect(await screen.findByText('1 files changed')).toBeTruthy()
+    expect(await screen.findByText('2 files changed')).toBeTruthy()
+    expect(screen.getByText('+4')).toBeTruthy()
+    expect(screen.getByText('-1')).toBeTruthy()
+    expect(screen.getByText('+12')).toBeTruthy()
+
+    // Read-only: no Undo button on change cards, no standalone Rewind conversation button on Turn 2, no Edit & resend.
+    expect(screen.queryByRole('button', { name: /Undo current turn/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Rewind to before this turn/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Roll back conversation/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
   })
 })

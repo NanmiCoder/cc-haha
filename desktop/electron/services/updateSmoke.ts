@@ -86,12 +86,16 @@ class UpdateSmokeUpdater implements ElectronUpdaterLike {
     })
   }
 
-  on(event: 'download-progress', handler: ProgressHandler): ElectronUpdaterLike {
-    if (event === 'download-progress') this.progressHandler = handler
+  on(event: 'download-progress', handler: ProgressHandler): ElectronUpdaterLike
+  on(event: 'error', handler: (error: unknown) => void): ElectronUpdaterLike
+  on(event: 'download-progress' | 'error', handler: ProgressHandler | ((error: unknown) => void)): ElectronUpdaterLike {
+    if (event === 'download-progress') this.progressHandler = handler as ProgressHandler
     return this
   }
 
-  off(event: 'download-progress', handler: ProgressHandler): ElectronUpdaterLike {
+  off(event: 'download-progress', handler: ProgressHandler): ElectronUpdaterLike
+  off(event: 'error', handler: (error: unknown) => void): ElectronUpdaterLike
+  off(event: 'download-progress' | 'error', handler: ProgressHandler | ((error: unknown) => void)): ElectronUpdaterLike {
     if (event === 'download-progress' && this.progressHandler === handler) {
       this.progressHandler = null
     }

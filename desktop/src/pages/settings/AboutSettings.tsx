@@ -167,7 +167,9 @@ export function AboutSettings() {
     if (updateStatus === 'downloading') {
       return hasKnownProgress
         ? t('update.progress', { progress: String(progressPercent) })
-        : t('update.progressBytes', { downloaded: downloadedText })
+        : downloadedBytes > 0
+          ? t('update.progressBytes', { downloaded: downloadedText })
+          : t('update.downloading')
     }
     if (updateStatus === 'downloaded') return t('update.downloaded')
     if (updateStatus === 'installing') return t('update.installing')
@@ -279,11 +281,13 @@ export function AboutSettings() {
               >
                 {updateStatus === 'downloaded'
                   ? t('update.installAndRestart')
-                  : updateStatus === 'installing'
-                    ? t('update.installing')
-                    : updateStatus === 'restarting'
-                      ? t('update.restarting')
-                      : t('update.now')}
+                  : updateStatus === 'downloading'
+                    ? t('update.downloading')
+                    : updateStatus === 'installing'
+                      ? t('update.installing')
+                      : updateStatus === 'restarting'
+                        ? t('update.restarting')
+                        : t('update.now')}
               </Button>
             )}
           </SettingsRow>

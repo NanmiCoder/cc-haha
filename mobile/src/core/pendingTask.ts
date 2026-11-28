@@ -1,5 +1,5 @@
 import type { ComposerReference } from './composerReferences'
-import { visibleMessageText, type ComposerAttachment } from './chatComposer'
+import { stripComposerRequestEnvelopes, type ComposerAttachment } from './chatComposer'
 import type { RuntimeConfig } from './types'
 
 export type PendingTask = {
@@ -35,10 +35,14 @@ export function clearPendingTask(hostId: string, sessionId: string) {
 }
 
 /**
- * A new task's content already carries the team request block, so it is sent as-is.
- * Show only the user's words in an input box; `team` tells the box the block is there.
+ * A new task's content already carries the team/browser request block, so it is sent as-is.
+ * Show only the user's words in an input box; `team` and `browserUse` tell the box the blocks are there.
  */
 export function pendingTaskDraft(task: PendingTask) {
-  const text = visibleMessageText(task.content)
-  return { text: task.displayText ?? text, team: text !== task.content }
+  const envelopes = stripComposerRequestEnvelopes(task.content)
+  return {
+    text: task.displayText ?? envelopes.content,
+    team: envelopes.team,
+    ...(envelopes.browserTarget ? { browserUse: true as const } : {}),
+  }
 }

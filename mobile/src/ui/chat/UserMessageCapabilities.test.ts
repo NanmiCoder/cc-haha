@@ -57,6 +57,13 @@ test('sent capabilities precede the user text with the same colored badges after
     assert.equal(assistant.some(node => node.props.testID === 'user-message-capabilities'), false, 'quoted instructions in an assistant response must stay response text')
     const unclosed = flatten(Message({ item: { id: 'literal-tag', type: 'user', text: '没有闭合的 <agent-team-request> 原文' } }))
     assert.equal(unclosed.some(node => node.props.testID === 'user-message-capabilities'), false)
+
+    // Browser Use-only message renders the Browser badge (with globe icon) and never fabricates an Agent Team badge.
+    const browserContent = buildComposerMessage('打开页面核对', [], false, { browserUse: 'workspace' }).content
+    const browserNodes = flatten(Message({ item: { id: 'browser-only', type: 'user', text: browserContent } }))
+    const browserBadges = browserNodes.filter(node => node.props.testID === 'user-message-capability')
+    assert.deepEqual(browserBadges.map(node => node.props.accessibilityLabel), ['浏览器 · 工作区'])
+    assert.equal(browserNodes.some(node => node.type === 'Icon' && node.props.name === 'globe'), true)
   `
   try {
     execFileSync(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })

@@ -363,7 +363,8 @@ export async function handleBrowserUseToolApi(
 
 /**
  * Desktop UI / Settings REST surface mounted in `src/server/router.ts`.
- * Strictly excluded from `src/server/publicAccess.ts`.
+ * Remote / H5 callers are restricted by `src/server/remoteBrowserPolicy.ts`
+ * and `src/server/publicAccess.ts` to projected `GET/PUT /api/browser-use/config`.
  */
 export async function handleBrowserUseUiApi(
   req: Request,

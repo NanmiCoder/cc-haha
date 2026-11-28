@@ -53,6 +53,7 @@ import { Message, type BubbleLayout } from '../../ui/Message'
 import { type Model } from '../../ui/RuntimePicker'
 import { RunSheet } from '../../ui/compose/RunSheet'
 import { nextChosenModel, runCapsule } from '../../ui/compose/runLogic'
+import { useBrowserUse } from '../../core/useBrowserUse'
 import { useComputerUse } from '../../core/useComputerUse'
 import { teamMembersAllStopped, useSessionActivity } from '../../core/sessionActivity'
 import { registerSessionSender } from '../../core/sessionSender'
@@ -183,7 +184,13 @@ function ChatSession({
     task: typeof initialTask
     phase: 'initial' | 'config' | 'done' | 'failed'
     /** 编辑重发前输入框里没发出的内容，发送成功后还回去。 */
-    restore?: { text: string; attachments: ComposerAttachment[]; references?: ComposerReference[] }
+    restore?: {
+      text: string
+      attachments: ComposerAttachment[]
+      references?: ComposerReference[]
+      team?: boolean
+      browserUse?: boolean
+    }
   }>({
     task: initialTask,
     phase: 'initial',
@@ -198,10 +205,11 @@ function ChatSession({
   )
   const [references, setReferences] = useState<ComposerReference[]>(initialTask?.references ?? parked?.references ?? [])
   const [team, setTeam] = useState(initialDraft?.team ?? parked?.team ?? false)
+  const [browserUse, setBrowserUse] = useState(initialDraft?.browserUse ?? parked?.browserUse ?? false)
   // 运行中追加的消息先在手机上排队，这一轮结束后按顺序发出。
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const queueSeq = useRef(0)
-  const leaving = useRef<ComposerQueueState>({ queue, draft, attachments, team, references })
+  const leaving = useRef<ComposerQueueState>({ queue, draft, attachments, team, browserUse, references })
   const focused = useRef(false)
   // 在模型弹层里选过的模型：用它的显示名和上下文大小，其余时候只有模型 id。
   const [chosenModel, setChosenModel] = useState<Model | null>(null)
@@ -457,8 +465,8 @@ function ChatSession({
     lastUser?.delivery,
   ])
   useEffect(() => {
-    leaving.current = { queue, draft, attachments, team, references }
-  }, [queue, draft, attachments, team, references])
+    leaving.current = { queue, draft, attachments, team, browserUse, references }
+  }, [queue, draft, attachments, team, browserUse, references])
   useEffect(() => {
     clearParkedComposer(draftKey)
   }, [draftKey])
@@ -471,6 +479,7 @@ function ChatSession({
       setDraft(restored.draft)
       setAttachments(restored.attachments)
       setTeam(restored.team)
+      setBrowserUse(Boolean(restored.browserUse))
       setReferences(restored.references ?? [])
     }
   }, [draftKey, drafts])
@@ -509,7 +518,7 @@ function ChatSession({
     showNotice('现在还不能引导，等上一条确认或当前决定处理完再试。', true)
   }
   function withdrawQueued(ids?: string[]) {
-    restoreQueue({ queue, draft, attachments, team, references }, ids)
+    restoreQueue({ queue, draft, attachments, team, browserUse, references }, ids)
   }
   const runtime =
     state.runtime ??
@@ -523,14 +532,18 @@ function ChatSession({
   const isAntigravity = isAntigravityProvider(
     runtime?.providerId ?? session?.runtimeProviderId
   )
+  const browser = useBrowserUse(client)
+  const computer = useComputerUse(client)
   const teamOn = team && !lean
+  const browserDisallowed = browser.available === false || (browser.available === true && !browser.enabled)
+  const browserOn = browserUse && !lean && !browserDisallowed
   if (lean && team) setTeam(false)
+  if ((lean || browserDisallowed) && browserUse) setBrowserUse(false)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
   const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
   const permissionMode = state.permissionMode ?? session?.permissionMode
   const backgroundCount = state.backgroundTaskIds.length
   const title = state.title || session?.title || '会话'
-  const computer = useComputerUse(client)
   const sendRaw = useCallback((message: ClientMessage) => transport.current?.send(message) ?? false, [])
   useEffect(() => registerSessionSender(id, sendRaw), [id, sendRaw])
   // 队长提交团队后只有人确认才会开工：手机上也要能处理。和桌面端一样放在输入框上方，
@@ -666,9 +679,10 @@ function ChatSession({
       value.phase = 'done'
       if (transport.current?.send(message)) {
         clearPendingTask(hostId, id)
-        // 团队只对首条生效；编辑重发时把之前没发出的输入框内容还回去。
-        setTeam(false)
+        // 团队和浏览器只对首条生效；编辑重发时把之前没发出的输入框内容还回去。
         const restore = value.restore
+        setTeam(Boolean(restore?.team))
+        setBrowserUse(Boolean(restore?.browserUse))
         setDraft(restore?.text ?? '')
         setReferences(restore?.references ?? [])
         setAttachments(restore?.attachments ?? [])
@@ -853,7 +867,7 @@ function ChatSession({
         serializeComposer(draft, isAntigravity ? [] : references),
         attachments,
         teamOn,
-        { antigravity: isAntigravity }
+        { antigravity: isAntigravity, browserUse: browserOn ? browser.preferredTarget : false }
       )
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
@@ -865,6 +879,7 @@ function ChatSession({
             text: draft.trim(),
             attachments,
             team: teamOn,
+            ...(browserOn ? { browserUse: true } : {}),
             references,
             message,
           },
@@ -873,6 +888,7 @@ function ChatSession({
         setReferences([])
         setAttachments([])
         setTeam(false)
+        setBrowserUse(false)
         drafts.delete(draftKey)
         setError('')
         return true
@@ -882,6 +898,7 @@ function ChatSession({
         setReferences([])
         setAttachments([])
         setTeam(false)
+        setBrowserUse(false)
         drafts.delete(draftKey)
         clearPendingTask(hostId, id)
         handoff.current.phase = 'done'
@@ -989,11 +1006,15 @@ function ChatSession({
       handoff.current = {
         task: { content: editText.trim(), attachments: [] },
         phase: 'initial',
-        ...(draft.trim() || attachments.length || references.length ? { restore: { text: draft, attachments, references } } : {}),
+        ...(draft.trim() || attachments.length || references.length || team || browserUse
+          ? { restore: { text: draft, attachments, references, team, browserUse } }
+          : {}),
       }
       setReferences([])
       setDraft(editText.trim())
       setAttachments([])
+      setTeam(false)
+      setBrowserUse(false)
       drafts.set(draftKey, editText.trim())
       setPanel(null)
       reloadSession()
@@ -1584,6 +1605,9 @@ function ChatSession({
             }}
             team={teamOn}
             onTeam={setTeam}
+            browser={browser}
+            browserUse={browserOn}
+            onBrowserUse={setBrowserUse}
             computer={computer}
             lean={lean}
             empty={!hasItems}

@@ -7,30 +7,49 @@ import { join } from 'node:path'
 
 function fakeUpdater(): ElectronUpdaterLike & {
   emitProgress(progress: { transferred?: number, total?: number }): void
+  emitError(error: unknown): void
+  progressListenerCount(): number
   checkForUpdates: ReturnType<typeof vi.fn>
   downloadUpdate: ReturnType<typeof vi.fn>
   quitAndInstall: ReturnType<typeof vi.fn>
 } {
-  let progressHandler: ((progress: { transferred?: number, total?: number }) => void) | null = null
+  const progressHandlers = new Set<(progress: { transferred?: number, total?: number }) => void>()
+  const errorHandlers = new Set<(error: unknown) => void>()
   const updater = {
     autoDownload: true,
     autoInstallOnAppQuit: true,
     checkForUpdates: vi.fn(),
     downloadUpdate: vi.fn(),
     quitAndInstall: vi.fn(),
-    on: vi.fn((_event, handler) => {
-      progressHandler = handler
+    on: vi.fn((event: string, handler: (...args: never[]) => void) => {
+      if (event === 'download-progress') {
+        progressHandlers.add(handler as (progress: { transferred?: number, total?: number }) => void)
+      } else if (event === 'error') {
+        errorHandlers.add(handler as (error: unknown) => void)
+      }
       return updater
     }),
-    off: vi.fn((_event, handler) => {
-      if (progressHandler === handler) progressHandler = null
+    off: vi.fn((event: string, handler: (...args: never[]) => void) => {
+      if (event === 'download-progress') {
+        progressHandlers.delete(handler as (progress: { transferred?: number, total?: number }) => void)
+      } else if (event === 'error') {
+        errorHandlers.delete(handler as (error: unknown) => void)
+      }
       return updater
     }),
-    emitProgress(progress) {
-      progressHandler?.(progress)
+    emitProgress(progress: { transferred?: number, total?: number }) {
+      for (const handler of progressHandlers) handler(progress)
     },
-  } as ElectronUpdaterLike & {
+    emitError(error: unknown) {
+      for (const handler of errorHandlers) handler(error)
+    },
+    progressListenerCount() {
+      return progressHandlers.size
+    },
+  } as unknown as ElectronUpdaterLike & {
     emitProgress(progress: { transferred?: number, total?: number }): void
+    emitError(error: unknown): void
+    progressListenerCount(): number
     checkForUpdates: ReturnType<typeof vi.fn>
     downloadUpdate: ReturnType<typeof vi.fn>
     quitAndInstall: ReturnType<typeof vi.fn>
@@ -331,5 +350,207 @@ describe('Electron updater service', () => {
 
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
     expect(env).toEqual({ CLAUDE_CONFIG_DIR: 'E:\\external-data' })
+  })
+
+  it('coalesces concurrent downloadUpdate callers and replays progress snapshot to late subscribers', async () => {
+    const localUpdater = fakeUpdater()
+    let finishDownload!: () => void
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4', body: 'Fixes' } })
+    localUpdater.downloadUpdate.mockImplementation(
+      () => new Promise<void>(resolve => { finishDownload = resolve }),
+    )
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+
+    const firstEvents: unknown[] = []
+    const secondEvents: unknown[] = []
+    const firstDownload = service.downloadUpdate(event => firstEvents.push(event))
+
+    localUpdater.emitProgress({ transferred: 40, total: 100 })
+
+    // A second caller joins mid-download (e.g. after renderer reload or concurrent trigger).
+    const secondDownload = service.downloadUpdate(event => secondEvents.push(event))
+    expect(secondEvents).toEqual([
+      { event: 'Started', data: { contentLength: 100 } },
+      { event: 'Progress', data: { chunkLength: 40 } },
+    ])
+
+    localUpdater.emitProgress({ transferred: 100, total: 100 })
+    finishDownload()
+    await Promise.all([firstDownload, secondDownload])
+
+    expect(localUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(firstEvents).toEqual([
+      { event: 'Started', data: { contentLength: 100 } },
+      { event: 'Progress', data: { chunkLength: 40 } },
+      { event: 'Progress', data: { chunkLength: 60 } },
+      { event: 'Finished' },
+    ])
+    expect(secondEvents).toEqual([
+      { event: 'Started', data: { contentLength: 100 } },
+      { event: 'Progress', data: { chunkLength: 40 } },
+      { event: 'Progress', data: { chunkLength: 60 } },
+      { event: 'Finished' },
+    ])
+  })
+
+  it('preserves an in-flight download when checkForUpdates is called again with the same proxy', async () => {
+    const localUpdater = fakeUpdater()
+    let finishDownload!: () => void
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4', body: 'Fixes' } })
+    localUpdater.downloadUpdate.mockImplementation(
+      () => new Promise<void>(resolve => { finishDownload = resolve }),
+    )
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+    const downloading = service.downloadUpdate(() => {})
+
+    const rechecked = await service.checkForUpdates()
+    expect(rechecked).toEqual({ version: '1.2.4', body: 'Fixes' })
+    expect(localUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+
+    finishDownload()
+    await downloading
+    expect(service.hasDownloadedUpdate()).toBe(true)
+  })
+
+  it('records sanitized lifecycle diagnostics without exposing manual proxy credentials', async () => {
+    const localUpdater = fakeUpdater()
+    const logs: string[] = []
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.5', body: 'Fixes' } })
+    localUpdater.downloadUpdate.mockImplementation(async () => {
+      localUpdater.emitProgress({ transferred: 50, total: 100 })
+      localUpdater.emitProgress({ transferred: 100, total: 100 })
+    })
+    const proxyController = { apply: vi.fn().mockResolvedValue(undefined) }
+    const service = new ElectronUpdaterService(localUpdater, proxyController, {
+      log: message => logs.push(message),
+    })
+
+    await service.checkForUpdates({ proxy: 'http://user:super-secret@127.0.0.1:7890' })
+    await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
+    service.quitAndInstallDownloadedUpdate({})
+
+    const combined = logs.join('\n')
+    expect(combined).toContain('check_start')
+    expect(combined).toContain('check_available version=1.2.5')
+    expect(combined).toContain('download_start version=1.2.5')
+    expect(combined).toContain('download_complete version=1.2.5')
+    expect(combined).toContain('stage_install version=1.2.5')
+    expect(combined).toContain('quit_and_install version=1.2.5')
+    expect(combined).not.toContain('super-secret')
+    expect(combined).not.toContain('127.0.0.1:7890')
+  })
+
+  it('replaces an existing subscriber with the same subscriberKey so renderer reload does not double progress', async () => {
+    const localUpdater = fakeUpdater()
+    let finishDownload!: () => void
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4', body: 'Fixes' } })
+    localUpdater.downloadUpdate.mockImplementation(
+      () => new Promise<void>(resolve => { finishDownload = resolve }),
+    )
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+
+    // Simulate a single webContents event channel receiving events across a reload.
+    const webContentsChannel: unknown[] = []
+    const firstDownload = service.downloadUpdate(
+      event => webContentsChannel.push(event),
+      { subscriberKey: 'webContents:1' },
+    )
+    localUpdater.emitProgress({ transferred: 40, total: 100 })
+
+    // Renderer reloads and re-subscribes on the same webContents id.
+    webContentsChannel.length = 0
+    const reloadedDownload = service.downloadUpdate(
+      event => webContentsChannel.push(event),
+      { subscriberKey: 'webContents:1' },
+    )
+    localUpdater.emitProgress({ transferred: 100, total: 100 })
+    finishDownload()
+    await Promise.all([firstDownload, reloadedDownload])
+
+    // Exactly one replay + one remaining chunk + one Finished (no 2x duplication).
+    expect(webContentsChannel).toEqual([
+      { event: 'Started', data: { contentLength: 100 } },
+      { event: 'Progress', data: { chunkLength: 40 } },
+      { event: 'Progress', data: { chunkLength: 60 } },
+      { event: 'Finished' },
+    ])
+  })
+
+  it('waits for a superseded download instead of double-listening or marking a newer proxy check as downloaded', async () => {
+    const localUpdater = fakeUpdater()
+    let finishFirstDownload!: () => void
+    let finishSecondDownload!: () => void
+    localUpdater.checkForUpdates
+      .mockResolvedValueOnce({ updateInfo: { version: '1.2.4', body: 'Old' } })
+      .mockResolvedValueOnce({ updateInfo: { version: '1.2.5', body: 'New' } })
+    localUpdater.downloadUpdate
+      .mockImplementationOnce(() => new Promise<void>(resolve => { finishFirstDownload = resolve }))
+      .mockImplementationOnce(() => new Promise<void>(resolve => { finishSecondDownload = resolve }))
+
+    const proxyController = { apply: vi.fn().mockResolvedValue(undefined) }
+    const service = new ElectronUpdaterService(localUpdater, proxyController)
+    await service.checkForUpdates()
+
+    const firstDownload = service.downloadUpdate(() => {})
+    expect(localUpdater.progressListenerCount()).toBe(1)
+
+    // Switch proxy mid-download and discover a newer release.
+    await service.checkForUpdates({ proxy: 'http://127.0.0.1:7890' })
+    const secondEvents: unknown[] = []
+    const secondDownload = service.downloadUpdate(event => secondEvents.push(event))
+
+    // Must not register a second progress listener while the old download is still active.
+    expect(localUpdater.progressListenerCount()).toBe(1)
+    expect(localUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+
+    // When the old download completes, it must NOT mark 1.2.5 as downloaded.
+    finishFirstDownload()
+    await firstDownload
+    expect(service.hasDownloadedUpdate()).toBe(false)
+
+    // The waiting caller now runs the fresh download for 1.2.5.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(localUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    localUpdater.emitProgress({ transferred: 100, total: 100 })
+    finishSecondDownload()
+    await secondDownload
+
+    expect(service.hasDownloadedUpdate()).toBe(true)
+    expect(secondEvents).toEqual([
+      { event: 'Started', data: { contentLength: 100 } },
+      { event: 'Progress', data: { chunkLength: 100 } },
+      { event: 'Finished' },
+    ])
+  })
+
+  it('sanitizes proxy credentials and URL queries in error logs and captures async updater errors', async () => {
+    const localUpdater = fakeUpdater()
+    const logs: string[] = []
+    const proxyController = { apply: vi.fn().mockResolvedValue(undefined) }
+    const service = new ElectronUpdaterService(localUpdater, proxyController, {
+      log: message => logs.push(message),
+    })
+
+    localUpdater.checkForUpdates.mockRejectedValueOnce(
+      new Error('connect failed via socks5://alice:top-secret@proxy.internal:1080 to https://bob:cdn-pass@cdn.example.com/latest.yml?token=secret-query'),
+    )
+    await expect(service.checkForUpdates({ proxy: 'socks5://alice:top-secret@proxy.internal:1080' })).rejects.toThrow()
+
+    localUpdater.emitError(new Error('Squirrel verify failed for https://user:pw@127.0.0.1:9999/update.zip?sig=leak'))
+
+    const combined = logs.join('\n')
+    expect(combined).toContain('check_error')
+    expect(combined).toContain('updater_error')
+    expect(combined).not.toContain('top-secret')
+    expect(combined).not.toContain('alice')
+    expect(combined).not.toContain('proxy.internal:1080')
+    expect(combined).not.toContain('cdn-pass')
+    expect(combined).not.toContain('secret-query')
+    expect(combined).not.toContain('pw')
+    expect(combined).not.toContain('sig=leak')
   })
 })

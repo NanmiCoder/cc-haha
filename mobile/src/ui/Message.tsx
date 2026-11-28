@@ -2,7 +2,8 @@ import { memo, useMemo, useRef, useState, type ComponentRef } from 'react'
 import { Image, Keyboard, Platform, Pressable, ScrollView, View, type TextStyle } from 'react-native'
 import { Text } from './Text'
 import type { ChatItem } from '../core/types'
-import { visibleMessageText } from '../core/chatComposer'
+import type { BrowserPreferredTarget } from '../core/browserUse'
+import { stripComposerRequestEnvelopes } from '../core/chatComposer'
 import { userMessageDisplay, type UserMessageCapability } from '../core/userMessageDisplay'
 import { Callout, CodeBlock, Icon, InlineCode, useColors } from './kit'
 import {
@@ -292,8 +293,10 @@ export const Message = memo(function Message({
         {item.text}
       </Text>
     )
-  const text = visibleMessageText(item.text)
-  const team = text !== item.text
+  const envelopes = stripComposerRequestEnvelopes(item.text)
+  const text = envelopes.content
+  const team = envelopes.team
+  const browser = envelopes.browserTarget
   const longPress = () => {
     const node = bubble.current
     if (!node || !onLongPress) return
@@ -311,7 +314,7 @@ export const Message = memo(function Message({
           style={{ maxWidth: 300 }}
         >
           <View ref={bubble} collapsable={false}>
-            <UserBubble item={item} text={text} team={team} selectable={inlineSelectable} />
+            <UserBubble item={item} text={text} team={team} browser={browser} selectable={inlineSelectable} />
           </View>
         </Pressable>
         {item.pending ? (
@@ -345,15 +348,17 @@ export function UserBubble({
   item,
   text,
   team,
+  browser,
   selectable = false,
 }: {
   item: ChatItem
   text: string
   team: boolean
+  browser?: BrowserPreferredTarget
   selectable?: boolean
 }) {
   const colors = useColors()
-  const display = userMessageDisplay(text, team)
+  const display = userMessageDisplay(text, team, browser)
   return (
     <View
       style={{
@@ -402,7 +407,19 @@ function MessageCapability({ capability }: { capability: UserMessageCapability }
       {capability.kind === 'computer' || capability.kind === 'plugin' ? (
         <Glyph name={capability.kind === 'computer' ? 'monitor' : 'plug'} size={13} color={colors.run} />
       ) : (
-        <Icon name={capability.kind === 'team' ? 'users' : capability.kind === 'command' ? 'terminal' : 'layers'} size={13} color={colors.run} />
+        <Icon
+          name={
+            capability.kind === 'team'
+              ? 'users'
+              : capability.kind === 'browser'
+                ? 'globe'
+                : capability.kind === 'command'
+                  ? 'terminal'
+                  : 'layers'
+          }
+          size={13}
+          color={colors.run}
+        />
       )}
       <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 12.5, lineHeight: 17, fontWeight: '600', color: colors.run }}>
         {capability.label}

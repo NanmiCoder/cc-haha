@@ -1965,9 +1965,6 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   if (!launchInfo) {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
-  if (launchInfo.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID) {
-    throw ApiError.conflict('Antigravity does not support forking a conversation.')
-  }
 
   try {
     const result = await createSessionBranch({
@@ -1978,9 +1975,11 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
       sourceWorkDir: launchInfo.workDir,
       sourceRepository: launchInfo.repository,
       sourceWorktreeSession: launchInfo.worktreeSession,
+      detachNativeSession: launchInfo.runtimeProviderId === ANTIGRAVITY_PROVIDER_ID,
     })
 
     recentProjectsCache = null
+    sessionService.invalidateSessionListCache()
 
     return Response.json({
       sessionId: result.sessionId,
@@ -1988,6 +1987,11 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
       workDir: result.workDir ?? launchInfo.workDir,
       sourceSessionId: sessionId,
       targetMessageId: body.targetMessageId.trim(),
+      messageCount: result.serializedMessages.length,
+      ...(launchInfo.runtimeProviderId !== undefined ? { runtimeProviderId: launchInfo.runtimeProviderId } : {}),
+      ...(launchInfo.runtimeModelId ? { runtimeModelId: launchInfo.runtimeModelId } : {}),
+      ...(launchInfo.effortLevel ? { effortLevel: launchInfo.effortLevel } : {}),
+      ...(launchInfo.permissionMode ? { permissionMode: launchInfo.permissionMode } : {}),
     }, { status: 201 })
   } catch (error) {
     if (error instanceof SessionBranchingError) {

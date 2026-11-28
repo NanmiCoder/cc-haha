@@ -275,33 +275,74 @@ describe('useCapabilityMenu', () => {
     expect(result.current.browserUse.enabled).toBe(true)
   })
 
-  it('hides the Browser Use switch on non-desktop H5 and avoids retry loops on 403', async () => {
+  it('supports Browser Use on non-desktop H5 when config loads, and degrades cleanly without retry loops on 403', async () => {
     window.desktopHost = { ...browserHost, kind: 'browser', isDesktop: false }
-    const h5Menu = renderMenu()
-    const runSection = h5Menu.result.current.sections.find(section => section.id === 'run')!
-    const browserRow = runSection.items.find(item => item.key === 'browser-use')!
-    expect(browserRow.switch).toBeUndefined()
-    expect(browserRow.action).toEqual({ type: 'settings', tab: 'browserUse' })
-    expect(mocks.browserUseGetConfig).not.toHaveBeenCalled()
+    mocks.browserUseGetConfig.mockResolvedValue({
+      enabled: true,
+      preferredTarget: 'chrome',
+      showCursorOverlay: true,
+      autoOpenWorkspacePanel: true,
+      managedChromeHeadless: false,
+    })
+    const h5Menu = renderHook(() =>
+      useCapabilityMenu({ open: true, antigravity: true, cwd: '/repo', references: [], handlers: handlers() }),
+    )
+    await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalled())
+    await waitFor(() => {
+      const runSection = h5Menu.result.current.sections.find(section => section.id === 'run')!
+      const browserRow = runSection.items.find(item => item.key === 'browser-use')!
+      expect(browserRow.switch).toEqual({ checked: false, disabled: false })
+      expect(browserRow.action).toEqual({ type: 'toggleBrowserUse' })
+    })
+    act(() => {
+      h5Menu.result.current.onAction({ type: 'toggleBrowserUse' })
+    })
+    expect(h5Menu.result.current.browserUse.armed).toBe(true)
+    expect(h5Menu.result.current.browserUse.preferredTarget).toBe('chrome')
     h5Menu.unmount()
 
-    // Even on desktop, a 403/error degrades to settings navigation and stops re-fetching.
-    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
-    mocks.browserUseGetConfig.mockRejectedValue(new Error('403 Desktop-only'))
-    const desktopMenu = renderHook(
+    // On an older server returning 403, degrade to settings navigation and stop re-fetching.
+    useBrowserUseStore.getState().reset()
+    mocks.browserUseGetConfig.mockReset().mockRejectedValue(new Error('403 Desktop-only'))
+    const degradedMenu = renderHook(
       ({ open }) => useCapabilityMenu({ open, cwd: '/repo', references: [], handlers: handlers() }),
       { initialProps: { open: true } },
     )
     await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1))
     await waitFor(() => {
-      const degradedRow = desktopMenu.result.current.sections.find(section => section.id === 'run')!.items.find(item => item.key === 'browser-use')!
+      const degradedRow = degradedMenu.result.current.sections.find(section => section.id === 'run')!.items.find(item => item.key === 'browser-use')!
       expect(degradedRow.switch).toBeUndefined()
       expect(degradedRow.action).toEqual({ type: 'settings', tab: 'browserUse' })
     })
-    desktopMenu.rerender({ open: false })
-    desktopMenu.rerender({ open: true })
+    degradedMenu.rerender({ open: false })
+    degradedMenu.rerender({ open: true })
     await Promise.resolve()
     expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1)
+    degradedMenu.unmount()
+
+    // Transient network failures degrade without permanently blocking retry when `+` reopens.
+    useBrowserUseStore.getState().reset()
+    mocks.browserUseGetConfig
+      .mockReset()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValueOnce({
+        enabled: true,
+        preferredTarget: 'workspace',
+        showCursorOverlay: true,
+        autoOpenWorkspacePanel: true,
+        managedChromeHeadless: false,
+      })
+    const flakyMenu = renderHook(
+      ({ open }) => useCapabilityMenu({ open, cwd: '/repo', references: [], handlers: handlers() }),
+      { initialProps: { open: false } },
+    )
+    await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(1))
+    flakyMenu.rerender({ open: true })
+    await waitFor(() => expect(mocks.browserUseGetConfig).toHaveBeenCalledTimes(2))
+    await waitFor(() => {
+      const recovered = flakyMenu.result.current.sections.find(section => section.id === 'run')!.items.find(item => item.key === 'browser-use')!
+      expect(recovered.switch).toEqual({ checked: false, disabled: false })
+    })
   })
 
   it('hydrates Browser Use config before opening + menu and surfaces toasts on save failures', async () => {

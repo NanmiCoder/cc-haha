@@ -1274,4 +1274,37 @@ describe('sessionStore', () => {
       workDir: '/workspace/repo/branches/session-branch-existing',
     })
   })
+
+  it('preserves authoritative Antigravity metadata, messageCount, and syncs sessionRuntimeStore even when source session is absent', async () => {
+    branchMock.mockResolvedValue({
+      sessionId: 'session-agy-branch-1',
+      title: 'Antigravity (Branch)',
+      workDir: '/workspace/repo',
+      sourceSessionId: 'session-agy-source-not-in-list',
+      targetMessageId: 'transcript-agy-1',
+      messageCount: 4,
+      runtimeProviderId: 'antigravity-acp',
+      runtimeModelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+      permissionMode: 'acceptEdits',
+    })
+    listMock.mockImplementation(() => new Promise(() => {}))
+    useSessionStore.setState({ sessions: [] })
+
+    await useSessionStore.getState().branchSession('session-agy-source-not-in-list', 'transcript-agy-1')
+
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      id: 'session-agy-branch-1',
+      messageCount: 4,
+      runtimeProviderId: 'antigravity-acp',
+      runtimeModelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+      permissionMode: 'acceptEdits',
+    })
+    expect(useSessionRuntimeStore.getState().selections['session-agy-branch-1']).toMatchObject({
+      providerId: 'antigravity-acp',
+      modelId: 'gemini-3.8-pro',
+      effortLevel: 'high',
+    })
+  })
 })
