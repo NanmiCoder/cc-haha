@@ -474,11 +474,15 @@ export function mergeHistoryPages(
     current.page.sourceVersion !== older.page.sourceVersion
   )
     throw new Error('HISTORY_PAGE_STALE')
-  const seen = new Set<string>()
-  const messages = [...older.messages, ...current.messages].filter((entry) => {
-    if (seen.has(entry.id)) return false
-    seen.add(entry.id)
-    return true
+  // Keep each replay's newest record at the position it occupied in the transcript.
+  const records = [...older.messages, ...current.messages]
+  const latestIndexById = new Map<string, number>()
+  records.forEach((entry, index) => {
+    if (entry.id?.trim()) latestIndexById.set(entry.id, index)
+  })
+  const messages = records.filter((entry, index) => {
+    const latest = latestIndexById.get(entry.id)
+    return latest === undefined || latest === index
   })
   const omitted =
     current.page.omittedOversizedEntries + older.page.omittedOversizedEntries
