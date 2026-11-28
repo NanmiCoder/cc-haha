@@ -2607,7 +2607,7 @@ export function MessageList({
   const isAntigravitySession = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.runtimeProviderId === ANTIGRAVITY_ACP_PROVIDER_ID))
   const isAntigravity = isAntigravityRuntime || isAntigravitySession
   const supportsTurnCheckpoints = !isDirectAgentSession && !isAntigravity
-  const branchActionsDisabled = isAntigravity || isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
+  const branchActionsDisabled = isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
 

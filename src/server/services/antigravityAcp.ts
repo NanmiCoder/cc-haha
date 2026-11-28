@@ -394,6 +394,7 @@ type AntigravityAcpInitState = {
   permissionMode: AntigravityCcHahaPermissionMode
   launchedWithBypassPermissions: boolean
   supportsImages: boolean
+  supportsNativeFork: boolean
   version?: string
   tier?: AntigravityTierInfo
   modelConfigId?: string
@@ -412,6 +413,8 @@ export class AntigravityAcp {
   readonly sessionId: string
   readonly launchedWithBypassPermissions: boolean
   readonly supportsImages: boolean
+  /** Reserved capability flag for future native ACP `session/fork` support. */
+  readonly supportsNativeFork: boolean
   readonly version?: string
   readonly tier?: AntigravityTierInfo
   initialAvailableCommands: AntigravitySlashCommand[]
@@ -432,6 +435,7 @@ export class AntigravityAcp {
     this.permissionMode = state.permissionMode
     this.launchedWithBypassPermissions = state.launchedWithBypassPermissions
     this.supportsImages = state.supportsImages
+    this.supportsNativeFork = state.supportsNativeFork
     this.version = state.version
     this.tier = state.tier
     this.modelConfigId = state.modelConfigId
@@ -785,6 +789,7 @@ export async function openAntigravityAcp(
       permissionMode: initialMode,
       launchedWithBypassPermissions,
       supportsImages: acpObject(capabilities?.promptCapabilities)?.image === true,
+      supportsNativeFork: Boolean(sessionCaps?.fork),
       ...(typeof version === 'string' ? { version } : {}),
       ...(tier ? { tier } : {}),
       modelConfigId: typeof modelOpt?.id === 'string' ? modelOpt.id : undefined,

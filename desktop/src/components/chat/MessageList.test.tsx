@@ -7038,6 +7038,67 @@ describe('MessageList nested tool calls', () => {
     })
   })
 
+  it('offers and triggers transcript branching for completed Antigravity messages', async () => {
+    const branchSession = vi.fn().mockResolvedValue({
+      sessionId: 'branched-agy-session-1',
+      title: 'Branched Antigravity',
+      workDir: '/tmp/source-project',
+    })
+    const connectToSession = vi.fn()
+    useSessionStore.setState({
+      sessions: [{
+        id: ACTIVE_TAB,
+        title: 'Antigravity session',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        modifiedAt: '2026-05-19T00:00:00.000Z',
+        messageCount: 2,
+        projectPath: '/tmp/source-project',
+        projectRoot: '/tmp/source-project',
+        workDir: '/tmp/source-project',
+        workDirExists: true,
+        runtimeProviderId: 'antigravity-acp',
+        runtimeModelId: 'gemini-3.8-pro',
+      }],
+      branchSession: branchSession as never,
+    })
+    useChatStore.setState({
+      connectToSession: connectToSession as never,
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'agy-user-1',
+              transcriptMessageId: 'transcript-agy-user-1',
+              type: 'user_text',
+              content: 'First Antigravity turn',
+              timestamp: 1,
+            },
+            {
+              id: 'agy-assistant-1',
+              transcriptMessageId: 'transcript-agy-assistant-1',
+              type: 'assistant_text',
+              content: 'First Antigravity reply',
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    const branchButtons = screen.getAllByRole('button', { name: 'Fork a new conversation' })
+    expect(branchButtons).toHaveLength(2)
+
+    fireEvent.click(branchButtons[1]!)
+
+    await waitFor(() => {
+      expect(branchSession).toHaveBeenCalledWith(ACTIVE_TAB, 'transcript-agy-assistant-1')
+    })
+    expect(connectToSession).toHaveBeenCalledWith('branched-agy-session-1')
+    expect(useTabStore.getState().activeTabId).toBe('branched-agy-session-1')
+  })
+
   it('hides branch actions while the current session is still running', () => {
     useChatStore.setState({
       sessions: {

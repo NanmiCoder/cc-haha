@@ -3414,6 +3414,361 @@ describe('Antigravity ACP server core & integration', () => {
       else process.env.CC_HAHA_ANTIGRAVITY_APP_DATA_DIR = prevAppData
     }
   }, 20_000)
+
+  test('forks an Antigravity session at an arbitrary historical checkpoint via context-seeded session/new, preserves clean UI transcript, supports nested fork, and clears pending seed on /clear', async () => {
+    const fake = await installFakeAgy(sandboxDir, 'ready')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-fork-e2e')
+    await mkdir(workDir, { recursive: true })
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsUrl = `ws://127.0.0.1:${server.port}`
+    try {
+      // 1. Create source Antigravity session and complete two turns.
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-3.8-flash',
+          effortLevel: 'high',
+          permissionMode: 'acceptEdits',
+        }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId: sourceSessionId } = await createRes.json() as { sessionId: string }
+
+      const openWs = (targetSessionId: string) => {
+        const ws = new WebSocket(`${wsUrl}/ws/${targetSessionId}`)
+        const received: ServerMessage[] = []
+        ws.onmessage = event => { received.push(JSON.parse(String(event.data)) as ServerMessage) }
+        return { ws, received }
+      }
+
+      const source = openWs(sourceSessionId)
+      await waitUntil(() => source.ws.readyState === WebSocket.OPEN)
+
+      source.ws.send(JSON.stringify({ type: 'user_message', content: 'Turn 1: design the cache key' }))
+      await waitUntil(() => source.received.some(m => m.type === 'message_complete'))
+
+      const completeAfterTurn1 = source.received.filter(m => m.type === 'message_complete').length
+      source.ws.send(JSON.stringify({ type: 'user_message', content: 'Turn 2: switch to a different DB' }))
+      await waitUntil(() => source.received.filter(m => m.type === 'message_complete').length > completeAfterTurn1)
+
+      const sourceLaunch = await sessionService.getSessionLaunchInfo(sourceSessionId)
+      expect(sourceLaunch?.nativeSessionId).toBe('native-session-1')
+
+      // Load persisted messages so we can pick the assistant reply from Turn 1 as the fork checkpoint.
+      const sourceMsgsRes = await fetch(`${baseUrl}/api/sessions/${sourceSessionId}/messages`)
+      expect(sourceMsgsRes.status).toBe(200)
+      const sourceMsgsBody = await sourceMsgsRes.json() as {
+        messages: Array<{ id: string; type: string; content: unknown }>
+      }
+      const turn1Assistant = sourceMsgsBody.messages.find(m => m.type === 'assistant')
+      expect(turn1Assistant?.id).toBeTruthy()
+
+      // 2. Fork from Turn 1 checkpoint via HTTP API.
+      const branchRes = await fetch(`${baseUrl}/api/sessions/${sourceSessionId}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetMessageId: turn1Assistant!.id, title: 'Cache Key Fork' }),
+      })
+      expect(branchRes.status).toBe(201)
+      const branchBody = await branchRes.json() as {
+        sessionId: string
+        title: string
+        messageCount?: number
+        runtimeProviderId?: string | null
+        runtimeModelId?: string
+        effortLevel?: string
+        permissionMode?: string
+      }
+      const forkSessionId = branchBody.sessionId
+      expect(forkSessionId).not.toBe(sourceSessionId)
+      expect(branchBody.messageCount).toBeGreaterThan(0)
+      expect(branchBody.runtimeProviderId).toBe(ANTIGRAVITY_PROVIDER_ID)
+      expect(branchBody.runtimeModelId).toBe('gemini-3.8-flash')
+      expect(branchBody.effortLevel).toBe('high')
+      expect(branchBody.permissionMode).toBe('acceptEdits')
+
+      // Verify prewarm_session is skipped for pending Antigravity fork sessions (no orphan ACP process created).
+      const wireCountBeforePrewarm = (await fake.readWire()).length
+      const fork = openWs(forkSessionId)
+      await waitUntil(() => fork.ws.readyState === WebSocket.OPEN)
+      fork.ws.send(JSON.stringify({ type: 'prewarm_session' }))
+      await new Promise(resolve => setTimeout(resolve, 150))
+      expect(conversationService.hasSession(forkSessionId)).toBe(false)
+      expect((await fake.readWire()).length).toBe(wireCountBeforePrewarm)
+
+      // Verify fork launch metadata detached the parent nativeSessionId and armed fork seed.
+      const forkLaunchBeforeSend = await sessionService.getSessionLaunchInfo(forkSessionId)
+      expect(forkLaunchBeforeSend?.runtimeProviderId).toBe(ANTIGRAVITY_PROVIDER_ID)
+      expect(forkLaunchBeforeSend?.runtimeModelId).toBe('gemini-3.8-flash')
+      expect(forkLaunchBeforeSend?.effortLevel).toBe('high')
+      expect(forkLaunchBeforeSend?.permissionMode).toBe('acceptEdits')
+      expect(forkLaunchBeforeSend?.nativeSessionId).toBeUndefined()
+      expect(forkLaunchBeforeSend?.antigravityForkSeedPending).toBe(true)
+
+      // Verify fork history contains Turn 1 only (not Turn 2).
+      const forkMsgsBeforeSend = await (await fetch(`${baseUrl}/api/sessions/${forkSessionId}/messages`)).json() as {
+        messages: Array<{ id: string; type: string; content: unknown }>
+      }
+      const serializedBeforeSend = JSON.stringify(forkMsgsBeforeSend.messages)
+      expect(serializedBeforeSend).toContain('Turn 1: design the cache key')
+      expect(serializedBeforeSend).not.toContain('Turn 2: switch to a different DB')
+
+      // 3. Send the first message in the forked session -> must use session/new (fresh native ID),
+      //    carry Turn 1 history on the ACP wire, and keep the user bubble clean in UI & JSONL.
+      await writeFile(fake.modeFile, 'fresh', 'utf8')
+      const wireCountBeforeForkSend = (await fake.readWire()).length
+
+      fork.ws.send(JSON.stringify({ type: 'user_message', content: 'Try Redis for the cache key instead' }))
+      await waitUntil(() => fork.received.some(m => m.type === 'message_complete'))
+
+      const wireAfterForkTurn1 = (await fake.readWire()).slice(wireCountBeforeForkSend)
+      expect(wireAfterForkTurn1.some(w => w.method === 'session/resume')).toBe(false)
+      const forkSessionNew = wireAfterForkTurn1.find(w => w.method === 'session/new')
+      expect(forkSessionNew).toBeDefined()
+      const sysAppend = (((forkSessionNew?.params?._meta as Record<string, unknown> | undefined)?.antigravity as Record<string, unknown> | undefined)?.systemPrompt as Record<string, unknown> | undefined)?.append
+      expect(String(sysAppend ?? '')).toContain('<forked_conversation_history>')
+
+      const firstForkPrompt = wireAfterForkTurn1.find(w => w.method === 'session/prompt')
+      const firstForkPromptText = ((firstForkPrompt?.params?.prompt ?? []) as Array<{ text?: string }>)
+        .map(b => b.text ?? '')
+        .join('\n')
+      expect(firstForkPromptText).toContain('<forked_conversation_history>')
+      expect(firstForkPromptText).toContain('Turn 1: design the cache key')
+      expect(firstForkPromptText).not.toContain('Turn 2: switch to a different DB')
+      expect(firstForkPromptText).toContain('Try Redis for the cache key instead')
+
+      // Persisted launch info now has the new nativeSessionId and cleared antigravityForkSeedPending.
+      const forkLaunchAfterTurn1 = await sessionService.getSessionLaunchInfo(forkSessionId)
+      expect(forkLaunchAfterTurn1?.nativeSessionId).toBe('native-session-fresh-2')
+      expect(forkLaunchAfterTurn1?.antigravityForkSeedPending).toBeUndefined()
+
+      // Persisted UI transcript contains ONLY the clean user text, never the wrapper.
+      const forkMsgsAfterTurn1 = await (await fetch(`${baseUrl}/api/sessions/${forkSessionId}/messages`)).json() as {
+        messages: Array<{ id: string; type: string; content: unknown }>
+      }
+      const serializedAfterTurn1 = JSON.stringify(forkMsgsAfterTurn1.messages)
+      expect(serializedAfterTurn1).toContain('Try Redis for the cache key instead')
+      expect(serializedAfterTurn1).not.toContain('<forked_conversation_history>')
+
+      // 4. Second turn in the fork must NOT re-inject the fork wrapper.
+      const wireCountBeforeForkTurn2 = (await fake.readWire()).length
+      const completeBeforeForkTurn2 = fork.received.filter(m => m.type === 'message_complete').length
+      fork.ws.send(JSON.stringify({ type: 'user_message', content: 'Add TTL expiry too' }))
+      await waitUntil(() => fork.received.filter(m => m.type === 'message_complete').length > completeBeforeForkTurn2)
+
+      const wireAfterForkTurn2 = (await fake.readWire()).slice(wireCountBeforeForkTurn2)
+      const secondForkPrompt = wireAfterForkTurn2.find(w => w.method === 'session/prompt')
+      const secondForkPromptText = ((secondForkPrompt?.params?.prompt ?? []) as Array<{ text?: string }>)
+        .map(b => b.text ?? '')
+        .join('\n')
+      expect(secondForkPromptText).toBe('Add TTL expiry too')
+      expect(secondForkPromptText).not.toContain('<forked_conversation_history>')
+
+      // 5. Restarting the fork process must resume the fork's own nativeSessionId without re-seeding.
+      await conversationService.stopSessionAndWait(forkSessionId, 2_000, { requireExit: true })
+      const wireCountBeforeForkResume = (await fake.readWire()).length
+      const completeBeforeForkResume = fork.received.filter(m => m.type === 'message_complete').length
+      fork.ws.send(JSON.stringify({ type: 'user_message', content: 'Resume after restart' }))
+      await waitUntil(() => fork.received.filter(m => m.type === 'message_complete').length > completeBeforeForkResume)
+
+      const wireAfterForkResume = (await fake.readWire()).slice(wireCountBeforeForkResume)
+      const forkResumeCall = wireAfterForkResume.find(w => w.method === 'session/resume')
+      expect(forkResumeCall?.params?.sessionId).toBe('native-session-fresh-2')
+      const resumedPrompt = wireAfterForkResume.find(w => w.method === 'session/prompt')
+      const resumedPromptText = ((resumedPrompt?.params?.prompt ?? []) as Array<{ text?: string }>)
+        .map(b => b.text ?? '')
+        .join('\n')
+      expect(resumedPromptText).toBe('Resume after restart')
+
+      // 6. Nested fork from a newly appended message in the fork preserves BOTH Turn 1 and the fork's new turn.
+      const forkMsgsLatest = await (await fetch(`${baseUrl}/api/sessions/${forkSessionId}/messages`)).json() as {
+        messages: Array<{ id: string; type: string; content: unknown }>
+      }
+      const lastAssistantInFork = [...forkMsgsLatest.messages].reverse().find(m => m.type === 'assistant')
+      expect(lastAssistantInFork?.id).toBeTruthy()
+
+      const nestedRes = await fetch(`${baseUrl}/api/sessions/${forkSessionId}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetMessageId: lastAssistantInFork!.id, title: 'Nested Fork' }),
+      })
+      expect(nestedRes.status).toBe(201)
+      const { sessionId: nestedForkId } = await nestedRes.json() as { sessionId: string }
+
+      const nestedMsgs = await (await fetch(`${baseUrl}/api/sessions/${nestedForkId}/messages`)).json() as {
+        messages: Array<{ id: string; type: string; content: unknown }>
+      }
+      const serializedNested = JSON.stringify(nestedMsgs.messages)
+      expect(serializedNested).toContain('Turn 1: design the cache key')
+      expect(serializedNested).toContain('Try Redis for the cache key instead')
+      expect(serializedNested).toContain('Add TTL expiry too')
+
+      // 7. /clear on an unactivated fork clears antigravityForkSeedPending completely.
+      const nestedWs = openWs(nestedForkId)
+      await waitUntil(() => nestedWs.ws.readyState === WebSocket.OPEN)
+      nestedWs.ws.send(JSON.stringify({ type: 'user_message', content: '/clear' }))
+      await waitUntil(() => nestedWs.received.some(m => m.type === 'system_notification' && m.subtype === 'session_cleared'))
+      const nestedLaunchAfterClear = await sessionService.getSessionLaunchInfo(nestedForkId)
+      expect(nestedLaunchAfterClear?.antigravityForkSeedPending).toBeUndefined()
+      expect(nestedLaunchAfterClear?.nativeSessionId).toBeUndefined()
+
+      // Original parent session remains untouched with both Turn 1 and Turn 2.
+      const parentLaunchAfter = await sessionService.getSessionLaunchInfo(sourceSessionId)
+      expect(parentLaunchAfter?.nativeSessionId).toBe('native-session-1')
+
+      source.ws.close()
+      fork.ws.close()
+      nestedWs.ws.close()
+    } finally {
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+  }, 25_000)
+
+  test('consumes fork seed when first turn cancels after partial output so the next turn does not double-inject context, and always uses session/new while forkSeedPending is true', async () => {
+    // Part A: unit-level check on AntigravityConversation cancel-after-partial-output vs zero-output failure
+    const sentPrompts: unknown[][] = []
+    let onMessage: ((method: string, params: Record<string, unknown>, id?: number | string) => void) | undefined
+    let promptResolvers: Array<(value: Record<string, unknown>) => void> = []
+    let failNextPrompt = false
+    const fakeAcp = {
+      sessionId: 'native-cancel-test',
+      modelId: 'gemini-3.8-flash',
+      effortLevel: 'high',
+      permissionMode: 'default',
+      launchedWithBypassPermissions: false,
+      supportsImages: true,
+      supportsNativeFork: false,
+      isOpen: true,
+      drained: Promise.resolve(),
+      initialAvailableCommands: [],
+      set onMessage(fn: typeof onMessage) { onMessage = fn },
+      prompt: (blocks: unknown[]) => {
+        sentPrompts.push(blocks)
+        if (failNextPrompt) {
+          failNextPrompt = false
+          return Promise.reject(new AntigravityError('ANTIGRAVITY_TURN_FAILED', 'transient error'))
+        }
+        return new Promise<Record<string, unknown>>((resolve) => {
+          promptResolvers.push(resolve)
+        })
+      },
+      cancel: () => true,
+      reply: () => true,
+      end: () => {},
+      close: () => {},
+    } as unknown as AntigravityAcp
+
+    let consumedCount = 0
+    const conv = new AntigravityConversation(
+      fakeAcp,
+      () => {},
+      async () => {},
+      {
+        pendingForkSeedContext: '<forked_conversation_history>\n[User]\nPrior context\n</forked_conversation_history>',
+        onForkSeedConsumed: () => { consumedCount += 1 },
+      },
+    )
+
+    // 1) Zero-output failure retains the fork seed for retry.
+    failNextPrompt = true
+    expect(conv.send([{ type: 'text', text: 'Attempt 1' }], 'u-fail-1')).toBe(true)
+    await conv.pendingTurnCompletion
+    expect(consumedCount).toBe(0)
+    expect(String((sentPrompts[0]?.[0] as { text?: string })?.text ?? '')).toContain('<forked_conversation_history>')
+
+    // 2) Partial output followed by user cancel MUST consume the fork seed.
+    expect(conv.send([{ type: 'text', text: 'Attempt 2' }], 'u-cancel-2')).toBe(true)
+    await waitUntil(() => sentPrompts.length === 2)
+    expect(String((sentPrompts[1]?.[0] as { text?: string })?.text ?? '')).toContain('<forked_conversation_history>')
+    onMessage?.('session/update', {
+      sessionId: 'native-cancel-test',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Partial answer before stop' } },
+    })
+    expect(conv.cancel()).toBe(true)
+    promptResolvers.shift()?.({ stopReason: 'cancelled' })
+    await conv.pendingTurnCompletion
+    expect(consumedCount).toBe(1)
+
+    // 3) Next turn after cancel must NOT re-inject the fork seed.
+    expect(conv.send([{ type: 'text', text: 'Follow up after stop' }], 'u-next-3')).toBe(true)
+    await waitUntil(() => sentPrompts.length === 3)
+    const thirdText = String((sentPrompts[2]?.[0] as { text?: string })?.text ?? '')
+    expect(thirdText).toBe('Follow up after stop')
+    expect(thirdText).not.toContain('<forked_conversation_history>')
+    promptResolvers.shift()?.({ stopReason: 'end_turn' })
+    await conv.pendingTurnCompletion
+
+    // Part B: even if an unprompted nativeSessionId was previously persisted alongside
+    // antigravityForkSeedPending: true, starting the session must call session/new rather than session/resume.
+    const fake = await installFakeAgy(sandboxDir, 'fresh')
+    process.env.PATH = `${fake.binDir}:/usr/bin:/bin`
+    const workDir = join(sandboxDir, 'work-stale-native-seed')
+    await mkdir(workDir, { recursive: true })
+
+    const server = startServer(0, '127.0.0.1')
+    const baseUrl = `http://127.0.0.1:${server.port}`
+    const wsUrl = `ws://127.0.0.1:${server.port}`
+    try {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workDir,
+          providerId: ANTIGRAVITY_PROVIDER_ID,
+          modelId: 'gemini-3.8-flash',
+        }),
+      })
+      const { sessionId } = await createRes.json() as { sessionId: string }
+      const launch = await sessionService.getSessionLaunchInfo(sessionId)
+      await sessionService.appendSessionMetadata(sessionId, {
+        workDir,
+        runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+        runtimeModelId: 'gemini-3.8-flash',
+        nativeSessionId: 'stale-empty-native-id',
+        antigravityForkSeedPending: true,
+      })
+      // Append a copied historical message so fork context exists.
+      await writeFile(
+        launch!.filePath,
+        `${await readFile(launch!.filePath, 'utf8')}${JSON.stringify({
+          type: 'user',
+          uuid: crypto.randomUUID(),
+          parentUuid: null,
+          sessionId,
+          timestamp: new Date().toISOString(),
+          message: { role: 'user', content: 'Copied checkpoint turn' },
+        })}\n`,
+        'utf8',
+      )
+
+      const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      const received: ServerMessage[] = []
+      ws.onmessage = event => { received.push(JSON.parse(String(event.data)) as ServerMessage) }
+      await waitUntil(() => ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'user_message', content: 'Continue from stale pending fork' }))
+      await waitUntil(() => received.some(m => m.type === 'message_complete'))
+
+      const wire = await fake.readWire()
+      expect(wire.some(w => w.method === 'session/resume')).toBe(false)
+      expect(wire.some(w => w.method === 'session/new')).toBe(true)
+      const prompt = wire.find(w => w.method === 'session/prompt')
+      const promptText = ((prompt?.params?.prompt ?? []) as Array<{ text?: string }>).map(b => b.text ?? '').join('\n')
+      expect(promptText).toContain('Copied checkpoint turn')
+      expect(promptText).toContain('Continue from stale pending fork')
+
+      ws.close()
+    } finally {
+      await conversationService.stopAllSessionsAndWait(2_000)
+      server.stop(true)
+    }
+  }, 20_000)
 })
 
 async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {

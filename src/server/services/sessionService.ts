@@ -231,6 +231,7 @@ export type SessionLaunchInfo = {
   effortLevel?: string
   openAIFastMode?: boolean
   nativeSessionId?: string
+  antigravityForkSeedPending?: boolean
 }
 
 type SessionMetadataPatch = {
@@ -244,6 +245,7 @@ type SessionMetadataPatch = {
   effortLevel?: string
   openAIFastMode?: boolean
   nativeSessionId?: string
+  antigravityForkSeedPending?: boolean
 }
 
 type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
@@ -1034,7 +1036,7 @@ export class SessionService {
     }
   }
 
-  private invalidateSessionListCache(): void {
+  invalidateSessionListCache(): void {
     this.sessionListCache.clear()
     this.sessionListCacheGeneration += 1
     const sharedState = getSharedSessionMutationState(this.localIndexGateway)
@@ -1300,6 +1302,12 @@ export class SessionService {
       return false
     }
     if (metadata.nativeSessionId !== undefined && launchInfo.nativeSessionId !== metadata.nativeSessionId) {
+      return false
+    }
+    if (
+      typeof metadata.antigravityForkSeedPending === 'boolean' &&
+      Boolean(launchInfo.antigravityForkSeedPending) !== metadata.antigravityForkSeedPending
+    ) {
       return false
     }
     if (launchInfo.effortLevel !== resolveSessionEffortLevel(metadata, launchInfo.effortLevel)) {
@@ -1583,6 +1591,7 @@ export class SessionService {
         runtimeModelId: undefined as string | undefined, effortLevel: undefined as string | undefined,
         openAIFastMode: undefined as boolean | undefined,
         nativeSessionId: undefined as string | undefined,
+        antigravityForkSeedPending: undefined as boolean | undefined,
         customTitle: null as string | null, nonemptyCustomTitle: null as string | null,
         goalTitle: null as string | null, aiTitle: null as string | null, firstUserTitle: null as string | null,
         createdAt: null as string | null, modifiedAt: null as string | null,
@@ -1618,6 +1627,9 @@ export class SessionService {
               : undefined
           if (rawNativeId && rawNativeId.length <= 512) {
             state.nativeSessionId = rawNativeId
+          }
+          if (typeof record.antigravityForkSeedPending === 'boolean') {
+            state.antigravityForkSeedPending = record.antigravityForkSeedPending
           }
         }
         state.repository = this.resolveRepositoryFromEntries([entry]) ?? state.repository
@@ -1670,6 +1682,7 @@ export class SessionService {
           transcriptMessageCount: launch.launchCount,
           ...shared(launch),
           ...(launch.nativeSessionId ? { nativeSessionId: launch.nativeSessionId } : {}),
+          ...(launch.antigravityForkSeedPending ? { antigravityForkSeedPending: true } : {}),
         },
         customTitle: launch.nonemptyCustomTitle,
         transcriptMetadata: { ...transcriptMetadata, cwd: launch.cwd },
@@ -5508,7 +5521,11 @@ export class SessionService {
           projectDir, workDir, transcriptMessageCount: 0, customTitle: null,
         } : null)
         if (info) {
-          const { nativeSessionId: _detachedNativeSessionId, ...restInfo } = info
+          const {
+            nativeSessionId: _detachedNativeSessionId,
+            antigravityForkSeedPending: _detachedForkSeedPending,
+            ...restInfo
+          } = info
           this.memoryLaunchInfo.set(this.memorySessionKey(sessionId), {
             ...restInfo,
             transcriptMessageCount: 0,
@@ -5549,9 +5566,9 @@ export class SessionService {
           // Unknown extension fields merge as patches. The runtime selection does
           // not: a complete selection without effortLevel means auto, so it is
           // reduced exactly like the launch metadata projection instead.
-          // /clear 清空界面历史，也必须与原 Antigravity 对话解绑。
-          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, nativeSessionId, antigravitySessionId, ...extension } = entry
-          detachesAntigravity ||= typeof nativeSessionId === 'string' || typeof antigravitySessionId === 'string'
+          // /clear 清空界面历史，也必须与原 Antigravity 对话及待接力状态解绑。
+          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, nativeSessionId, antigravitySessionId, antigravityForkSeedPending: _antigravityForkSeedPending, ...extension } = entry
+          detachesAntigravity ||= typeof nativeSessionId === 'string' || typeof antigravitySessionId === 'string' || _antigravityForkSeedPending === true
           Object.assign(preserved.extra, extension)
           if (runtimeProviderId === null || typeof runtimeProviderId === 'string') preserved.runtime.runtimeProviderId = runtimeProviderId
           if (typeof runtimeModelId === 'string') preserved.runtime.runtimeModelId = runtimeModelId
@@ -5727,6 +5744,9 @@ export class SessionService {
         ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
         effortLevel: resolveSessionEffortLevel(metadata, previousInfo.effortLevel),
         openAIFastMode: typeof metadata.openAIFastMode === 'boolean' ? metadata.openAIFastMode : previousInfo.openAIFastMode,
+        ...(typeof metadata.antigravityForkSeedPending === 'boolean'
+          ? { antigravityForkSeedPending: metadata.antigravityForkSeedPending }
+          : {}),
       })
     }
     if (!persist || !this.shouldPersistSession()) {
@@ -5836,6 +5856,9 @@ export class SessionService {
         : {}),
       ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
       ...(metadata.nativeSessionId ? { nativeSessionId: metadata.nativeSessionId } : {}),
+      ...(typeof metadata.antigravityForkSeedPending === 'boolean'
+        ? { antigravityForkSeedPending: metadata.antigravityForkSeedPending }
+        : {}),
       ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
         ? { effortLevel: metadata.effortLevel }
         : {}),

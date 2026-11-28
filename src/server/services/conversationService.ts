@@ -53,6 +53,10 @@ import {
 } from './antigravityAcp.js'
 import { AntigravityConversation } from './antigravityConversation.js'
 import {
+  ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND,
+  loadAntigravityForkSeedContext,
+} from './antigravityForkContext.js'
+import {
   createAntigravityBrowserUseBridge,
   type AntigravityBrowserUseBridge,
 } from './antigravityBrowserUseBridge.js'
@@ -1162,10 +1166,21 @@ export class ConversationService {
     const modelId = options?.model ?? launchInfo.runtimeModelId ?? ANTIGRAVITY_DEFAULT_MODEL
     const effortLevel = options?.effort ?? launchInfo.effortLevel
     const permissionMode = options?.permissionMode ?? launchInfo.permissionMode ?? 'default'
-    const nativeId = launchInfo.nativeSessionId
-    if (!nativeId && launchInfo.transcriptMessageCount > 0) {
+    const forkSeedPending = launchInfo.antigravityForkSeedPending === true
+    // While fork context seeding is still pending, never try to `session/resume`
+    // an unprompted native session (e.g. after restart or permission-mode recycle);
+    // always open a clean `session/new` so the first prompt seeds the conversation.
+    const nativeId = forkSeedPending ? undefined : launchInfo.nativeSessionId
+    if (!nativeId && launchInfo.transcriptMessageCount > 0 && !forkSeedPending) {
       throw new AntigravityError('ANTIGRAVITY_RESUME_FAILED', 'This history is not linked to an Antigravity session. Start a new chat for Antigravity.')
     }
+    const loadedForkSeed = forkSeedPending
+      ? await loadAntigravityForkSeedContext(launchInfo.filePath)
+      : undefined
+    const pendingForkSeedContext = loadedForkSeed?.status === 'loaded'
+      ? loadedForkSeed.context
+      : undefined
+    const retainForkSeedPending = forkSeedPending && loadedForkSeed?.status !== 'empty'
 
     const bridge = await createAntigravityComputerUseBridge(sessionId)
     let browserUseBridge: AntigravityBrowserUseBridge | null = null
@@ -1188,6 +1203,7 @@ export class ConversationService {
     const systemPromptParts = [
       bridge?.systemPromptAppend,
       browserUseBridge?.systemPromptAppend,
+      ...(pendingForkSeedContext ? [ANTIGRAVITY_FORK_SYSTEM_PROMPT_APPEND] : []),
     ].filter((part): part is string => Boolean(part))
     const systemPromptAppend = systemPromptParts.length > 0 ? systemPromptParts.join('\n\n') : undefined
 
@@ -1226,6 +1242,7 @@ export class ConversationService {
         runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
         runtimeModelId: modelId,
         ...(effortLevel ? { effortLevel } : {}),
+        ...(forkSeedPending ? { antigravityForkSeedPending: retainForkSeedPending } : {}),
       })
       assertSessionAvailable()
       if (this.sessions.has(sessionId)) {
@@ -1298,6 +1315,22 @@ export class ConversationService {
       {
         computerUseBridge: bridge,
         browserUseBridge,
+        ...(pendingForkSeedContext ? {
+          pendingForkSeedContext,
+          onForkSeedConsumed: async () => {
+            if (!ownsSession() || session.controlRevoked) return
+            await sessionService.appendSessionMetadata(sessionId, {
+              workDir,
+              repository,
+              permissionMode: acp.permissionMode,
+              nativeSessionId: acp.sessionId,
+              runtimeProviderId: ANTIGRAVITY_PROVIDER_ID,
+              runtimeModelId: acp.modelId ?? modelId,
+              ...(acp.effortLevel ? { effortLevel: acp.effortLevel } : {}),
+              antigravityForkSeedPending: false,
+            })
+          },
+        } : {}),
         onAvailableCommands: (commands: AntigravitySlashCommand[]) => {
           session.initMessage = {
             ...session.initMessage,

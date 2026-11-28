@@ -2285,6 +2285,11 @@ async function handlePrewarmSession(ws: SessionConnection) {
     return
   }
 
+  if (launchInfo?.antigravityForkSeedPending) {
+    console.log(`[WS] Skipping prewarm for pending Antigravity fork session ${sessionId}`)
+    return
+  }
+
   prewarmPendingSessions.add(sessionId)
   void ensureCliSessionStarted(ws, sessionId, 'prewarm_session')
     .then(() => {

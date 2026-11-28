@@ -154,6 +154,8 @@ type Turn = {
   isCompact: boolean
   preCompactTokens: number
   compactCommandXml?: string
+  usedForkSeed?: boolean
+  hasOutput: boolean
   userUuid?: string
   detached: boolean
   promptSeq: number
@@ -187,6 +189,8 @@ export type AntigravityConversationOptions = {
   browserUseBridge?: AntigravityBrowserUseBridge | null
   onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   antigravityAppDataDir?: string
+  pendingForkSeedContext?: string
+  onForkSeedConsumed?: () => Promise<void> | void
 }
 
 type ContextUsageState = {
@@ -237,6 +241,14 @@ function countUserContentChars(userContent: Frame[]): number {
     }
   }
   return chars
+}
+
+function prependForkSeedToPrompt(seedContext: string, prompt: Frame[]): Frame[] {
+  const first = prompt[0]
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    return [{ ...first, text: `${seedContext}\n\n${first.text}` }, ...prompt.slice(1)]
+  }
+  return [{ type: 'text', text: seedContext }, ...prompt]
 }
 
 function buildContextGridRows(
@@ -757,6 +769,8 @@ export class AntigravityConversation {
   private readonly browserUseBridge?: AntigravityBrowserUseBridge | null
   private readonly onAvailableCommands?: (commands: AntigravitySlashCommand[]) => void
   private readonly antigravityAppDataDir: string
+  private pendingForkSeedContext?: string
+  private readonly onForkSeedConsumed?: () => Promise<void> | void
 
   constructor(
     readonly acp: AntigravityAcp,
@@ -768,6 +782,8 @@ export class AntigravityConversation {
     this.browserUseBridge = options.browserUseBridge
     this.onAvailableCommands = options.onAvailableCommands
     this.antigravityAppDataDir = options.antigravityAppDataDir ?? resolveDefaultAppDataDir()
+    this.pendingForkSeedContext = options.pendingForkSeedContext?.trim() || undefined
+    this.onForkSeedConsumed = options.onForkSeedConsumed
     acp.onMessage = (method, params, id) => this.receive(method, params, id)
     if (acp.initialAvailableCommands.length > 0) {
       this.availableCommands = acp.initialAvailableCommands
@@ -1181,10 +1197,17 @@ export class AntigravityConversation {
     }
     const compactCommand = parseManualCompactPrompt(userContent)
     const preCompactTokens = compactCommand ? (this.contextUsage?.used ?? 0) : 0
+    const forkSeedContext = !compactCommand ? this.pendingForkSeedContext : undefined
+    const wirePrompt = forkSeedContext
+      ? prependForkSeedToPrompt(forkSeedContext, prompt)
+      : prompt
     if (!compactCommand && this.firstTurnBaselineTokens === undefined && this.firstTurnUserChars === undefined) {
-      this.firstTurnUserChars = countUserContentChars(userContent)
+      this.firstTurnUserChars = countUserContentChars(wirePrompt)
     }
     const turn = this.beginTurn(false)
+    if (forkSeedContext) {
+      turn.usedForkSeed = true
+    }
     if (compactCommand) {
       turn.isCompact = true
       turn.preCompactTokens = preCompactTokens
@@ -1195,7 +1218,7 @@ export class AntigravityConversation {
     void this.run(
       turn,
       seq,
-      prompt,
+      wirePrompt,
       compactCommand
         ? undefined
         : { type: 'user', uuid, timestamp: new Date().toISOString(), message: { role: 'user', content: userContent } },
@@ -1633,7 +1656,7 @@ export class AntigravityConversation {
     const turn: Turn = {
       entries: [], permissions: new Map(), pendingAskTools: new Map(), resolvedQuestions: new Map(),
       nextIndex: 0, started: Date.now(),
-      apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0,
+      apiDurationMs: 0, decodeDurationMs: 0, isCompact: false, preCompactTokens: 0, hasOutput: false,
       detached,
       promptSeq: 0,
       accumulatedUsage: createEmptyUsage(),
@@ -1874,6 +1897,17 @@ export class AntigravityConversation {
     this.cancelPermissions(turn)
     this.turn = undefined
     const failed = !turn.cancelled && error
+    const forkSeedDelivered = Boolean(
+      turn.usedForkSeed && (turn.hasOutput || turn.replyOpen || (!error && !turn.cancelled)),
+    )
+    if (forkSeedDelivered && this.pendingForkSeedContext) {
+      this.pendingForkSeedContext = undefined
+      try {
+        await this.onForkSeedConsumed?.()
+      } catch {
+        // Best-effort metadata persistence; do not fail a completed turn.
+      }
+    }
     if (turn.isCompact) {
       if (compactBoundaryEvent && !turn.cancelled && !error) {
         this.emit(compactBoundaryEvent)
@@ -1919,6 +1953,7 @@ export class AntigravityConversation {
   }
 
   private assistant(turn: Turn, content: Frame): void {
+    turn.hasOutput = true
     const message = {
       type: 'assistant', uuid: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -1942,6 +1977,7 @@ export class AntigravityConversation {
 
   private chunk(turn: Turn, kind: 'text' | 'thinking', text: string): void {
     if (!text) return
+    turn.hasOutput = true
     if (turn.nativeEnd) turn.replyOpen = true
     if (turn.chunk?.kind !== kind) {
       this.flushChunk(turn)
@@ -2017,6 +2053,7 @@ export class AntigravityConversation {
       ...(durationMs !== undefined ? { durationMs } : {}),
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: tool.status === 'failed' }] },
     }
+    turn.hasOutput = true
     turn.entries.push(message)
     this.emit(message)
     this.maybeResumeModelPhase(turn)

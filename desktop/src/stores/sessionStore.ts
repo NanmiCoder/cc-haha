@@ -375,20 +375,39 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     })
     invalidateRecentProjectsCache()
     const sourceSession = get().sessions.find((session) => session.id === sourceSessionId)
+    const sourceRuntimeSelection = useSessionRuntimeStore.getState().selections[sourceSessionId]
     const now = new Date().toISOString()
+    const runtimeProviderId =
+      result.runtimeProviderId !== undefined
+        ? result.runtimeProviderId
+        : sourceRuntimeSelection?.providerId !== undefined
+          ? sourceRuntimeSelection.providerId
+          : sourceSession?.runtimeProviderId
+    const runtimeModelId =
+      result.runtimeModelId ?? sourceRuntimeSelection?.modelId ?? sourceSession?.runtimeModelId
+    const effortLevel =
+      result.effortLevel ?? sourceRuntimeSelection?.effortLevel ?? sourceSession?.effortLevel
+    const permissionMode = result.permissionMode ?? sourceSession?.permissionMode
     const optimisticSession: SessionListItem = {
       id: result.sessionId,
       title: result.title || 'New Session',
       createdAt: now,
       modifiedAt: now,
-      messageCount: 0,
+      messageCount: typeof result.messageCount === 'number' && result.messageCount > 0
+        ? result.messageCount
+        : Math.max(1, sourceSession?.messageCount ?? 1),
       projectPath: sourceSession?.projectPath ?? '',
       projectRoot: sourceSession?.projectRoot ?? sourceSession?.workDir ?? result.workDir ?? null,
       workDir: result.workDir ?? sourceSession?.workDir ?? null,
       workDirExists: true,
+      ...(permissionMode ? { permissionMode } : {}),
+      ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
+      ...(runtimeModelId ? { runtimeModelId } : {}),
+      ...(effortLevel ? { effortLevel } : {}),
     }
 
     pendingCreatedSessionIds.add(result.sessionId)
+    useSessionRuntimeStore.getState().syncFromSessions([optimisticSession])
     set((state) => ({
       sessions: state.sessions.some((session) => session.id === result.sessionId)
         ? state.sessions.map((session) =>
